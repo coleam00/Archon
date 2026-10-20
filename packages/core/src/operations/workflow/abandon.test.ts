@@ -490,7 +490,7 @@ describe('abandonWorkflow', () => {
     );
     mockRequestDetachedRunStop.mockResolvedValueOnce({
       pid: 42,
-      stop: async () => ({ survivors: [], warnings: ['Owner cleanup warning'] }),
+      stop: async () => ({ warnings: ['Owner cleanup warning'] }),
       release: () => undefined,
     });
     mockReclaimContainerEnv.mockRejectedValueOnce(new Error('fixture reclamation failure'));
@@ -516,7 +516,7 @@ describe('abandonWorkflow', () => {
         pid: 42,
         stop: async () => {
           order.push('stop');
-          return { survivors: [], warnings: [] };
+          return { warnings: [] };
         },
         release: () => undefined,
       })
@@ -953,11 +953,46 @@ describe('abandon owned worktrees', () => {
     expect(result.releasedWorktrees).toEqual([{ path: '/wt/run-a', branch: 'b-a' }]);
   });
 
+  test.each(['retry', 'descendant', 'reset'] as const)(
+    'preserves owner warnings on %s release',
+    async mode => {
+      mockRequestDetachedRunStop.mockResolvedValue({
+        pid: 4242,
+        stop: async () => ({ warnings: ['Output is still held; inspect checkout'] }),
+        release: () => undefined,
+      });
+      if (mode === 'retry')
+        mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'cancelled' }));
+      if (mode === 'descendant') {
+        const child = owned('child', {
+          metadata: {
+            owned_worktree: {
+              envId: 'env-child',
+              creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+            },
+            execution_owner: { host: hostname(), pid: 5252, uid: process.getuid?.() },
+          },
+        });
+        mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [child] : []));
+        mockRequestDetachedRunStop.mockRejectedValueOnce(
+          new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+        );
+      }
+      if (mode === 'reset') mockCancelResumableRunsForConversation.mockResolvedValueOnce([owned()]);
+      const result =
+        mode === 'reset'
+          ? await operations.abandonResumableRunsForConversation('conv-1', operator)
+          : await operations.abandonWorkflow('run-1', operator);
+      expect(result.cleanupWarnings).toContain('Output is still held; inspect checkout');
+      expect(reclaim).toHaveBeenCalled();
+    }
+  );
+
   test('ordinary cancel retains worktrees', async () => {
     mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'running' }));
     mockRequestDetachedRunStop.mockResolvedValueOnce({
       pid: 4242,
-      stop: async () => ({ survivors: [], warnings: [] }),
+      stop: async () => ({ warnings: [] }),
       release: () => {},
     });
     await operations.cancelWorkflow('run-1', operator);

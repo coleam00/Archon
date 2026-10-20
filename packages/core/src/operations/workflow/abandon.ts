@@ -111,6 +111,7 @@ async function recordAbandonment(
     return {
       run,
       cancelled: false,
+      cleanupWarnings: stopWarnings,
       cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
       cascadeFailures: tree.failures,
       blockedParentRunId: null,
@@ -147,9 +148,9 @@ async function releaseAbandonedWorktrees(
       );
       continue;
     }
-    const ownerWarning = await worktreeOwnerWarning(ctx, row, run, owner);
-    if (ownerWarning) {
-      warnings.push(ownerWarning);
+    const ownerCheck = await checkWorktreeOwner(ctx, row, run, owner);
+    warnings.push(...ownerCheck.warnings);
+    if (!ownerCheck.safe) {
       unsafeDescendant = true;
       continue;
     }
@@ -185,28 +186,38 @@ export async function collectAbandonmentTree(
   return { runs: runs.slice(0, MAX_CASCADE_RUNS), failures };
 }
 
-export async function worktreeOwnerWarning(
+async function checkWorktreeOwner(
   ctx: OperationContext,
   row: WorkflowRun,
   root?: WorkflowRun,
   rootOutcome?: AbandonOwnerOutcome
-): Promise<string | undefined> {
+): Promise<{ safe: boolean; warnings: string[] }> {
   if (!readOwnedWorktree(row.metadata) && !(root && readOwnedWorktree(root.metadata)))
-    return undefined;
+    return { safe: true, warnings: [] };
   const recorded = readExecutionOwner(row.metadata);
   const reason = unreachableOwnerReason(row, recorded, root, rootOutcome);
   if (reason)
-    return `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`;
-  if (root?.id === row.id) return undefined;
-  if (ranInStoppedRootOwner(recorded, root, rootOutcome)) return undefined;
+    return {
+      safe: false,
+      warnings: [
+        `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`,
+      ],
+    };
+  if (root?.id === row.id) return { safe: true, warnings: [] };
+  if (ranInStoppedRootOwner(recorded, root, rootOutcome)) return { safe: true, warnings: [] };
   try {
     const outcome = await stopLiveOwner(ctx, row);
     return outcome.kind === 'not_stopped'
-      ? `Retained checkout for run ${row.id}: ${outcome.message}`
-      : undefined;
+      ? { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] }
+      : { safe: true, warnings: outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [] };
   } catch (err) {
     getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_child_owner_check_failed');
-    return `Retained checkout ${row.working_path ?? ''} for run ${row.id}: could not check or stop its owner: ${(err as Error).message}. Inspect the owner before retrying abandonment.`;
+    return {
+      safe: false,
+      warnings: [
+        `Retained checkout ${row.working_path ?? ''} for run ${row.id}: could not check or stop its owner: ${(err as Error).message}. Inspect the owner before retrying abandonment.`,
+      ],
+    };
   }
 }
 
@@ -284,9 +295,9 @@ export async function abandonResumableRunsForConversation(
   const releasedWorktrees: ReleasedWorktree[] = [];
   for (const run of runs) {
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
-    const ownerWarning = await worktreeOwnerWarning(ctx, run);
-    if (ownerWarning) cleanupWarnings.push(ownerWarning);
-    else {
+    const ownerCheck = await checkWorktreeOwner(ctx, run);
+    cleanupWarnings.push(...ownerCheck.warnings);
+    if (ownerCheck.safe) {
       const release = await releaseRunWorktree(ctx, run);
       cleanupWarnings.push(...release.warnings);
       if (release.released) releasedWorktrees.push(release.released);

@@ -16,6 +16,7 @@ export interface RunOwnerTerminationPreparation {
 
 export type PrepareRunOwnerTermination = () => RunOwnerTerminationPreparation;
 
+export const TERMINATE_READY = 'ready\n';
 export const PREPARATION_HEADER = 'preparing\n';
 export const PREPARATION_TIMEOUT_MS = TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS;
 
@@ -28,7 +29,7 @@ export async function writeOwnerPreparation(
   for (const warning of await preparation.ready) {
     socket.write(`${JSON.stringify({ warning })}\n`);
   }
-  socket.write('ready\n');
+  socket.write(TERMINATE_READY);
 }
 
 export const processGroupStopSchema = z.discriminatedUnion('leaderReaped', [

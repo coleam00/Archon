@@ -8,7 +8,6 @@ import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schema
 import type { ReleasedWorktree } from '../../services/cleanup-service';
 import {
   DetachedRunOwnerUnavailableError,
-  describeDetachedRunStop,
   type DetachedRunStopTarget,
 } from '../../services/run-owner-stop';
 import { getLog, type OperationContext } from './context';
@@ -19,7 +18,7 @@ export const MAX_CASCADE_RUNS = 500;
 /**
  * What abandon found at the run's live-owner endpoint before it recorded `cancelled`.
  *
- * `stopped`: an owner answered and its process was stopped, with any node survivors reported.
+ * `stopped`: an owner answered and its process was stopped, with any output-holder warnings reported.
  * `no_owner_answered`: nothing is listening at the endpoint on this host. Recording
  * `cancelled` is then the operator's explicit call that the run is dead, so the
  * recorded facts travel with the result for every surface to show.
@@ -351,7 +350,7 @@ export async function stopLiveOwner(
     return { kind: 'not_stopped', message: ownerNotStoppedMessage(run.id, error) };
   }
   try {
-    const warnings = describeDetachedRunStop(await target.stop());
+    const warnings = (await target.stop()).warnings;
     return {
       kind: 'stopped',
       pid: target.pid,

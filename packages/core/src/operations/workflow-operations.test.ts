@@ -75,7 +75,7 @@ describe('supplied stores', () => {
     const isolation = { ...isolationStore, getById };
     const cleanup = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(async () => {});
     const cancelled = mock<IWorkflowStore['cancelWorkflowRun']>(async () => ({ cancelled: true }));
-    const stop = mock(async () => ({ survivors: [], warnings: [] }));
+    const stop = mock(async () => ({ warnings: [] }));
     const operations = createWorkflowOperations({
       getUserRole: async () => undefined,
       store: {

@@ -9,21 +9,16 @@ export interface ProcessGroupMember {
   pid: number;
   pgid: number;
   state: string;
-  command: string;
 }
 
 export type ProcessGroupStop =
   | { pgid: number; leaderReaped: true; signalAttempted: false }
   | { pgid: number; leaderReaped: false; signalAttempted: true; signalError?: string };
 
-export interface ProcessGroupSurvivor extends ProcessGroupMember {
-  reason: 'leader_reaped';
-}
-
 async function listPosixProcesses(): Promise<string> {
   const { stdout } = await execFileAsync(
     '/bin/ps',
-    ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat=', '-o', 'comm='],
+    ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat='],
     { timeout: 5000 }
   );
   return stdout;
@@ -39,15 +34,15 @@ export async function inspectProcessGroups(
   const members: ProcessGroupMember[] = [];
   for (const line of (await listProcesses()).split('\n')) {
     if (!line.trim()) continue;
-    const fields = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    const fields = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
     if (!fields) throw new Error('Invalid POSIX process listing');
-    const [, rawPid, rawPgid, state, command] = fields;
+    const [, rawPid, rawPgid, state] = fields;
     const pid = Number(rawPid);
     const pgid = Number(rawPgid);
     if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(pgid) || pgid < 0) {
       throw new Error('Invalid POSIX process identifier');
     }
-    if (groups.has(pgid)) members.push({ pid, pgid, state, command });
+    if (groups.has(pgid)) members.push({ pid, pgid, state });
   }
   return members;
 }

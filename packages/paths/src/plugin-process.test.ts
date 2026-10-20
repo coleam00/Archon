@@ -8,15 +8,12 @@ import {
 } from './plugin-process';
 
 describe('inspectProcessGroups', () => {
-  test('selects numeric groups and preserves executable commands with spaces', async () => {
+  test('selects numeric groups and includes zombie members', async () => {
     expect(
-      await inspectProcessGroups(
-        [12],
-        async () => ' 123 12 S /path with spaces/worker\n 124 120 S other\n 125 12 Z zombie\n'
-      )
+      await inspectProcessGroups([12], async () => ' 123 12 S\n 124 120 S\n 125 12 Z\n')
     ).toEqual([
-      { pid: 123, pgid: 12, state: 'S', command: '/path with spaces/worker' },
-      { pid: 125, pgid: 12, state: 'Z', command: 'zombie' },
+      { pid: 123, pgid: 12, state: 'S' },
+      { pid: 125, pgid: 12, state: 'Z' },
     ]);
   });
 
@@ -30,9 +27,9 @@ describe('inspectProcessGroups', () => {
     await expect(inspectProcessGroups([12], async () => 'invalid listing')).rejects.toThrow(
       'Invalid POSIX process listing'
     );
-    await expect(
-      inspectProcessGroups([12], async () => '99999999999999999 12 S x')
-    ).rejects.toThrow('Invalid POSIX process identifier');
+    await expect(inspectProcessGroups([12], async () => '99999999999999999 12 S')).rejects.toThrow(
+      'Invalid POSIX process identifier'
+    );
   });
 
   test.skipIf(process.platform === 'win32')(

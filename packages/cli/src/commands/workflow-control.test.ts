@@ -934,7 +934,7 @@ describe('workflowAbandonCommand', () => {
       pid: 42,
       stop: async () => {
         order.push('terminate');
-        return { survivors: [], warnings: [] };
+        return { warnings: [] };
       },
       release: mockDetachedTargetRelease,
     }));
@@ -1009,7 +1009,7 @@ describe('workflowCancelCommand', () => {
       release: mockDetachedTargetRelease,
     });
     mockDetachedTargetStop.mockReset();
-    mockDetachedTargetStop.mockResolvedValue({ survivors: [], warnings: [] });
+    mockDetachedTargetStop.mockResolvedValue({ warnings: [] });
     mockDetachedTargetRelease.mockClear();
     mockReclaimContainerEnv.mockReset();
     mockReclaimContainerEnv.mockResolvedValue();
@@ -1043,7 +1043,7 @@ describe('workflowCancelCommand', () => {
         pid: 4242,
         stop: async () => {
           order.push('terminate');
-          return { survivors: [], warnings: [] };
+          return { warnings: [] };
         },
         release: mockDetachedTargetRelease,
       };
@@ -1121,7 +1121,7 @@ describe('workflowCancelCommand', () => {
     });
     mockDetachedTargetStop.mockImplementation(async () => {
       order.push('terminate-owner');
-      return { survivors: [], warnings: [] };
+      return { warnings: [] };
     });
     mockReclaimContainerEnv.mockImplementation(async (): Promise<void> => {
       order.push('reclaim-container');

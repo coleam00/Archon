@@ -1,8 +1,4 @@
-import {
-  confirmProcessGroupsGone,
-  inspectProcessGroups,
-  type ProcessGroupSurvivor,
-} from '@archon/paths/plugin-process';
+import { confirmProcessGroupsGone } from '@archon/paths/plugin-process';
 import type { RunOwnerPreparedStop } from './run-owner-preparation';
 import {
   requestRunLiveOwnerStop,
@@ -22,7 +18,6 @@ import { openWindowsRunJob, type WindowsRunJob } from './windows-run-job';
 const POLL_INTERVAL_MS = 50;
 
 export interface DetachedRunStopReport {
-  survivors: ProcessGroupSurvivor[];
   warnings: string[];
 }
 
@@ -77,7 +72,7 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
         if (prepared && process.platform !== 'win32')
           return await stopPreparedOwner(lease, prepared);
         await terminateDetachedProcessTree(lease.pid, () => lease.isLive(), windowsJob);
-        return { survivors: [], warnings: [] };
+        return { warnings: [] };
       } finally {
         windowsJob?.close();
         lease.release();
@@ -188,21 +183,5 @@ async function stopPreparedOwner(
   const failed = live.find(group => group.signalError && group.signalError !== 'ESRCH');
   if (failed)
     throw new Error(`Could not signal node group ${String(failed.pgid)} (${failed.signalError})`);
-  const members = await inspectProcessGroups(
-    prepared.groups.filter(group => group.leaderReaped).map(group => group.pgid)
-  );
-  return {
-    survivors: members.map(member => ({ ...member, reason: 'leader_reaped' })),
-    warnings: prepared.warnings,
-  };
-}
-
-export function describeDetachedRunStop(report: DetachedRunStopReport): string[] {
-  return [
-    ...report.warnings,
-    ...report.survivors.map(
-      member =>
-        `Surviving process PID ${String(member.pid)}, PGID ${String(member.pgid)}, command ${member.command}: not signalled because its group leader was reaped; group ownership no longer permits a signal. End it by exact PID.`
-    ),
-  ];
+  return { warnings: prepared.warnings };
 }

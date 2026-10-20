@@ -3,10 +3,13 @@ import { confirmProcessGroupsGone, type ProcessGroupStop } from '@archon/paths/p
 
 interface RecordedCommand {
   reaped: boolean;
+  child: ChildProcess;
+  stop?: ProcessGroupStop;
 }
 
 export interface PreparedNodeTermination {
   groups: ProcessGroupStop[];
+  ready: Promise<string[]>;
   release(): void;
 }
 
@@ -24,26 +27,47 @@ export class DetachedNodeProcesses {
   record(child: ChildProcess): void {
     if (child.pid === undefined) return;
     const pid = child.pid;
-    const command: RecordedCommand = { reaped: false };
+    const command: RecordedCommand = { reaped: false, child };
     this.commands.set(pid, command);
     child.once('exit', () => {
       command.reaped = true;
     });
-    child.once('close', () => this.commands.delete(pid));
   }
 
-  private signalCommands(): ProcessGroupStop[] {
-    return [...this.commands].map(([pgid, command]): ProcessGroupStop => {
-      if (command.reaped) return { pgid, leaderReaped: true, signalAttempted: false };
-      const group: ProcessGroupStop = { pgid, leaderReaped: false, signalAttempted: true };
-      // No await between checking the parent's reap event and the group signal.
+  forget(child: ChildProcess): void {
+    if (child.pid !== undefined) this.commands.delete(child.pid);
+  }
+
+  async waitForOutput(child: ChildProcess): Promise<boolean> {
+    const deadline = Date.now() + 1000;
+    while ([child.stdout, child.stderr].some(stream => stream && !stream.readableEnded)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise<void>(resolve => setTimeout(resolve, 25));
+    }
+    return true;
+  }
+
+  signal(pgid: number, signal: NodeJS.Signals): ProcessGroupStop {
+    const command = this.commands.get(pgid);
+    if (!command) throw new Error('Detached node command is not recorded');
+    if (command.stop && command.reaped) return command.stop;
+    const group: ProcessGroupStop = command.reaped
+      ? { pgid, leaderReaped: true, signalAttempted: false }
+      : { pgid, leaderReaped: false, signalAttempted: true };
+    command.stop = group;
+    // The fact describes ownership at the signal, retained through confirmation.
+    if (!group.leaderReaped) {
       try {
-        process.kill(-pgid, 'SIGKILL');
+        process.kill(-pgid, signal);
       } catch (error) {
         group.signalError = (error as NodeJS.ErrnoException).code ?? 'UNKNOWN';
       }
-      return group;
-    });
+    }
+    return group;
+  }
+
+  private signalCommands(): ProcessGroupStop[] {
+    return [...this.commands.keys()].map(pgid => this.signal(pgid, 'SIGKILL'));
   }
 
   prepareTermination(): PreparedNodeTermination {
@@ -54,9 +78,22 @@ export class DetachedNodeProcesses {
     });
     const result: PreparedNodeTermination = {
       groups: this.signalCommands(),
+      ready: Promise.all(
+        [...this.commands.values()].map(command => this.waitForOutput(command.child))
+      ).then(closed =>
+        closed.every(Boolean)
+          ? []
+          : [
+              "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
+            ]
+      ),
       release: () => {
         if (this.preparation?.result !== result) return;
         this.preparation = undefined;
+        for (const command of this.commands.values()) {
+          if (command.stop && !command.stop.leaderReaped && command.stop.signalError)
+            command.stop = undefined;
+        }
         releaseHold();
       },
     };

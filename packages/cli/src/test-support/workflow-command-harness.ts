@@ -108,7 +108,7 @@ export const mockLogger = {
   child: mock(() => mockLogger),
 };
 
-export const mockDetachedTargetStop = mock(async () => ({ survivors: [], warnings: [] }));
+export const mockDetachedTargetStop = mock(async () => ({ warnings: [] }));
 export const mockDetachedTargetRelease = mock((): undefined => undefined);
 export const mockReclaimContainerEnv = mock((): Promise<void> => Promise.resolve());
 export const mockRequestDetachedRunStop = mock<typeof RunOwnerStop.requestDetachedRunStop>(() =>

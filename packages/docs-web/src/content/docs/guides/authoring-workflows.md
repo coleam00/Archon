@@ -292,10 +292,11 @@ left the node's group with `setsid` escapes. On Windows, background work whose n
 already exited is not reached. A container node's command is not reached.
 On macOS and Linux, detached cancellation first stops unfinished node groups whose leaders
 are still unreaped, then stops the owner group and confirms those groups are gone.
-If an unfinished node's leader was already reaped while a descendant holds its output pipes,
-Archon never signals that group. Cancellation still ends the run and reports each surviving
-member's PID, PGID, executable command, and reason for withholding the signal in the cancel
-result and the run's cancellation event. The operator can end that process by exact PID.
+Archon never signals a group whose leader was already reaped. If a node's output pipes
+remain held after safe group signals, cancellation still ends the run and warns in the
+cancel result and run event that some process outside the run's process group holds the
+output and was not signalled. Archon does not identify that holder. Use `lsof` on the run's
+checkout to find it before reusing or removing the checkout.
 Background jobs of already-completed nodes are excluded. Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
@@ -2269,7 +2270,7 @@ sub-pipeline.**
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
   detached run stops its live node groups and owner group (macOS and Linux) or Job Object
-  (Windows), with the reaped-leader survivor warnings described above.
+  (Windows), with the output-holder warnings described above.
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its

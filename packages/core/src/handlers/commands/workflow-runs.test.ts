@@ -195,9 +195,8 @@ describe('CommandHandler', () => {
             pid: 4242,
             stop: () =>
               Promise.resolve({
-                survivors: [],
                 warnings: [
-                  'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.',
+                  'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
                 ],
               }),
             release: () => undefined,
@@ -208,12 +207,13 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain(
-          'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.'
+          'Some process still holds node output; it was not signalled. Use lsof on the checkout.'
         );
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached', {
           cancel_reason: 'operator',
-          reason: 'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.',
+          reason:
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
         });
       });
 

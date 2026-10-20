@@ -1141,10 +1141,11 @@ who owns the run:
   contacts that process and stops its owner before recording the run as `cancelled`.
   On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
   then confirms those groups and the owner group are gone. A group whose leader was already
-  reaped is never signalled: cancellation still ends the run, but surviving members are
-  reported with PID, PGID, executable command and reason in `cleanupWarnings` and the run's
-  cancellation event. End those processes by exact PID. Background jobs left by completed
-  nodes and processes that deliberately leave their node group are excluded. Windows uses
+  reaped is never signalled. If a node's output pipes remain held, cancellation still ends
+  the run and reports in `cleanupWarnings` and the run's cancellation event that some
+  process outside the run's process group holds the output and was not signalled.
+  Archon does not identify it; use `lsof` on the run's checkout before reusing or removing
+  that checkout. Background jobs left by completed nodes are excluded. Windows uses
   the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
@@ -1206,7 +1207,8 @@ Once cancellation is recorded, further managed container reclamation is best-eff
 the run stays `cancelled`, but container resources may remain allocated. Every cancel
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
-`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+`cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
+and output pipes still held by an unsignalled process; the field is omitted
 when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
 
 ### `workflow abandon`
@@ -1216,7 +1218,9 @@ worktree lock and resource slot, so abandon first asks the run's live-owner endp
 this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
-  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+  (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
+  The output-holder warning and `lsof` action described above apply here too; inspect
+  warnings before reusing or removing the checkout.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:
@@ -1259,7 +1263,8 @@ Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
 Successful `--json` responses include an optional `cleanupWarnings` array of warning
-strings when reclamation fails; the field is omitted when there are no cleanup
+strings for container reclamation failures, owner-stop cleanup failures, and output pipes
+still held by an unsignalled process; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.

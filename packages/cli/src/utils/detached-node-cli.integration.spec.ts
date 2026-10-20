@@ -32,7 +32,10 @@ function alive(pid: number): boolean {
   }
 }
 
-async function launch(kind: 'bash' | 'script', mode: 'timeout' | 'live' | 'reaped') {
+async function launch(
+  kind: 'bash' | 'script',
+  mode: 'timeout' | 'live' | 'reaped' | 'escaped' | 'escaped-live'
+) {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-cli-')));
   const home = join(dir, 'home');
   const project = join(dir, 'project');
@@ -40,10 +43,11 @@ async function launch(kind: 'bash' | 'script', mode: 'timeout' | 'live' | 'reape
   mkdirSync(join(project, '.archon/workflows'), { recursive: true });
   writeFileSync(join(home, 'config.yaml'), 'store: files\n');
   const rootFile = join(dir, 'root');
-  const role = mode === 'reaped' ? 'grandchild' : 'child';
+  const role =
+    mode === 'reaped' || mode === 'escaped' || mode === 'escaped-live' ? 'grandchild' : 'child';
   const command = [process.execPath, worker, dir, role];
-  const script = `require('fs').writeFileSync(${JSON.stringify(rootFile)}, String(process.pid)); const c = Bun.spawn(${JSON.stringify(command)}, {stdio: ['ignore', 'inherit', 'inherit']}); ${mode === 'reaped' ? 'process.exit(0);' : 'await c.exited;'}`;
-  const shell = `echo $$ > '${rootFile}'; ${command.map(arg => `'${arg}'`).join(' ')} & ${mode === 'reaped' ? 'exit 0' : 'wait'}`;
+  const script = `require('fs').writeFileSync(${JSON.stringify(rootFile)}, String(process.pid)); const c = Bun.spawn(${JSON.stringify(command)}, {detached: ${mode === 'escaped' || mode === 'escaped-live'}, stdio: ['ignore', 'inherit', 'inherit']}); ${mode === 'reaped' || mode === 'escaped' ? 'process.exit(0);' : 'await c.exited;'}`;
+  const shell = `echo $$ > '${rootFile}'; ${command.map(arg => `'${arg}'`).join(' ')} & ${mode === 'reaped' || mode === 'escaped' ? 'exit 0' : 'wait'}`;
   const body =
     kind === 'bash'
       ? `bash: ${JSON.stringify(shell)}`
@@ -98,6 +102,8 @@ for (const kind of ['bash', 'script'] as const) {
       const run = await launch(kind, 'timeout');
       try {
         await until(async () => (await run.store.getWorkflowRun(run.runId))?.status === 'failed');
+        await Bun.sleep(2600);
+        expect(existsSync(join(run.dir, 'marker'))).toBe(false);
         for (const role of ['root', 'child', 'grandchild'])
           expect(alive(run.pid(role))).toBe(false);
         const events = await run.store.listWorkflowEvents(run.runId);
@@ -106,8 +112,6 @@ for (const kind of ['bash', 'script'] as const) {
             event => event.event_type === 'node_failed' && event.data?.failure_kind === 'timeout'
           )
         ).toBe(true);
-        await Bun.sleep(2600);
-        expect(existsSync(join(run.dir, 'marker'))).toBe(false);
       } finally {
         await run.cleanup();
       }
@@ -142,12 +146,16 @@ posix(
   20000
 );
 
-posix(
-  'reaped-node cancellation ends the run, reports survivors in result and stored event, and never signals its group',
-  async () => {
-    const run = await launch('bash', 'reaped');
+posix.each(['reaped', 'escaped', 'escaped-live'] as const)(
+  '%s-node cancellation ends the run, reports held output in result and stored event, and signals only safe groups',
+  async mode => {
+    const run = await launch('script', mode);
     try {
-      await until(() => existsSync(join(run.dir, 'grandchild')) && !alive(run.pid('root')));
+      await until(
+        () =>
+          existsSync(join(run.dir, 'grandchild')) &&
+          (mode === 'escaped-live' || !alive(run.pid('root')))
+      );
       const root = run.pid('root');
       const survivor = run.pid('grandchild');
       const result = await run.invoke('workflow', 'cancel', run.runId, '--json');
@@ -155,10 +163,10 @@ posix(
       expect(alive(survivor)).toBe(true);
       expect((await run.store.getWorkflowRun(run.runId))?.status).toBe('cancelled');
       const warning = result.cleanupWarnings?.join('\n') ?? '';
-      expect(warning).toContain(`PID ${String(survivor)}`);
-      expect(warning).toContain(`PGID ${String(root)}`);
-      expect(warning).toContain('bun');
-      expect(warning).toContain('leader was reaped');
+      expect(warning).toContain("outside the run's process group still holds the node's output");
+      expect(warning).toContain('it was not signalled');
+      expect(warning).toContain("lsof on the run's checkout");
+      expect(warning).not.toContain(`PID ${String(survivor)}`);
       const cancelled = (await run.store.listWorkflowEvents(run.runId)).find(
         event => event.event_type === 'workflow_cancelled'
       );
@@ -168,7 +176,10 @@ posix(
         .trim()
         .split('\n')
         .map(line => JSON.parse(line));
-      expect(signals.filter(signal => signal.pid === -root)).toEqual([]);
+      expect(signals.filter(signal => signal.pid === -root)).toHaveLength(
+        mode === 'escaped-live' ? 1 : 0
+      );
+      expect(signals.filter(signal => signal.pid === -survivor)).toEqual([]);
     } finally {
       await run.cleanup();
     }

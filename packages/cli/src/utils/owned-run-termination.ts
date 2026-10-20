@@ -69,10 +69,13 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     }
   };
   const unregisterPreparation = detachedTrees
-    ? liveOwner.registerTerminationPreparation(() => ({
-        ...detachedTrees.prepareTermination(),
-        ready: prepareTeardown(),
-      }))
+    ? liveOwner.registerTerminationPreparation(() => {
+        const prepared = detachedTrees.prepareTermination();
+        return {
+          ...prepared,
+          ready: Promise.all([prepared.ready, prepareTeardown()]).then(results => results.flat()),
+        };
+      })
     : undefined;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {

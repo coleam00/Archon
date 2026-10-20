@@ -38,7 +38,7 @@ export class CancelRefusedError extends Error {
  * process executes the run, or the run is a `workflow:` sub-run with no live owner of
  * its own whose root run's owner answers: it executes inside that process while the
  * root's row keeps the worktree lock and resource slot. `cancelled` is false when the run finished first.
- * `stopped`: another live process owned the run; its process was stopped, with any node survivors reported
+ * `stopped`: another live process owned the run; its process was stopped, with any output-holder warnings reported
  * before the run was recorded `cancelled`.
  */
 export type CancelWorkflowResult =

@@ -161,7 +161,7 @@ describe('cancelWorkflow', () => {
         pid: 42,
         stop: async () => {
           order.push('stop');
-          return { survivors: [], warnings: [] };
+          return { warnings: [] };
         },
         release: () => undefined,
       })
@@ -185,7 +185,7 @@ describe('cancelWorkflow', () => {
         pid: 42,
         stop: async () => {
           order.push('stop');
-          return { survivors: [], warnings: [] };
+          return { warnings: [] };
         },
         release: () => undefined,
       })

@@ -455,17 +455,13 @@ function assertRecorderActive(recorder: NodeProcessRecorder | undefined): void {
 }
 
 async function endDetachedNodeTree(
+  recorder: DetachedNodeProcesses,
   pgid: number,
-  signal: NodeJS.Signals,
-  leaderReaped: boolean
+  signal: NodeJS.Signals
 ): Promise<void> {
-  if (!leaderReaped) {
-    try {
-      process.kill(-pgid, signal);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    }
-  }
+  const group = recorder.signal(pgid, signal);
+  if (!group.leaderReaped && group.signalError && group.signalError !== 'ESRCH')
+    throw new Error(`Could not signal node group ${pgid} (${group.signalError})`);
   await confirmProcessGroupsGone([pgid], TERMINATION_CONFIRM_MS);
 }
 
@@ -503,7 +499,7 @@ export async function execOwnedProcessGroup(
   let terminationError: Error | undefined;
   const endTree = (pid: number, signal: NodeJS.Signals): void => {
     if (recorder?.mode === 'detached-posix') {
-      termination = endDetachedNodeTree(pid, signal, exited).catch((error: unknown) => {
+      termination = endDetachedNodeTree(recorder, pid, signal).catch((error: unknown) => {
         terminationError = error instanceof Error ? error : new Error(String(error));
         if (!exited) child.kill('SIGKILL');
       });
@@ -532,24 +528,31 @@ export async function execOwnedProcessGroup(
     failure ??= error;
     stop(false);
   });
+  const closeOutput = (): void => {
+    const destroy = (): void => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    };
+    if (recorder?.mode === 'detached-posix') {
+      void Promise.resolve(termination)
+        .then(() => recorder.waitForOutput(child))
+        .then(destroy);
+    } else destroy();
+  };
   const timer =
     options.timeout === undefined
       ? undefined
       : setTimeout(() => {
           timedOut = true;
           stop(!node || node.endTreeOnTimeout);
-          child.stdout?.destroy();
-          child.stderr?.destroy();
+          closeOutput();
         }, options.timeout);
   const abortSignal = recorder ? node?.abortSignal : undefined;
   const abort = (): void => {
     cancelled = true;
     clearTimeout(timer);
-    // Detached POSIX termination checks `exited` inside endTree. The default recorder
-    // retains its existing abort behavior for output-held groups.
     if (!termination && rootPid !== undefined && (posix || !exited)) endTree(rootPid, 'SIGKILL');
-    child.stdout?.destroy();
-    child.stderr?.destroy();
+    closeOutput();
   };
   if (abortSignal?.aborted) abort();
   else abortSignal?.addEventListener('abort', abort, { once: true });
@@ -563,9 +566,8 @@ export async function execOwnedProcessGroup(
         code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
       });
       clearTimeout(timer);
-      stop(!node);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
+      stop(!node || recorder?.mode === 'detached-posix');
+      closeOutput();
     }
   };
   child.stdout?.on('data', (chunk: Buffer) => collect('stdout', chunk));
@@ -591,7 +593,10 @@ export async function execOwnedProcessGroup(
   abortSignal?.removeEventListener('abort', abort);
   child.stdin?.destroy();
   await termination;
-  if (recorder?.mode === 'detached-posix') await recorder.waitForRelease();
+  if (recorder?.mode === 'detached-posix') {
+    await recorder.waitForRelease();
+    recorder.forget(child);
+  }
   if (lifeline && child.pid !== undefined) {
     try {
       await confirmGroupGone(child.pid);

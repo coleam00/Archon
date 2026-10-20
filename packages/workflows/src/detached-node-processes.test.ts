@@ -342,3 +342,56 @@ posixOnly('a detached recorder leaves probes in the owner group', async () => {
     trees.release();
   }
 });
+
+posixOnly.each(['timeout', 'abort', 'maxBuffer'] as const)(
+  'retains the command through %s termination confirmation',
+  async mode => {
+    const dir = fixtureDir();
+    const ready = join(dir, 'root');
+    const trees = recordNodeProcessTrees({ mode: 'detached-posix' });
+    const controller = new AbortController();
+    let confirm!: () => void;
+    let confirming = false;
+    const confirmation = new Promise<void>(resolve => {
+      confirm = resolve;
+    });
+    const inspect = spyOn(processTools, 'confirmProcessGroupsGone').mockImplementation(async () => {
+      confirming = true;
+      await confirmation;
+    });
+    const command =
+      mode === 'maxBuffer'
+        ? `echo $$ > '${ready}'; while :; do printf '%10000s' x; done`
+        : `echo $$ > '${ready}'; exec /bin/sleep 30`;
+    const result = failure(
+      runSubprocess({ kind: 'host' }, '/bin/bash', ['-c', command], {
+        cwd: dir,
+        env: {},
+        endTreeOnTimeout: true,
+        timeout: mode === 'timeout' ? 200 : undefined,
+        abortSignal: controller.signal,
+        retention: { standalone: true },
+      })
+    );
+    try {
+      await waitUntil(() => existsSync(ready) && readFileSync(ready, 'utf8').trim() !== '');
+      const root = Number(readFileSync(ready, 'utf8'));
+      if (mode === 'abort') controller.abort();
+      await waitUntil(() => confirming && !alive(root));
+      await Bun.sleep(50);
+      const prepared = trees.prepareTermination();
+      expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: false, signalAttempted: true }]);
+      confirm();
+      prepared.release();
+      await result;
+      expect(trees.prepareTermination().groups).toEqual([]);
+    } finally {
+      confirm();
+      inspect.mockRestore();
+      trees.prepareTermination().release();
+      trees.release();
+      await result;
+      if (existsSync(ready)) killFixture(Number(readFileSync(ready, 'utf8')));
+    }
+  }
+);

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   PREPARATION_HEADER,
+  TERMINATE_READY,
   PREPARATION_TIMEOUT_MS,
   readPreparationFrame,
   writeOwnerPreparation,
@@ -23,7 +24,6 @@ const OWNER_ATTENTION = 'attention\n';
 const CONTROL_HANDOFF = 'control_handoff\n';
 const STOP_REQUEST = 'stop\n';
 const TERMINATE_REQUEST = 'terminate\n';
-const TERMINATE_READY = 'ready\n';
 /**
  * How long `close` waits for a controller holding a stop lease to release it before
  * dropping the lease. A committed lease has no lifetime of its own: it lasts while both
