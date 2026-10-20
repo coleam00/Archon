@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listWorktrees, toBranchName, toRepoPath, toWorktreePath } from '@archon/git';
@@ -13,7 +13,7 @@ import {
   recordWorktreeAdoption,
 } from '@archon/isolation';
 import { getLogLevel, setLogLevel, setLogSink } from '@archon/paths';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
 
@@ -33,21 +33,19 @@ const { createCodebaseChildResolver } = await import('./child-isolation-resolver
 const originalEnv = {
   ARCHON_HOME: process.env.ARCHON_HOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-  GIT_TRACE2_PERF: process.env.GIT_TRACE2_PERF,
 };
 const originalLevel = getLogLevel();
 const events: Record<string, unknown>[] = [];
 let root: string;
 let repo: string;
 let codebaseId: string;
-let rollbackTrace: { label: string; path: string } | undefined;
 
 function git(...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
 }
 
 beforeEach(async () => {
-  root = await realpath(await mkdtemp(join(tmpdir(), 'archon-adoption-')));
+  root = track(await realpath(await mkdtemp(join(tmpdir(), 'archon-adoption-'))));
   process.env.ARCHON_HOME = join(root, 'home');
   process.env.GIT_CONFIG_GLOBAL = join(root, 'gitconfig');
   setLogLevel('info');
@@ -78,7 +76,7 @@ beforeEach(async () => {
   events.length = 0;
 });
 
-afterEach(async () => {
+afterEach(() => {
   setLogSink(undefined);
   setLogLevel(originalLevel);
   configureIsolation(async () => null);
@@ -86,22 +84,8 @@ afterEach(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  try {
-    if (rollbackTrace) {
-      const trace = rollbackTrace;
-      rollbackTrace = undefined;
-      console.error(`[rollback timing] ${trace.label} Git Trace2 perf begin`);
-      try {
-        console.error(await readFile(trace.path, 'utf8'));
-      } catch (error) {
-        console.error(`[rollback timing] ${trace.label} Trace2 read failed: ${String(error)}`);
-      }
-      console.error(`[rollback timing] ${trace.label} Git Trace2 perf end`);
-    }
-  } finally {
-    await removeTempTree(root);
-  }
 });
+const track = trackTempRoots();
 afterAll(async () => {
   await db.close();
 });
@@ -601,130 +585,78 @@ for (const persistence of ['sql', 'file'] as const) {
     'replaced-stale',
   ] as const) {
     test(`${persistence}: rollback preserves a concurrent ${adopter} adoption before the final lookup`, async () => {
-      const label = `${persistence}/${adopter}`;
-      const startedAt = performance.now();
-      async function phase<T>(name: string, run: () => Promise<T>): Promise<T> {
-        const phaseStart = performance.now();
-        const log = (event: string) =>
-          console.error(
-            '[rollback timing]',
-            JSON.stringify({
-              label,
-              phase: name,
-              event,
-              time: new Date().toISOString(),
-              elapsedMs: performance.now() - startedAt,
-              phaseMs: performance.now() - phaseStart,
-            })
-          );
-        log('start');
-        try {
-          const result = await run();
-          log('done');
-          return result;
-        } catch (error) {
-          log('error');
-          throw error;
-        }
-      }
-      // Trace2 keeps Git's internal waits and child-process timings even when exec captures stderr.
-      const tracePath = join(root, 'rollback-git.perf');
-      await writeFile(tracePath, '');
-      rollbackTrace = { label, path: tracePath };
-      process.env.GIT_TRACE2_PERF = tracePath;
-      const store = await phase('open store', async () =>
+      const store =
         persistence === 'sql'
           ? isolation
           : (await (await import('./file-host')).createFileWorkflowHost(join(root, 'store')))
-              .records.isolation
-      );
+              .records.isolation;
       if (adopter === 'replaced-stale') {
-        await phase('seed stale row', () =>
-          store.create({
-            codebase_id: codebaseId,
-            workflow_type: 'task',
-            workflow_id: 'concurrent',
-            working_path: join(repo, '.worktrees', 'archon', 'task-concurrent'),
-            branch_name: toBranchName('archon/task-concurrent'),
-            metadata: { worktree_creation_id: 'old-creation' },
-          })
-        );
+        await store.create({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'concurrent',
+          working_path: join(repo, '.worktrees', 'archon', 'task-concurrent'),
+          branch_name: toBranchName('archon/task-concurrent'),
+          metadata: { worktree_creation_id: 'old-creation' },
+        });
       }
       const failure = new Error('registration rejected');
       let adopted: Awaited<ReturnType<typeof store.create>> | undefined;
       await expect(
-        phase('create and rollback', () =>
-          createRegisteredWorktree(
-            {
-              listActive: () => phase('list active registrations', () => store.listActive()),
-              create: async pending => {
-                const reused = await phase('provider adoption', () =>
-                  getIsolationProvider().create({
-                    workflowType: 'task',
-                    identifier: 'concurrent',
-                    codebaseId,
-                    codebaseName: 'test/repo',
-                    canonicalRepoPath: toRepoPath(repo),
-                  })
-                );
-                expect(reused.metadata.provenance).toBe('adopted');
-                const otherCodebaseId = randomUUID();
-                if (adopter === 'other-codebase') {
-                  await phase('insert other codebase', () =>
-                    db.query(
-                      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
-                      [otherCodebaseId, 'duplicate/repo', repo]
-                    )
-                  );
-                }
-                adopted = await phase('persist adoption', () =>
-                  store.create({
-                    ...pending,
-                    codebase_id:
-                      adopter === 'other-codebase' ? otherCodebaseId : pending.codebase_id,
-                    workflow_id: adopter === 'other-workflow' ? 'other' : pending.workflow_id,
-                    metadata: { adopted: true, worktree_creation_id: null },
-                  })
-                );
-                const work = join(adopted.working_path, 'in-progress.txt');
-                await phase('write in-progress file', () => writeFile(work, 'keep this work'));
-                throw failure;
-              },
-            },
-            {
-              request: {
+        createRegisteredWorktree(
+          {
+            listActive: store.listActive,
+            create: async pending => {
+              const reused = await getIsolationProvider().create({
                 workflowType: 'task',
                 identifier: 'concurrent',
                 codebaseId,
                 codebaseName: 'test/repo',
                 canonicalRepoPath: toRepoPath(repo),
-              },
-              createdByPlatform: 'cli',
-            }
-          )
+              });
+              expect(reused.metadata.provenance).toBe('adopted');
+              const otherCodebaseId = randomUUID();
+              if (adopter === 'other-codebase') {
+                await db.query(
+                  'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+                  [otherCodebaseId, 'duplicate/repo', repo]
+                );
+              }
+              adopted = await store.create({
+                ...pending,
+                codebase_id: adopter === 'other-codebase' ? otherCodebaseId : pending.codebase_id,
+                workflow_id: adopter === 'other-workflow' ? 'other' : pending.workflow_id,
+                metadata: { adopted: true, worktree_creation_id: null },
+              });
+              await writeFile(join(adopted.working_path, 'in-progress.txt'), 'keep this work');
+              throw failure;
+            },
+          },
+          {
+            request: {
+              workflowType: 'task',
+              identifier: 'concurrent',
+              codebaseId,
+              codebaseName: 'test/repo',
+              canonicalRepoPath: toRepoPath(repo),
+            },
+            createdByPlatform: 'cli',
+          }
         )
       ).rejects.toBe(failure);
       if (!adopted) throw new Error('expected concurrent adoption');
-      const retained = adopted;
-      expect(await phase('read retained row', () => store.getById(retained.id))).toEqual(adopted);
-      expect(
-        (await phase('list worktrees', () => listWorktrees(toRepoPath(repo)))).map(
-          worktree => worktree.path
-        )
-      ).toContain(toWorktreePath(adopted.working_path));
-      expect(
-        await phase('read in-progress file', () =>
-          Bun.file(join(retained.working_path, 'in-progress.txt')).text()
-        )
-      ).toBe('keep this work');
+      expect(await store.getById(adopted.id)).toEqual(adopted);
+      expect((await listWorktrees(toRepoPath(repo))).map(worktree => worktree.path)).toContain(
+        toWorktreePath(adopted.working_path)
+      );
+      expect(await Bun.file(join(adopted.working_path, 'in-progress.txt')).text()).toBe(
+        'keep this work'
+      );
       expect(events).toContainEqual(
         expect.objectContaining({
           msg: 'isolation_store_rollback_skipped_registered',
           worktreePath: adopted.working_path,
         })
-      );
-      console.error(
-        `[rollback timing] ${label} assertions done ${performance.now() - startedAt}ms`
       );
     });
   }

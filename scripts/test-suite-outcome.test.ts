@@ -133,26 +133,6 @@ function jobSteps(job: Record<string, unknown>): Record<string, unknown>[] {
 }
 
 describe('CI wiring', () => {
-  test('rollback artifacts follow the comparison outcome and output directory', () => {
-    const steps = jobSteps(record(jobs.test));
-    const comparison = steps.find(step =>
-      String(step.run ?? '').includes('bun scripts/measure-rollback-adoption.ts')
-    );
-    if (!comparison) throw new Error('Missing rollback comparison');
-    const upload = steps.find(step => step.name === 'Upload rollback comparison');
-    if (!upload) throw new Error('Missing rollback artifact upload');
-    expect(comparison.if).toBe(
-      "always() && github.event.pull_request.number == 4797 && runner.os == 'Windows' && matrix.check == 'core-tests' && matrix.part == '2/2'"
-    );
-    expect(comparison.run).toContain('"path=$env:ROLLBACK_OUTPUT" >> $env:GITHUB_OUTPUT');
-    expect(comparison.run).toContain('$rollbackBaseline "$env:ROLLBACK_OUTPUT"');
-    expect(record(comparison.env).ROLLBACK_OUTPUT).toBeString();
-    expect(comparison.id).toBeString();
-    expect(upload.if).toBe(`always() && steps.${String(comparison.id)}.outcome != 'skipped'`);
-    expect(record(upload.with).path).toBe(`\${{ steps.${String(comparison.id)}.outputs.path }}`);
-    expect(record(upload.with)['if-no-files-found']).toBe('error');
-  });
-
   test('static runs independently of the selector', () => {
     expect(record(jobs.static).needs).toBeUndefined();
     expect(record(jobs.static).if).toBe('${{ !github.event.pull_request.draft }}');

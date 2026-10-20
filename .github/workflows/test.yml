@@ -182,31 +182,6 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only ${{ matrix.check }}
 
-      # Bounded same-worker comparison for #4796. Keep it on the investigation PR:
-      # independent hosted workers cannot isolate diagnostic overhead from VM variance.
-      - name: Compare rollback diagnostics with their baseline
-        id: rollback-comparison
-        if: always() && github.event.pull_request.number == 4797 && runner.os == 'Windows' && matrix.check == 'core-tests' && matrix.part == '2/2'
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          ROLLBACK_OUTPUT: ${{ runner.temp }}/rollback-comparison
-        run: |
-          "path=$env:ROLLBACK_OUTPUT" >> $env:GITHUB_OUTPUT
-          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          $rollbackBaseline = 'eb44039df38af173ba89debbd7aacb392caf62fc'
-          git fetch --no-tags origin $rollbackBaseline
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bun scripts/measure-rollback-adoption.ts $rollbackBaseline "$env:ROLLBACK_OUTPUT"
-
-      - name: Upload rollback comparison
-        if: always() && steps.rollback-comparison.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
-        with:
-          name: rollback-comparison-${{ github.run_attempt }}
-          path: ${{ steps.rollback-comparison.outputs.path }}
-          if-no-files-found: error
-
   # The root scripts shard. Root tests read the packages, so it runs whenever the suite does.
   test-scripts:
     needs: changes
