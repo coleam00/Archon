@@ -4,12 +4,10 @@ import { readPreparationFrame, type RunOwnerPreparedStop } from './run-owner-pre
 const liveGroup: RunOwnerPreparedStop['groups'][number] = {
   pgid: 123,
   leaderReaped: false,
-  signalAttempted: true,
 };
 const reapedGroup: RunOwnerPreparedStop['groups'][number] = {
   pgid: 456,
   leaderReaped: true,
-  signalAttempted: false,
 };
 
 test.each([

@@ -6,8 +6,8 @@ import { isPidProvablyGone } from './process-owner';
 const execFileAsync = promisify(execFile);
 
 export type ProcessGroupStop =
-  | { pgid: number; leaderReaped: true; signalAttempted: false }
-  | { pgid: number; leaderReaped: false; signalAttempted: true; signalError?: string };
+  | { pgid: number; leaderReaped: true }
+  | { pgid: number; leaderReaped: false; signalError?: string };
 
 async function listPosixProcessGroups(): Promise<string> {
   const { stdout } = await execFileAsync('/bin/ps', ['-A', '-o', 'pgid='], { timeout: 5000 });

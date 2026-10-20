@@ -36,12 +36,10 @@ export const processGroupStopSchema = z.discriminatedUnion('leaderReaped', [
   z.object({
     pgid: z.number().int().positive(),
     leaderReaped: z.literal(true),
-    signalAttempted: z.literal(false),
   }),
   z.object({
     pgid: z.number().int().positive(),
     leaderReaped: z.literal(false),
-    signalAttempted: z.literal(true),
     signalError: z.string().optional(),
   }),
 ]);

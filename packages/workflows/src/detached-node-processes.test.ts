@@ -127,7 +127,7 @@ posixOnly(
       const signals = spyOn(process, 'kill');
       const prepared = trees.prepareTermination();
       expect(trees.prepareTermination()).toBe(prepared);
-      expect(prepared.groups).toEqual([{ pgid, leaderReaped: false, signalAttempted: true }]);
+      expect(prepared.groups).toEqual([{ pgid, leaderReaped: false }]);
       expect(signals.mock.calls.filter(([pid]) => pid === -pgid)).toEqual([[-pgid, 'SIGKILL']]);
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
@@ -201,9 +201,7 @@ posixOnly.each(['end', 'timeout', 'abort'] as const)(
       try {
         if (mode === 'end') {
           const prepared = trees.prepareTermination();
-          expect(prepared.groups).toEqual([
-            { pgid: root, leaderReaped: true, signalAttempted: false },
-          ]);
+          expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: true }]);
           const childGroup = Bun.spawnSync(['/bin/ps', '-p', String(job), '-o', 'pgid=']);
           expect(childGroup.exitCode).toBe(0);
           expect(Number(childGroup.stdout.toString().trim())).toBe(root);
@@ -296,9 +294,7 @@ posixOnly(
       });
       try {
         const first = trees.prepareTermination();
-        expect(first.groups).toEqual([
-          { pgid: root, leaderReaped: false, signalAttempted: true, signalError: 'EPERM' },
-        ]);
+        expect(first.groups).toEqual([{ pgid: root, leaderReaped: false, signalError: 'EPERM' }]);
         expect(trees.prepareTermination()).toBe(first);
         first.release();
       } finally {
@@ -306,7 +302,7 @@ posixOnly(
       }
       expect(alive(root)).toBe(true);
       const retry = trees.prepareTermination();
-      expect(retry.groups).toEqual([{ pgid: root, leaderReaped: false, signalAttempted: true }]);
+      expect(retry.groups).toEqual([{ pgid: root, leaderReaped: false }]);
       await waitUntil(() => !alive(root));
       retry.release();
       expect(await node).toMatchObject({ signal: 'SIGKILL' });
@@ -380,7 +376,7 @@ posixOnly.each(['timeout', 'abort', 'maxBuffer'] as const)(
       await waitUntil(() => confirming && !alive(root));
       await Bun.sleep(50);
       const prepared = trees.prepareTermination();
-      expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: true, signalAttempted: false }]);
+      expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: true }]);
       confirm();
       prepared.release();
       await result;

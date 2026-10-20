@@ -50,8 +50,8 @@ export class DetachedNodeProcesses {
     const command = this.commands.get(pgid);
     if (!command) throw new Error('Detached node command is not recorded');
     const group: ProcessGroupStop = command.reaped
-      ? { pgid, leaderReaped: true, signalAttempted: false }
-      : { pgid, leaderReaped: false, signalAttempted: true };
+      ? { pgid, leaderReaped: true }
+      : { pgid, leaderReaped: false };
     if (!group.leaderReaped) {
       try {
         process.kill(-pgid, signal);

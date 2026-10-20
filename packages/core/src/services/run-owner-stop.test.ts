@@ -41,7 +41,7 @@ posix.each(['inspection failure', 'surviving group'] as const)(
       pid: ownerPid,
       windowsJob: undefined,
       commit: async () => ({
-        groups: [{ pgid: nodePgid, leaderReaped: false, signalAttempted: true }],
+        groups: [{ pgid: nodePgid, leaderReaped: false }],
         warnings: [],
       }),
       isLive: () => true,

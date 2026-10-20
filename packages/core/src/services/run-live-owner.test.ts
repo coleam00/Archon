@@ -441,7 +441,6 @@ describe('detached owner preparation', () => {
     const groups = Array.from({ length: 12 }, (_, i) => ({
       pgid: 1000 + i,
       leaderReaped: true as const,
-      signalAttempted: false as const,
     }));
     const unregister = owner.registerTerminationPreparation(() => {
       prepared++;
@@ -498,17 +497,9 @@ describe('detached owner preparation', () => {
   });
 
   test.each([
-    [
-      'malformed',
-      '{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}',
-      'Invalid input',
-    ],
+    ['malformed', '{"group":{"pgid":"invalid","leaderReaped":true}}', 'Invalid input'],
     ['oversized', 'x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
-    [
-      'mixed',
-      '{"warning":"held output","group":{"pgid":1,"leaderReaped":false,"signalAttempted":true}}',
-      'Invalid input',
-    ],
+    ['mixed', '{"warning":"held output","group":{"pgid":1,"leaderReaped":false}}', 'Invalid input'],
   ])(
     'rejects %s preparation frames instead of acknowledging a stop',
     async (_kind, frame, expectedError) => {
