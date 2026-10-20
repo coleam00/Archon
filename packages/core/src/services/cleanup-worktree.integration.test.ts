@@ -729,15 +729,78 @@ describe('completed run worktree release', () => {
     }
   );
 
-  test('completion refuses ambiguous newline push destinations', async () => {
-    await git(repo, 'remote', 'set-url', '--push', 'upstream', 'first.git\nsecond.git');
-    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
-    await expect(
-      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
-    ).rejects.toThrow('Newlines');
-    expect(existsSync(env.working_path)).toBe(true);
-    expect(await status()).toBe('active');
-  });
+  test.each(['insteadOf', 'pushInsteadOf'] as const)(
+    'completion pins a resolved %s destination without rewriting it again',
+    async kind => {
+      const published = join(root, 'published.git');
+      const empty = join(root, 'empty.git');
+      for (const destination of [published, empty])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repo, 'push', '-q', published, `HEAD:refs/heads/${env.branch_name}`);
+      await git(repo, 'remote', 'set-url', 'upstream', 'completion-source:');
+      await git(repo, 'config', `url.${published}.${kind}`, 'completion-source:');
+      await git(repo, 'config', `url.${empty}.${kind}`, published);
+
+      expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow();
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
+
+  test.each(['url', 'pushurl'] as const)(
+    'completion inspects the validated configuration snapshot (%s)',
+    async kind => {
+      const published = join(root, 'published.git');
+      const first = join(root, 'first.git');
+      const second = join(root, 'second.git');
+      for (const destination of [published, first, second])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repo, 'push', '-q', published, `HEAD:refs/heads/${env.branch_name}`);
+      const originalExec = gitModule.execFileAsync;
+      const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (file, args, options) => {
+          const result = await originalExec(file, args, options);
+          if (args.includes('--null') && args.includes('--list'))
+            await originalExec('git', [
+              '-C',
+              repo,
+              'config',
+              `remote.upstream.${kind}`,
+              `${first}\n${second}`,
+            ]);
+          return result;
+        }
+      );
+      try {
+        await git(repo, 'config', `remote.upstream.${kind}`, published);
+        expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+        await git(repo, 'config', `remote.upstream.${kind}`, published);
+        await expect(
+          releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+        ).rejects.toThrow();
+        expect(existsSync(env.working_path)).toBe(true);
+        expect(await status()).toBe('active');
+      } finally {
+        exec.mockRestore();
+      }
+    }
+  );
+
+  test.each(['url', 'pushurl'] as const)(
+    'completion refuses ambiguous newline %s destinations',
+    async kind => {
+      await git(repo, 'config', `remote.upstream.${kind}`, 'first.git\nsecond.git');
+      expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow('Newlines');
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
 
   test('a remote that cannot be read keeps the checkout', async () => {
     await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));

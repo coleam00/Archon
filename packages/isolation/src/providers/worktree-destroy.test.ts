@@ -22,14 +22,15 @@ import { getLog } from './worktree/shared';
 const provider = new WorktreeProvider();
 const WORKTREE = git.toWorktreePath('/workspace/worktrees/repo/feature-branch');
 const BRANCH = git.toBranchName('feature-branch');
+const pushConfig = 'remote.origin.url\n/remote.git\0remote.upstream.url\n/upstream.git\0';
 const ownedDestroyOptions = { canonicalRepoPath: REPO, creationId: 'test-creation' };
 
 // A registered checkout that carries this creation's proof and is gone once removed.
 beforeEach(() => {
   resetWorktreeMocks();
   execSpy.mockImplementation(async (_file, args) => ({
-    stdout: args.includes('get-url')
-      ? '/remote.git\n'
+    stdout: args.includes('--null')
+      ? pushConfig
       : args.includes('ls-remote')
         ? `${'a'.repeat(40)}\trefs/heads/${args.at(-1)?.replace('refs/heads/', '')}\n`
         : '',
@@ -59,7 +60,7 @@ const failGit = (
 ): void => {
   execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
     if (args.includes(token)) throw error;
-    return { stdout: args.includes('get-url') ? '/remote.git\n' : extra(args), stderr: '' };
+    return { stdout: args.includes('--null') ? pushConfig : extra(args), stderr: '' };
   });
 };
 
@@ -396,9 +397,9 @@ describe('branch cleanup', () => {
       const failure = new Error(`Command failed: git https://user:${secret}@localhost/repo`);
       let inspections = 0;
       execSpy.mockImplementation(async (_cmd, args) => {
-        if (args.includes('get-url')) {
+        if (args.includes('--null')) {
           if (stage === 'destination resolution') throw failure;
-          return { stdout: '/remote.git\n', stderr: '' };
+          return { stdout: pushConfig, stderr: '' };
         }
         if (args.includes('ls-remote')) {
           inspections++;
@@ -429,7 +430,7 @@ describe('branch cleanup', () => {
 
   test('returns remoteBranchDeleted=false with warning on network error', async () => {
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-      if (args.includes('get-url')) return { stdout: '/remote.git\n', stderr: '' };
+      if (args.includes('--null')) return { stdout: pushConfig, stderr: '' };
       if (args.includes('ls-remote')) throw new Error('network unreachable');
       if (args.includes('push')) throw new Error('fatal: Could not read from remote repository');
       return { stdout: '', stderr: '' };
@@ -459,7 +460,7 @@ describe('branch cleanup', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/workspace/repo', 'remote', 'get-url', '--push', '--all', 'upstream'],
+      ['-C', '/workspace/repo', 'config', '--null', '--list'],
       expect.any(Object)
     );
     expect(execSpy).toHaveBeenCalledWith(
@@ -474,5 +475,7 @@ describe('branch cleanup', () => {
       ]),
       expect.any(Object)
     );
+    const push = execSpy.mock.calls.find(([, args]) => args.includes('push'));
+    expect(Object.values(push?.[2]?.env ?? {})).toContain('url./upstream.git.insteadOf');
   });
 });

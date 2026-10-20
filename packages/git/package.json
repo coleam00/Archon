@@ -42,6 +42,9 @@
       "src/branch.test.ts"
     ],
     [
+      "src/push-destinations.test.ts"
+    ],
+    [
       "src/checkout.integration.test.ts"
     ],
     [

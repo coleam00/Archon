@@ -720,8 +720,8 @@ JSON; it does not masquerade as a missing historical record.
 
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote and unpublished, so the engine removes it after the
-completion write, keeping the branch. The record is written before the removal, so a
+was clean, fully on a remote, and its branch was absent from every push destination of
+the configured remote. The engine removes it after the completion write, keeping the branch. The record is written before the removal, so a
 removal that is refused because work appeared in the meantime, or that fails, leaves the
 checkout and is logged. Otherwise it is
 `{ "disposition": "retained", "reason": ... }` with an optional `detail`:
@@ -734,7 +734,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
+| `published_branch` | At least one push destination of the configured remote advertises the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1556,10 +1556,12 @@ The scheduled cleanup keeps an environment whose checkout is missing the same wa
 the branch Archon created for it holds such a commit.
 
 A completed run removes the worktree it created when it completes, if the checkout is
-clean, every commit on its HEAD and branch is on a remote, and the configured remote
-does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which removes its local branch. When
-the remote cannot be read, the worktree stays and the record says `check_failed`. The
+clean, every commit on its HEAD and branch is on a remote, and none of the configured
+remote's push destinations advertises the branch. The publication check reads every
+push destination, which can differ from the fetch URL. The removal keeps the branch, so
+the run can still be adopted. A branch advertised by a push destination waits for
+`--merged`, which removes its local branch. When any push destination cannot be read,
+the worktree stays and the record says `check_failed`. The
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
 

@@ -660,6 +660,67 @@ describe('WorktreeProvider against real git', () => {
     }
   );
 
+  test.each(['pushurl', 'url'] as const)(
+    'remote destruction uses one configuration snapshot (%s)',
+    async kind => {
+      const first = join(root, 'first.git');
+      const second = join(root, 'second.git');
+      const intended = join(root, 'intended.git');
+      for (const destination of [first, second, intended])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      const ref = `refs/heads/${created.branchName}`;
+      for (const destination of [first, second, intended])
+        await git(repoPath, 'push', '-q', destination, created.branchName);
+      await git(repoPath, 'config', `remote.origin.${kind}`, intended);
+      const originalExec = gitModule.execFileAsync;
+      let changed = false;
+      const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (file, args, options) => {
+          const result = await originalExec(file, args, options);
+          if (args.includes('--null') && args.includes('--list')) {
+            await originalExec('git', [
+              '-C',
+              repoPath,
+              'config',
+              `remote.origin.${kind}`,
+              `${first}\n${second}`,
+            ]);
+            changed = true;
+          }
+          return result;
+        }
+      );
+      try {
+        const result = await provider.destroy(created.workingPath, {
+          canonicalRepoPath: request.canonicalRepoPath,
+          creationId: created.metadata.creationId,
+          branchName: created.branchName,
+          force: true,
+          deleteRemoteBranch: true,
+        });
+        expect(changed).toBe(true);
+        expect(result.remoteBranchDeleted).toBe(true);
+        expect(result.warnings).toEqual([]);
+      } finally {
+        exec.mockRestore();
+      }
+      expect(await git(root, 'ls-remote', intended, ref)).toBe('');
+      for (const destination of [first, second])
+        expect(await git(root, 'ls-remote', destination, ref)).toContain(ref);
+    }
+  );
+
   describe('ordinary destruction status', () => {
     async function createOwned() {
       await git(repoPath, 'remote', 'add', 'origin', repoPath);

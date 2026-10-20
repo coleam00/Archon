@@ -7,26 +7,75 @@ export async function resolvePushDestinations(repoPath: string, remote: string):
     ['-C', repoPath, 'config', '--null', '--list'],
     { timeout: 10000 }
   );
-  for (const record of config.split('\0')) {
-    const separator = record.indexOf('\n');
-    const key = record.slice(0, separator);
-    // get-url has no NUL output mode. Reject ambiguous URL values before splitting its output.
-    // Git rejects newlines in config keys, so rewrite destinations cannot introduce them.
-    if (
-      (key === `remote.${remote}.url` || key === `remote.${remote}.pushurl`) &&
-      record.indexOf('\n', separator + 1) !== -1
-    ) {
-      throw new Error('Newlines in push destination configuration are unsupported');
-    }
-  }
-  const { stdout } = await execFileAsync(
-    'git',
-    ['-C', repoPath, 'remote', 'get-url', '--push', '--all', remote],
-    { timeout: 10000 }
-  );
-  const destinations = stdout.split('\n').filter(destination => destination !== '');
+  const settings = config
+    .split('\0')
+    .filter(Boolean)
+    .map(record => {
+      const separator = record.indexOf('\n');
+      return separator < 0
+        ? { key: record, value: undefined }
+        : { key: record.slice(0, separator), value: record.slice(separator + 1) };
+    });
+  const urls = configuredUrls(settings, `remote.${remote}.url`);
+  const pushUrls = configuredUrls(settings, `remote.${remote}.pushurl`);
+  const insteadOf = configuredRewrites(settings, '.insteadof');
+  const pushInsteadOf = configuredRewrites(settings, '.pushinsteadof');
+  // Git applies insteadOf to explicit pushurls, but pushInsteadOf to original fallback URLs.
+  // Both resolution and newline validation must use this same NUL-delimited snapshot.
+  const pushed = urls.flatMap(url => {
+    const rewritten = rewriteUrl(url, pushInsteadOf);
+    return rewritten === undefined ? [] : [rewritten];
+  });
+  const destinations = pushUrls.length
+    ? pushUrls.map(url => rewriteUrl(url, insteadOf) ?? url)
+    : pushed.length
+      ? pushed
+      : urls.map(url => rewriteUrl(url, insteadOf) ?? url);
   if (!destinations.length) throw new Error('No push destination');
   return destinations;
+}
+
+type GitSetting = { key: string; value: string | undefined };
+
+function configuredUrls(settings: GitSetting[], key: string): string[] {
+  const urls: string[] = [];
+  for (const setting of settings) {
+    if (setting.key !== key) continue;
+    if (setting.value === undefined) throw new Error('Push destination requires a URL value');
+    if (setting.value.includes('\n'))
+      throw new Error('Newlines in push destination configuration are unsupported');
+    if (setting.value) urls.push(setting.value);
+    else urls.length = 0;
+  }
+  return urls;
+}
+
+function configuredRewrites(settings: GitSetting[], suffix: string): Map<string, string[]> {
+  const rewrites = new Map<string, string[]>();
+  for (const { key, value } of settings) {
+    if (!key.startsWith('url.') || !key.endsWith(suffix) || key.length < 4 + suffix.length)
+      continue;
+    if (value === undefined) throw new Error('URL rewrite requires a prefix value');
+    const base = key.slice(4, -suffix.length);
+    const prefixes = rewrites.get(base) ?? [];
+    prefixes.push(value);
+    rewrites.set(base, prefixes);
+  }
+  return rewrites;
+}
+
+function rewriteUrl(url: string, rewrites: Map<string, string[]>): string | undefined {
+  let longest: string | undefined;
+  let destination: string | undefined;
+  for (const [base, prefixes] of rewrites) {
+    for (const prefix of prefixes) {
+      if (url.startsWith(prefix) && (longest === undefined || prefix.length > longest.length)) {
+        longest = prefix;
+        destination = base + url.slice(prefix.length);
+      }
+    }
+  }
+  return destination;
 }
 
 /** Pin Git's single URL rewrite to an already resolved endpoint for reads and pushes. */

@@ -769,50 +769,11 @@ back:
 removes each worktree whose pull request merged, with its local branch. Remote
 branches are retained with a warning: after registration retirement, a Git commit
 ID cannot prove whether the branch belongs to a replacement registration. Force
-does not bypass this refusal. For manual cleanup, first verify from the primary
-checkout that the branch still belongs to the completed work and is no longer in
-use. Leave replacement refs alone. Use the configured `worktree.remote` (default:
-`origin`) and branch reported by cleanup. Inspect the push destinations with
-`git remote get-url --push --all <remote>`. For each intended destination, use
-the following procedure in Bash. Copy the exact URL, including any leading or
-trailing spaces, into `push_url`:
-
-```bash
-push_url='<push-url>'
-branch='<branch>'
-endpoint="archon-cleanup-$$-$RANDOM:"
-git_at_endpoint() (
-    config_index=${GIT_CONFIG_COUNT:-0}
-    export "GIT_CONFIG_KEY_${config_index}=url.${push_url}.insteadOf"
-    export "GIT_CONFIG_VALUE_${config_index}=$endpoint"
-    export "GIT_CONFIG_KEY_$((config_index + 1))=url.${push_url}.pushInsteadOf"
-    export "GIT_CONFIG_VALUE_$((config_index + 1))=$endpoint"
-    export GIT_CONFIG_COUNT=$((config_index + 2))
-    git "$@"
-)
-git_at_endpoint ls-remote --refs -- "$endpoint" "refs/heads/$branch"
-```
-
-Inspect the advertised OID and verify that commit belongs to the completed work.
-An empty result means the ref is already absent. Keep the same `push_url`, `branch`
-and `endpoint`, then enter the verified OID:
-
-```bash
-verified_oid='<verified-oid>'
-git_at_endpoint push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
-```
-
-The temporary alias maps directly to the resolved URL for both commands, preventing
-another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
-Separate config keys and values preserve URLs containing `=`. The destination
-listing is line-delimited; if a configured URL contains a newline,
-do not split it into destinations. Inspect the NUL-delimited configuration with
-`git config --null --list` and verify the exact destination before proceeding.
-
-The lease refuses a changed tip but cannot detect a same-commit republish. Delete
-only while no one is reusing or publishing that branch; leave it alone if ownership
-is uncertain. On GitHub, enable **Automatically delete head branches** in repository
-settings to have GitHub remove merged pull requests' branches automatically.
+does not bypass this refusal. For manual cleanup, follow the
+[remote branch recovery procedure](https://archon.diy/reference/cli/#recovering-remote-branch-cleanup)
+in the CLI reference. It covers destination inspection, ownership verification and leased deletion.
+On GitHub, enable **Automatically delete head branches** in repository settings to have
+GitHub remove merged pull requests' branches automatically.
 
 A worktree with uncommitted changes, a run
 that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
@@ -820,8 +781,10 @@ it also removes worktrees whose pull request was closed without merging. It runs
 and creates no worktree of its own.
 
 A worktree that never opened a pull request is not its concern. A completed run removes
-its own worktree when the checkout is clean, every commit is on a remote, and the branch
-was never published; otherwise the run's terminal record says why it stayed.
+its own worktree when the checkout is clean, every commit is on a remote, and no push
+destination of the configured remote advertises the branch. The publication check reads every push destination,
+which can differ from the fetch URL. If any destination advertises the branch or cannot be
+read, the checkout stays; the run's terminal record says why.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
 installs that run only the CLI. The pack installs no binding. A native schedule starts a
