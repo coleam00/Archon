@@ -350,26 +350,12 @@ export async function executeWorkflow(
     if (baselineFailure) return baselineFailure;
   }
 
-  const sourced = await establishAdoptedRunSource(
-    deps,
-    platform,
-    conversationId,
-    workflowRun,
-    workflowSourceDir,
-    opts,
-    isContinuation,
-    dispatch.execution
-  );
-  if (sourced.stopped) return sourced.result;
-  const { workflowSourceRoots } = sourced.value;
-
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
   // Hold a Windows keep-awake request for the executing window (see
   // utils/keep-awake.ts for the Modern Standby / mid-run-death rationale and
-  // best-effort semantics). Placed HERE, not at function top, so the
-  // early-return validation paths above never leak an unpaired acquire; the
-  // matching release is the first statement of this try's finally.
+  // best-effort semantics). Source establishment is inside the paired window;
+  // its stopped results also release through this try's finally.
   keepAwake.acquire();
   // Set by every path that observes a rejected terminal status write — one arriving
   // from the DAG or a sub-run (the catch below), and the catch's own recovery write.
@@ -378,6 +364,22 @@ export async function executeWorkflow(
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
   try {
+    const sourced = await establishAdoptedRunSource(
+      deps,
+      platform,
+      conversationId,
+      workflowRun,
+      workflowSourceDir,
+      opts,
+      isContinuation,
+      dispatch.execution
+    );
+    if (sourced.stopped) {
+      sourceExecutionStopped = true;
+      return sourced.result;
+    }
+    const { workflowSourceRoots } = sourced.value;
+
     const adoptedRunDir = sourced.value.adoptedRunDir();
 
     // The environment stays fixed for this execution; resumed segments resolve again
@@ -681,6 +683,9 @@ export async function executeWorkflow(
       }
     } catch (writeError) {
       terminalStatusWriteFailed = true;
+      if (writeError instanceof TerminalStatusWriteError) {
+        writeError.message += ` (while recording workflow failure: ${err.message})`;
+      }
       throw writeError;
     } finally {
       emitter.unregisterRun(workflowRun.id);
