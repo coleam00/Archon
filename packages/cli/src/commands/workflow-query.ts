@@ -643,7 +643,14 @@ export async function workflowRunsCommand(
       try {
         codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
       } catch (error) {
-        getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+        const err = error as Error;
+        getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+        const message = `Failed to resolve workflow runs project: ${err.message}`;
+        if (opts.json) {
+          await writeJsonLine({ ok: false, error: message });
+          return 1;
+        }
+        throw new Error(message, { cause: err });
       }
     }
     const runs = await host.deps.store.findOpenWorkRuns({
@@ -688,19 +695,19 @@ export async function workflowRunsCommand(
     statusFilter = parsed.data;
   }
 
-  // Scope to this project by exact registration first, then through the
-  // checkout's canonical repository path. This preserves an explicitly
-  // registered linked worktree while allowing another linked worktree to share
-  // its registered primary checkout. Ordinary clones remain unchanged (#2613).
-  // --all opts out of scoping. A lookup failure or an unregistered cwd both
-  // fall back to the global list — never a silent wrong-scope (the human path
-  // prints an explicit note below).
   let codebase = null;
   if (!opts.all) {
     try {
       codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
     } catch (error) {
-      getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+      const err = error as Error;
+      getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+      const message = `Failed to resolve workflow runs project: ${err.message}`;
+      if (opts.json) {
+        await writeJsonLine({ ok: false, error: message });
+        return 1;
+      }
+      throw new Error(message, { cause: err });
     }
   }
   // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
@@ -725,7 +732,7 @@ export async function workflowRunsCommand(
   }
 
   // True when project scoping was requested but fell back to the global list
-  // (unregistered cwd or a lookup failure). The human path prints a note below;
+  // (unregistered cwd). The human path prints a note below;
   // surface the same signal in --json so an agent isn't handed a global result
   // it silently mistakes for a project-scoped one.
   const scopeFallback = !opts.all && !codebase;
