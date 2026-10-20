@@ -29,7 +29,9 @@ function rulePassages(file: string): string[] {
 function namedVariables(passage: string): string[] {
   const group = /user-controlled variables \(([^)]*)\)/i.exec(passage);
   if (group === null) throw new Error(`no parenthesised variable list in: ${passage}`);
-  return [...group[1].matchAll(/\$([A-Z_]+)/g)].map(match => match[1]);
+  const names = [...group[1].matchAll(/\$([A-Z_]+)/g)].map(match => match[1]);
+  if (names.length === 0) throw new Error(`no variables named in: ${passage}`);
+  return names;
 }
 
 /**
@@ -41,7 +43,9 @@ function namedEnvironment(passage: string): string[] {
   const clause = /environment variables\b(.*)/i.exec(passage);
   if (clause === null) throw new Error(`no environment variable list in: ${passage}`);
   const promised = clause[1].split(/\bplus\b/i)[0];
-  return [...promised.matchAll(/`([A-Z_]+)`/g)].map(match => match[1]);
+  const names = [...promised.matchAll(/`([A-Z_]+)`/g)].map(match => match[1]);
+  if (names.length === 0) throw new Error(`no environment variables named in: ${passage}`);
+  return names;
 }
 
 /** Every variable the copies treat as user-controlled: the substituted names and their env forms. */
