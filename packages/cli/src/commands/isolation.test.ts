@@ -30,6 +30,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+const mockListActive = mock<typeof IsolationDb.listActive>(() => Promise.resolve([]));
 const mockFindActiveByBranchName = mock<typeof IsolationDb.findActiveByBranchName>(() =>
   Promise.resolve(null)
 );
@@ -43,7 +44,7 @@ const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByBranchName: mockFindActiveByBranchName,
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
-  listAllActiveWithCodebase: mock(() => Promise.resolve([])),
+  listActive: mockListActive,
   listByCodebaseWithAge: mock(() => Promise.resolve([])),
   findStaleEnvironments: mockFindStaleEnvironments,
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
@@ -204,6 +205,7 @@ describe('isolationCompleteCommand', () => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    mockListActive.mockReset().mockResolvedValue([mockEnv]);
     mockFindActiveByBranchName.mockReset();
     mockRemoveEnvironment.mockReset();
     mockWorktreeExists.mockReset().mockResolvedValue(true);
@@ -252,6 +254,7 @@ describe('isolationCompleteCommand', () => {
 
   it('prints not found when env does not exist', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(null);
+    mockListActive.mockResolvedValueOnce([]);
 
     await isolationCompleteCommand(['nonexistent-branch'], { force: false, deleteRemote: true });
 
@@ -291,7 +294,9 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when env has uncommitted changes without --force', async () => {
-    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    const env = makeEnvironment({ branch_name: 'dirty-branch' });
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+    mockListActive.mockResolvedValueOnce([env]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     await isolationCompleteCommand(['dirty-branch'], { force: false, deleteRemote: true });
@@ -671,7 +676,9 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('proceeds despite all checks when --force is set', async () => {
-    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    const env = makeEnvironment({ branch_name: 'dirty-branch' });
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+    mockListActive.mockResolvedValueOnce([env]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
     mockRemoveEnvironment.mockResolvedValueOnce({
@@ -694,7 +701,9 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts failed when removeEnvironment throws', async () => {
-    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    const env = makeEnvironment({ branch_name: 'bad-branch' });
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+    mockListActive.mockResolvedValueOnce([env]);
     mockRemoveEnvironment.mockRejectedValueOnce(new Error('git error: cannot remove worktree'));
 
     await isolationCompleteCommand(['bad-branch'], { force: false, deleteRemote: true });
@@ -706,10 +715,14 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('handles multiple branches with mixed results', async () => {
+    mockListActive
+      .mockResolvedValueOnce([makeEnvironment({ branch_name: 'branch-1' })])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([makeEnvironment({ branch_name: 'branch-3' })]);
     mockFindActiveByBranchName
-      .mockResolvedValueOnce(mockEnv) // found: branch-1
+      .mockResolvedValueOnce(makeEnvironment({ branch_name: 'branch-1' })) // found: branch-1
       .mockResolvedValueOnce(null) // not found: branch-2
-      .mockResolvedValueOnce(mockEnv); // found: branch-3 (will fail)
+      .mockResolvedValueOnce(makeEnvironment({ branch_name: 'branch-3' })); // found: branch-3 (will fail)
     mockRemoveEnvironment
       .mockResolvedValueOnce({ worktreeRemoved: true, branchDeleted: true, warnings: [] }) // branch-1 succeeds
       .mockRejectedValueOnce(new Error('some error')); // branch-3 fails
@@ -722,7 +735,9 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 1 not found');
   });
   it('counts as failed when removeEnvironment returns skippedReason (ghost worktree)', async () => {
-    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    const env = makeEnvironment({ branch_name: 'ghost-branch' });
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+    mockListActive.mockResolvedValueOnce([env]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: false,
       branchDeleted: false,
@@ -740,7 +755,9 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts as failed when removeEnvironment returns partial (worktree not removed, branch deleted)', async () => {
-    mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
+    const env = makeEnvironment({ branch_name: 'partial-branch' });
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+    mockListActive.mockResolvedValueOnce([env]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: false,
       branchDeleted: true,
