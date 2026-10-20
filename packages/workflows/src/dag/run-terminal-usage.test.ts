@@ -1820,9 +1820,15 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     );
   });
 
-  it.each(['node_completed', 'node_failed', 'node_deferred_usage'] as const)(
-    'keeps metadata-free unpriced %s usage unknown through resume',
-    async eventType => {
+  it.each(
+    (['node_completed', 'node_failed', 'node_deferred_usage'] as const).flatMap(eventType =>
+      [{ input: 10, output: 2 }, 'bad', null, { input: 'bad', output: 2 }].map(
+        tokens => [eventType, tokens] as const
+      )
+    )
+  )(
+    'keeps metadata-free unpriced %s usage unknown through resume with tokens %j',
+    async (eventType, tokens) => {
       providerCosts(undefined);
       const prior = ai('prior');
       const store = await run({ name: 'legacy-cost', nodes: [prior, sh('anchor')] });
@@ -1832,7 +1838,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       const data = event.data as Record<string, unknown>;
       for (const key of nodeExecutionMetadataPayloadSchema.keyof().options) delete data[key];
       delete data.cost_usd;
-      data.tokens = { input: 10, output: 2 };
+      data.tokens = tokens;
       data.error = 'historical failure';
       event.event_type = eventType;
       const resume = await resumeOptions(store);

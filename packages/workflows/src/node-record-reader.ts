@@ -144,7 +144,7 @@ export function readNodeRecordEvent(
       metadata.spend.tokens.reason === 'incomplete'
         ? { tokensUnknown: true }
         : {}),
-      costUsd: readRawCost(metadata?.spend, raw.cost_usd, data.tokens),
+      costUsd: readRawCost(metadata?.spend, raw.cost_usd, Object.hasOwn(raw, 'tokens')),
     },
     ...(metadata === undefined ? {} : { metadata }),
   };
@@ -170,7 +170,7 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
       tokens: raw.tokens,
       tokensUnknown:
         data.spend?.tokens.source === 'unavailable' && data.spend.tokens.reason === 'incomplete',
-      costUsd: readRawCost(data.spend, raw.cost_usd, data.tokens),
+      costUsd: readRawCost(data.spend, raw.cost_usd, Object.hasOwn(raw, 'tokens')),
     },
   };
 }
@@ -178,8 +178,8 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
 function readRawCost(
   spend: NodeExecutionMetadata['spend'] | undefined,
   rawCost: unknown,
-  tokens: SerializedNodeData['tokens']
+  hasTokens: boolean
 ): unknown {
   if (spend !== undefined) return exactExecutionCost(spend) === null ? null : rawCost;
-  return rawCost === undefined && tokens !== undefined ? null : rawCost;
+  return rawCost === undefined && hasTokens ? null : rawCost;
 }
