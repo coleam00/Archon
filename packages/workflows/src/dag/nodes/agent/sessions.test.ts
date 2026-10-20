@@ -1630,6 +1630,65 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     ]);
   });
 
+  for (const missingSource of ['skipped', 'completed without a session'] as const) {
+    it(`rejects a stale same-body session when iteration 2's source is ${missingSource}`, async () => {
+      const nodes = sameBodyWorkflow(false);
+      const group = nodes[0];
+      if (group?.kind !== 'loop_group') throw new Error('missing group');
+      const [source, consumer] = group.loop_group.nodes;
+      if (!source || !consumer) throw new Error('missing body nodes');
+      if (missingSource === 'skipped') source.when = '$LOOP_PREV.b.output.skip != true';
+      consumer.trigger_rule = 'all_done';
+      consumer.output_format = {
+        type: 'object',
+        properties: { skip: { type: 'boolean' } },
+        required: ['skip'],
+      };
+      group.loop_group.until_bash = 'test $b.output.skip = false';
+
+      let aRuns = 0;
+      let bRuns = 0;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        const sessionId = prompt === 'a' ? `A${++aRuns}` : `B${++bRuns}`;
+        yield { type: 'agent_message_chunk', text: sessionId };
+        yield {
+          type: 'result',
+          ...(prompt === 'a' && aRuns === 2 ? {} : { sessionId }),
+          ...(prompt === 'b' ? { structuredOutput: { skip: true } } : {}),
+          ...(session ? { resumed: true } : {}),
+        };
+      });
+
+      const store = await runAddressableWorkflow(nodes);
+      expect(aRuns).toBe(missingSource === 'skipped' ? 1 : 2);
+      expect(sameBodyConsumerCalls()).toEqual([['A1', true]]);
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+      const events = persistedEvents(store);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: missingSource === 'skipped' ? 'node_skipped' : 'node_completed',
+          step_name: 'group.a',
+          data: expect.objectContaining({ iteration: 2 }),
+        })
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_failed',
+          step_name: 'group.b',
+          data: expect.objectContaining({
+            invocation: expect.objectContaining({ loopPath: [{ groupId: 'group', iteration: 2 }] }),
+            session_source_node_id: 'a',
+            error:
+              "Node 'b' cannot resume 'a': the completed source has no available provider session.",
+          }),
+        })
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({ event_type: 'node_failed', step_name: 'group' })
+      );
+    });
+  }
+
   it("keeps a same-body consumer on its iteration's source across a nested pause", async () => {
     mockSameBodySessions();
     const nodes = sameBodyWorkflow(true);
