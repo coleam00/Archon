@@ -120,7 +120,7 @@ nodes:
                 required: [what, why, recommendation, choices, if_unanswered, links]
             required: [number, action, class, head, reran, reason, brief, attention]
         # The default branch as the sweep found it; an attention item only when its red holds merges.
-        dev:
+        base:
           type: object
           additionalProperties: false
           properties:
@@ -150,7 +150,7 @@ nodes:
               required: [what, why, recommendation, choices, if_unanswered, links]
           required: [summary, attention]
         summary: { type: string }
-      required: [decisions, dev, summary]
+      required: [decisions, base, summary]
 
   # Checks the decisions, reads back every pull request and records one decision per
   # item; raises at most one attention item. It also runs when no sweep was due.
@@ -179,7 +179,7 @@ nodes:
               id: { type: string }
               label: { type: string }
             required: [id, label]
-        class: { type: string, enum: ['', pr, dev] }
+        class: { type: string, enum: ['', pr, base] }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
       required: [merged, summary, attention, options, class, asked]

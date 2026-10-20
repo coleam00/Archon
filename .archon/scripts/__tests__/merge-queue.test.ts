@@ -7,7 +7,7 @@ import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
   checksOf,
-  DEV_EFFECTS,
+  BASE_EFFECTS,
   gateRefusals,
   MERGE_ASKED_BY,
   MERGE_EFFECTS,
@@ -176,9 +176,9 @@ describe('the merge record and the gate', () => {
     expect(at('sweep', ...decision, 'class')?.enum).toEqual([...POLICY_CLASSES]);
     expect(at('sweep', ...decision, 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...MERGE_EFFECTS]);
     expect(at('sweep', ...decision, 'attention', 'recommendation', 'confidence')?.enum).toEqual([...CONFIDENCES]);
-    expect(at('sweep', 'dev', 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...DEV_EFFECTS]);
+    expect(at('sweep', 'base', 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...BASE_EFFECTS]);
     expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
-    expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...DEV_EFFECTS]);
+    expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
 });
 
@@ -367,7 +367,7 @@ function merges(result: ScriptRun): string[] {
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
-const DEV_GREEN = { summary: 'dev is green', attention: null };
+const BASE_GREEN = { summary: 'dev is green', attention: null };
 
 const ATTENTION: MergeAttention = {
   what: 'PR 42 changes the SDLC pack; merge it?',
@@ -386,12 +386,12 @@ function decision(overrides: Record<string, unknown>): Record<string, unknown> {
   return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', attention: null, ...overrides };
 }
 
-function recordInputs(decisions: readonly Record<string, unknown>[], dev: Record<string, unknown> = DEV_GREEN): Record<string, string> {
+function recordInputs(decisions: readonly Record<string, unknown>[], base: Record<string, unknown> = BASE_GREEN): Record<string, string> {
   return {
     INPUTS_PATH: 'sweep',
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
-    INPUTS_SWEEP: JSON.stringify({ decisions, dev, summary: 'swept' }),
+    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
   };
 }
 
@@ -404,7 +404,7 @@ const BOTH_ITEMS = JSON.stringify([
   ...JSON.parse(ITEMS),
 ]);
 const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
-const DEV_RED = {
+const BASE_RED = {
   summary: 'lint red on dev after a rerun',
   attention: { ...ATTENTION, what: 'dev is red since PR 43 merged', choices: [HOLD], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
 };
@@ -561,8 +561,8 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const inputs = (dev: Record<string, unknown>) => ({ ...recordInputs([decision({ number: 43 }), decision({})], dev), INPUTS_ITEMS: BOTH_ITEMS });
-    const unmerged = run(at, 'record', inputs(DEV_GREEN), { pr: { merged: [43] } });
+    const inputs = (base: Record<string, unknown>) => ({ ...recordInputs([decision({ number: 43 }), decision({})], base), INPUTS_ITEMS: BOTH_ITEMS });
+    const unmerged = run(at, 'record', inputs(BASE_GREEN), { pr: { merged: [43] } });
     expect(unmerged.code).not.toBe(0);
     expect(unmerged.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back open; every other decision is recorded`);
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)' }] } } });
@@ -573,7 +573,7 @@ describe('the merge queue scripts', () => {
     // Closed, not merged, under a red default branch, and PR 43's work item is no longer this run's.
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, { claim: { run_id: 'another-run', at: AT, requests: [] } }), subject: OTHER });
-    const closed = run(at, 'record', inputs(DEV_RED), { pr: { state: 'CLOSED', merged: [43] } });
+    const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
     expect(closed.code).not.toBe(0);
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
     expect(closed.stderr).toContain('the default branch is red and was not raised (lint red on dev after a rerun)');
@@ -587,14 +587,14 @@ describe('the merge queue scripts', () => {
     const released = { merged: [42], attention: '', class: '', asked: null };
     // Declared merged; declared at another head; merged by hand, declared wait; merged by hand under an ask.
     const cases = [
-      [decision({}), DEV_GREEN],
-      [decision({ head: OLD }), DEV_GREEN],
-      [decision({ action: 'wait', reason: 'CI pending' }), DEV_GREEN],
-      [decision({ action: 'ask', attention: ATTENTION }), DEV_GREEN],
+      [decision({}), BASE_GREEN],
+      [decision({ head: OLD }), BASE_GREEN],
+      [decision({ action: 'wait', reason: 'CI pending' }), BASE_GREEN],
+      [decision({ action: 'ask', attention: ATTENTION }), BASE_GREEN],
     ] as const;
-    for (const [decided, dev] of cases) {
+    for (const [decided, base] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));
-      expect(ok(run(at, 'record', recordInputs([decided], dev), { pr: merged }))).toMatchObject(released);
+      expect(ok(run(at, 'record', recordInputs([decided], base), { pr: merged }))).toMatchObject(released);
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(false);
     }
@@ -654,9 +654,9 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], DEV_RED);
+    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
-    expect(raised).toMatchObject({ merged: [43], class: 'dev', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'dev' } });
+    expect(raised).toMatchObject({ merged: [43], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
     expect(raised.attention).toContain('dev is red since PR 43 merged');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ decision: 'ask (not raised this run) (unclear)' }] } } });
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });

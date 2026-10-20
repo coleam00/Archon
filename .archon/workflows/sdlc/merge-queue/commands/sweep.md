@@ -13,7 +13,7 @@ Every forge command names the repository with `--repo <host>/<path>`. Run the ga
 
 ## The default branch first
 
-Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: merge nothing this sweep, and say so in each pull request's `reason`. Find what each failing job points at. Red in code none of the pull requests merged since the branch was last green touches gets one rerun of its failed jobs (`gh run rerun <run-id> --failed`), unless the run's attempt number already shows a rerun; then the pull requests `wait`. Red after a rerun, or red in code a recent merge touched, is raised: `dev.attention` names the failing checks, every pull request merged since the branch was last green, the one you suspect, and recommends a revert or a fix-forward; its one choice is `hold`. Otherwise `dev.attention` is null. `dev.summary` says what you found.
+Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: merge nothing this sweep, and say so in each pull request's `reason`. Find what each failing job points at. Red in code none of the pull requests merged since the branch was last green touches gets one rerun of its failed jobs (`gh run rerun <run-id> --failed`), unless the run's attempt number already shows a rerun; then the pull requests `wait`. Red after a rerun, or red in code a recent merge touched, is raised: `base.attention` names the failing checks, every pull request merged since the branch was last green, the one you suspect, and recommends a revert or a fix-forward; its one choice is `hold`. Otherwise `base.attention` is null. `base.summary` says what you found.
 
 ## Decide
 

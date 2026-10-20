@@ -26,7 +26,7 @@ import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
-  type DevAttention,
+  type BaseAttention,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -79,9 +79,9 @@ interface Decision {
 
 interface Sweep {
   readonly decisions: readonly Decision[];
-  readonly dev: {
+  readonly base: {
     readonly summary: string;
-    readonly attention: DevAttention | null;
+    readonly attention: BaseAttention | null;
   };
   readonly summary: string;
 }
@@ -244,11 +244,11 @@ function main(): void {
   const decisions = sweep === null ? [] : decide(items, sweep);
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  const devAttention = sweep?.dev.attention ?? null;
+  const baseAttention = sweep?.base.attention ?? null;
   const firstAsk = decisions.find(decision => decision.attention !== null);
   let asked: MergeAsked | null =
-    devAttention !== null
-      ? { by: 'dev', attention: devAttention }
+    baseAttention !== null
+      ? { by: 'base', attention: baseAttention }
       : firstAsk === undefined
         ? null
         : {
@@ -262,7 +262,7 @@ function main(): void {
   const render = (raised: MergeAsked | null): string =>
     raised === null
       ? ''
-      : raised.by === 'dev'
+      : raised.by === 'base'
         ? renderAttention('Merge queue: the default branch is red', raised.attention)
         : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
 
@@ -276,8 +276,8 @@ function main(): void {
   const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
   // the next sweep, and a red default branch is named in the failure instead.
-  if (asked?.by === 'dev' && contradictions.length > 0) {
-    contradictions.push(`the default branch is red and was not raised (${sweep?.dev.summary ?? ''})`);
+  if (asked?.by === 'base' && contradictions.length > 0) {
+    contradictions.push(`the default branch is red and was not raised (${sweep?.base.summary ?? ''})`);
   }
   // The asked pull request was merged or closed under the question: there is nothing to ask.
   const askedPr = asked?.by === 'pr' ? asked.pr.number : null;

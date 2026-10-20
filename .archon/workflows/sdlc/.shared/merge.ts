@@ -23,8 +23,8 @@ export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
-export const DEV_EFFECTS = ['hold'] as const;
-export type DevAttention = Attention<(typeof DEV_EFFECTS)[number]>;
+export const BASE_EFFECTS = ['hold'] as const;
+export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
 
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
 export const SWEEP_ACTIONS = ['merged', 'return', 'ask', 'wait'] as const;
@@ -34,7 +34,7 @@ export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
 /** Which attention item a run raised: its class label, which the YAML also declares. */
-export const MERGE_ASKED_BY = ['pr', 'dev'] as const;
+export const MERGE_ASKED_BY = ['pr', 'base'] as const;
 export type MergeAskedBy = (typeof MERGE_ASKED_BY)[number];
 /** What the record node asked, which the ruling node needs to act on the answer. */
 export type MergeAsked =
@@ -46,7 +46,7 @@ export type MergeAsked =
       readonly brief: string;
       readonly attention: MergeAttention;
     }
-  | { readonly by: Extract<MergeAskedBy, 'dev'>; readonly attention: DevAttention };
+  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 

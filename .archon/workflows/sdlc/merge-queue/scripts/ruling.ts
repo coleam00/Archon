@@ -68,7 +68,7 @@ function main(): void {
   if (asked === null) throw new Error('the answer arrived with nothing asked');
   const id = trimmed(process.env.INPUTS_CHOICE);
   const words = trimmed(process.env.INPUTS_TEXT);
-  if (asked.by === 'dev') {
+  if (asked.by === 'base') {
     chosen(asked.attention, id);
     emit({
       decision: 'hold',

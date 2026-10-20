@@ -654,7 +654,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   brief, so the build queue picks it up.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
   one choice holds merges until it is green, or else the first pull request the sweep
-  asked about, labelled `merge: dev` or `merge: pr`. It carries the build queue's
+  asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
   links. Every pull-request item also offers `other`, which returns the pull request to

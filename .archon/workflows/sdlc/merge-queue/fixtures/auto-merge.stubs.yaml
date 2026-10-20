@@ -17,7 +17,7 @@ facts:
 sweep:
   decisions:
     - { number: 42, action: merged, class: clear, head: "1111111", reran: false, reason: "stub: a bug fix with its test; the gate passed", brief: "", attention: null }
-  dev: { summary: "stub: dev is green", attention: null }
+  base: { summary: "stub: dev is green", attention: null }
   summary: "stub: merged PR 42"
 record:
   merged: [42]

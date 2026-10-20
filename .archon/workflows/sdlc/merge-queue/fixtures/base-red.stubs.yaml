@@ -18,7 +18,7 @@ facts:
 sweep:
   decisions:
     - { number: 42, action: wait, class: clear, head: "1111111", reran: false, reason: "stub: dev is red, so nothing merges", brief: "", attention: null }
-  dev:
+  base:
     summary: "stub: the unit job fails in a file PR 41 changed"
     attention:
       what: "stub: dev CI is red since PR 41 merged"
@@ -34,8 +34,8 @@ record:
   summary: "stub: dev is red; merged nothing"
   attention: "stub: the attention message"
   options: [{ id: hold, label: "stub: hold merges" }]
-  class: dev
-  asked: { by: dev, attention: {} }
+  class: base
+  asked: { by: base, attention: {} }
 ask: { decision: hold, text: "" }
 ruling:
   decision: hold
