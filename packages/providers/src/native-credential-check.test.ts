@@ -26,7 +26,18 @@ const request = () => ({ env: { PREFLIGHT_TEST: 'value' }, signal: new AbortCont
 for (const entry of [
   { account: {}, expected: 'not_connected' },
   { account: { apiKeySource: 'none', tokenSource: 'none' }, expected: 'not_connected' },
-  { account: { tokenSource: 'oauth' }, expected: 'usable' },
+  // The shapes the Claude Code CLI reports for a logged-out user and a claude.ai
+  // subscription login: a subscription names the account but no credential source.
+  { account: { tokenSource: 'none', apiProvider: 'firstParty' }, expected: 'not_connected' },
+  {
+    account: {
+      email: 'user@example.com',
+      organization: 'Example',
+      subscriptionType: 'Claude Max',
+      apiProvider: 'firstParty',
+    },
+    expected: 'usable',
+  },
   { account: { apiKeySource: 'ANTHROPIC_API_KEY' }, expected: 'usable' },
   { account: { apiProvider: 'bedrock' }, expected: 'not_checked' },
 ] as const) {
