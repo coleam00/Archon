@@ -162,7 +162,15 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const mode = await selectSetupMode(existing, force);
   const s = spinner();
   const ai = await collectAIConfig(options);
-  const config = await collectSetupConfig(mode, ai, existing, force, s);
+  let config: SetupConfig;
+  if (mode === 'add') {
+    config = await collectAdditionalConfig(ai, existing, force, s);
+  } else {
+    const platforms = await collectPlatforms();
+    config = { ai, platforms, botDisplayName: 'Archon' };
+    await collectPlatformCredentials(config, platforms);
+    config.botDisplayName = await collectBotDisplayName();
+  }
   const writeResult = await writeConfiguration(
     config,
     target,
@@ -256,22 +264,6 @@ function platformNames(platforms: SetupConfig['platforms']): string[] {
   if (platforms.telegram) names.push('Telegram');
   if (platforms.slack) names.push('Slack');
   return names;
-}
-
-async function collectSetupConfig(
-  mode: SetupMode,
-  ai: SetupConfig['ai'],
-  existing: ExistingConfig,
-  force: boolean,
-  s: ReturnType<typeof spinner>
-): Promise<SetupConfig> {
-  if (mode === 'add') return collectAdditionalConfig(ai, existing, force, s);
-
-  const platforms = await collectPlatforms();
-  const config: SetupConfig = { ai, platforms, botDisplayName: 'Archon' };
-  await collectPlatformCredentials(config, platforms);
-  config.botDisplayName = await collectBotDisplayName();
-  return config;
 }
 
 async function collectAdditionalConfig(
