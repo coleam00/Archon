@@ -12,6 +12,7 @@ import {
   acceptRelayConnection,
   isDetachedLaunch,
   relayOutsideRunJob,
+  RUN_JOB_ESCAPE_BUN_CONFIG_ARG,
   RUN_JOB_ESCAPE_ENV,
   serveRunJobEscape,
   waitForRunJobEscapeBroker,
@@ -89,6 +90,67 @@ describe('run job escape', () => {
     }
   });
 
+  for (const action of ['run', 'resume', 'approve', 'reject', 'respond']) {
+    it(`relays detached workflow ${action} through the broker`, async () => {
+      const pipe = brokerPipe();
+      const program = stubProgram();
+      const server = await serveRunJobEscape(pipe, program);
+      try {
+        expect(
+          await relayOutsideRunJob(
+            pipe,
+            {
+              argv: [...program, 'workflow', action, 'run-id', '--detach'],
+              cwd: process.cwd(),
+              env: {},
+            },
+            { stdout: async () => {}, stderr: async () => {} }
+          )
+        ).toBe(3);
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  for (const channel of ['BUN_OPTIONS', 'bunfig.toml']) {
+    it(`blocks ${channel} preloads when starting the real broker`, async () => {
+      const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-broker-preload-')));
+      const marker = join(dir, 'unowned-preload');
+      const preload = join(dir, 'preload.ts');
+      writeFileSync(
+        preload,
+        `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unowned'); process.exit(23);`
+      );
+      if (channel === 'bunfig.toml') {
+        writeFileSync(join(dir, 'bunfig.toml'), 'preload = ["./preload.ts"]');
+      }
+      const owner = join(dir, 'owner.ts');
+      writeFileSync(
+        owner,
+        `
+        import { startRunJobEscapeBroker } from ${JSON.stringify(join(import.meta.dir, 'run-job-escape.ts'))};
+        process.env.BUN_OPTIONS = ${JSON.stringify(channel === 'BUN_OPTIONS' ? `--preload ${preload}` : '')};
+        await startRunJobEscapeBroker();
+        process.exit(0);
+      `
+      );
+      const child = Bun.spawn([process.execPath, RUN_JOB_ESCAPE_BUN_CONFIG_ARG, owner], {
+        cwd: dir,
+        env: { ...process.env, BUN_OPTIONS: '', ARCHON_TELEMETRY_DISABLED: '1' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exit, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect(exit, stdout + stderr).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    });
+  }
+
   it('keeps serving after one connection fails', async () => {
     const pipe = brokerPipe();
     const program = stubProgram();
@@ -139,6 +201,13 @@ describe('run job escape', () => {
         '--detach',
       ],
       [...program, 'trigger', 'fire', '--detach'],
+      ...['answer', 'cancel', 'abandon', 'wake', 'unknown'].map(action => [
+        ...program,
+        'workflow',
+        action,
+        'run-id',
+        '--detach',
+      ]),
       [...program, 'workflow', 'run', 'build'],
       [...program, 'workflow', 'run', 'build', '--', '--detach'],
       [...program, 'workflow', 'run', 'build', 'ship --detach later'],
@@ -407,6 +476,15 @@ nodes:
   });
 
   it('relays only detached launches', () => {
+    for (const action of ['run', 'resume', 'approve', 'reject', 'respond']) {
+      expect(isDetachedLaunch(['workflow', action, 'run-id', '--detach'])).toBe(true);
+      expect(isDetachedLaunch(['workflow', action, 'run-id'])).toBe(false);
+      expect(isDetachedLaunch(['workflow', action, 'run-id', '--', '--detach'])).toBe(false);
+    }
+    expect(isDetachedLaunch(['workflow', 'run', 'build', '--resume', '--detach'])).toBe(true);
+    for (const decision of ['approve', 'reject', 'custom']) {
+      expect(isDetachedLaunch(['workflow', 'respond', 'run-id', decision, '--detach'])).toBe(true);
+    }
     expect(isDetachedLaunch(['workflow', 'run', 'build', '--detach', '--json'])).toBe(true);
     expect(isDetachedLaunch(['workflow', 'run', 'build', 'ship --detach later'])).toBe(false);
     expect(isDetachedLaunch(['workflow', 'run', 'build', '--', '--detach'])).toBe(false);

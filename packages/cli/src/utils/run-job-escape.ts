@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'util';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { cliArgOptions } from '../args';
+import type { runDetachedControlCommand } from '../commands/workflow-detach';
 import { withDrainedExit } from './exit-with-drain';
 import { writeStderr, writeStdout } from './stdout';
 
@@ -91,7 +92,7 @@ function parseInvocation(line: string, program: readonly [string, ...string[]]):
   const argv = parsed.argv;
   const args = argv.slice(program.length);
   if (program.some((part, index) => argv[index] !== part) || !isDetachedLaunch(args)) {
-    throw new Error("Only this CLI's workflow run --detach launches may leave the run job");
+    throw new Error("Only this CLI's detached workflow launches may leave the run job");
   }
   return parsed as EscapedInvocation;
 }
@@ -199,14 +200,20 @@ export async function serveRunJobEscape(
 export async function startRunJobEscapeBroker(): Promise<string> {
   const pipe = `\\\\.\\pipe\\archon-run-escape-${randomUUID()}`;
   const program = brokerProgram();
-  const broker = spawn(program[0], program.slice(1), {
-    env: { ...process.env, [BROKER_ENV]: pipe },
-    // The owner never writes to stdin; its end closing is how the broker learns the owner
-    // is gone. `detached` keeps the broker out of the runtime's own kill-on-close job.
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-    windowsHide: true,
-  });
+  const args = program.slice(1);
+  const broker = spawn(
+    program[0],
+    BUNDLED_IS_BINARY ? args : [RUN_JOB_ESCAPE_BUN_CONFIG_ARG, ...args],
+    {
+      // The broker starts outside the job, so startup hooks cannot run here either.
+      env: { ...process.env, BUN_OPTIONS: '', [BROKER_ENV]: pipe },
+      // The owner never writes to stdin; its end closing is how the broker learns the owner
+      // is gone. `detached` keeps the broker out of the runtime's own kill-on-close job.
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+      windowsHide: true,
+    }
+  );
   await waitForRunJobEscapeBroker(broker);
   return pipe;
 }
@@ -294,6 +301,14 @@ export async function escapeRunJobIfRequested(
   );
 }
 
+const detachedWorkflowActions = {
+  run: true,
+  resume: true,
+  approve: true,
+  reject: true,
+  respond: true,
+} satisfies Record<'run' | Parameters<typeof runDetachedControlCommand>[1], true>;
+
 /** Whether `args` launch a detached run owner (`--detach`). */
 export function isDetachedLaunch(args: readonly string[]): boolean {
   // Lenient: the strict parse in the relayed process reports a malformed command.
@@ -303,7 +318,12 @@ export function isDetachedLaunch(args: readonly string[]): boolean {
     allowPositionals: true,
     strict: false,
   });
-  return positionals[0] === 'workflow' && positionals[1] === 'run' && values.detach === true;
+  return (
+    positionals[0] === 'workflow' &&
+    positionals[1] !== undefined &&
+    Object.hasOwn(detachedWorkflowActions, positionals[1]) &&
+    values.detach === true
+  );
 }
 
 interface RelayOutput {

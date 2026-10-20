@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { isRunOwnerAnswering, startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
 
 /*
@@ -13,10 +14,11 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
+ * - `nested-approve`: pause that run at an approval, then continue with `approve --detach`.
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-const modes = ['orphan', 'spawner', 'nested', 'relay'];
+const modes = ['orphan', 'spawner', 'nested', 'nested-approve', 'relay', 'relay-approve'];
 if (!runId || !dir || !mode || !modes.includes(mode)) {
   throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
@@ -30,15 +32,13 @@ function writeReady(): void {
   renameSync(`${readyPath}.tmp`, readyPath);
 }
 
-if (mode === 'relay') {
+async function runCli(args: string[]): Promise<string> {
   const child = Bun.spawn(
     [
       process.execPath,
       resolve(import.meta.dir, '..', '..', 'cli.ts'),
       'workflow',
-      'run',
-      'nested-child',
-      '--folder',
+      ...args,
       '--detach',
       '--json',
       '--cwd',
@@ -68,7 +68,23 @@ if (mode === 'relay') {
   ) {
     throw new Error('Nested CLI launch returned no run id');
   }
-  writeFileSync(join(dir, 'child-run-id'), ack.runId);
+  return ack.runId;
+}
+
+if (mode === 'relay' || mode === 'relay-approve') {
+  const childRunId = await runCli(['run', 'nested-child', '--folder']);
+  if (mode === 'relay-approve') {
+    const store = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
+    while (
+      (await store.getWorkflowRun(childRunId))?.status !== 'paused' ||
+      (await isRunOwnerAnswering(childRunId))
+    ) {
+      await Bun.sleep(25);
+    }
+    const continuedRunId = await runCli(['approve', childRunId]);
+    if (continuedRunId !== childRunId) throw new Error('Approval continued a different run');
+  }
+  writeFileSync(join(dir, 'child-run-id'), childRunId);
   process.exit(0);
 } else {
   await claimDetachedRunProcessOwner();
@@ -106,7 +122,7 @@ if (mode === 'relay') {
     mkdirSync(kidsDir);
     loop();
     writeReady();
-  } else if (mode === 'nested') {
+  } else if (mode === 'nested' || mode === 'nested-approve') {
     const workflows = join(dir, '.archon', 'workflows');
     mkdirSync(workflows, { recursive: true });
     mkdirSync(join(dir, 'home'));
@@ -120,14 +136,18 @@ description: Nested detached owner fixture
 worktree:
   enabled: false
 nodes:
-  - id: hold
-    runtime: bun
+${mode === 'nested-approve' ? '  - id: review\n    approval:\n      message: Continue?\n' : ''}  - id: hold
+${mode === 'nested-approve' ? '    depends_on: [review]\n' : ''}    runtime: bun
     script: ${JSON.stringify(script)}
 `
     );
-    const relay = spawn(process.execPath, [import.meta.path, runId, dir, 'relay'], {
-      stdio: 'ignore',
-    });
+    const relay = spawn(
+      process.execPath,
+      [import.meta.path, runId, dir, mode === 'nested-approve' ? 'relay-approve' : 'relay'],
+      {
+        stdio: 'ignore',
+      }
+    );
     relay.on('error', error => {
       throw error;
     });

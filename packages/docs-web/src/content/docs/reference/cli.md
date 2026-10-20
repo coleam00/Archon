@@ -1179,10 +1179,11 @@ already exited. An owner started by an Archon version without this reports no jo
 tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
 process and its descendants yourself, then use `workflow abandon`.
 
-A detached run that a node launches with `--detach`, for example `workflow run --detach`,
-starts outside the launching run's job and owns its own. Cancelling the launching run
-leaves it running; stop it with its own `cancel`. The relayed CLI ignores `BUN_OPTIONS`
-and `bunfig.toml` startup hooks, which would execute before the child has an owner.
+A detached run that a node launches with `workflow run`, `resume`, `approve`, `reject`,
+or `respond` and `--detach` starts outside the launching run's job and owns its own.
+Cancelling the launching run leaves it running; stop it with its own `cancel`.
+The broker and relayed CLI ignore
+`BUN_OPTIONS` and `bunfig.toml` startup hooks, which would execute outside the owner's job.
 On POSIX a detached run starts its own process group, so the same holds.
 
 The job grants no other way out: a tool in the run that asks Windows to start a process
@@ -1321,7 +1322,9 @@ In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode th
 wrong-status, missing-context, `child_workflow`-blocked, already-resolved, or
 no-working-path run is refused synchronously and nothing is spawned. The parent then
 hands the whole command to a detached child that owns all state mutation in its own
-process group. A shell that dies mid-flight can no longer wedge the run.
+process group on POSIX or Job Object on Windows. When launched inside a Windows run,
+the child escapes the launching run's job, so cancelling the launcher leaves the child
+running and independently owned. A shell that dies mid-flight can no longer wedge the run.
 
 For `resume`, the parent waits for the child's engine admission receipt before
 acknowledging success, rather than waiting for workflow completion. Even a run that
