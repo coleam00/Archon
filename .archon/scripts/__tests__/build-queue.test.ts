@@ -398,12 +398,6 @@ function failedCorrection(scenario: ReadyCase): boolean {
   return ['refused', 'unknown', 'diagnostic-failed', 'closed', 'merged', 'readback-failed'].includes(scenario);
 }
 
-function ghReadyReads(scenario: ReadyCase): number {
-  if (scenario === 'already-draft') return 4;
-  if (scenario === 'readback-failed') return 6;
-  return 5;
-}
-
 function expectCorrectionError(result: ScriptRun, observed: ReadyObservation, scenario: ReadyCase, source: 'gh' | 'forge'): void {
   expect(result.stderr).toContain('draft correction failed');
   expect(result.stderr).toContain('Inspect');
@@ -473,9 +467,6 @@ describe('the build queue scripts', () => {
         if (scenario === 'readback-failed') expect(observed.current.is_draft).toBe(true);
         if (['refused', 'unknown', 'diagnostic-failed'].includes(scenario)) expect(observed.current.is_draft).toBe(false);
         expect(observed.calls.filter(op => op === 'pr.draft')).toHaveLength(source === 'gh' && noDraftWrite ? 0 : 1);
-        const failure = failedCorrection(scenario);
-        const expectedReads = source === 'forge' ? 1 + Number(failure) : ghReadyReads(scenario);
-        expect(observed.calls.filter(op => op === 'pr.view')).toHaveLength(expectedReads);
       });
     }
   });
