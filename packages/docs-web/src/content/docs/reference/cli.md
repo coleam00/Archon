@@ -1173,8 +1173,9 @@ process and its descendants yourself, then use `workflow abandon`.
 
 A detached run that a node launches with `--detach`, for example `workflow run --detach`,
 starts outside the launching run's job and owns its own. Cancelling the launching run
-leaves it running; stop it with its own `cancel`. On POSIX a detached run starts its own
-process group, so the same holds.
+leaves it running; stop it with its own `cancel`. The relayed CLI ignores `BUN_OPTIONS`
+and `bunfig.toml` startup hooks, which would execute before the child has an owner.
+On POSIX a detached run starts its own process group, so the same holds.
 
 The job grants no other way out: a tool in the run that asks Windows to start a process
 outside its job fails to start it. A run that a node starts through `archon trigger` stays

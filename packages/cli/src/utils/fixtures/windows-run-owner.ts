@@ -3,7 +3,6 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
-import { relayOutsideRunJob, RUN_JOB_ESCAPE_ENV } from '../run-job-escape';
 
 /*
  * A real detached run owner for the Windows stop tests. Every process it starts carries
@@ -32,41 +31,35 @@ function writeReady(): void {
 }
 
 if (mode === 'relay') {
-  const pipe = process.env[RUN_JOB_ESCAPE_ENV];
-  if (pipe === undefined) throw new Error(`${RUN_JOB_ESCAPE_ENV} is not set`);
-  const stdout: Buffer[] = [];
-  const code = await relayOutsideRunJob(
-    pipe,
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      resolve(import.meta.dir, '..', '..', 'cli.ts'),
+      'workflow',
+      'run',
+      'nested-child',
+      '--folder',
+      '--detach',
+      '--json',
+      '--cwd',
+      dir,
+    ],
     {
-      argv: [
-        process.execPath,
-        resolve(import.meta.dir, '..', '..', 'cli.ts'),
-        'workflow',
-        'run',
-        'nested-child',
-        '--folder',
-        '--detach',
-        '--json',
-        '--cwd',
-        dir,
-      ],
       cwd: dir,
-      env: { ...process.env, ARCHON_HOME: join(dir, 'home'), ARCHON_TELEMETRY_DISABLED: '1' },
-    },
-    {
-      stdout: async data => {
-        stdout.push(Buffer.from(data));
+      env: {
+        ...process.env,
+        ARCHON_HOME: join(dir, 'home'),
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
       },
-      stderr: async data => {
-        process.stderr.write(data);
-      },
+      stdout: 'pipe',
+      stderr: 'inherit',
     }
   );
-  if (code !== 0)
-    throw new Error(
-      `Nested CLI launch failed (${String(code)}): ${Buffer.concat(stdout).toString()}`
-    );
-  const ack: unknown = JSON.parse(Buffer.concat(stdout).toString());
+  const stdout = await new Response(child.stdout).text();
+  const code = await child.exited;
+  if (code !== 0) throw new Error(`Nested CLI launch failed (${String(code)}): ${stdout}`);
+  const ack: unknown = JSON.parse(stdout);
   if (
     typeof ack !== 'object' ||
     ack === null ||

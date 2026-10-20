@@ -6,7 +6,6 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'util';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { cliArgOptions } from '../args';
-import { cliProgramArguments } from './cli-program-arguments';
 import { withDrainedExit } from './exit-with-drain';
 import { writeStderr, writeStdout } from './stdout';
 
@@ -113,13 +112,22 @@ function runInvocation(
   // The relayed command must run, not relay again to this broker.
   const env = { ...invocation.env };
   Reflect.deleteProperty(env, RUN_JOB_ESCAPE_ENV);
+  // Bun startup hooks run before the CLI can give the detached run its own owner.
+  env.BUN_OPTIONS = '';
   const [command, ...args] = invocation.argv;
-  const child = spawn(command, args, {
-    cwd: invocation.cwd,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
+  // Release binaries disable bunfig autoload at build time; source Bun needs it here.
+  const child = spawn(
+    command,
+    BUNDLED_IS_BINARY
+      ? args
+      : [`--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, ...args],
+    {
+      cwd: invocation.cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    }
+  );
   child.stdout.on('data', (chunk: Buffer) => {
     sendFrame(socket, { stream: 'stdout', data: chunk.toString('base64') });
   });
@@ -280,7 +288,7 @@ export async function escapeRunJobIfRequested(
   if (pipe === undefined || !isDetachedLaunch(args)) return;
   await withDrainedExit(() =>
     relayOutsideRunJob(pipe, {
-      argv: [...cliProgramArguments(), ...args],
+      argv: [...brokerProgram(), ...args],
       cwd: process.cwd(),
       env: inheritedEnv,
     })

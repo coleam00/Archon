@@ -21,7 +21,7 @@ function stubProgram(): [string, string] {
   const path = join(dir, 'cli.ts');
   writeFileSync(
     path,
-    `console.log(JSON.stringify(process.env.${RUN_JOB_ESCAPE_ENV} ?? null)); console.error('relayed'); process.exit(3);`
+    `console.log(JSON.stringify({ marker: process.env.${RUN_JOB_ESCAPE_ENV} ?? null, cwd: process.cwd(), value: process.env.ARCHON_RELAY_TEST })); console.error('relayed'); process.exit(3);`
   );
   return [process.execPath, path];
 }
@@ -62,7 +62,7 @@ describe('run job escape', () => {
         {
           argv: [...program, 'workflow', 'run', 'build', '--detach'],
           cwd: process.cwd(),
-          env: { ...process.env, [RUN_JOB_ESCAPE_ENV]: pipe },
+          env: { ...process.env, [RUN_JOB_ESCAPE_ENV]: pipe, ARCHON_RELAY_TEST: 'preserved' },
         },
         {
           stdout: async data => {
@@ -75,7 +75,11 @@ describe('run job escape', () => {
       );
       expect(exit).toBe(3);
       // A relayed `--detach` that still carried the marker would relay itself forever.
-      expect(Buffer.concat(stdout).toString()).toBe('null\n');
+      expect(JSON.parse(Buffer.concat(stdout).toString())).toEqual({
+        marker: null,
+        cwd: process.cwd(),
+        value: 'preserved',
+      });
       expect(Buffer.concat(stderr).toString()).toBe('relayed\n');
     } finally {
       await server.close();
@@ -180,6 +184,41 @@ describe('run job escape', () => {
       await server.close();
     }
   });
+
+  for (const channel of ['BUN_OPTIONS', 'bunfig.toml']) {
+    it(`blocks ${channel} preloads with the real CLI prefix`, async () => {
+      const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-preload-')));
+      const preload = join(dir, 'preload.ts');
+      writeFileSync(preload, 'process.exit(23);');
+      const env = { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', BUN_OPTIONS: '' };
+      if (channel === 'BUN_OPTIONS') env.BUN_OPTIONS = `--preload ${preload}`;
+      else writeFileSync(join(dir, 'bunfig.toml'), 'preload = ["./preload.ts"]');
+      const pipe = brokerPipe();
+      const server = await serveRunJobEscape(pipe);
+      try {
+        expect(
+          await relayOutsideRunJob(
+            pipe,
+            {
+              argv: [
+                process.execPath,
+                join(import.meta.dir, '..', 'cli.ts'),
+                'workflow',
+                'run',
+                '--detach',
+                '--help',
+              ],
+              cwd: dir,
+              env,
+            },
+            { stdout: async () => {}, stderr: async () => {} }
+          )
+        ).toBe(0);
+      } finally {
+        await server.close();
+      }
+    });
+  }
 
   it('kills a broker that never becomes ready and reports its stderr', async () => {
     const broker = await bootBrokerStub(

@@ -6,7 +6,14 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import {
+  runLiveOwnerPath,
+  isRunOwnedByThisProcess,
+  isRunOwnerAnswering,
+} from '@archon/core/services/run-live-owner';
+import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { createInMemoryWorkflowHostStore } from '../test-support/workflow-store';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from './workflow-exit-code';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
@@ -186,11 +193,17 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * Start `fixtures/windows-run-owner.ts` as a real detached run owner and wait until it is
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
-async function startWindowsRunOwner(
-  mode: 'orphan' | 'spawner' | 'nested'
-): Promise<{ runId: string; dir: string; marker: string }> {
+async function startWindowsRunOwner(mode: 'orphan' | 'spawner' | 'nested'): Promise<{
+  runId: string;
+  dir: string;
+  marker: string;
+  store: Awaited<ReturnType<typeof createFileWorkflowStore>>;
+}> {
   const runId = `windows-${mode}-${crypto.randomUUID()}`;
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), `archon-windows-${mode}-`)));
+  const store = await createFileWorkflowStore({ root: join(dir, 'parent-store') });
+  await store.createWorkflowRun({ id: runId, workflow_name: mode, user_message: '' });
+  await store.claimPendingWorkflowRun(runId);
   const fixturePath = join(import.meta.dir, 'fixtures', 'windows-run-owner.ts');
   const owner = spawn(process.execPath, [fixturePath, runId, dir, mode], {
     detached: true,
@@ -203,7 +216,33 @@ async function startWindowsRunOwner(
     () => existsSync(join(dir, 'ready')),
     mode === 'nested' ? NESTED_LAUNCH_DEADLINE_MS : FIXTURE_STATE_DEADLINE_MS
   );
-  return { runId, dir, marker: basename(dir) };
+  return { runId, dir, marker: basename(dir), store };
+}
+
+function cancellationOperations(
+  store: Awaited<ReturnType<typeof createFileWorkflowStore>>,
+  beforeRecord: () => Promise<void>
+) {
+  const unused = async (): Promise<never> => {
+    throw new Error('Unexpected isolation or delete operation');
+  };
+  return createWorkflowOperations({
+    store: {
+      ...store,
+      deleteWorkflowRun: unused,
+      cancelWorkflowRun: async (...args) => {
+        await beforeRecord();
+        return store.cancelWorkflowRun(...args);
+      },
+    },
+    hostStore: createInMemoryWorkflowHostStore(),
+    getUserRole: async () => undefined,
+    requestDetachedRunStop,
+    isRunOwnedByThisProcess,
+    isRunOwnerAnswering,
+    reclaimRunWorktree: unused,
+    reclaimContainerEnv: unused,
+  });
 }
 
 /** Kill whatever `marker` still names, after a test that may have left survivors. */
@@ -357,22 +396,30 @@ describe('detached run control integration', () => {
   );
 
   it(
-    'stops a Windows grandchild whose parent exited before the stop',
+    'stops a Windows orphan grandchild before recording cancellation',
     async () => {
       // #3492: the owner started a child that started a grandchild and exited, so no
       // live process links the grandchild to the owner by parent PID. The grandchild is
       // detached, which takes it out of the runtime's own kill-on-close job.
       if (process.platform !== 'win32') return;
 
-      const { runId, dir, marker } = await startWindowsRunOwner('orphan');
+      const { runId, dir, marker, store } = await startWindowsRunOwner('orphan');
       let survivors: number[] | undefined;
       try {
         const grandchild = Number(readFileSync(join(dir, 'grandchild'), 'utf8'));
         // The premise, asserted rather than assumed: the orphan is alive before the stop.
         expect(await windowsProcessesNaming(marker)).toContain(grandchild);
 
-        const target = await requestDetachedRunStop(runId);
-        await target.stop();
+        let recorded = false;
+        const operations = cancellationOperations(store, async () => {
+          expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+          expect(await windowsProcessesNaming(marker)).toEqual([]);
+          recorded = true;
+        });
+        const result = await operations.cancelWorkflow(runId, { kind: 'operator' });
+        expect(result.kind).toBe('stopped');
+        expect(recorded).toBe(true);
+        expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
         survivors = await windowsProcessesNaming(marker);
         expect(survivors).toEqual([]);
@@ -458,21 +505,27 @@ describe('detached run control integration', () => {
       // the operator's call.
       if (process.platform !== 'win32') return;
 
-      const { runId, dir, marker } = await startWindowsRunOwner('nested');
+      const { runId, dir, marker, store } = await startWindowsRunOwner('nested');
       const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
+      const childStore = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
       let survivors: number[] | undefined;
       try {
         await waitFor(() => existsSync(join(dir, 'child-ready')), NESTED_LAUNCH_DEADLINE_MS);
         const childPid = Number(readFileSync(join(dir, 'child-ready'), 'utf8'));
         const child = await requestDetachedRunStop(childRunId);
 
-        const parent = await requestDetachedRunStop(runId);
-        await parent.stop();
+        const operations = cancellationOperations(store, async () => {
+          expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+        });
+        const parent = await operations.cancelWorkflow(runId, { kind: 'operator' });
+        if (parent.kind !== 'stopped') throw new Error('Parent was not stopped');
+        expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
         const remaining = await windowsProcessesNaming(marker);
         expect(remaining).toContain(childPid);
         expect(remaining).toContain(child.pid);
         expect(remaining).not.toContain(parent.pid);
+        expect((await childStore.getWorkflowRun(childRunId))?.status).toBe('running');
         const ownedChild = await requestDetachedRunStop(childRunId);
         expect(ownedChild.pid).toBe(child.pid);
         await child.stop();
