@@ -174,8 +174,27 @@ export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
 export type WorkflowAttentionWaitContext = Extract<WorkflowWaitContext, { kind: 'attention' }>;
 export type WorkflowUsageLimitWaitContext = Extract<WorkflowWaitContext, { kind: 'quota' }>;
 
+export function validateWorkflowWaitMetadata(metadata: Record<string, unknown> | undefined): void {
+  if (metadata && Object.hasOwn(metadata, 'wait')) workflowWaitContextSchema.parse(metadata.wait);
+}
+
+const workflowWaitContextKeys = new Set(
+  workflowWaitContextSchema.options.flatMap(branch => Object.keys(branch.shape))
+);
+
+/** Read known wait fields without relaxing the strict contract used by writers. */
+export function readWorkflowWaitContext(value: unknown): WorkflowWaitContext | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  // Keep keys from every variant so known fields on the wrong kind or owner still fail.
+  const known = Object.fromEntries(
+    Object.entries(value).filter(([key]) => workflowWaitContextKeys.has(key))
+  );
+  const parsed = workflowWaitContextSchema.safeParse(known);
+  return parsed.success ? parsed.data : undefined;
+}
+
 export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitContext {
-  return workflowWaitContextSchema.safeParse(value).success;
+  return readWorkflowWaitContext(value) !== undefined;
 }
 
 export function workflowWaitStepName(wait: WorkflowWaitContext): string {
@@ -187,8 +206,8 @@ export function pausedAttentionWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowAttentionWaitContext | undefined {
   if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
-  const wait = run.metadata.wait;
-  return isWorkflowWaitContext(wait) && wait.kind === 'attention' ? wait : undefined;
+  const wait = readWorkflowWaitContext(run.metadata.wait);
+  return wait?.kind === 'attention' ? wait : undefined;
 }
 
 /** The usage-limit wait a paused run sits at, if it sits at one. */
@@ -196,8 +215,8 @@ export function pausedUsageLimitWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowUsageLimitWaitContext | undefined {
   if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
-  const wait = run.metadata.wait;
-  return isWorkflowWaitContext(wait) && wait.kind === 'quota' ? wait : undefined;
+  const wait = readWorkflowWaitContext(run.metadata.wait);
+  return wait?.kind === 'quota' ? wait : undefined;
 }
 
 /** The form and literal options an attention wait declares, paused or authored. */
@@ -502,8 +521,8 @@ export function pendingWorkflowWaitDeadline(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowDeadlineWaitContext | undefined {
   if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
-  const wait = run.metadata.wait;
-  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  const wait = readWorkflowWaitContext(run.metadata.wait);
+  if (!wait || wait.kind === 'attention') return undefined;
   return wait;
 }
 

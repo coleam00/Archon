@@ -34,6 +34,7 @@ import {
   isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
+  readWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   pausedUsageLimitWait,
@@ -41,6 +42,7 @@ import {
   isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
+  validateWorkflowWaitMetadata,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
@@ -197,6 +199,7 @@ export function createTransactionView(
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
+    validateWorkflowWaitMetadata(input.metadata);
     const origin =
       input.origin && Object.values(input.origin).some(value => value !== undefined)
         ? structuredClone(input.origin)
@@ -272,17 +275,17 @@ export function createTransactionView(
       const run = runs.get(id);
       const labeled = run && labeledAttentionWait(run, write);
       if (!run || !labeled) return { labeled: false };
-      run.metadata.wait = labeled;
+      run.metadata.wait = workflowWaitContextSchema.parse(labeled);
       record(attentionLabeledEvent(id, labeled, write));
       return { labeled: true, wait: structuredClone(labeled) };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
       if (!run) return { signaled: false };
-      const wait = run.metadata.wait;
+      const wait = readWorkflowWaitContext(run.metadata.wait);
       if (
         run.status !== 'paused' ||
-        !isWorkflowWaitContext(wait) ||
+        !wait ||
         wait.kind !== 'event' ||
         wait.signaledAt ||
         wait.event !== expected.event ||
@@ -292,11 +295,11 @@ export function createTransactionView(
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
-      run.metadata.wait = {
+      run.metadata.wait = workflowWaitContextSchema.parse({
         ...wait,
         signaledAt: new Date().toISOString(),
         ...(payload === undefined ? {} : { payload: structuredClone(payload) }),
-      };
+      });
       record({
         workflow_run_id: id,
         event_type: 'wait_signaled',
@@ -320,6 +323,7 @@ export function createTransactionView(
       return structuredClone(run);
     },
     updateWorkflowRun: async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
+      validateWorkflowWaitMetadata(updates.metadata);
       const run = row(id);
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
@@ -346,6 +350,7 @@ export function createTransactionView(
       completion,
       metadata
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
@@ -399,6 +404,7 @@ export function createTransactionView(
       gateEvents,
       expected
     ): ReturnType<IWorkflowStore['resolveApprovalGate']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       Object.assign(run.metadata, structuredClone(metadata));
