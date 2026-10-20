@@ -61,7 +61,7 @@ archon workflow get <run-id>      # one run: status, nodes and outcome
 archon workflow attention         # runs paused for your decision
 ```
 
-A run that needs a decision pauses as an attention item. Answer it with `archon workflow respond <run-id> <decision> "<reason>"`. See [The attention queue](/guides/attention-queue/).
+A run that needs a decision pauses as an attention item. Answer it with `archon workflow respond <run-id> <decision> "<reason>"`. See [Operate runs](/getting-started/operate/).
 
 To browse runs in a browser instead, start the Web UI with `archon serve`.
 

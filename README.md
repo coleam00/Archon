@@ -163,10 +163,9 @@ Full documentation is at **[archon.diy/docs](https://archon.diy/docs/)**.
 
 | Topic | Description |
 |---|---|
-| [Getting started](https://archon.diy/getting-started/overview/) | Install and first run |
-| [The Book of Archon](https://archon.diy/book/) | A narrative tutorial |
+| [Quickstart](https://archon.diy/getting-started/quick-start/) | Install and first run |
 | [Authoring workflows](https://archon.diy/guides/authoring-workflows/) | Write your own YAML workflows |
-| [The attention queue](https://archon.diy/guides/attention-queue/) | List, follow and answer paused runs |
+| [Operate runs](https://archon.diy/getting-started/operate/) | Watch runs, answer the ones that need you, read results |
 | [CLI reference](https://archon.diy/reference/cli/) | Every command and flag |
 | [Configuration](https://archon.diy/reference/configuration/) | Config options, model tiers and aliases, env vars |
 | [AI assistants](https://archon.diy/getting-started/ai-assistants/) | Claude Code, Codex and Pi setup |
