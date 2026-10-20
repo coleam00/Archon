@@ -750,7 +750,7 @@ describe('server platform composition', () => {
       expect(warnSpy).toHaveBeenCalledWith(
         {
           platform: 'slack',
-          hint: 'Install its plugin: archon plugin add coleam00/Archon/plugins/chat-slack',
+          hint: 'Docker images provision Slack offline when SLACK_BOT_TOKEN is set. Check provisioning logs and restart with a current image. Outside Docker, install the plugin and restart. Manual install: archon plugin add coleam00/Archon/plugins/chat-slack',
         },
         'chat.bundled_adapter_retired'
       );
