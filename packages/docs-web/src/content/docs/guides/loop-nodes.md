@@ -548,8 +548,10 @@ Rate limits and capacity retain the shared AI-node exceptions: at least five ret
 ## Cross-Node Loops with `loop_group`
 
 A `loop` node iterates a **single prompt**. A `loop_group` node iterates a
-**multi-node sub-DAG** — a sealed body of nodes that re-runs in full each
-iteration until a completion condition is met. Use it when "iterate until done"
+**multi-node sub-DAG** — a sealed body of nodes that runs in full for each fresh
+iteration until a completion condition is met. Failure resume can reuse completed
+nodes in the interrupted iteration; historical runs without execution lineage replay
+from iteration 1. Use it when "iterate until done"
 needs a *pipeline* of steps (e.g. `implement → test → review`), not just one
 repeated step.
 
@@ -869,8 +871,10 @@ Suspension and failure have different recovery rules:
   iteration's `$LOOP_PREV` snapshot. Cached includes must still pass their owning
   loop's gate; `always_run` and changed dependencies retain their ordinary cache
   invalidation rules. Later iterations start with an empty cache. This does not
-  restore provider session cursors from failures. Historical runs without execution
-  lineage restart from iteration 1 and replay the whole body.
+  restore provider session cursors from failures. If a later recorded execution has
+  overwritten a preceding iteration's output spill, resume fails rather than using
+  the wrong output. Historical runs without execution lineage restart from
+  iteration 1 and replay the whole body.
 
 ### What is NOT supported on loop_group nodes (v1)
 

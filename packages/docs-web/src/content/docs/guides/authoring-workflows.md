@@ -318,7 +318,7 @@ nodes:
     depends_on: [lens-a, lens-b]
 ```
 
-`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume restores the interrupted iteration and eligible completed body nodes when execution lineage is available; it does not restore provider session cursors. Historical runs without lineage restart at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
 
@@ -1809,8 +1809,10 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   example, `$review.output` is the output of the block's `implement-fixes` node.
 - **Inside a `loop_group` body.** An include expands inside that sealed body at load time.
   Its nodes keep the usual `<includeId>__<nodeId>` names, then the loop runtime prefixes
-  persisted step names with the group id (for example `fix-loop.review__synthesize`). Every
-  iteration re-runs the expanded nodes exactly like equivalent inline body nodes. The group's
+  persisted step names with the group id (for example `fix-loop.review__synthesize`). Each fresh
+  iteration re-runs the expanded nodes exactly like equivalent inline body nodes. Failure
+  resume can reuse completed nodes in the interrupted iteration; historical runs without
+  execution lineage replay from iteration 1. The group's
   `until_bash` can read `$<includeId>.output` and expansion binds it to the block's declared
   `returns:` node. A `workflow:` node is different — it creates a child run at runtime and
   remains unsupported inside a loop-group body.

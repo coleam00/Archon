@@ -1,6 +1,9 @@
 import { foldDagResumeSnapshot, type DagResumeEvent } from '../../../dag-resume-snapshot';
 import { nodeInvocationKey, readNodeRecordEvent } from '../../../node-record-reader';
 import { definedOutputPaths, type NodeOutput } from '../../../schemas';
+import { getStaleCachedDependencies } from '../../stale-dependencies';
+import { recordNodeState } from '../../../node-event-write';
+import { describeExecutionNode } from '../../../node-execution';
 import { NODE_STATE_EVENT_TYPES, type PersistedNodeOutput } from '../../../store';
 import type { WorkflowEventRow } from '../../../schemas/workflow-event';
 import type { LoopGroupRun } from './loop-group-state';
@@ -22,36 +25,64 @@ export async function readCachedLoopIteration(
     ctx.priorCompletedNodes.has(run.node.id)
   )
     return undefined;
+  const staleDeps = getStaleCachedDependencies(
+    run.node,
+    ctx.nodeOutputs,
+    ctx.priorCompletedNodes,
+    ctx.replayedFailures
+  );
+  if (staleDeps.length > 0) {
+    await recordNodeState(
+      { store: ctx.deps.store, logDir: ctx.logDir },
+      {
+        runId: ctx.workflowRun.id,
+        path: run.stepName,
+        node: describeExecutionNode(run.node),
+        cache: { action: 'invalidated', invalidatingDeps: staleDeps, prior: { text: '' } },
+      }
+    );
+    return undefined;
+  }
   const iterationOf = bodyIterationResolver(run);
-  const iterations = [
-    ...[...ctx.nodeOutputs].flatMap(([path, output]) =>
-      output.execution ? [iterationOf(path, output.execution.invocation.loopPath)] : []
-    ),
-    ...[...(ctx.unfinishedInvocations?.values() ?? [])].map(record =>
-      iterationOf(record.path, record.invocation.loopPath)
-    ),
-  ].filter((iteration): iteration is number => iteration !== undefined);
-  if (iterations.length === 0) return undefined;
   const rows =
     (await ctx.deps.store.listEventsForRuns([ctx.workflowRun.id], NODE_STATE_EVENT_TYPES)).get(
       ctx.workflowRun.id
     ) ?? [];
-  const byIteration = groupIterationRows(rows, iterationOf);
+  const byIteration = groupIterationRows(currentExecutionRows(run, rows), iterationOf);
   if (byIteration.size === 0) return undefined;
   const iteration = Math.max(...byIteration.keys());
   const current = await foldDagResumeSnapshot(byIteration.get(iteration) ?? [], ctx.workflowRun.id);
-  const previous = await foldDagResumeSnapshot(
-    byIteration.get(iteration - 1) ?? [],
-    ctx.workflowRun.id
-  );
+  const previousRows = byIteration.get(iteration - 1) ?? [];
+  refuseOverwrittenSpills(previousRows, rows, ctx.workflowRun.id);
+  const previous = await foldDagResumeSnapshot(previousRows, ctx.workflowRun.id);
   const localCompletions = (completed: Map<string, PersistedNodeOutput>) =>
     new Map(
       [...completed].map(([path, output]) => [path.slice(run.bodyStepNamePrefix.length), output])
     );
+  const previousOutputs = cachedBodyOutputs(run, localCompletions(previous.completedNodeOutputs));
+  const finalExecutions = new Map(
+    previousRows.flatMap(row => {
+      const record = readNodeRecordEvent({
+        ...row,
+        workflow_run_id: ctx.workflowRun.id,
+        data: row.data,
+      });
+      return record?.metadata ? [[record.path, record.metadata] as const] : [];
+    })
+  );
+  for (const [path, execution] of finalExecutions) {
+    if (execution.lifecycle.status !== 'skipped') continue;
+    previousOutputs.set(path.slice(run.bodyStepNamePrefix.length), {
+      state: 'skipped',
+      output: '',
+      cause: execution.lifecycle.cause,
+      execution,
+    });
+  }
   return {
     iteration,
     completedNodes: localCompletions(current.completedNodeOutputs),
-    previousOutputs: cachedBodyOutputs(run, localCompletions(previous.completedNodeOutputs)),
+    previousOutputs,
   };
 }
 
@@ -113,4 +144,56 @@ function groupIterationRows(
     byIteration.set(rowIteration, bucket);
   }
   return byIteration;
+}
+
+function currentExecutionRows(
+  run: LoopGroupRun,
+  rows: readonly WorkflowEventRow[]
+): readonly WorkflowEventRow[] {
+  const ownerKey = nodeInvocationKey(run.stepName, run.ctx.loopGroupPath);
+  let groupKey: string | undefined;
+  let start = 0;
+  for (const [index, row] of rows.entries()) {
+    const record = readNodeRecordEvent(row);
+    if (record?.path !== run.stepName) continue;
+    if (record.metadata)
+      groupKey = nodeInvocationKey(record.path, record.metadata.invocation.loopPath);
+    if (groupKey !== ownerKey) continue;
+    if (
+      record.eventType === 'node_completed' ||
+      record.eventType === 'node_always_run_reset' ||
+      record.eventType === 'node_prior_cache_invalidated'
+    )
+      start = index + 1;
+  }
+  return rows.slice(start);
+}
+
+function refuseOverwrittenSpills(
+  previous: readonly DagResumeEvent[],
+  rows: readonly WorkflowEventRow[],
+  runId: string
+): void {
+  const writers = new Map<string, string>();
+  for (const row of rows) {
+    const record = readNodeRecordEvent(row);
+    if (record?.metadata && record.data.node_output_spill_path) {
+      writers.set(record.data.node_output_spill_path, record.metadata.attempt.id);
+    }
+  }
+  const completions = new Map<string, NonNullable<ReturnType<typeof readNodeRecordEvent>>>();
+  for (const row of previous) {
+    const record = readNodeRecordEvent({ ...row, workflow_run_id: runId, data: row.data });
+    if (!record || record.eventType === 'node_skipped_prior_success') continue;
+    completions.delete(record.path);
+    if (record.eventType === 'node_completed') completions.set(record.path, record);
+  }
+  for (const record of completions.values()) {
+    const spill = record.data.node_output_spill_path;
+    if (spill && record.metadata && writers.get(spill) !== record.metadata.attempt.id) {
+      throw new Error(
+        `Cannot resume loop: overwritten output spill for '${record.path}' in the preceding iteration`
+      );
+    }
+  }
 }

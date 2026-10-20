@@ -27,8 +27,8 @@ export function utf8SequenceLength(leadByte: number): number {
  * exactly what `getDagResumeSnapshot` keys `completedNodeOutputs` by. A loop_group body
  * node's `step_name` is the SAME across every iteration (only `data.iteration` differs
  * per row), and `completedNodeOutputs` is already last-write-wins per `step_name` — so
- * the spill file being overwritten each iteration is correct: it always holds exactly
- * what the next resume's snapshot will resolve to for that key, never a stale iteration.
+ * the spill file holds the latest execution for that key. Recovery of an earlier
+ * iteration must reject a spill overwritten by a later execution.
  *
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
