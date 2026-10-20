@@ -508,7 +508,7 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
   } catch (pauseError) {
     // A run cancelled or paused meanwhile keeps that status, exactly as the failure
     // branches below leave it.
-    const status = await statusAfterPauseFailure(deps.store, workflowRun.id);
+    const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
     if (status === 'running') throw pauseError;
     getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
     return true;

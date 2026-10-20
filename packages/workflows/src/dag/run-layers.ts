@@ -670,7 +670,17 @@ async function aggregateLayerResults(
  * True when the walk stops here.
  */
 async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Promise<boolean> {
-  const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  let dagStatus;
+  try {
+    dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  } catch (statusErr) {
+    if (statusErr instanceof WorkflowStatusReadError) throw statusErr;
+    getLog().warn(
+      { err: statusErr as Error, workflowRunId: ctx.workflowRun.id },
+      'dag.status_check_failed'
+    );
+    return false;
+  }
   if (dagStatus === null || dagStatus !== 'running') {
     const effectiveStatus = dagStatus ?? 'deleted';
     if (

@@ -252,7 +252,7 @@ export async function executeWaitNode(
       );
       paused = true;
     } catch (pauseError) {
-      const status = await statusAfterPauseFailure(deps.store, workflowRun.id);
+      const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
       if (status === 'running') throw pauseError;
       getLog().warn(
         { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },

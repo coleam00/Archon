@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { statusAfterPauseFailure } from './pause';
 import { WorkflowStatusReadError } from '../workflow-status-read';
 import { createEscalationStore } from './pause-test-utils';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -850,4 +851,21 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(events).toContain('node_failed');
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
+});
+
+describe('statusAfterPauseFailure', () => {
+  it.each([false, true])(
+    'selects the original pause error unless the status is unsupported (%s)',
+    async unsupported => {
+      const pauseError = new Error('Pause write failed');
+      const queryError = unsupported
+        ? new WorkflowStatusReadError('pause-error', new Error('Unsupported status'))
+        : new Error('Status query failed');
+      const store = createMockStore();
+      store.getWorkflowRunStatus.mockRejectedValueOnce(queryError);
+      await expect(statusAfterPauseFailure(store, 'pause-error', pauseError)).rejects.toBe(
+        unsupported ? queryError : pauseError
+      );
+    }
+  );
 });

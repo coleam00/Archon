@@ -10,6 +10,7 @@ import {
 } from '../schemas';
 import type { GatePauseEventInput } from '../store';
 import { WorkflowRunPauseConflictError } from '../store';
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import { getLog } from './log';
 import { type RunLayersContext } from './run-context';
 
@@ -53,11 +54,18 @@ export async function sendPauseNotice(
     });
 }
 
-export function statusAfterPauseFailure(
+export async function statusAfterPauseFailure(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
-  runId: string
+  runId: string,
+  pauseError: unknown
 ): Promise<WorkflowRunStatus | null> {
-  return store.getWorkflowRunStatus(runId);
+  try {
+    return await store.getWorkflowRunStatus(runId);
+  } catch (statusErr) {
+    if (statusErr instanceof WorkflowStatusReadError) throw statusErr;
+    getLog().warn({ err: statusErr as Error, workflowRunId: runId }, 'dag.status_check_failed');
+    throw pauseError;
+  }
 }
 
 /**
@@ -84,7 +92,7 @@ export async function pauseGateRespectingExternalTransition(
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
-    const status = await statusAfterPauseFailure(deps.store, runId);
+    const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);
     if (status === 'running' || status === 'pending') throw pauseErr;
     if (status === 'paused') {
       const run = await deps.store.getWorkflowRun(runId);

@@ -233,6 +233,55 @@ describe('executeDagWorkflow -- final status derivation', () => {
     }
   );
 
+  it.each([1, 2])(
+    'continues after an ordinary status query failure following layer %s',
+    async layer => {
+      const store = createMockStore();
+      const queryError = new Error('Database temporarily unavailable');
+      let rejected = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        const completed = persistedEvents(store).filter(e => e.event_type === 'node_completed');
+        if (!rejected && completed.length === layer) {
+          rejected = true;
+          throw queryError;
+        }
+        return 'running';
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('transient-query'),
+          workflow: {
+            name: 'transient-query',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'First' } },
+              {
+                id: 'second',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Second' },
+                depends_on: ['first'],
+              },
+            ],
+          },
+        })
+      );
+      expect(rejected).toBe(true);
+      expect(
+        persistedEvents(store)
+          .filter(e => e.event_type === 'node_completed')
+          .map(e => e.step_name)
+      ).toEqual(['first', 'second']);
+      expect(mockLogFn.mock.calls).toContainEqual([
+        { err: queryError, workflowRunId: 'transient-query' },
+        'dag.status_check_failed',
+      ]);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   it('preserves the completion-guard cause after a successful DAG without terminal writes', async () => {
     const store = createMockStore();
     const cause = new Error('Unsupported persisted status at completion');
