@@ -266,6 +266,48 @@ describe('DashboardEventPoller', () => {
     mockLog.warn.mockClear();
   });
 
+  test.each(['node_started', 'node_suspended', 'node_completed', 'node_failed', 'node_skipped'])(
+    'a malformed %s row does not block later runs or replay on the next drain',
+    async eventType => {
+      const feed = makeFeed();
+      const t = makeTransport();
+      const poller = new DashboardEventPoller(feed);
+      await poller.start(t, 1e9);
+      const malformed = row({
+        id: 'bad-event',
+        workflow_run_id: 'bad-run',
+        event_type: eventType,
+        data: { node: { id: 'build', kind: 'exec', runtime: 'sh' } },
+      });
+      try {
+        expect(() => mapWorkflowEventRow(malformed)).toThrow('metadata is incomplete');
+        feed.write(
+          malformed,
+          row({ workflow_run_id: 'healthy-run', event_type: 'workflow_completed' })
+        );
+        await poller.drainNow();
+        expect(emittedIds(t)).toEqual(['healthy-run']);
+
+        feed.write(row({ workflow_run_id: 'next-run', event_type: 'workflow_started' }));
+        await poller.drainNow();
+        expect(emittedIds(t)).toEqual(['healthy-run', 'next-run']);
+        expect(mockLog.warn).toHaveBeenCalledTimes(1);
+        expect(mockLog.warn.mock.calls[0]).toEqual([
+          {
+            err: expect.any(Error),
+            eventId: 'bad-event',
+            runId: 'bad-run',
+            eventType,
+          },
+          'dashboard_poller.row_mapping_failed',
+        ]);
+        expect(mockLog.error).not.toHaveBeenCalled();
+      } finally {
+        poller.stop();
+      }
+    }
+  );
+
   test('emits events written after start once, in commit order, and never replays history', async () => {
     const feed = makeFeed();
     feed.write(row({ workflow_run_id: 'before-start', event_type: 'workflow_started' }));
