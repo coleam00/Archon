@@ -46,8 +46,8 @@ export const processGroupStopSchema = z.discriminatedUnion('leaderReaped', [
   }),
 ]);
 const preparationFrame = z.union([
-  z.object({ warning: z.string() }),
-  z.object({ group: processGroupStopSchema }),
+  z.strictObject({ warning: z.string() }),
+  z.strictObject({ group: processGroupStopSchema }),
 ]);
 
 export function readPreparationFrame(frame: string, report: RunOwnerPreparedStop): void {
