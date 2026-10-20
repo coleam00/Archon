@@ -84,6 +84,7 @@ export async function pauseGateRespectingExternalTransition(
     event: GatePauseEventInput;
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
+    onDeferred?: () => Promise<void>;
   }
 ): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
@@ -103,6 +104,7 @@ export async function pauseGateRespectingExternalTransition(
           { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
           'dag.gate_deferred'
         );
+        await options.onDeferred?.();
         return undefined;
       }
       if (
@@ -115,6 +117,7 @@ export async function pauseGateRespectingExternalTransition(
         { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
         'dag.gate_deferred'
       );
+      await options.onDeferred?.();
       return undefined;
     }
     getLog().warn(

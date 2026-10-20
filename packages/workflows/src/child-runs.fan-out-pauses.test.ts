@@ -116,9 +116,13 @@ ${fanOut}
         .map(r => [r.user_message, r])
     );
 
-  it.each(['all_done', 'all_success'] as const)(
-    'preserves rowless ancestry failure through pause with %s',
-    async join => {
+  it.each(
+    (['all_done', 'all_success'] as const).flatMap(join =>
+      (['none', 'approval'] as const).map(gate => ({ join, gate }))
+    )
+  )(
+    'preserves rowless ancestry failure through pause with $join behind $gate',
+    async ({ join, gate }) => {
       await writeWorkflow('ancestry-child', fanAskChild('ancestry-child', 'a', '!='));
       await writeWorkflow(
         'ancestry-parent',
@@ -127,7 +131,13 @@ ${fanOut}
           'ancestry-child',
           '["a","b","c"]',
           `      max_parallel: 1\n      join: ${join}`
-        )
+        ) +
+          (gate === 'none'
+            ? ''
+            : `  - id: peer
+    depends_on: [plan]
+    approval:\n      message: Review parent
+`)
       );
       const store = new InMemoryStore();
       const ancestry = store.getRunAncestry;
@@ -153,7 +163,24 @@ ${fanOut}
       expect(children.has('c')).toBe(false);
       const parent = [...store.runs.values()].find(run => run.workflow_name === 'ancestry-parent')!;
       expect(parent.status).toBe('paused');
-      expect(parent.metadata.approval).toMatchObject({
+      if (gate !== 'none') {
+        expect(parent.metadata.approval).toMatchObject({ nodeId: 'peer', type: 'approval' });
+        store.approveGate(parent.id);
+        const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+        expect(hydrated).not.toBeNull();
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('ancestry-parent'),
+          'goal',
+          { conversationId: 'conv-db' },
+          { ...hydrated! }
+        );
+        expect(childByItem(store, 'ancestry-child').has('a')).toBe(false);
+      }
+      expect((await store.getWorkflowRun(parent.id))?.metadata.approval).toMatchObject({
         type: 'fan_out',
         childRunIds: [children.get('b')!.id],
         unspawnedItems: 1,

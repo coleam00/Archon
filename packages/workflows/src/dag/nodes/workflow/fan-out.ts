@@ -220,6 +220,7 @@ async function suspendOnHeldChildren(
     },
     { output: { text: '' }, diagnostics: { fanOut: true } }
   );
+  let deferred: NodeExecutionResult | undefined;
   const paused = await pauseGateRespectingExternalTransition(
     ctx.deps,
     ctx.workflowRun.id,
@@ -230,9 +231,14 @@ async function suspendOnHeldChildren(
       childRunIds: held.map(([, id]) => id),
       unspawnedItems,
     },
-    { event: serializeNodeStateRecord(suspended) }
+    {
+      event: serializeNodeStateRecord(suspended),
+      onDeferred: async () => {
+        deferred = await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, suspended);
+      },
+    }
   );
-  if (!paused) return serializeNodeOutput(execution);
+  if (!paused) return deferred ?? serializeNodeOutput(execution);
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   await notify(
     `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +

@@ -1,5 +1,6 @@
 // @archon-test-isolated
-import { statusAfterPauseFailure } from './pause';
+import { pauseGateRespectingExternalTransition, statusAfterPauseFailure } from './pause';
+import { persistNodeEvent } from '../node-event-write';
 import { WorkflowStatusReadError } from '../workflow-status-read';
 import { createEscalationStore } from './pause-test-utils';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -51,6 +52,59 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each(['approval', 'wait'] as const)(
+    'checkpoints a deferred fan-out behind an active %s without taking its cursor',
+    async gate => {
+      const runId = 'deferred-checkpoint';
+      const store = createEscalationStore(runId);
+      if (gate === 'approval') {
+        await store.pauseWorkflowRun(runId, {
+          nodeId: 'peer',
+          type: 'approval',
+          message: 'Review',
+        });
+      } else {
+        await store.pauseWorkflowRunForWait(
+          runId,
+          {
+            owner: 'node',
+            nodeId: 'peer',
+            kind: 'time',
+            waitingSince: '2026-01-01T00:00:00Z',
+            resumeAt: '2026-01-02T00:00:00Z',
+          },
+          { kind: 'started', stepName: 'peer' }
+        );
+      }
+      const owner = structuredClone(store.getState());
+      const event = {
+        workflow_run_id: runId,
+        event_type: 'node_suspended' as const,
+        step_name: 'work',
+        data: {
+          suspend_point: 'fan_out',
+          fan_out_setup_failures: [{ index: 0, error: 'setup failed' }],
+        },
+      };
+      const defer = () =>
+        pauseGateRespectingExternalTransition(
+          createMockDeps(store),
+          runId,
+          { nodeId: 'work', type: 'fan_out', message: 'Waiting', childRunIds: ['child'] },
+          { event, onDeferred: () => persistNodeEvent(store, event) }
+        );
+      expect(await defer()).toBeUndefined();
+      expect(persistedEvents(store)).toEqual([event]);
+      expect(store.getState()).toEqual(owner);
+      store.persistWorkflowEvent.mockRejectedValueOnce(new Error('checkpoint write failed'));
+      await expect(defer()).rejects.toMatchObject({
+        name: 'NodeEventWriteError',
+        cause: expect.objectContaining({ message: 'checkpoint write failed' }),
+      });
+      expect(store.getState()).toEqual(owner);
+    }
+  );
 
   it('presents the admitted gate before a slow sibling settles and persists before sending', async () => {
     const runId = 'prompt-before-layer-settles';
