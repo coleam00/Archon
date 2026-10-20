@@ -115,16 +115,14 @@ export function readLoopGroupResume(
   };
 }
 
-/** The enclosing ancestry, plus this invocation's own cursors once any cursor is tracked. */
+/** Every enclosing invocation needs a frame, even when it owns no sessions. */
 function withOwnCursors(
   ctx: RunLayersContext,
   ownerInvocationKey: string,
   bodySessionCursors: Map<string, SessionCursor> | undefined
 ): Map<string, Map<string, SessionCursor>> {
   const bodySessionCursorAncestry = new Map(ctx.bodySessionCursorAncestry);
-  if (bodySessionCursors !== undefined || bodySessionCursorAncestry.size > 0) {
-    bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
-  }
+  bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
   return bodySessionCursorAncestry;
 }
 
