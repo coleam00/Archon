@@ -1953,8 +1953,11 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
   });
 
-  it('waits for the latest reset when several nodes hit usage limits', async () => {
-    const sooner = new Date(Date.now() + 10 * 60_000).toISOString();
+  it.each([
+    ['still ahead', 10 * 60_000],
+    ['already passed', -60_000],
+  ])('waits for the latest reset when another usage reset is %s', async (_case, offsetMs) => {
+    const sooner = new Date(Date.now() + offsetMs).toISOString();
     const later = new Date(Date.now() + 60 * 60_000).toISOString();
     // The later reset is the first node, so a pass that kept the first or the earliest
     // reset would wait on the wrong one.
@@ -1991,6 +1994,12 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       })
     );
 
+    expect(
+      persistedEvents(store)
+        .filter(event => event.event_type === 'node_failed')
+        .map(event => event.step_name)
+        .sort()
+    ).toEqual(['first', 'second']);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'credit-wait-latest-run',

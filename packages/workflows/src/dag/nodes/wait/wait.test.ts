@@ -15,7 +15,7 @@ import {
   persistedEvents,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
-import type { WorkflowWaitContext } from '../../../schemas';
+import { workflowWaitContextSchema, type WorkflowWaitContext } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
 
 describe('executeDagWorkflow -- durable wait node', () => {
@@ -109,9 +109,13 @@ describe('executeDagWorkflow -- durable wait node', () => {
         const persisted = { ...second };
         await executeDagWorkflow({
           ...options,
-          workflowRun: { ...options.workflowRun, metadata: { wait: persisted } },
+          workflowRun: {
+            ...options.workflowRun,
+            metadata: { wait: { ...persisted, futureField: true } },
+          },
         });
         expect(calls[2]?.[1]).toEqual(persisted);
+        expect(workflowWaitContextSchema.safeParse(calls[2]?.[1]).success).toBe(true);
         expect(calls[2]?.[2]).toEqual({ kind: 'continued' });
       } finally {
         setSystemTime();

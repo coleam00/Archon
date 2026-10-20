@@ -4,6 +4,7 @@ import type { IStateDocumentStore } from './state-document-store';
 import type { IResourceStartStore, ResourceBlocker } from './resource-start-store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
+  TERMINAL_RUN_EVENT_TYPES,
   answeredPauseContinuation,
   continuablePause,
   attentionLabels,
@@ -299,8 +300,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'run_attention_changed',
   'attention_notice_sent',
   'workflow_started',
-  'workflow_completed',
-  'workflow_failed',
+  ...TERMINAL_RUN_EVENT_TYPES,
   // Written for failed-run resume, engine-cancelled fan-out recovery, and resume of
   // paused or stale-running runs with a nonempty metadata.error. Optional data.error
   // preserves cleared legacy failure evidence (#2348); the event does not imply a
@@ -352,7 +352,6 @@ export const WORKFLOW_EVENT_TYPES = [
   // paused instead of failed. `data` carries `node_id`, `path` (when known), `error` and
   // `retry_at`; any host that can read the source continues it.
   'source_released',
-  'workflow_cancelled',
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
