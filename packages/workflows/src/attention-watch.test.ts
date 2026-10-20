@@ -136,6 +136,62 @@ const attentionOf =
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
+  test('a paused gate streams sibling stalls and their removal without losing the gate', async () => {
+    const store = await makeStore();
+    const runId = await running(store);
+    const approval = gate();
+    await store.pauseWorkflowRun(runId, approval);
+    const stream = await watch(store);
+    try {
+      await stream.next(attentionOf(runId));
+      const call = {
+        streamId: 's',
+        nodeId: 'silent-sibling',
+        provider: 'codex',
+        toolCallId: 'turn',
+        name: 'provider turn',
+        kind: 'provider_turn' as const,
+        startedAt: new Date(Date.now() - 1800000).toISOString(),
+        lastProgressAt: new Date(Date.now() - 1800000).toISOString(),
+        raisedAt: new Date().toISOString(),
+        thresholdMs: 1800000,
+      };
+      await store.setToolCallAttention(runId, 's', [call]);
+      const stalled = await stream.next(
+        line =>
+          line.type === 'attention' && line.item.runId === runId && !!line.item.stalledCalls?.length
+      );
+      if (stalled.type !== 'attention') throw new Error('expected attention');
+      expect(stalled.item.stalledCalls?.[0].stalledForMs).toBeGreaterThanOrEqual(1800000);
+      expect(stalled).toMatchObject({
+        type: 'attention',
+        snapshot: false,
+        item: {
+          kind: 'awaiting_response',
+          occurrence: approval.pauseId,
+          stalledCalls: [{ nodeId: 'silent-sibling' }],
+        },
+      });
+      const beforeClear = stream.lines.length;
+      await store.setToolCallAttention(runId, 's', []);
+      await stream.next(
+        line =>
+          stream.lines.indexOf(line) >= beforeClear &&
+          line.type === 'attention' &&
+          line.item.runId === runId &&
+          !line.item.stalledCalls?.length
+      );
+      expect(stream.lines.at(-1)).toMatchObject({
+        type: 'attention',
+        item: { kind: 'awaiting_response', occurrence: approval.pauseId },
+      });
+      expect((await store.getWorkflowRun(runId))?.status).toBe('paused');
+      expect(stream.lines.some(line => line.type === 'resolved')).toBe(false);
+    } finally {
+      await stream.close();
+    }
+  });
+
   test.each(['attention', 'resolved', 'unmatched', 'terminal', 'resumed'] as const)(
     'a rejected %s line retries before later cursors are delivered',
     async type => {

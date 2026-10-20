@@ -609,10 +609,14 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
   `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
-  usage limit, or a rate limit that outlasted its retries; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  usage limit, or a rate limit that outlasted its retries; the run continues by itself at `resumeAt`), `blocked_on_child` (waiting on the named child), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
   work with a silent provider turn, overdue tools or reported subtasks), or `unreadable`.
-  It is read from the run row alone.
+  A paused primary reason can also carry `stalledCalls` for concurrent live siblings,
+  with their node, provider, work, timestamps, `elapsedMs` and `stalledForMs`.
+  `stalled_tool_calls` carries those descriptors in `calls` with status `running` or
+  `paused`. It is read from the run row alone; blocked parents retain child pointers
+  even when they have their own stalled siblings.
 
 The node events for every listed run are read in one query, so the cost does not grow with
 one query per run.
@@ -877,7 +881,18 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-A silent open turn or overdue reported work returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) records a request to end the stalled attempt, and `workflow cancel` stops the whole run. The advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+A silent open turn or overdue reported work returns `result: "attention"`.
+With no primary paused reason, `attention.kind: "stalled_tool_calls"` carries
+`status: "running"` or `"paused"`, the affected `runId`, and `calls` naming nodes,
+providers, work, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`.
+A paused primary reason, such as a gate or usage limit, instead carries sibling stalls
+in `attention.stalledCalls`; its primary kind and answer commands remain unchanged.
+Exit `0` means attention was found; it does not mean the run completed.
+Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) records a
+request to end the stalled attempt, and `workflow cancel` stops the whole run.
+The stall itself grants no approve or resume action. Reattaching returns it immediately
+while active. A parent blocked on children reports its own stalled siblings first,
+using the parent's run ID; otherwise wait follows the children and names the affected child.
 
 ```bash
 archon workflow wait <run-id>
@@ -1242,7 +1257,8 @@ warnings. A cleanup warning does not change `ok: true`.
 
 ### `workflow end-turn`
 
-Record a request to end the AI turns behind a run's `stalled_tool_calls` advisory.
+Record a request to end the AI turns named by a run's `stalled_tool_calls.calls` or
+concurrent `stalledCalls` advisory.
 
 ```bash
 archon workflow end-turn <run-id>

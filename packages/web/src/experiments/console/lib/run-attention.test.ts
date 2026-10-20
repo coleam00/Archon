@@ -452,3 +452,38 @@ test('metadata cannot manufacture attention when the server says none is owed', 
   expect(h.alerted).toEqual([]);
   h.watcher.stop();
 });
+
+test('a paused gate alerts on a new sibling stall and retains its occurrence', async () => {
+  const attention = {
+    kind: 'awaiting_response' as const,
+    runId: 'paused',
+    respondTo: { runId: 'paused', nodeId: 'review' },
+    message: 'Ship it?',
+    occurrence: 'gate',
+  };
+  const base = run('paused', { status: 'paused', attention });
+  const h = harness([base]);
+  await h.seed();
+  const call = {
+    streamId: 's',
+    nodeId: 'sibling',
+    provider: 'codex',
+    toolCallId: 'turn',
+    name: 'provider turn',
+    startedAt: '2026-10-01T00:00:00Z',
+    lastProgressAt: '2026-10-01T00:00:00Z',
+    raisedAt: '2026-10-01T00:30:00Z',
+    thresholdMs: 1800000,
+    elapsedMs: 1800000,
+    stalledForMs: 1800000,
+  };
+  const stalled = { ...base, attention: { ...attention, stalledCalls: [call] } };
+  await h.change(stalled);
+  expect(h.alerted).toEqual(['paused:paused']);
+  await h.change(stalled);
+  await h.change(base);
+  expect(h.alerted).toHaveLength(1);
+  await h.change({ ...base, attention: { ...attention, occurrence: 'next-gate' } });
+  expect(h.alerted).toHaveLength(2);
+  h.watcher.stop();
+});

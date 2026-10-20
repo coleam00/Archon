@@ -17,18 +17,22 @@ type RunState = Pick<Run, 'attention'>;
 
 function attentionState(run: RunState): AttentionState {
   const attention = run.attention;
-  switch (attention?.kind) {
-    case 'stalled_tool_calls':
-      return attention.calls.map(call =>
-        JSON.stringify([call.streamId, call.toolCallId, call.raisedAt])
-      );
+  if (!attention) return [];
+  const calls =
+    attention.kind === 'stalled_tool_calls'
+      ? attention.calls
+      : 'stalledCalls' in attention
+        ? (attention.stalledCalls ?? [])
+        : [];
+  const state = calls.map(call => JSON.stringify([call.streamId, call.toolCallId, call.raisedAt]));
+  switch (attention.kind) {
     case 'awaiting_response':
     case 'attention':
-      return [JSON.stringify([attention.kind, attention.occurrence])];
+      return [...state, JSON.stringify([attention.kind, attention.occurrence])];
     case 'terminal':
       return [attention.status];
     default:
-      return [];
+      return state;
   }
 }
 

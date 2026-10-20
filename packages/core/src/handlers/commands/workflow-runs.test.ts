@@ -239,6 +239,46 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow get', () => {
+      test.each(['get run-paused', 'status'])(
+        'shows gate and sibling recovery for %s',
+        async command => {
+          const run = makeWorkflowRun({
+            id: 'run-paused',
+            status: 'paused',
+            metadata: {
+              approval: { nodeId: 'gate', message: 'Ship it?' },
+              tool_call_attention: [
+                {
+                  streamId: 's',
+                  nodeId: 'silent-sibling',
+                  provider: 'codex',
+                  toolCallId: 'turn',
+                  name: 'provider turn',
+                  kind: 'provider_turn',
+                  startedAt: new Date(Date.now() - 1800000).toISOString(),
+                  lastProgressAt: new Date(Date.now() - 1800000).toISOString(),
+                  raisedAt: new Date().toISOString(),
+                  thresholdMs: 1800000,
+                },
+              ],
+            },
+          });
+          if (command.startsWith('get')) mockGetWorkflowRun.mockResolvedValueOnce(run);
+          else
+            mockListDashboardRuns.mockResolvedValueOnce({
+              runs: [makeDashboardRun(run)],
+              total: 1,
+              counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
+            });
+          const result = await handleCommand(baseConversation, '/workflow ' + command, operator);
+          expect(result.success).toBe(true);
+          expect(result.message).toContain('/workflow approve run-paused');
+          expect(result.message).toContain('silent-sibling');
+          expect(result.message).toContain('no progress 1800s');
+          expect(result.message).toContain('archon workflow end-turn run-paused');
+        }
+      );
+
       test('shows the one run named by the id, whatever its status', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({

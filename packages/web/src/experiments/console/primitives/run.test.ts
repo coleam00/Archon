@@ -627,7 +627,7 @@ describe('toRun — terminal record', () => {
   });
 });
 
-test('running advisories are normalized through API metadata and disappear for terminal rows', () => {
+test('live advisories are normalized through API metadata and disappear for terminal rows', () => {
   const call = {
     streamId: 's',
     nodeId: 'node',
@@ -642,6 +642,28 @@ test('running advisories are normalized through API metadata and disappear for t
   const metadata = { tool_call_attention: [call] };
   const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
   expect(live.toolCallAttention).toEqual([call]);
+  expect(
+    toRun(raw({ id: 'paused', workflow_name: 'work', status: 'paused', metadata }))
+      .toolCallAttention
+  ).toEqual([call]);
+  const sibling = { ...call, elapsedMs: 1800000, stalledForMs: 1800000 };
+  const composite = toRun(
+    raw({
+      id: 'paused',
+      workflow_name: 'work',
+      status: 'paused',
+      attention: {
+        kind: 'awaiting_response',
+        runId: 'paused',
+        occurrence: 'gate',
+        respondTo: { runId: 'paused', nodeId: 'review' },
+        message: 'Ship it?',
+        stalledCalls: [sibling],
+      },
+    })
+  );
+  expect(composite.toolCallAttention).toEqual([sibling]);
+  expect(composite.attention?.kind).toBe('awaiting_response');
   expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
   // A stalled tool call keeps naming its cause when the owner is also gone or unobservable.
   for (const observation of ['unreachable', 'unknown'] as const)
