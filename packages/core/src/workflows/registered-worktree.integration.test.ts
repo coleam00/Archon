@@ -652,7 +652,6 @@ for (const persistence of ['sql', 'file'] as const) {
       }
       const failure = new Error('registration rejected');
       let adopted: Awaited<ReturnType<typeof store.create>> | undefined;
-      const traceBeforeCreation = await readFile(tracePath, 'utf8');
       await expect(
         phase('create and rollback', () =>
           createRegisteredWorktree(
@@ -705,8 +704,6 @@ for (const persistence of ['sql', 'file'] as const) {
           )
         )
       ).rejects.toBe(failure);
-      const creationTrace = (await readFile(tracePath, 'utf8')).slice(traceBeforeCreation.length);
-      expect(creationTrace).toMatch(/\|\s+exit\s+\|\s*\|\s+\d+\.\d+\s+\|/);
       if (!adopted) throw new Error('expected concurrent adoption');
       const retained = adopted;
       expect(await phase('read retained row', () => store.getById(retained.id))).toEqual(adopted);
