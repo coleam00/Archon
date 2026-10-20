@@ -837,6 +837,33 @@ test('ordinary cleanup removes a proven checkout and its branch', async () => {
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
 });
 
+test.each(['worktreeRemoved', 'directoryClean'] as const)(
+  'incomplete %s preserves the active registration and published remote ref',
+  async field => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(repo, 'push', '-q', 'origin', env.branch_name);
+    const ref = `refs/heads/${env.branch_name}`;
+    const published = await git(repo, 'ls-remote', 'origin', ref);
+    expect(published).toContain(ref);
+    const partial = spyOn(getIsolationProvider(), 'destroy').mockResolvedValue({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: null,
+      remoteBranchDeleted: null,
+      warnings: ['Retained directory'],
+      [field]: false,
+    });
+    try {
+      const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+      expect(result.skippedReason).toContain('filesystem removal incomplete');
+      expect(await status()).toBe('active');
+      expect(await git(repo, 'ls-remote', 'origin', ref)).toBe(published);
+    } finally {
+      partial.mockRestore();
+    }
+  }
+);
+
 test.each([false, true])(
   'remote cleanup preserves relative URL resolution (decoy repository: %s)',
   async decoy => {

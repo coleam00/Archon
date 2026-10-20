@@ -769,11 +769,26 @@ back:
 removes each worktree whose pull request merged, with its local branch. It also attempts
 remote branch deletion. If it fails, cleanup warns and can still finish local
 removal, leaving the remote branch behind. Archon cannot retry remote deletion
-after retiring the registration. From the primary checkout, verify the remote with
-`git remote get-url <remote>` and the branch with
-`git ls-remote --heads <remote> refs/heads/<branch>`, then remove it with
-`git push <remote> --delete <branch>`. Use the configured `worktree.remote`
-(default: `origin`) and the branch reported by cleanup. A worktree with uncommitted changes, a run
+after retiring the registration. If the ref changed or belongs to a replacement,
+leave it alone; do not bypass a lease refusal or substitute its new tip.
+For a transient network, authentication or policy failure, resolve it first, then
+verify from the primary checkout that the branch still belongs to the completed
+work and is no longer in use. Use the configured `worktree.remote` (default:
+`origin`) and branch reported by cleanup. Inspect the push destinations with
+`git remote get-url --push --all <remote>`. For each intended destination, use
+that exact URL as `<push-url>` in both commands:
+
+```bash
+git ls-remote --refs -- <push-url> refs/heads/<branch>
+git push --force-with-lease=refs/heads/<branch>:<verified-oid> -- <push-url> :refs/heads/<branch>
+```
+
+Verify the advertised commit belongs to the completed work before entering its
+OID as `<verified-oid>`; an empty result means the ref is absent. The lease refuses
+a changed tip but cannot detect a same-commit republish. Retry only while no one
+is reusing or publishing that branch; leave it alone if ownership is uncertain.
+
+A worktree with uncommitted changes, a run
 that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.

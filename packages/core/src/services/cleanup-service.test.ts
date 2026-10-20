@@ -514,12 +514,16 @@ describe('removeEnvironment', () => {
 
   test('remote inspection failure retains the remote branch but permits local cleanup', async () => {
     mockGetById.mockResolvedValue(makeEnvironment());
-    mockReadRemoteBranchOid.mockRejectedValue(new Error('remote unavailable'));
+    mockReadRemoteBranchOid.mockRejectedValue(
+      new Error('Command failed: git ls-remote https://user:probe-secret@127.0.0.1/repo')
+    );
     const result = await removeEnvironment(await selectedEnvironment(), {
       deleteRemoteBranch: true,
     });
     expect(result.worktreeRemoved).toBe(true);
-    expect(result.warnings).toEqual(['Remote branch cleanup skipped: remote unavailable']);
+    expect(result.warnings).toEqual([
+      'Remote branch cleanup skipped: could not inspect the remote ref',
+    ]);
     expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalled();
   });

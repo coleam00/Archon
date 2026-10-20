@@ -13,10 +13,11 @@ import {
   REPO,
   resetWorktreeMocks,
 } from './worktree-test-fixture';
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import * as git from '@archon/git';
 import { WorktreeUncommittedChangesError } from '../errors';
 import { WorktreeProvider } from './worktree';
+import { getLog } from './worktree/shared';
 
 const provider = new WorktreeProvider();
 const WORKTREE = git.toWorktreePath('/workspace/worktrees/repo/feature-branch');
@@ -380,6 +381,38 @@ describe('branch cleanup', () => {
     expect(result.branchDeleted).toBe(false);
     expect(result.warnings.some(w => w.includes('Unexpected error deleting branch'))).toBe(true);
   });
+
+  test.each(['initial inspection', 'push', 'failure inspection'] as const)(
+    'remote %s failure does not expose credentials in warnings or diagnostics',
+    async stage => {
+      const secret = 'probe-secret';
+      const failure = new Error(`Command failed: git https://user:${secret}@localhost/repo`);
+      let inspections = 0;
+      execSpy.mockImplementation(async (_cmd, args) => {
+        if (args.includes('ls-remote')) {
+          inspections++;
+          if (stage === 'initial inspection' || (stage === 'failure inspection' && inspections > 1))
+            throw failure;
+          return { stdout: `${'a'.repeat(40)}\trefs/heads/feature-branch\n`, stderr: '' };
+        }
+        if (args.includes('push')) throw failure;
+        return { stdout: '', stderr: '' };
+      });
+      const warning = spyOn(getLog(), 'warn').mockImplementation(() => {});
+      const error = spyOn(getLog(), 'error').mockImplementation(() => {});
+      try {
+        const result = await destroyBranch(true);
+        expect(result.remoteBranchDeleted).toBe(false);
+        expect(result.warnings).toEqual([
+          "Failed to delete remote branch 'feature-branch': remote inspection or leased deletion failed",
+        ]);
+        expect(JSON.stringify([warning.mock.calls, error.mock.calls])).not.toContain(secret);
+      } finally {
+        warning.mockRestore();
+        error.mockRestore();
+      }
+    }
+  );
 
   test('returns remoteBranchDeleted=false with warning on network error', async () => {
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {

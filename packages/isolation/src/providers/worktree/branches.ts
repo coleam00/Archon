@@ -501,18 +501,16 @@ export async function deleteRemoteBranchTracked(
     );
     getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
     return true;
-  } catch (error) {
-    const err = error as Error;
+  } catch {
     try {
       if (!(await remoteBranchExists(repoPath, remote, branchName))) return true;
-    } catch (inspectionError) {
-      getLog().warn(
-        { err: inspectionError, repoPath, branchName },
-        'remote_branch_delete_inspection_failed'
-      );
+    } catch {
+      getLog().warn({ repoPath, branchName }, 'remote_branch_delete_inspection_failed');
     }
-    result.warnings.push(`Failed to delete remote branch '${branchName}': ${err.message}`);
-    getLog().error({ err, repoPath, branchName }, 'remote_branch_delete_failed');
+    result.warnings.push(
+      `Failed to delete remote branch '${branchName}': remote inspection or leased deletion failed`
+    );
+    getLog().error({ repoPath, branchName }, 'remote_branch_delete_failed');
     return false;
   }
 }

@@ -17,8 +17,8 @@ export async function prepareRemoteBranchCleanup(
     return async result => {
       await deleteRemoteBranchTracked(durable, branchName, result, remote, oid);
     };
-  } catch (error) {
-    const warning = `Remote branch cleanup skipped: ${(error as Error).message}`;
+  } catch {
+    const warning = 'Remote branch cleanup skipped: could not inspect the remote ref';
     return async result => {
       result.warnings.push(warning);
     };
