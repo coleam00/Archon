@@ -64,7 +64,7 @@ describe('planEndTurn', () => {
     });
   });
 
-  it('records every observed stall in each stream', () => {
+  it('records every observed stall across streams', () => {
     const plan = planEndTurn(
       run('running', [
         call('a', '2026-10-18T06:55:59.000Z'),
@@ -74,10 +74,11 @@ describe('planEndTurn', () => {
     );
     expect(plan.kind === 'request' && plan.metadata).toEqual({
       end_turn_request: {
-        stalls: {
-          a: ['a:2026-10-18T06:55:59.000Z', 'a:2026-10-18T06:56:10.000Z'],
-          b: ['b:2026-10-18T07:00:00.000Z'],
-        },
+        stallIds: [
+          'a:2026-10-18T06:55:59.000Z',
+          'a:2026-10-18T06:56:10.000Z',
+          'b:2026-10-18T07:00:00.000Z',
+        ],
       },
     });
   });
@@ -86,9 +87,9 @@ describe('planEndTurn', () => {
 describe('isEndTurnRequested', () => {
   it.each([
     {},
-    { stalls: { a: 'bad' } },
-    { stalls: [] },
-    { stalls: { a: [''] } },
+    { stallIds: 'bad' },
+    { stallIds: [] },
+    { stallIds: [''] },
     { stalls: { a: '2026-10-18T06:55:59.000Z' }, requestedAt: '2026-10-18T05:00:00.000Z' },
   ])('rejects malformed or obsolete timestamp requests %j', async request => {
     expect(
@@ -100,14 +101,14 @@ describe('isEndTurnRequested', () => {
   });
 
   it('matches any observed occurrence still active in its stream', async () => {
-    const store = storeWith({ end_turn_request: { stalls: { a: ['first', 'second'] } } });
+    const store = storeWith({ end_turn_request: { stallIds: ['first', 'second'] } });
     for (const stallIds of [['first'], ['second'], ['first', 'new']]) {
       expect(await isEndTurnRequested(store, 'run', { streamId: 'a', stallIds })).toBe(true);
     }
     for (const stall of [
       { streamId: 'a', stallIds: ['new'] },
       { streamId: 'a', stallIds: [] },
-      { streamId: 'b', stallIds: ['first'] },
+      { streamId: 'b', stallIds: ['other-stream-stall'] },
     ])
       expect(await isEndTurnRequested(store, 'run', stall)).toBe(false);
   });

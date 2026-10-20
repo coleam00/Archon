@@ -13,7 +13,7 @@ import type { StreamStall } from './tool-call-attention';
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
 export const endTurnRequestSchema = z.object({
-  stalls: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)),
+  stallIds: z.array(z.string().min(1)).min(1),
 });
 
 type EndTurnMetadata = {
@@ -36,19 +36,17 @@ export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndT
   if (!parsed.success) return { kind: 'refused', reason: 'unreadable_attention' };
   const calls = parsed.data;
   if (calls.length === 0) return { kind: 'refused', reason: 'nothing_stalled' };
-  const stalls = new Map<string, string[]>();
+  const stallIds: string[] = [];
   for (const call of calls) {
     if (call.stallId === undefined) return { kind: 'refused', reason: 'unreadable_attention' };
-    const observed = stalls.get(call.streamId) ?? [];
-    observed.push(call.stallId);
-    stalls.set(call.streamId, observed);
+    stallIds.push(call.stallId);
   }
   return {
     kind: 'request',
     calls,
     metadata: {
       [END_TURN_REQUEST_METADATA_KEY]: endTurnRequestSchema.parse({
-        stalls: Object.fromEntries(stalls),
+        stallIds,
       }),
     },
   };
@@ -62,9 +60,5 @@ export async function isEndTurnRequested(
 ): Promise<boolean> {
   const run = await store.getWorkflowRun(runId);
   const request = endTurnRequestSchema.safeParse(run?.metadata[END_TURN_REQUEST_METADATA_KEY]);
-  return (
-    request.success &&
-    Object.hasOwn(request.data.stalls, stall.streamId) &&
-    stall.stallIds.some(id => request.data.stalls[stall.streamId].includes(id))
-  );
+  return request.success && stall.stallIds.some(id => request.data.stallIds.includes(id));
 }

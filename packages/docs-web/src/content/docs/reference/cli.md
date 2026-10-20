@@ -1273,7 +1273,7 @@ including thinking and result chunks, renews that interval. Reported tools and b
 work use `workflows.toolCallAttentionMs` instead, with their own progress timestamps and
 sanitized descriptions. Silence never ends the turn automatically.
 
-The command records the stream ids and unique stall identities the operator observed. A live
+The command records the unique stall identities the operator observed. A live
 owner checks about every ten seconds and aborts a matching turn only if that stall is
 still active. The attempt fails as `timeout`; its retry policy decides whether to start
 a fresh attempt. A recovered stream or a later attempt is not ended by an old request, even if the
