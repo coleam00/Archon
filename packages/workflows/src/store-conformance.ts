@@ -1,3 +1,5 @@
+import { createRunToolCallAttention } from './tool-call-attention';
+import { planEndTurn } from './end-turn-request';
 import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
@@ -33,6 +35,7 @@ import {
   pausedAttentionWait,
   pendingWorkflowWaitDeadline,
   queuedRunAttention,
+  runAttention,
   readCapacityWait,
   readSourceRelease,
   workflowWaitContextSchema,
@@ -275,6 +278,36 @@ export function describeWorkflowStoreConformance(
     });
     afterEach(async () => {
       await harness?.close();
+    });
+
+    test('resume preserves a live stalled sibling and permits end-turn', async () => {
+      const run = await store.createWorkflowRun({ workflow_name: 'test', user_message: '' });
+      await store.claimPendingWorkflowRun(run.id);
+      let now = Date.parse('2026-10-20T00:00:00.000Z');
+      const stream = createRunToolCallAttention({ store, runId: run.id }).createStream({
+        nodeId: 'ci',
+        provider: 'codex',
+        reportedBackgroundWork: true,
+        thresholdMs: 20,
+        env: {},
+        now: () => now,
+      });
+      await stream.observe({ type: 'subtask', taskId: 'live', status: 'started' });
+      await store.pauseWorkflowRun(run.id, approval);
+      now += 100;
+      await stream.refresh();
+      expect(stream.stall()).toBeDefined();
+      const resumed = await store.resumeWorkflowRun(run.id);
+      await stream.refresh();
+      const current = await store.getWorkflowRun(run.id);
+      if (!current) throw new Error('Missing resumed run');
+      expect(runAttention(resumed)).toMatchObject({
+        kind: 'stalled_tool_calls',
+        calls: [{ nodeId: 'ci', stalledForMs: expect.any(Number) }],
+      });
+      expect(planEndTurn(current)).toMatchObject({ kind: 'request' });
+      await stream.clear();
+      expect((await store.getWorkflowRun(run.id))?.metadata.tool_call_attention).toBeUndefined();
     });
 
     type Lane = PreparedWorkflowLaunch['execution']['isolation'];

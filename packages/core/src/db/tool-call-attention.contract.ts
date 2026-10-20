@@ -75,6 +75,7 @@ export function toolCallAttentionContract(
     expect((await readRun()).metadata.tool_call_attention).toEqual([call('b')]);
     await workflows.resumeWorkflowRun(runId);
     expect((await readRun()).metadata).toEqual({
+      tool_call_attention: [call('b')],
       keep: 'value',
       execution_claim: expect.any(String),
     });

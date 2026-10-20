@@ -109,6 +109,31 @@ export async function findResumableRun(
   }
 }
 
+function clearedResumeMetadata(
+  prior: { status: string; metadata: unknown } | undefined,
+  scheduled: ScheduledWorkflowResume | null,
+  triggeredAt: string | null
+) {
+  // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
+  const usageLimitWait =
+    prior?.status === 'paused' &&
+    pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
+      undefined;
+  return {
+    ...(usageLimitWait ? { wait: null } : {}),
+    ...(prior?.status === 'paused' ? {} : { [TOOL_CALL_ATTENTION_METADATA_KEY]: null }),
+    error: null,
+    [RUN_STOP_REASON_METADATA_KEY]: null,
+    continuation_retry_at: null,
+    [CAPACITY_WAIT_METADATA_KEY]: null,
+    [SOURCE_RELEASE_METADATA_KEY]: null,
+    [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
+    ...(scheduled !== null && triggeredAt !== null
+      ? { scheduled_resume: { ...scheduled, triggeredAt } }
+      : {}),
+  };
+}
+
 /**
  * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
  * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
@@ -264,24 +289,7 @@ export async function resumeWorkflowRun(
       const clearedError = readMetadataError(prior?.metadata);
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
-      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-      const usageLimitWait =
-        prior?.status === 'paused' &&
-        pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
-          undefined;
-      const metadataPatch = {
-        ...(usageLimitWait ? { wait: null } : {}),
-        [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
-        error: null,
-        [RUN_STOP_REASON_METADATA_KEY]: null,
-        continuation_retry_at: null,
-        [CAPACITY_WAIT_METADATA_KEY]: null,
-        [SOURCE_RELEASE_METADATA_KEY]: null,
-        [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
-        ...(scheduled !== null && triggeredAt !== null
-          ? { scheduled_resume: { ...scheduled, triggeredAt } }
-          : {}),
-      };
+      const metadataPatch = clearedResumeMetadata(prior, scheduled, triggeredAt);
 
       const result = await query(
         `UPDATE remote_agent_workflow_runs

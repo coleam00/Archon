@@ -447,7 +447,7 @@ export function createTransactionView(
       }
       delete run.metadata.error;
       delete run.metadata.stop_reason;
-      Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
+      if (run.status !== 'paused') delete run.metadata.tool_call_attention;
       delete run.metadata.continuation_retry_at;
       Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
       Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
