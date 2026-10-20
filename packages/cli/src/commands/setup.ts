@@ -267,20 +267,18 @@ async function collectAdditionalConfig(
 ): Promise<SetupConfig> {
   s.start('Loading existing configuration...');
 
-  const config: SetupConfig = {
-    ai,
-    platforms: createPlatformSelection(platform => existing?.platforms[platform] ?? false),
-    botDisplayName: 'Archon',
-  };
-
   s.stop('Existing configuration loaded');
 
   log.info('Select additional platforms to configure');
   const newPlatforms = await collectPlatforms();
 
-  config.platforms = createPlatformSelection(
-    platform => config.platforms[platform] || newPlatforms[platform]
-  );
+  const config: SetupConfig = {
+    ai,
+    platforms: createPlatformSelection(
+      platform => (existing?.platforms[platform] ?? false) || newPlatforms[platform]
+    ),
+    botDisplayName: 'Archon',
+  };
 
   if (force) {
     log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
