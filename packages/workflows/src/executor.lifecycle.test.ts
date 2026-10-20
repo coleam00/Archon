@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   dagCall,
+  logged,
   makeDeps,
   makeRun,
   makeStore,
@@ -361,6 +362,47 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it.each([false, true])(
+    'preserves the execution result when the backstop status read fails (execution failed: %p)',
+    async executionFailed => {
+      const executionError = new Error('dag execution failed');
+      if (executionFailed) mockExecuteDagWorkflow.mockRejectedValueOnce(executionError);
+      else mockExecuteDagWorkflow.mockResolvedValueOnce(undefined);
+      const readError = new Error('status store unavailable');
+      const store = makeStore({
+        getWorkflowRun: mock(async () => makeRun({ status: 'completed' })),
+        getWorkflowRunStatus: mock(async () => {
+          throw readError;
+        }),
+      });
+      const result = await startWorkflow({ store });
+      expect(result).toMatchObject({
+        success: !executionFailed,
+        workflowRunId: 'run-123',
+        ...(executionFailed ? { error: executionError.message } : {}),
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        {
+          workflowRunId: 'run-123',
+          operation: 'getWorkflowRunStatus',
+          err: readError,
+          recovery: expect.stringContaining('archon workflow get <run-id>'),
+        },
+        'executor.backstop_status_read_failed'
+      );
+      expect((logged('executor.backstop_status_read_failed')[0] as { err: unknown }).err).toBe(
+        readError
+      );
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(executionFailed ? 1 : 0);
+      if (executionFailed) {
+        expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', executionError.message, {
+          exitReason: 'unhandled_error',
+        });
+      }
+      expect(keepAwake.activeCount()).toBe(0);
+    }
+  );
+
   const backstopWrites = (failSpy: ReturnType<typeof mock>) =>
     (failSpy.mock.calls as unknown[][]).filter(
       c => typeof c[1] === 'string' && c[1].includes('exited without finalizing')

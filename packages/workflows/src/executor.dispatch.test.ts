@@ -230,6 +230,15 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
   const recorded = (base_branch: string) =>
     makeRun({ metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch } } });
 
+  it.each(['checkout-base', ''])(
+    'uses the caller-resolved base %p ahead of config',
+    async resolvedBaseBranch => {
+      await inWorktree({ resolvedBaseBranch }, 'configured');
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(dagCall()?.baseBranch).toBe(resolvedBaseBranch);
+    }
+  );
+
   // The per-dispatch `--base` override ranks above repo config. Otherwise a repo that sets
   // `worktree.baseBranch` would cut its worktree from the override but report the
   // configured branch as $BASE_BRANCH, and target `gh pr create --base` at the wrong one.
@@ -311,7 +320,14 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
   it.each(['release-2026', ''])(
     'a continuation keeps the recorded base branch %p over the current environment (#2454)',
     async baseBranch => {
-      await inWorktree({ ...resumeOf(recorded(baseBranch)), baseBranch: 'develop' }, 'main');
+      await inWorktree(
+        {
+          ...resumeOf(recorded(baseBranch)),
+          baseBranch: 'develop',
+          resolvedBaseBranch: 'new-checkout-base',
+        },
+        'main'
+      );
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
       expect(dagCall()?.baseBranch).toBe(baseBranch);
     }
@@ -320,7 +336,11 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
   // `--base` on a resume is a deliberate act by whoever is resuming; the record restores
   // what was dropped, it does not overrule what this invocation asked for.
   it('a resume that re-passes --base still retargets $BASE_BRANCH (#2454)', async () => {
-    await inWorktree({ ...resumeOf(recorded('release-2026')), baseOverride: 'hotfix/urgent' });
+    await inWorktree({
+      ...resumeOf(recorded('release-2026')),
+      baseOverride: 'hotfix/urgent',
+      resolvedBaseBranch: 'new-checkout-base',
+    });
     expect(dagCall()?.baseBranch).toBe('hotfix/urgent');
   });
 
