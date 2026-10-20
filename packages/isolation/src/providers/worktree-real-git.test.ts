@@ -571,7 +571,7 @@ describe('WorktreeProvider against real git', () => {
       const unrelated = join(root, 'url.git');
       for (const destination of [intended, unrelated])
         await git(root, 'init', '--bare', '-q', destination);
-      await git(repoPath, 'remote', 'add', 'origin', unrelated);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
       const created = await provider.create({
         ...request,
         workflowType: 'task',
@@ -586,6 +586,7 @@ describe('WorktreeProvider against real git', () => {
       for (const destination of [intended, unrelated])
         await git(repoPath, 'push', '-q', destination, created.branchName);
       const published = await git(root, 'ls-remote', intended, ref);
+      await git(repoPath, 'remote', 'set-url', 'origin', unrelated);
       const servicePath = intended.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
       await git(
         repoPath,
@@ -628,7 +629,7 @@ describe('WorktreeProvider against real git', () => {
     async ({ force, service }) => {
       const destination = join(root, 'remote.git');
       await git(root, 'init', '--bare', '-q', destination);
-      await git(repoPath, 'remote', 'add', 'origin', destination);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
       const created = await provider.create({
         ...request,
         workflowType: 'task',
@@ -639,6 +640,7 @@ describe('WorktreeProvider against real git', () => {
         },
       });
       if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      await git(repoPath, 'remote', 'set-url', 'origin', destination);
       await git(repoPath, 'push', '-q', 'origin', created.branchName);
       const ref = `refs/heads/${created.branchName}`;
       const published = await git(root, 'ls-remote', destination, ref);
