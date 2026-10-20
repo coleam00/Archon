@@ -29,7 +29,6 @@ function isReached(
   iteration?: number
 ): boolean {
   const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
-    loopPrevOutputs: ctx.loopPrevOutputs,
     loopBodyScopes: ctx.loopBodyScopes,
   });
   if (boundaryDecision.decision === 'skip') {

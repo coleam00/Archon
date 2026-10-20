@@ -103,7 +103,6 @@ export function checkComposedBlockBoundaries(
   inputs?: Record<string, JsonValue>,
   options: {
     evaluateEntryBoundary?: boolean;
-    loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
     loopBodyScopes?: readonly LoopBodyScope[];
   } = {}
 ): TriggerRuleDecision {
@@ -126,12 +125,7 @@ export function checkComposedBlockBoundaries(
       try {
         const depth = boundary.loopDepth ?? 0;
         const scopeIndex = (options.loopBodyScopes?.length ?? 0) - 1 - depth;
-        const loopPrevOutputs =
-          depth === 0
-            ? options.loopPrevOutputs
-            : scopeIndex >= 0
-              ? options.loopBodyScopes?.[scopeIndex]?.loopPrevOutputs
-              : undefined;
+        const loopPrevOutputs = options.loopBodyScopes?.[scopeIndex]?.loopPrevOutputs;
         const condition = evaluateCondition(boundary.when, nodeOutputs, inputs, {
           loopPrevOutputs,
         });

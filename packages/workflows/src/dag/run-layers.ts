@@ -167,7 +167,6 @@ async function admitNode(
     resolveRunInputs(ctx.workflowRun),
     {
       evaluateEntryBoundary: isCachedPriorSuccess,
-      loopPrevOutputs: ctx.loopPrevOutputs,
       loopBodyScopes: ctx.loopBodyScopes,
     }
   );
