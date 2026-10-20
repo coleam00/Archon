@@ -594,7 +594,12 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   queue's last round delivered. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). The sweep
+  work item names yet and whose head branch is not one the build queue creates
+  (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). A pull request
+  on a build branch belongs to its build item alone until that item is ready. When a
+  build item's rounds come to name a pull request that already has an own-PR item, the
+  run settles the own-PR item as superseded before claiming, recording the build
+  item's number, so the sweep never sees it. The sweep
   reviews such a pull request in full when it has no verdict, and asks instead of
   returning it, since no build round owns it.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its

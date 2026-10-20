@@ -32,7 +32,7 @@ import {
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
-import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
+import { enrollOwnPrs, isOwnPr, supersedeOwnPrs } from '../../.shared/own-prs.ts';
 import { claimNext, parseOrder, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -108,6 +108,7 @@ function main(): void {
   requireGh();
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
+  supersedeOwnPrs(new Date().toISOString(), runId);
   enrollOrNote(repo, list.ownPrs);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];

@@ -262,7 +262,7 @@ interface FakePr {
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean; headRefName: string }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
 }
@@ -432,16 +432,32 @@ describe('the merge queue scripts', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item());
     const ownPrs = [
-      { number: 42, url: PR_URL, isDraft: false },
-      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
-      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
+      { number: 42, url: PR_URL, isDraft: false, headRefName: 'build/7-fix-the-thing-abcdef12' },
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' },
+      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true, headRefName: 'wip' },
+      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'build/9-add-a-thing-0123abcd' },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
     expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
     expect(stored(at, 51).value).toBeNull();
+    expect(stored(at, 52).value).toBeNull();
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
+  }, 60_000);
+
+  test('an own-PR item whose pull request a build item delivers is settled as superseded and never swept', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item());
+    const ownDoc = { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } };
+    seed(at, ownDoc);
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [] } });
+    const output = ok(picked) as { items: { item: { number: number } }[] };
+    expect(output.items.map(entry => entry.item.number)).toEqual([7]);
+    const merge = stored(at, 42).value?.facts.merge;
+    expect(merge?.status).toBe('parked');
+    expect(merge?.decisions[0]?.decision).toBe('superseded');
+    expect(merge?.decisions[0]?.reason).toContain('work item 7');
   }, 60_000);
 
   test('a failed own-PR listing is noted and the sweep still takes the existing work', () => {
@@ -456,7 +472,7 @@ describe('the merge queue scripts', () => {
 
   test('without the opt-in, nobody\'s pull requests are enrolled', () => {
     const at = install();
-    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }] } });
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }] } });
     expect(ok(picked)).toMatchObject({ path: 'idle' });
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
   }, 60_000);

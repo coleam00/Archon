@@ -213,7 +213,14 @@ export function buildBranch(number: number, title: string, runId: string): strin
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/, '');
-  return ['build/' + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
+  return [BUILD_BRANCH_PREFIX + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
+}
+
+const BUILD_BRANCH_PREFIX = 'build/';
+
+/** Whether a branch is one `buildBranch` names: the build queue owns pushes to it. */
+export function isBuildBranch(branch: string): boolean {
+  return new RegExp(`^${BUILD_BRANCH_PREFIX}\\d+(-|$)`).test(branch);
 }
 
 export interface BuildChange {
