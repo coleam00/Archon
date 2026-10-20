@@ -69,6 +69,7 @@ const PROMISES_ENVIRONMENT = /\b(?:environment variables?|env vars?)\b/i;
 /** The exec node kinds a statement can talk about. */
 const EXEC_KINDS = { bash: 'bash', script: 'script' } as const;
 type ExecKind = keyof typeof EXEC_KINDS;
+
 /** A backticked name, as the copies write an environment variable. */
 const BACKTICKED_NAME = /`([A-Z][A-Z0-9_]*)`/g;
 
@@ -181,6 +182,10 @@ describe('the user-controlled variable rule', () => {
     for (const copy of copies) assertClassNamesAreEngineOwned(copy);
   });
 
+  test('every variable a copy calls user-controlled has an environment form it promises', () => {
+    for (const copy of copies) assertClassNamesArePromised(copy);
+  });
+
   test('the copies agree on the user-controlled class', () => {
     assertCopiesAgreeOnTheClass(copies);
   });
@@ -248,11 +253,24 @@ function assertNamedVariablesAreSubstituted(document: Document): void {
 
 /** Every name a copy calls user-controlled must be one the engine leaves out of a source. */
 function assertClassNamesAreEngineOwned(document: Document): void {
-  for (const statement of document.statements) {
-    for (const name of classNames(statement.text)) {
+  for (const statement of ruleStatements(document)) {
+    for (const name of classClaim(statement)) {
       if (USER_CONTROLLED.has(name)) continue;
       throw new Error(
         `${document.file} calls ${name} user-controlled, which the engine does not leave out of a source`
+      );
+    }
+  }
+}
+
+/** Every name a copy calls user-controlled must also be one it promises as a variable. */
+function assertClassNamesArePromised(document: Document): void {
+  for (const statement of ruleStatements(document)) {
+    const promised = promisedNames(statement);
+    for (const name of classClaim(statement)) {
+      if (promised.has(name)) continue;
+      throw new Error(
+        `${document.file} calls ${name} user-controlled but promises no ${name} environment variable`
       );
     }
   }
@@ -573,7 +591,7 @@ function classClaim(statement: Statement): Set<string> {
   const names = new Set<string>();
   for (const sentence of statement.sentences) {
     if (!speaksAboutClass(sentence)) continue;
-    for (const name of classNames(sentence)) names.add(name);
+    for (const name of namedVariables(sentence)) names.add(name);
   }
   return names;
 }
