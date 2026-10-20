@@ -11,7 +11,7 @@ sidebar:
 
 Connect Archon to Slack so you can interact with your AI coding assistant from any Slack workspace.
 
-Slack runs as a chat plugin, `chat-slack`, released with Archon. The server starts the plugin as its own process and talks to it over the chat plugin protocol; the server itself contains no Slack code. You create a Slack app, set its two tokens in the server environment, and install the plugin.
+Slack runs as a chat plugin, `chat-slack`, released with Archon. The server starts the plugin as its own process and talks to it over the chat plugin protocol; the server itself contains no Slack code. You create a Slack app, set its two tokens in the server environment, and install the plugin. Docker provisions the image-provided plugin automatically when `SLACK_BOT_TOKEN` is configured.
 
 New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it. See [Who can act on a run](/reference/security/#who-can-act-on-a-run).
 
@@ -131,6 +131,8 @@ SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 ```
 
+In Docker, a nonempty `SLACK_BOT_TOKEN` declares installation at startup, including tokens in `/.archon/.env`. Both tokens are required for a connection.
+
 The plugin reads them from the environment the server starts it with. If either is missing, the plugin fails to start and the server does not retry it.
 
 ## Step 7: Install the Slack Plugin
@@ -141,13 +143,11 @@ With the release binary or Homebrew:
 archon plugin add coleam00/Archon/plugins/chat-slack
 ```
 
-In a source checkout, run `bun run cli plugin add coleam00/Archon/plugins/chat-slack`. In Docker:
+In a source checkout, run `bun run cli plugin add coleam00/Archon/plugins/chat-slack`.
 
-```bash
-docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/chat-slack
-```
+In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Docker plugins](/deployment/docker/#plugins) for release pins and build args.
 
-Without a tag, `plugin add` installs the latest release. Restart the server; Slack appears in `/api/health` once the plugin connects. Keep the plugin current with `archon plugin update coleam00/Archon/plugins/chat-slack`, and remove it with `archon plugin remove coleam00/Archon/plugins/chat-slack`; after a restart, Slack is gone. See [`archon plugin`](/reference/cli/#plugin).
+Without a tag, manual `plugin add` installs the latest release. Restart the server; Slack appears in `/api/health` once the plugin connects. Keep the plugin current with `archon plugin update coleam00/Archon/plugins/chat-slack`, and remove it with `archon plugin remove coleam00/Archon/plugins/chat-slack`. In Docker, remove Slack tokens from every effective env source as well, or the image plugin is reinstalled on restart. Outside Docker, removal followed by a restart keeps Slack off. See [`archon plugin`](/reference/cli/#plugin).
 
 ## Step 8: Invite Bot to Channel
 
@@ -248,9 +248,9 @@ a refusal only they can see.
 Earlier Archon versions ran Slack inside the server whenever `SLACK_BOT_TOKEN` and
 `SLACK_APP_TOKEN` were set. The server no longer contains that adapter: without the
 plugin, Slack stays off. When `SLACK_BOT_TOKEN` is set and no Slack plugin is installed,
-startup logs a `chat.bundled_adapter_retired` warning with the install command.
+startup logs a `chat.bundled_adapter_retired` warning with Docker provisioning guidance and the manual install command.
 
-Install the plugin (Step 7) and restart. Nothing else changes: the tokens, the Slack app
+In Docker, existing token configuration provisions the image-provided plugin offline on restart; no manual step is needed. The boot log names the release and why it was installed. Outside Docker, install the plugin (Step 7) and restart. Nothing else changes: the tokens, the Slack app
 configuration, `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` stay as they are, and
 existing conversations, linked identities and workspaces carry over because the plugin
 keeps the platform id `slack`.

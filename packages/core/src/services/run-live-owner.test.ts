@@ -39,8 +39,8 @@ import {
 const LIVE_OWNER_EVENT_DEADLINE_MS = 3_000;
 
 /**
- * Longer than the cold Windows process listing a stop waits on (4-8 s on a loaded runner),
- * which is longer than the idle lease timeout that used to cut a slow stop off (#3516).
+ * Several times the idle lease timeout that used to cut a slow stop off (#3516), and on the
+ * scale of the slowest stop a lease has had to outlive.
  */
 const SLOW_STOP_IDLE_MS = 9_000;
 
@@ -202,6 +202,8 @@ describe('run live owner', () => {
     const lease = await requestRunLiveOwnerStop(runId);
     try {
       expect(lease.pid).toBe(process.pid);
+      // This process never claimed a Windows job object, so its owner reports none.
+      expect(lease.windowsJob).toBeUndefined();
       expect(owner.isStopRequested()).toBe(true);
       await lease.commit();
       await waitForOwnerEvent(() => events.includes('control_handoff'));
@@ -217,10 +219,10 @@ describe('run live owner', () => {
   test(
     'holds a committed stop lease for as long as both ends are alive, however slow the stop',
     async () => {
-      // A Windows stop lists the process table before it kills, and a cold listing on a
-      // loaded host takes 4-8 s with nothing sent on the lease (#3516). An idle timer on
-      // either end used to close the lease during that listing, and the stop then refused
-      // a live owner. Idle past that window, then prove both ends still hold the lease.
+      // A stop can wait seconds terminating and confirming the tree with nothing sent on
+      // the lease (#3516). An idle timer on either end used to close the lease during that
+      // wait, and the stop then refused a live owner. Idle past that window, then prove
+      // both ends still hold the lease.
       const runId = `slow-stop-${crypto.randomUUID()}`;
       const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
       const lease = await requestRunLiveOwnerStop(runId);
@@ -236,6 +238,32 @@ describe('run live owner', () => {
     },
     testTimeout(SLOW_STOP_IDLE_MS + 5_000)
   );
+
+  test('reads the Windows job an owner reports, and refuses one that is not a name', async () => {
+    const runId = `windows-job-${crypto.randomUUID()}`;
+    const path = runLiveOwnerPath(runId);
+    let windowsJob: unknown = 'Global\\archon-run-fixture';
+    const server = createServer(socket => {
+      socket.once('data', () => {
+        socket.write(`${JSON.stringify({ kind: 'detached', pid: 12345, windowsJob })}\n`);
+      });
+    });
+    await listen(server, path);
+    try {
+      const lease = await requestRunLiveOwnerStop(runId);
+      lease.release();
+      expect(lease.windowsJob).toBe('Global\\archon-run-fixture');
+
+      for (windowsJob of [42, '']) {
+        const refusal = await stopRefusal(runId);
+        expect(refusal.message).toContain('owner returned an invalid response');
+        expect(refusal.reason).toBe('unproven');
+      }
+    } finally {
+      await close(server);
+      if (process.platform !== 'win32') rmSync(path, { force: true });
+    }
+  });
 
   test('bounds close while a controller retains an uncommitted stop lease', async () => {
     const runId = `retained-${crypto.randomUUID()}`;

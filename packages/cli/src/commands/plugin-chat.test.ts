@@ -22,7 +22,7 @@ import { GitHubAdapter } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { RESERVED_CHAT_PLATFORMS } from '@archon/chat-contract/descriptor';
-import { pluginCommand, type PluginEnvironment } from './plugin';
+import { installPinnedPlugin, pluginCommand, type PluginEnvironment } from './plugin';
 
 const windows = process.platform === 'win32';
 const enabled = !windows || (!!process.env.CI && !skipCompiledBinaryTests());
@@ -432,4 +432,23 @@ test('reserved identities conform to bundled adapters', () => {
     'gitlab',
     'web',
   ]);
+});
+
+integration('image preparation checks the release commit before executing any bytes', async () => {
+  const env = await environment();
+  await configure();
+  await writeFile(marker, 'not executed');
+  await expect(installPinnedPlugin('owner/repo@v1', 'f'.repeat(40), env)).rejects.toThrow(
+    'expected ' + 'f'.repeat(40)
+  );
+  expect(await Bun.file(marker).text()).toBe('not executed');
+  expect(await readReceipts(env.pluginsDir)).toEqual([]);
+  await expect(installPinnedPlugin('owner/repo', commits.get('v1')!, env)).rejects.toThrow(
+    'explicit release tag'
+  );
+  await installPinnedPlugin('owner/repo@v1', commits.get('v1')!, env);
+  expect((await readReceipts(env.pluginsDir))[0]).toMatchObject({
+    tag: 'v1',
+    commit: commits.get('v1'),
+  });
 });

@@ -1,5 +1,3 @@
-import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from './windows-process-tree';
-
 /*
  * How long stopping a detached run owner can take, shared by the controller that stops it
  * (`run-owner-stop.ts`) and the waiters that watch it go (`run-attention-watch.ts`). It
@@ -10,6 +8,11 @@ import { WINDOWS_PROCESS_TREE_STOP_MAX_MS } from './windows-process-tree';
 export const TERMINATION_GRACE_MS = 5_000;
 /** POSIX: how long the group has to disappear after SIGKILL. */
 export const TERMINATION_CONFIRM_MS = 1_000;
+/**
+ * Windows: how long the stop has to see the owner's job object empty after terminating
+ * it. Running out is a failure, never proof that anything died.
+ */
+export const WINDOWS_RUN_JOB_STOP_MAX_MS = 10_000;
 
 /**
  * The longest a committed stop spends terminating the owner's process tree before it
@@ -19,7 +22,7 @@ export const TERMINATION_CONFIRM_MS = 1_000;
  */
 export const DETACHED_RUN_TERMINATION_MAX_MS =
   process.platform === 'win32'
-    ? WINDOWS_PROCESS_TREE_STOP_MAX_MS
+    ? WINDOWS_RUN_JOB_STOP_MAX_MS
     : TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS;
 
 /** Time for the controller to record `cancelled` once the tree is gone. */

@@ -4,8 +4,8 @@
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
  * (issue #3334).
  *
- * Mock setup mirrors `executor.test.ts`'s "Mock ... / Import after mocks"
- * convention — `InProcessWorkflowEngine` delegates straight through to the
+ * Mock setup mirrors `executor/test-utils.ts`, the scaffolding of the
+ * `executor.*.test.ts` files — `InProcessWorkflowEngine` delegates straight through to the
  * real `executeWorkflow`/`hydrateResumableRun`, so the same fs/git/dag-executor
  * seams need stubbing here too. This file deliberately does NOT mock
  * `./executor` or `@archon/workflows/executor` itself.
@@ -103,7 +103,7 @@ mock.module('./event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => mockEmitter),
 }));
 
-// --- Bootstrap provider registry (after path mocks), same as executor.test.ts ---
+// --- Bootstrap provider registry (after path mocks), same as executor/test-utils.ts ---
 import { clearRegistry } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 clearRegistry();

@@ -436,7 +436,7 @@ async function startDashboardFeed(transport: SSETransport): Promise<DashboardFee
 function warnRetiredAdapters(installedChatIds: ReadonlySet<string>): void {
   for (const notice of retiredAdapterNotices(process.env, installedChatIds)) {
     getLog().warn(
-      { platform: notice.id, hint: `Install its plugin: ${notice.command}` },
+      { platform: notice.id, hint: `${notice.guidance} Manual install: ${notice.command}` },
       'chat.bundled_adapter_retired'
     );
   }

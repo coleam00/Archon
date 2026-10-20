@@ -1598,8 +1598,8 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     // keeps carrying the codebase default as the fallback — the same split the
     // provider request uses above. Asserting the flag in `baseBranch` here would
     // pass while $BASE_BRANCH still resolved to repo config (see the
-    // 'prefers baseOverride over repo config baseBranch' test in
-    // packages/workflows/src/executor.test.ts, which covers the resolution).
+    // 'baseOverride over repo config' case in
+    // packages/workflows/src/executor.dispatch.test.ts, which covers the resolution).
     const executeSpy = executeWorkflow as ReturnType<typeof mock>;
     const lastExecuteArgs = executeSpy.mock.calls.at(-1) as unknown[];
     const opts = lastExecuteArgs[lastExecuteArgs.length - 1] as {

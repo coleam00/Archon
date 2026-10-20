@@ -416,12 +416,7 @@ async function suspendedBody(
       return { ...running, ...(suspensionPoint !== undefined ? { suspensionPoint } : {}) };
     }
   }
-  if (
-    run.resume.bodySessionCursorAncestry.size > 0 &&
-    run.bodyNodes.some(
-      n => n.kind === 'loop_group' && scopedNodeOutputs.get(n.id)?.state === 'running'
-    )
-  ) {
+  if (run.bodyNodes.some(n => canSuspend(n) && scopedNodeOutputs.get(n.id)?.state === 'running')) {
     return running;
   }
   return undefined;

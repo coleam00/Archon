@@ -24,7 +24,12 @@ import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
-import { beginExecution, type LayerNodeResult, type RunLayersContext } from './run-context';
+import {
+  beginExecution,
+  ownsBodySessionCursor,
+  type LayerNodeResult,
+  type RunLayersContext,
+} from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
 import { isCheckoutGuarded } from './checkout-guard';
@@ -328,18 +333,8 @@ async function replayPriorSuccess(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
   composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
 ): Promise<LayerNodeResult | undefined> {
-  // Three sites below (always_run reset, cache invalidation, and the
-  // prior-success skip re-emit) all persist THIS node's prior output through
-  // the same bounded-preview+spill helper, keyed by its own step_name (#2726)
-  // — captured once here rather than repeating the lookup at each call site.
-  const formatThisNodesPriorOutput = (
-    stepName: string
-  ): ReturnType<typeof formatPersistedNodeOutput> =>
-    formatPersistedNodeOutput(
-      priorCompletedNodes.get(node.id)?.output ?? '',
-      ctx.artifactsDir,
-      stepName
-    );
+  const formatThisNodesPriorOutput = (): ReturnType<typeof formatPersistedNodeOutput> =>
+    formatPersistedNodeOutput(priorCompletedNodes.get(node.id)?.output ?? '', ctx.artifactsDir);
   if (node.always_run) {
     getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
     const alwaysRunStepName = ctx.stepNamePrefix + node.id;
@@ -347,7 +342,7 @@ async function replayPriorSuccess(
     // prefers the full spilled text over the bounded preview (#2726), so this
     // audit row must go through the same bounded-preview+spill helper as the
     // primary node_completed/node_skipped_prior_success writers, not the raw text.
-    const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
+    const alwaysRunPriorOutput = formatThisNodesPriorOutput();
     await recordNodeState(
       { store: ctx.deps.store, logDir: ctx.logDir },
       {
@@ -385,7 +380,7 @@ async function replayPriorSuccess(
       const invalidatedStepName = ctx.stepNamePrefix + node.id;
       // Same rationale as the always_run reset above: prior.output can now be
       // the full spilled text, so this audit row needs the same bounding (#2726).
-      const invalidatedPriorOutput = formatThisNodesPriorOutput(invalidatedStepName);
+      const invalidatedPriorOutput = formatThisNodesPriorOutput();
       getLog().info(
         { nodeId: node.id, invalidatingDeps: staleDeps },
         'dag.node_prior_cache_invalidated'
@@ -423,7 +418,7 @@ async function replayPriorSuccess(
               : {}),
             ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
           }
-        : formatThisNodesPriorOutput(skipStepName);
+        : formatThisNodesPriorOutput();
       // Return the pre-populated output (already in nodeOutputs)
       const cachedOutput = ctx.nodeOutputs.get(node.id);
       if (cachedOutput === undefined) {
@@ -553,6 +548,7 @@ async function aggregateLayerResults(
   isParallelLayer: boolean
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
+  const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
@@ -599,7 +595,7 @@ async function aggregateLayerResults(
       const ownerNode = nodeById.get(nodeId);
       if (
         ownerNode &&
-        isNodeContextResume(ownerNode.context) &&
+        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
         output.state === 'completed' &&
         output.sessionId !== undefined &&
         sessionProvider !== undefined

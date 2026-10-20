@@ -25,7 +25,7 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
 import {
-  assertDetachedRunProcessOwner,
+  claimDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
@@ -278,12 +278,12 @@ async function triggerExecute(
   if (!args[0] || !options.host)
     throw new Error('Usage: archon trigger execute <admitted-request-id> --host <configured-host>');
   // Read the marker `spawnAdmitted` sets, then clear it before any node subprocess
-  // can inherit it. Only a marked process that leads its own process group registers
-  // its PID, because `archon workflow cancel` terminates that whole group.
+  // can inherit it. Only a marked process that holds what `archon workflow cancel`
+  // terminates (its own process group, or on Windows its job object) registers its PID.
   const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
   if (detachedProcessOwner) {
     Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
-    assertDetachedRunProcessOwner();
+    await claimDetachedRunProcessOwner();
   }
   const { deps } = host;
   const result = await startAdmittedResourceStart({
