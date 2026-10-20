@@ -237,6 +237,68 @@ describe('isolationCompleteCommand', () => {
     consoleWarnSpy.mockRestore();
   });
 
+  it('counts a lookup failure and continues completing the remaining branches', async () => {
+    mockListActive
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValueOnce([mockEnv]);
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      warnings: [],
+    });
+
+    await expect(
+      isolationCompleteCommand(['lookup-fails', 'feature-branch'], { force: true })
+    ).rejects.toThrow('Failed to complete');
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '  Failed: lookup-fails — DB lookup error: database unavailable'
+    );
+    expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
+    expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      force: true,
+      deleteRemoteBranch: true,
+    });
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 0 not found');
+  });
+
+  it('refuses completion when the selected environment cannot be hydrated', async () => {
+    mockListActive.mockResolvedValueOnce([mockEnv]);
+    mockFindActiveByBranchName.mockRejectedValueOnce(new Error('invalid target path'));
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force: true })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '  Failed: feature-branch — DB lookup error: invalid target path'
+    );
+  });
+
+  it.each([false, true])('refuses ambiguous branches even with force=%s', async force => {
+    mockListActive.mockResolvedValueOnce([
+      mockEnv,
+      {
+        ...mockEnv,
+        id: 'other-env',
+        codebase_id: 'other-codebase',
+        codebase_default_cwd: '/other/repo',
+      },
+    ]);
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockFindActiveByBranchName).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('multiple active environments')
+    );
+  });
+
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
@@ -773,7 +835,6 @@ describe('isolationCompleteCommand', () => {
       .mockResolvedValueOnce([makeEnvironment({ branch_name: 'branch-3' })]);
     mockFindActiveByBranchName
       .mockResolvedValueOnce(makeEnvironment({ branch_name: 'branch-1' })) // found: branch-1
-      .mockResolvedValueOnce(null) // not found: branch-2
       .mockResolvedValueOnce(makeEnvironment({ branch_name: 'branch-3' })); // found: branch-3 (will fail)
     mockRemoveEnvironment
       .mockResolvedValueOnce({ worktreeRemoved: true, branchDeleted: true, warnings: [] }) // branch-1 succeeds

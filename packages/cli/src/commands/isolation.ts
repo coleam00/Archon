@@ -510,7 +510,16 @@ async function completeBranch(
 ): Promise<CompletionOutcome> {
   let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
   try {
-    env = await isolationDb.findActiveByBranchName(branch);
+    const matches = (await isolationDb.listActive()).filter(
+      candidate => candidate.branch_name === branch
+    );
+    if (matches.length > 1) {
+      console.error(
+        `  Failed: ${branch} — multiple active environments match this branch; refusing ambiguous deletion`
+      );
+      return 'failed';
+    }
+    env = matches[0] ? await isolationDb.findActiveByBranchName(branch) : null;
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');
