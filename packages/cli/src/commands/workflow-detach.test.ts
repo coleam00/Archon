@@ -1785,6 +1785,20 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
 });
 
 describe('buildDetachedRunCmd', () => {
+  for (const delimiter of [[], ['--', 'message']]) {
+    it(`preserves the broker's Bun config with delimiter=${delimiter.length > 0}`, () => {
+      const config = `--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`;
+      const argv = ['bun', '/cli.ts', 'workflow', 'run', 'hold', '--detach', ...delimiter];
+      const runtimeArgs = [config, '--inspect'];
+      const source = buildDetachedRunCmd(false, '/bun', argv, '/repo', [], runtimeArgs);
+      expect(source.slice(0, 3)).toEqual(['/bun', config, '/cli.ts']);
+      expect(source).not.toContain('--inspect');
+      const binary = buildDetachedRunCmd(true, '/archon', argv, '/repo', [], runtimeArgs);
+      expect(binary.slice(0, 3)).toEqual(['/archon', 'workflow', 'run']);
+      expect(binary).not.toContain(config);
+    });
+  }
+
   // BUNDLED_IS_BINARY is a module-level const (mocked false), so the binary
   // branch is unreachable through spawnDetachedWorkflowRun — exercise both
   // branches directly via the pure builder.

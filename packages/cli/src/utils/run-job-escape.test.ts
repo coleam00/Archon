@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { isRunOwnerAnswering } from '@archon/core/services/run-live-owner';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 import {
   acceptRelayConnection,
   isDetachedLaunch,
@@ -219,6 +222,90 @@ describe('run job escape', () => {
       }
     });
   }
+
+  it('keeps project preloads out of the detached executor until it owns the run', async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-executor-preload-')));
+    const home = join(dir, 'home');
+    const marker = join(dir, 'unowned-preload');
+    const ready = join(dir, 'node-ready');
+    mkdirSync(home);
+    mkdirSync(join(dir, '.archon', 'workflows'), { recursive: true });
+    writeFileSync(join(home, 'config.yaml'), 'store: files\n');
+    writeFileSync(join(dir, 'bunfig.toml'), 'preload = ["./preload.ts"]');
+    writeFileSync(
+      join(dir, 'preload.ts'),
+      `if (process.env.ARCHON_DETACHED_RUN_OWNER === '1') { require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unowned'); process.exit(23); }`
+    );
+    writeFileSync(
+      join(dir, '.archon', 'workflows', 'hold.yaml'),
+      `name: hold
+description: Detached executor preload fixture
+worktree:
+  enabled: false
+nodes:
+  - id: hold
+    runtime: bun
+    script: ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setInterval(() => {}, 1000);`)}
+`
+    );
+    const store = await createFileWorkflowStore({ root: join(home, 'store') });
+    const pipe = brokerPipe();
+    const server = await serveRunJobEscape(pipe);
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let runId: string | undefined;
+    try {
+      const exit = await relayOutsideRunJob(
+        pipe,
+        {
+          argv: [
+            process.execPath,
+            join(import.meta.dir, '..', 'cli.ts'),
+            'workflow',
+            'run',
+            'hold',
+            '--folder',
+            '--detach',
+            '--json',
+          ],
+          cwd: dir,
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            ARCHON_TELEMETRY_DISABLED: '1',
+            DATABASE_URL: '',
+            BUN_OPTIONS: '',
+          },
+        },
+        {
+          stdout: async data => {
+            stdout.push(Buffer.from(data));
+          },
+          stderr: async data => {
+            stderr.push(Buffer.from(data));
+          },
+        }
+      );
+      expect(existsSync(marker)).toBe(false);
+      expect(exit, Buffer.concat(stdout).toString() + Buffer.concat(stderr).toString()).toBe(0);
+      const ack: { runId: string } = JSON.parse(Buffer.concat(stdout).toString());
+      runId = ack.runId;
+      const deadline = Date.now() + 15_000;
+      while (!existsSync(ready) || !(await isRunOwnerAnswering(runId))) {
+        if (Date.now() >= deadline) throw new Error('Detached executor did not claim its owner');
+        await Bun.sleep(25);
+      }
+      expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+      expect(existsSync(marker)).toBe(false);
+      await (await requestDetachedRunStop(runId)).stop();
+      runId = undefined;
+    } finally {
+      if (runId && (await isRunOwnerAnswering(runId))) {
+        await (await requestDetachedRunStop(runId)).stop();
+      }
+      await server.close();
+    }
+  }, 30_000);
 
   it('kills a broker that never becomes ready and reports its stderr', async () => {
     const broker = await bootBrokerStub(
