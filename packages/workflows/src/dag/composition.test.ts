@@ -541,6 +541,91 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
+  for (const source of ['inline', 'command', 'loop'] as const) {
+    it(`reruns a cached same-body ${source} session source after failure`, async () => {
+      await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
+      await writeFile(join(testDir, '.archon', 'commands', 'source.md'), 'source');
+      mockSendQueryDag.mockClear();
+      let sourceRuns = 0;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        const sessionId = prompt === 'consumer' ? 'consumer-session' : `source-${++sourceRuns}`;
+        yield { type: 'agent_message_chunk', text: 'DONE' };
+        yield { type: 'result', sessionId, ...(session ? { resumed: true } : {}) };
+      });
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const runId = `cached-session-${source}`;
+      const workflow: TestWorkflowDefinition = {
+        name: runId,
+        nodes: [
+          dagNodeSchema.parse({
+            id: 'group',
+            loop_group: {
+              max_iterations: 1,
+              fresh_context: true,
+              until_bash: 'test $b.output = DONE',
+              nodes: [
+                {
+                  id: 'a',
+                  ...(source === 'loop'
+                    ? { loop: { prompt: 'source', until: 'DONE', max_iterations: 1 } }
+                    : source === 'command'
+                      ? { command: 'source' }
+                      : { prompt: 'source' }),
+                },
+                { id: 'blocker', bash: 'test -f allow-completion', depends_on: ['a'] },
+                { id: 'b', prompt: 'consumer', context: { resume: 'a' }, depends_on: ['blocker'] },
+              ],
+            },
+          }),
+        ],
+      };
+      const run = (priorCompletedNodes?: Map<string, PersistedNodeOutput>) =>
+        executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd: testDir,
+            workflow,
+            workflowRun: makeWorkflowRun(runId),
+            priorCompletedNodes,
+            priorNodeSessions: priorCompletedNodes
+              ? store.upsertWorkflowRunNodeSession.mock.calls.map(([row]) => ({
+                  ...row,
+                  created_at: new Date(0).toISOString(),
+                  updated_at: new Date(0).toISOString(),
+                }))
+              : undefined,
+          })
+        );
+      await run();
+      expect(sourceRuns).toBe(1);
+      expect(
+        eventList(deps).filter(e => e.step_name === 'group.a' && e.event_type === 'node_completed')
+      ).toHaveLength(1);
+      expect(
+        eventList(deps).filter(
+          e => e.step_name === 'group.blocker' && e.event_type === 'node_failed'
+        )
+      ).toHaveLength(1);
+      expect(mockSendQueryDag.mock.calls.filter(c => c[0] === 'consumer')).toHaveLength(0);
+      const snapshot = await foldDagResumeSnapshot(eventList(deps), runId);
+      restorePersistedHistory(store, deps, runId);
+      await writeFile(join(testDir, 'allow-completion'), '');
+      const before = eventList(deps).length;
+      await run(snapshot.completedNodeOutputs);
+      const resumed = eventList(deps).slice(before);
+      expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      expect(sourceRuns).toBe(2);
+      expect(
+        resumed.filter(e => e.step_name === 'group.b' && e.event_type === 'node_completed')
+      ).toHaveLength(1);
+      const consumers = mockSendQueryDag.mock.calls.filter(c => c[0] === 'consumer');
+      expect(consumers).toHaveLength(1);
+      expect(consumers[0]?.[2]).toBe('source-2');
+      expect(consumers[0]?.[3]?.forkSession).toBe(true);
+    });
+  }
+
   for (const { nested, active, advance } of [
     { nested: false, active: true, advance: false },
     { nested: false, active: false, advance: false },

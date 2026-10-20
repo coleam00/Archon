@@ -912,7 +912,9 @@ Suspension and failure have different recovery rules:
   iteration's `$LOOP_PREV` snapshot. Cached includes must still pass their owning
   loop's gate; `always_run` and changed dependencies retain their ordinary cache
   invalidation rules. Later iterations start with an empty cache. This does not
-  restore provider session cursors from failures. New output spills have unique paths.
+  restore provider session cursors from failures. Body nodes named as session sources
+  re-run so their consumers fork a live session matching the source's output.
+  New output spills have unique paths.
   For historical shared spill paths, if a later
   recorded execution overwrote a preceding iteration's spill, or an execution has no
   matching durable terminal event and may have replaced it, resume fails rather

@@ -81,9 +81,13 @@ export async function readCachedLoopIteration(
       execution,
     });
   }
+  const completedNodes = localCompletions(current.completedNodeOutputs);
+  // Failure recovery has no iteration-scoped provider handles. Named sources in
+  // this body must dispatch again so remaining consumers can fork a live session.
+  for (const id of ctx.namedResumeSourceIds ?? []) completedNodes.delete(id);
   return {
     iteration,
-    completedNodes: localCompletions(current.completedNodeOutputs),
+    completedNodes,
     previousOutputs,
   };
 }
