@@ -58,6 +58,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
+    if (ctx.stopBeforeLayer?.(layer)) break;
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {

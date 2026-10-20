@@ -275,6 +275,15 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
+    // A terminal suspension commits the pause itself, before failedBody can settle
+    // the group. Earlier all_done cleanup must still run after a body failure.
+    // All other body nodes have settled here; the sink's own output is still inherited.
+    stopBeforeLayer: layer =>
+      terminalSuspendNode !== undefined &&
+      layer.some(n => n.id === terminalSuspendNode.id) &&
+      bodyNodes.some(
+        n => n.id !== terminalSuspendNode.id && scopedNodeOutputs.get(n.id)?.state === 'failed'
+      ),
     nodeOutputs: scopedNodeOutputs,
     priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,

@@ -1,7 +1,10 @@
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
-import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-state';
+import {
+  findLoopGroupTerminalSuspendNode,
+  loopGroupIterationOutput,
+} from '../../dag/nodes/loop-group/loop-group-state';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import type { LoopGroupNode, NodeOutput } from '../../schemas';
 import { recordFailed, withResolution, type DryRunContext } from '../context';
@@ -15,6 +18,7 @@ export async function simulateLoopGroup(
   iteration?: number
 ): Promise<void> {
   const bodyNodes = resolvedBodyNodes(node.loop_group);
+  const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   // The executor builds the body's per-iteration context from the group's OWN resolved
   // provider and model (dag/dispatch.ts), so the body must simulate against those rather
   // than the enclosing workflow's scope. Everything the executor leaves alone — the
@@ -54,7 +58,18 @@ export async function simulateLoopGroup(
     ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
-      await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
+      await simulateNodes(
+        bodyPlan,
+        bodyOutputs,
+        ctx,
+        current,
+        layer =>
+          terminalSuspendNode !== undefined &&
+          layer.some(n => n.id === terminalSuspendNode.id) &&
+          bodyNodes.some(
+            n => n.id !== terminalSuspendNode.id && bodyOutputs.get(n.id)?.state === 'failed'
+          )
+      );
     } finally {
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;

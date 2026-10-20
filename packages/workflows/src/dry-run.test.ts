@@ -1800,6 +1800,77 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
+  for (const suspension of [
+    { approval: { message: 'Please decide' } },
+    { wait: { attention: 'Please decide' } },
+  ]) {
+    for (const failed of [true, false]) {
+      test(`loop-group ${'wait' in suspension ? 'wait' : 'gate'} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
+        const workflow = makeTestWorkflow({
+          name: 'failure-before-suspension',
+          nodes: [
+            {
+              id: 'group',
+              loop_group: {
+                until_bash: 'exit 1',
+                max_iterations: 2,
+                nodes: [
+                  { id: 'work', prompt: 'Work' },
+                  {
+                    id: 'cleanup',
+                    bash: 'echo cleanup',
+                    depends_on: ['work'],
+                    trigger_rule: 'all_done',
+                  },
+                  { id: 'pause', ...suspension, depends_on: ['cleanup'], trigger_rule: 'all_done' },
+                ],
+              },
+            },
+          ],
+        });
+        const result = await dryRunWorkflow({
+          workflow,
+          userMessage: '',
+          cwd: process.cwd(),
+          stubs: { ...(failed ? {} : { work: 'done' }), cleanup: 'cleaned' },
+          pauseAtGates: true,
+        });
+        expect(result.outcome).toBe(failed ? 'failed' : 'paused');
+        expect(result.trace.map(entry => entry.nodeId)).toEqual([
+          'work',
+          'cleanup',
+          failed ? 'group' : 'pause',
+        ]);
+        if (failed) expect(result.trace.some(entry => entry.state === 'paused')).toBe(false);
+      });
+    }
+  }
+
+  test('a failed outer node with the terminal wait id does not suppress a clean body pause', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'outer-failure',
+        nodes: [
+          { id: 'pause', prompt: 'Missing stub' },
+          {
+            id: 'group',
+            depends_on: ['pause'],
+            trigger_rule: 'all_done',
+            loop_group: {
+              until_bash: 'exit 1',
+              max_iterations: 1,
+              nodes: [{ id: 'pause', wait: { attention: 'Please decide' } }],
+            },
+          },
+        ],
+      }),
+      userMessage: '',
+      cwd: process.cwd(),
+    });
+    expect(result.outcome).toBe('paused');
+    expect(result.trace.at(-1)).toMatchObject({ nodeId: 'pause', state: 'paused' });
+  });
+
   test('a gate inside a loop_group body pauses the whole run', async () => {
     // simulateLoopGroup gives the body a scope of its own. It must do that on the
     // caller's context, not a copy: `halted` is written by the nested simulation, so a

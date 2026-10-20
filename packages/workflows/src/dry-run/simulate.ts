@@ -121,9 +121,11 @@ export async function simulateNodes(
   plan: GraphPlan,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
-  iteration?: number
+  iteration?: number,
+  stopBeforeLayer?: (layer: GraphPlan['layers'][number]) => boolean
 ): Promise<void> {
   for (const layer of plan.layers) {
+    if (stopBeforeLayer?.(layer)) return;
     for (const node of layer) {
       if (ctx.halted) return;
       const execution = await simulatedExecution(node, ctx);
