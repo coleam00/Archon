@@ -103,13 +103,7 @@ export async function runLoopIteration(
   if (loop.interactive && loop.gate_message) {
     await ctx.interactionAdmission?.beforeInteraction();
     const origin = ctx.interactionAdmission?.failure();
-    if (origin !== undefined)
-      return {
-        state: 'skipped',
-        output: '',
-        cause: { kind: 'upstream_failed', origin },
-        ...loopSpend(state),
-      };
+    if (origin !== undefined) return suppressLoopGate(run, state, i, origin);
     const honestMessage = buildHonestGateMessage(
       completionChecks,
       state.lastOutput,
@@ -509,6 +503,31 @@ async function completeLoop(
       }
     )
   );
+}
+
+async function suppressLoopGate(
+  run: LoopRun,
+  state: LoopState,
+  iteration: number,
+  origin: string
+): Promise<NodeExecutionResult> {
+  const { ctx } = run;
+  const skipped = finishNodeExecution(
+    state.execution,
+    { status: 'skipped', reason: 'trigger_rule', cause: { kind: 'upstream_failed', origin } },
+    {
+      ...loopSpend(state),
+      stopReason: state.stopReason,
+      numTurns: state.numTurns,
+      resolvedModel: state.resolvedModel?.id,
+      sessionId: state.sessionId,
+      diagnostics: { loopIterations: iteration },
+    }
+  );
+  // Skipped lifecycle rows settle the invocation; the accounting fold reads spend
+  // from the existing usage-only channel rather than skipped rows.
+  await persistNodeEvent(ctx.deps.store, serializeDeferredNodeUsage(skipped));
+  return recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, skipped);
 }
 
 async function pauseAtLoopGate(

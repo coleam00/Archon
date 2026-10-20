@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { dryRunWorkflow } from '../../../dry-run';
 import { validateDagStructure } from '../../../loader/dag-structure';
 import { createFileWorkflowStore } from '../../../file-store/store';
@@ -13,7 +14,8 @@ import { dagNodeSchema } from '../../../schemas';
 import { createMockDeps, createMockPlatform, dagOptions, mockSendQueryDag } from '../../test-utils';
 
 const variants = ['gate group', 'interactive group', 'interactive loop'] as const;
-function peer(id: string, variant: (typeof variants)[number], failed = false) {
+const failingVariants = [...variants, 'skipped gate group'] as const;
+function peer(id: string, variant: (typeof failingVariants)[number], failed = false) {
   if (variant === 'interactive loop')
     return {
       id,
@@ -32,18 +34,29 @@ function peer(id: string, variant: (typeof variants)[number], failed = false) {
       until: 'DONE',
       ...(variant === 'interactive group' ? { interactive: true, gate_message: 'Decide' } : {}),
       nodes: [
-        { id: `${id}-work`, bash: failed ? 'exit 7' : 'echo DONE' },
+        {
+          id: `${id}-work`,
+          bash:
+            failed && variant !== 'skipped gate group'
+              ? 'exit 7'
+              : variant === 'skipped gate group'
+                ? 'echo working'
+                : 'echo DONE',
+        },
         {
           id: `${id}-cleanup`,
           bash: 'echo cleaned',
           depends_on: [`${id}-work`],
           trigger_rule: 'all_done',
         },
-        ...(variant === 'gate group'
+        ...(variant === 'gate group' || variant === 'skipped gate group'
           ? [
               {
                 id: `${id}-gate`,
                 approval: { message: 'Decide' },
+                ...(variant === 'skipped gate group'
+                  ? { when: `$${id}-work.output == 'DONE'` }
+                  : {}),
                 depends_on: [`${id}-cleanup`],
                 trigger_rule: 'all_done',
               },
@@ -54,7 +67,7 @@ function peer(id: string, variant: (typeof variants)[number], failed = false) {
   };
 }
 
-for (const failing of variants)
+for (const failing of failingVariants)
   for (const pausing of variants)
     for (const pauseFirst of [true, false]) {
       test(`${failing} failure beside ${pausing}, pause ${pauseFirst ? 'first' : 'last'}`, async () => {
@@ -63,7 +76,12 @@ for (const failing of variants)
           mockSendQueryDag.mockImplementation(async function* (prompt) {
             if (prompt.includes('Fail')) throw new Error('peer failed');
             yield { type: 'agent_message_chunk', text: 'DONE' };
-            yield { type: 'result', sessionId: 'work' };
+            yield {
+              type: 'result',
+              sessionId: 'work',
+              cost: 0.02,
+              tokens: { input: 20, output: 3 },
+            };
           });
           const store = await createFileWorkflowStore({ root });
           const pauseGate = spyOn(store, 'pauseWorkflowRun');
@@ -111,7 +129,13 @@ for (const failing of variants)
           const bodyError = events.find(
             e => e.event_type === 'node_failed' && e.step_name === 'cycle.broken'
           )?.data.error;
-          expect(bodyError).toContain(failing === 'interactive loop' ? 'peer failed' : 'exit 7');
+          expect(bodyError).toContain(
+            failing === 'interactive loop'
+              ? 'peer failed'
+              : failing === 'skipped gate group'
+                ? 'max iterations'
+                : 'exit 7'
+          );
           expect(
             events.find(e => e.event_type === 'node_failed' && e.step_name === 'cycle')?.data.error
           ).toBe(`Loop-group node 'cycle' failed at iteration 1: 'broken': ${String(bodyError)}`);
@@ -119,6 +143,20 @@ for (const failing of variants)
           expect(persisted?.metadata.wait).toBeUndefined();
           expect(await listAttentionQueue({ store, branchOf: async () => null })).toEqual([]);
           expect(pauseGate).not.toHaveBeenCalled();
+          if (pausing === 'interactive loop') {
+            expect(persisted?.metadata).toMatchObject({
+              total_cost_usd: 0.02,
+              total_tokens_in: 20,
+              total_tokens_out: 3,
+            });
+            const snapshot = await foldDagResumeSnapshot(events, run.id);
+            expect(snapshot.costUsd).toBe(0.02);
+            expect(snapshot.tokens).toEqual({ input: 20, output: 3 });
+            if (!snapshot.unfinishedInvocations) throw new Error('Missing invocation snapshot');
+            expect(
+              [...snapshot.unfinishedInvocations.values()].some(e => e.path === 'cycle.pause')
+            ).toBe(false);
+          }
           for (const path of [
             'cycle.cleanup',
             ...(failing === 'interactive loop' ? [] : ['cycle.broken.broken-cleanup']),
@@ -136,11 +174,23 @@ for (const failing of variants)
             stubs: {
               pause: 'DONE',
               'pause-work': 'DONE',
-              'pause-cleanup': 'cleaned',
+              'pause-cleanup': 'DONE',
               'broken-cleanup': 'cleaned',
+              ...(failing === 'skipped gate group' ? { 'broken-work': 'working' } : {}),
               cleanup: 'cleaned',
             },
           });
+          if (failing === 'skipped gate group') {
+            expect(
+              events.find(
+                e => e.step_name === 'cycle.broken.broken-gate' && e.event_type === 'node_skipped'
+              )?.data.reason
+            ).toBe('when_condition');
+            expect(simulated.trace.find(e => e.nodeId === 'broken-gate')?.state).toBe('skipped');
+            expect(
+              simulated.trace.find(e => e.nodeId === 'broken' && e.state === 'failed')?.reason
+            ).toContain('max iterations');
+          }
           expect(simulated.outcome).toBe('failed');
           expect(simulated.trace.some(e => e.state === 'paused')).toBe(false);
           expect(simulated.trace.some(e => e.nodeId === 'broken' && e.state === 'failed')).toBe(

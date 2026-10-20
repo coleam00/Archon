@@ -112,6 +112,21 @@ async function simulateNode(
   execution?: NodeExecutionMetadata
 ): Promise<void> {
   if (!isReached(node, outputs, ctx, iteration)) return;
+  if (node.kind === 'gate' || node.kind === 'wait') {
+    await ctx.interactionAdmission?.beforeInteraction();
+  }
+  const origin = ctx.interactionAdmission?.failure();
+  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+    recordSkipped(
+      node,
+      outputs,
+      ctx,
+      'loop body failed',
+      { kind: 'upstream_failed', origin },
+      iteration
+    );
+    return;
+  }
   try {
     await simulateNodeKind(node, outputs, ctx, iteration, execution);
   } catch (error) {
@@ -169,21 +184,6 @@ async function simulateLayerNode(
   ctx: DryRunContext,
   iteration?: number
 ): Promise<void> {
-  if (node.kind === 'gate' || node.kind === 'wait') {
-    await ctx.interactionAdmission?.beforeInteraction();
-  }
-  const origin = ctx.interactionAdmission?.failure();
-  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
-    recordSkipped(
-      node,
-      outputs,
-      ctx,
-      'loop body failed',
-      { kind: 'upstream_failed', origin },
-      iteration
-    );
-    return;
-  }
   const execution = await simulatedExecution(node, ctx);
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);

@@ -191,8 +191,6 @@ async function admitNode(
   ctx: RunLayersContext,
   node: DagNode
 ): Promise<LayerNodeResult | undefined> {
-  const suppressed = await suppressFailedLoopInteraction(ctx, node);
-  if (suppressed !== undefined) return suppressed;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
@@ -292,7 +290,7 @@ async function admitNode(
       return { nodeId: node.id, output };
     }
   }
-  return undefined;
+  return suppressFailedLoopInteraction(ctx, node);
 }
 
 async function suppressFailedLoopInteraction(
