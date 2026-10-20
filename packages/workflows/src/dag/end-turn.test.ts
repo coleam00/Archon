@@ -12,6 +12,7 @@ import {
   mockSendQueryDag,
   createMockDeps,
   persistedEvents,
+  runUsageWrites,
   minimalConfig,
   dagOptions,
   makeWorkflowRun,
@@ -276,8 +277,10 @@ describe('ending a stalled turn', () => {
     { kind: 'agent', work: 'subtask' },
     { kind: 'loop', work: 'tool' },
     { kind: 'loop', work: 'subtask' },
+    { kind: 'agent', work: 'result' },
+    { kind: 'loop', work: 'result' },
   ] as const)(
-    '$kind processes delivered $work recovery before matching a request',
+    '$kind processes delivered $work before matching a request',
     async ({ kind, work }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`recovery-${kind}-${work}`);
@@ -301,6 +304,17 @@ describe('ending a stalled turn', () => {
         if (plan.kind !== 'request') throw new Error(plan.reason);
         Object.assign(workflowRun.metadata, plan.metadata);
         setSystemTime(new Date(Date.now() + CANCEL_CHECK_INTERVAL_MS + 1000));
+        if (work === 'result') {
+          yield {
+            type: 'result',
+            sessionId: 'delivered',
+            cost: 7,
+            tokens: { input: 100, output: 10 },
+            structuredOutput: { done: true },
+          };
+          yield { type: 'settled' };
+          return;
+        }
         yield work === 'tool'
           ? { type: 'tool_call_update', toolCallId: 'call', status: 'completed' }
           : { type: 'subtask', taskId: 'task', status: 'running' };
@@ -347,6 +361,25 @@ describe('ending a stalled turn', () => {
           },
         })
       );
+      if (work === 'result') {
+        expect(signal?.aborted).toBe(true);
+        const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+        expect(failed?.data).toMatchObject({
+          failure_kind: 'timeout',
+          cost_usd: 7,
+          session_id: 'delivered',
+          tokens: { input: 100, output: 10 },
+        });
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_cost_usd: 7,
+          total_tokens_in: 100,
+          total_tokens_out: 10,
+        });
+        expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(
+          false
+        );
+        return;
+      }
       expect(signal?.aborted).toBe(false);
       expect(persistedEvents(store).filter(event => event.event_type === 'node_failed')).toEqual(
         []

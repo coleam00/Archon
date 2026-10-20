@@ -136,13 +136,14 @@ export async function runStreamPass(
     )) {
       const tickNow = Date.now();
 
-      if (msg.type !== 'result' && msg.type !== 'settled') await providerEvents.handle(msg);
+      if (msg.type === 'result') recordResult(pc, state, pass, msg);
+      else if (msg.type !== 'settled') await providerEvents.handle(msg);
       if (await shouldStopStream()) break;
 
       await heartbeat(pc, tickNow);
 
       if (msg.type === 'result') {
-        recordResult(pc, state, pass, msg);
+        throwOnResultError(pc, msg);
       } else if (msg.type === 'settled') {
         state.settled =
           pc.capabilities.backgroundWork !== 'reported' ||
@@ -349,7 +350,6 @@ function recordResult(
     state.batchMessages.splice(0, state.batchMessages.length, msg.text);
   }
   state.structuredOutput = msg.structuredOutput;
-  throwOnResultError(pc, msg);
 }
 
 function recordResultUsage(nodeId: string, state: AgentAttemptState, msg: ResultChunk): void {

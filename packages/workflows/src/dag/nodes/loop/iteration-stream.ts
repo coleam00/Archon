@@ -448,11 +448,12 @@ async function consumeIterationStream(
       },
       shouldStopStream
     )) {
-      if (msg.type !== 'result' && msg.type !== 'settled') await providerEvents.handle(msg);
+      if (msg.type === 'result') applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+      else if (msg.type !== 'settled') await providerEvents.handle(msg);
       if (await shouldStopStream()) break;
 
       if (msg.type === 'result') {
-        applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+        throwOnResultFailure(run, i, msg);
         // A result is not the end of the iteration; `settled` is. See the
         // AI-node stream loop for the full rationale.
       } else if (msg.type === 'settled') {
@@ -549,7 +550,6 @@ function applyResultChunk(
     scope.attempt.fullOutput = msg.text;
   }
   scope.attempt.structured = msg.structuredOutput;
-  throwOnResultFailure(run, i, msg);
 }
 
 /**
