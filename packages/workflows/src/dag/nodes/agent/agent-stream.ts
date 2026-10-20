@@ -1,4 +1,3 @@
-import { withArtifactExchange } from '../../../artifact-exchange';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
@@ -129,46 +128,44 @@ export async function runStreamPass(
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, providerEvents);
-  await withArtifactExchange(pc.ctx.artifactExchange, async () => {
-    try {
-      for await (const msg of withIdleTimeout(
-        pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
-        pc.idleTimeoutMs,
-        () => {
-          onIdleTimeout(pc, state);
-        },
-        (msg, resetAt) => {
-          const type = msg.type;
-          state.lastWatchdogReset = { type, at: resetAt };
-          state.watchdogResets.observe(type, resetAt);
-        },
-        () =>
-          providerEvents.hasOpenTools() ||
-          (pc.capabilities.backgroundWork === 'reported' &&
-            providerEvents.liveSubtaskIds().length > 0),
-        shouldStopStream
-      )) {
-        const tickNow = Date.now();
+  try {
+    for await (const msg of withIdleTimeout(
+      pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
+      pc.idleTimeoutMs,
+      () => {
+        onIdleTimeout(pc, state);
+      },
+      (msg, resetAt) => {
+        const type = msg.type;
+        state.lastWatchdogReset = { type, at: resetAt };
+        state.watchdogResets.observe(type, resetAt);
+      },
+      () =>
+        providerEvents.hasOpenTools() ||
+        (pc.capabilities.backgroundWork === 'reported' &&
+          providerEvents.liveSubtaskIds().length > 0),
+      shouldStopStream
+    )) {
+      const tickNow = Date.now();
 
-        if (await shouldStopStream()) break;
+      if (await shouldStopStream()) break;
 
-        await heartbeat(pc, tickNow);
+      await heartbeat(pc, tickNow);
 
-        if (msg.type === 'result') {
-          recordResult(pc, state, pass, msg);
-        } else if (msg.type === 'settled') {
-          state.settled =
-            pc.capabilities.backgroundWork !== 'reported' ||
-            providerEvents.liveSubtaskIds().length === 0;
-          break;
-        } else {
-          await providerEvents.handle(msg);
-        }
+      if (msg.type === 'result') {
+        recordResult(pc, state, pass, msg);
+      } else if (msg.type === 'settled') {
+        state.settled =
+          pc.capabilities.backgroundWork !== 'reported' ||
+          providerEvents.liveSubtaskIds().length === 0;
+        break;
+      } else {
+        await providerEvents.handle(msg);
       }
-    } finally {
-      await providerEvents.clearAttention();
     }
-  });
+  } finally {
+    await providerEvents.clearAttention();
+  }
 
   // Stream ended with subtasks still live: the SDK subprocess died or the idle
   // timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).

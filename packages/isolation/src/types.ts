@@ -10,7 +10,6 @@ import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type {
-  ArtifactExchange,
   OverlayMode,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
@@ -569,10 +568,14 @@ export interface BackendPrepareRequest {
    */
   sourceMount?: string;
   /**
-   * Canonical host path of the run's artifacts directory (`$ARTIFACTS_DIR`).
-   * Container environments expose a private output volume at this same logical path
-   * and exchange bytes through `PreparedEnv.artifactExchange`.
-   * Engine-internal and Archon-owned, like `sourceMount`; in-place backends ignore it.
+   * Host path of the run's artifacts directory (`$ARTIFACTS_DIR`), to bind READ-WRITE at
+   * the SAME absolute path inside the environment.
+   *
+   * `$ARTIFACTS_DIR` is the run's output channel: screenshots, reports, the evidence
+   * marker. A node writes there on both sides of the boundary, so the container gets
+   * the host directory itself rather than a container-local copy the host never sees.
+   * Same ownership rules as `sourceMount`: engine-internal, Archon-owned, ignored by
+   * backends that do not isolate the filesystem.
    */
   artifactsMount?: string;
 }
@@ -585,7 +588,6 @@ export interface BackendPrepareRequest {
  * Phase B); in-place runs create no row and leave it undefined.
  */
 export interface PreparedEnv {
-  artifactExchange?: ArtifactExchange;
   cwd: string;
   execContext: ExecutionContext;
   envId?: string;

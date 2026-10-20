@@ -36,7 +36,6 @@ export async function runGroupUntilBash(
       {
         input: invocation.input,
         cwd: ctx.cwd,
-        artifactExchange: ctx.artifactExchange,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,
         protectedCredentialValues: config.protectedCredentialValues,

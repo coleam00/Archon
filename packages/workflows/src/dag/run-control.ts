@@ -1,5 +1,3 @@
-import type { ArtifactExchange } from '../container-context';
-import { withArtifactExchange } from '../artifact-exchange';
 import type { WorkflowRunStatus } from '../schemas';
 import type { WorkflowDeps } from '../deps';
 import { runSubprocess } from '../subprocess';
@@ -67,49 +65,43 @@ export async function runSubprocessUntilRunStops(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
   runId: string,
   nodeId: string,
-  execContext: Parameters<typeof runSubprocess>[0],
-  cmd: Parameters<typeof runSubprocess>[1],
-  args: Parameters<typeof runSubprocess>[2],
-  options: Parameters<typeof runSubprocess>[3] & { artifactExchange?: ArtifactExchange }
+  ...[execContext, cmd, args, options]: Parameters<typeof runSubprocess>
 ): ReturnType<typeof runSubprocess> {
-  const { artifactExchange, ...subprocessOptions } = options;
-  return withArtifactExchange(artifactExchange, async () => {
-    const controller = new AbortController();
-    let reading = false;
-    const poll = setInterval(() => {
-      if (reading) return;
-      reading = true;
-      store
-        .getWorkflowRunStatus(runId)
-        .then(status => {
-          if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
-          clearInterval(poll);
-          getLog().info(
-            { workflowRunId: runId, nodeId, status },
-            'dag.stop_detected_during_subprocess'
-          );
-          controller.abort();
-        })
-        // A failed status read is not a stop signal: keep polling, as the streaming check does.
-        .catch((statusErr: unknown) => {
-          getLog().warn(
-            { err: statusErr as Error, workflowRunId: runId, nodeId },
-            'dag.status_check_failed'
-          );
-        })
-        .finally(() => {
-          reading = false;
-        });
-    }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
-    try {
-      return await runSubprocess(execContext, cmd, args, {
-        ...subprocessOptions,
-        abortSignal: controller.signal,
+  const controller = new AbortController();
+  let reading = false;
+  const poll = setInterval(() => {
+    if (reading) return;
+    reading = true;
+    store
+      .getWorkflowRunStatus(runId)
+      .then(status => {
+        if (controller.signal.aborted || shouldContinueStreamingForStatus(status)) return;
+        clearInterval(poll);
+        getLog().info(
+          { workflowRunId: runId, nodeId, status },
+          'dag.stop_detected_during_subprocess'
+        );
+        controller.abort();
+      })
+      // A failed status read is not a stop signal: keep polling, as the streaming check does.
+      .catch((statusErr: unknown) => {
+        getLog().warn(
+          { err: statusErr as Error, workflowRunId: runId, nodeId },
+          'dag.status_check_failed'
+        );
+      })
+      .finally(() => {
+        reading = false;
       });
-    } finally {
-      clearInterval(poll);
-    }
-  });
+  }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
+  try {
+    return await runSubprocess(execContext, cmd, args, {
+      ...options,
+      abortSignal: controller.signal,
+    });
+  } finally {
+    clearInterval(poll);
+  }
 }
 
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */

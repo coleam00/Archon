@@ -945,7 +945,7 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
     ]);
   });
 
-  it('prepares the canonical artifacts root and forwards its exchange to execution', async () => {
+  it('binds the run artifacts directory into the container, created on the host first', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const codebaseDb = await import('@archon/core/db/codebases');
 
@@ -961,7 +961,8 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       kind: 'folder',
     });
     const expectedArtifacts = join(mockArtifactsRoot, 'artifacts', 'runs', 'test-run-id');
-    const artifactExchange = { publish: mock(async () => {}), collect: mock(async () => {}) };
+    // Ownership matters: a bind target Docker creates itself is root-owned on a rootful
+    // daemon, so the directory must already exist when prepare() is reached.
     let existedAtPrepare: boolean | undefined;
     mockFolderBackendPrepare.mockImplementationOnce((req?: unknown) => {
       const artifactsMount = (req as { artifactsMount?: string } | undefined)?.artifactsMount;
@@ -970,7 +971,6 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
         cwd: '/test/path',
         execContext: { kind: 'host' as const },
         envId: 'container-env-1',
-        artifactExchange,
         overlayMode: 'fuse' as const,
       });
     });
@@ -986,17 +986,6 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       })
     );
     expect(existedAtPrepare).toBe(true);
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    expect(executeWorkflow).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ container: expect.objectContaining({ artifactExchange }) })
-    );
   });
 });
 

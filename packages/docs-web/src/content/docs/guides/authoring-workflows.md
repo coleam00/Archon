@@ -3024,10 +3024,8 @@ is no in-workflow resolver: a pointer is for **machine readers**, and
 `GET /api/artifacts/<run_id>/<path>` serves exactly that file. The read side owns
 reachability and real-path checks by design; that route does lexical containment today, and
 real-path resolution at read time is not yet implemented (#3160). A prompt inside the
-producing run keeps using the logical `$ARTIFACTS_DIR/<path>` string. New container
-environments use separate container output and host artifact stores at that path; output
-becomes visible to host readers after collection following the invocation, before pointer
-certification. Host runs and legacy container binds address the same file directly. See
+producing run keeps using the `$ARTIFACTS_DIR/<path>` string, which is the same file on
+disk. See
 [Artifact pointers](/reference/variables/#artifact-pointers-in-a-result) for the full rule
 set.
 

@@ -1,4 +1,3 @@
-import type { ArtifactExchange } from '@archon/workflows/container-context';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { statSync } from 'node:fs';
 import {
@@ -358,7 +357,6 @@ export interface FolderExecution {
     backend: ContainerBackend;
     envId: string | undefined;
     overlayMode: OverlayMode | undefined;
-    artifactExchange?: ArtifactExchange;
   };
 }
 
@@ -473,12 +471,7 @@ export async function prepareFolderExecution(input: {
       workingCwd: prepared.cwd,
       execContext: prepared.execContext,
       preparedSource,
-      container: {
-        backend,
-        envId: prepared.envId,
-        overlayMode: prepared.overlayMode,
-        artifactExchange: prepared.artifactExchange,
-      },
+      container: { backend, envId: prepared.envId, overlayMode: prepared.overlayMode },
     };
   }
   // In-place (default) — byte-identical to pre-container behavior: keep
@@ -536,8 +529,8 @@ async function resumeFolderContainer(
 
 /**
  * `$ARTIFACTS_DIR` is the run's output channel on both sides of the boundary,
- * with separate host storage and container output at the same logical path.
- * Create the canonical root as the host user before preparing the exchange.
+ * so it is bound read-write at the same absolute path. Created here by the host
+ * user: a bind target Docker has to create itself would be owned by root.
  */
 async function containerMounts(
   host: WorkflowHost,
@@ -552,7 +545,7 @@ async function containerMounts(
     folderCodebase.id
   );
   await mkdir(artifactsDir, { recursive: true });
-  // Source and artifact exchange retain the same logical absolute paths
+  // Read-only source and read-write artifacts, both at the same absolute path
   // inside the container, so a path means one thing on either side of the
   // boundary.
   return { sourceMount: preparedSource.anchor.root, artifactsMount: artifactsDir };

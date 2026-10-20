@@ -177,7 +177,6 @@ function instanceRunContext(
     workflowSourceRoots: ctx.workflowSourceRoots,
     runChildWorkflow: ctx.runChildWorkflow,
     execContext: ctx.execContext,
-    artifactExchange: ctx.artifactExchange,
     workflowRun: ctx.workflowRun,
     workflowName: ctx.workflowName,
     config: ctx.config,

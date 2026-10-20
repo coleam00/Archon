@@ -346,7 +346,6 @@ async function runUntilBash(
       {
         input: invocation.input,
         cwd: ctx.cwd,
-        artifactExchange: ctx.artifactExchange,
         timeout: node.timeout,
         protectedEnvKeys: config.protectedEnvKeys,
         protectedCredentialValues: config.protectedCredentialValues,

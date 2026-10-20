@@ -85,11 +85,6 @@ export interface ContainerWriteBackBackend {
   discardChanges(envId: string): Promise<void>;
 }
 
-export interface ArtifactExchange {
-  publish(): Promise<void>;
-  collect(): Promise<void>;
-}
-
 /**
  * Container run context threaded from the caller (CLI/orchestrator) into the
  * engine. Present only for folder-project container runs; absent for host runs.
@@ -98,7 +93,6 @@ export interface ArtifactExchange {
  * separate process) can rediscover the container.
  */
 export interface ContainerRunContext {
-  artifactExchange?: ArtifactExchange;
   envId: string;
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';
