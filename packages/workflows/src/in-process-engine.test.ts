@@ -284,4 +284,34 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       `${failed.id}:workflow_completed:`,
     ]);
   });
+  it('does not fail a resumed run when its final lifecycle read rejects', async () => {
+    const { engine, store } = await makeEngine();
+    const pending = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+    await store.updateWorkflowRun(pending.id, { status: 'running' });
+    await store.failWorkflowRun(pending.id, 'interrupted');
+    await completeNode(store, pending.id, 'first');
+    const failed = await store.getWorkflowRun(pending.id);
+    if (!failed) throw new Error('missing run');
+    const cause = new Error('Unreadable status');
+    dagBody = async () => {
+      store.getWorkflowRun = async () => {
+        throw cause;
+      };
+      return undefined;
+    };
+    const admission = await engine.resume({
+      platform,
+      conversationId: 'conv-1',
+      cwd: '/tmp/ops',
+      userMessage: '',
+      run: failed,
+      legacyWorkflow: parent,
+    });
+    if (!admission.accepted) throw new Error('expected resume');
+    await expect(admission.settled).rejects.toMatchObject({
+      name: 'WorkflowStatusReadError',
+      cause,
+    });
+    expect(await store.getWorkflowRunStatus(pending.id)).toBe('running');
+  });
 });

@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -131,7 +132,9 @@ async function stopBeforeIteration(
   i: number
 ): Promise<NodeExecutionResult | undefined> {
   const { ctx, node } = run;
-  const runStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const runStatus = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
+    ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
+  );
   if (shouldContinueStreamingForStatus(runStatus)) return undefined;
   const effectiveStatus = runStatus ?? 'deleted';
   getLog().info(

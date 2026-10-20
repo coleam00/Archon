@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../workflow-status-read';
 /**
  * Container run lifecycle: the lifecycle events, suspend-on-pause, and the engine-level
  * write-back gate that runs after the last node before a container run completes.
@@ -183,7 +184,7 @@ export async function runContainerWriteBackGate(
   containerCtx: ContainerRunContext,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
 ): Promise<'paused' | 'applied' | 'discarded' | 'skipped'> {
-  const run = await deps.store.getWorkflowRun(runId);
+  const run = await readWorkflowLifecycle(runId, () => deps.store.getWorkflowRun(runId));
   const meta = run?.metadata ?? {};
   const pending = meta.pending_writeback as
     | { envId: string; summary?: OverlayChangeSummary }

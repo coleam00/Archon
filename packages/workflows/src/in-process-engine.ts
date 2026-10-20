@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { resolveContinuationWorkflow } from './run-source';
@@ -94,6 +95,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       // before its terminal-write boundary; recovery must work without a server.
       if (
         !(error instanceof TerminalStatusWriteError) &&
+        !(error instanceof WorkflowStatusReadError) &&
         (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
       ) {
         await requireTerminalStatusWrite(

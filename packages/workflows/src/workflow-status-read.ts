@@ -11,3 +11,15 @@ export class WorkflowStatusReadError extends Error {
     this.name = 'WorkflowStatusReadError';
   }
 }
+
+export async function readWorkflowLifecycle<T>(
+  workflowRunId: string,
+  read: () => Promise<T>
+): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
+    throw new WorkflowStatusReadError(workflowRunId, error);
+  }
+}

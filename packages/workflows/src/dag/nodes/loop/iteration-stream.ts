@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
@@ -136,7 +137,9 @@ export async function runIterationAttempts(
   const retry: IterationRetry = { attempt: 0, sawRateLimit: false };
   for (; ; retry.attempt++) {
     if (retry.attempt > 0) {
-      const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+      const status = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
+        ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
+      );
       if (!shouldContinueStreamingForStatus(status)) {
         return failed(
           await failLoopNode(ctx, run.node.id, state, `Workflow ${status ?? 'deleted'}`, {

@@ -1228,10 +1228,12 @@ nodes:
     }
   });
 
-  it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
-    await writeWorkflow(
-      'child-gated',
-      `
+  it.each(['setup', 'status'] as const)(
+    'handles a parent auto-resume %s error without inventing a lifecycle outcome',
+    async kind => {
+      await writeWorkflow(
+        'child-gated',
+        `
 name: child-gated
 description: child with an approval gate
 nodes:
@@ -1242,10 +1244,10 @@ nodes:
       message: "review the sub-run"
     depends_on: [implement]
 `
-    );
-    await writeWorkflow(
-      'parent-gated',
-      `
+      );
+      await writeWorkflow(
+        'parent-gated',
+        `
 name: parent-gated
 description: parent composing a gated child
 nodes:
@@ -1253,50 +1255,64 @@ nodes:
     workflow: child-gated
     input: "goal"
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('parent-gated');
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
-      conversationId: 'conv-db',
-    });
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const parent = await discover('parent-gated');
+      await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
 
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
-    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
-    expect(parentRun?.status).toBe('paused');
+      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
+      expect(parentRun?.status).toBe('paused');
 
-    // Sabotage the auto-resume pass: the resumed parent carries a codebase_id, so
-    // executeWorkflow's early setup (before its failWorkflowRun catch-all) calls
-    // getCodebaseEnvVars — make it throw. The child's own resume drive below does
-    // not pass a codebaseId, so only the parent's pass hits the mine.
-    parentRun!.codebase_id = 'cb-1';
-    store.getCodebaseEnvVars = () => Promise.reject(new Error('env lookup exploded'));
-
-    store.approveGate(child!.id);
-    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
-    const childWf = await discover('child-gated');
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      childWf,
-      child!.user_message,
-      { conversationId: 'conv-db' },
-      {
-        ...hydrated!,
+      const cause = new Error('parent lifecycle read failed');
+      if (kind === 'setup') {
+        parentRun!.codebase_id = 'cb-1';
+        store.getCodebaseEnvVars = () => Promise.reject(new Error('env lookup exploded'));
+      } else {
+        const readStatus = store.getWorkflowRunStatus;
+        store.getWorkflowRunStatus = async id => {
+          if (id === parentRun!.id && store.runs.get(id)?.status === 'running') throw cause;
+          return readStatus(id);
+        };
       }
-    );
 
-    // Child completed normally; its result is untouched by the parent's failure.
-    expect((await store.getWorkflowRun(child!.id))?.status).toBe('completed');
-    // The parent must land in 'failed' (resumable) — NOT stuck at 'running',
-    // which resumeWorkflow refuses and only a destructive abandon could clear.
-    const finalParent = await store.getWorkflowRun(parentRun!.id);
-    expect(finalParent?.status).toBe('failed');
-    expect(String(finalParent?.metadata.error)).toContain('Auto-resume after sub-run failed');
-  });
+      store.approveGate(child!.id);
+      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+      const childWf = await discover('child-gated');
+      const execution = executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        childWf,
+        child!.user_message,
+        { conversationId: 'conv-db' },
+        {
+          ...hydrated!,
+        }
+      );
+
+      if (kind === 'status') {
+        await expect(execution).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+        expect(store.runs.get(parentRun!.id)?.status).toBe('running');
+        expect(store.runs.get(child!.id)?.status).toBe('completed');
+        return;
+      }
+      await execution;
+
+      // Child completed normally; its result is untouched by the parent's failure.
+      expect((await store.getWorkflowRun(child!.id))?.status).toBe('completed');
+      // The parent must land in 'failed' (resumable) — NOT stuck at 'running',
+      // which resumeWorkflow refuses and only a destructive abandon could clear.
+      const finalParent = await store.getWorkflowRun(parentRun!.id);
+      expect(finalParent?.status).toBe('failed');
+      expect(String(finalParent?.metadata.error)).toContain('Auto-resume after sub-run failed');
+    }
+  );
 
   it('surfaces a rejected parent terminal write after the child completes', async () => {
     await writeWorkflow(

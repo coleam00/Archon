@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { createEscalationStore } from '../../pause-test-utils';
-import { describe, it, expect, beforeEach, afterEach, spyOn, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -13,6 +13,7 @@ import {
   createMockPlatform,
   dagOptions,
   ready,
+  persistedEvents,
   makeWorkflowRun,
   readTranscript,
 } from '../../test-utils';
@@ -337,6 +338,53 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       sessionId: 'iteration-2-session',
     });
   });
+
+  it.each(['owned-wait', 'wait-resume'] as const)(
+    'propagates an unreadable %s without failing the group',
+    async phase => {
+      const store = createEscalationStore('unreadable-wait');
+      const cause = new Error('Unreadable status');
+      if (phase === 'owned-wait') {
+        store.getWorkflowRun.mockRejectedValue(cause);
+      } else {
+        const readStatus = store.getWorkflowRunStatus;
+        store.getWorkflowRunStatus = mock(async id => {
+          if (store.pauseWorkflowRunForWait.mock.calls.length > 0) throw cause;
+          return readStatus(id);
+        });
+      }
+      const metadata =
+        phase === 'wait-resume'
+          ? {
+              wait: {
+                kind: 'time',
+                owner: 'loop_group',
+                nodeId: 'grp',
+                bodyWaitId: 'delay',
+                iteration: 1,
+                sessionId: null,
+                sessionProvider: null,
+                waitingSince: new Date().toISOString(),
+                resumeAt: new Date(Date.now() + 60_000).toISOString(),
+              },
+            }
+          : {};
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: ready(waitTerminatedLoopGroupWorkflow()),
+            workflowRun: makeWorkflowRun('unreadable-wait', { metadata }),
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.getState().status).toBe('paused');
+      expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   it('escalates a terminal wait and completes it from the persisted deadline on resume', async () => {
     const store = createEscalationStore('run-wait-escalation');

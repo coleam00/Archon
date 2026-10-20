@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle, WorkflowStatusReadError } from './workflow-status-read';
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
@@ -97,6 +98,10 @@ function childBaseBranch(
   return isolation.baseBranch ?? '';
 }
 
+function failOutcome(error: string, childRunId = ''): ChildWorkflowOutcome {
+  return { childRunId, status: 'failed', error };
+}
+
 /**
  * Start (or resume a failed) child workflow run in-process for a `workflow:` node
  * (#2121 Phase 2). Reuses the FULL executeWorkflow lifecycle for the child —
@@ -108,8 +113,8 @@ function childBaseBranch(
  * executeWorkflow derives the ancestor chain from the child's own parent_run_id
  * to exclude it from the path-lock.
  * Ordinary failures return a `{ status: 'failed' }` outcome so the calling node
- * fails cleanly rather than the whole DAG throwing. Terminal status-write failures
- * propagate because the child has no trustworthy terminal outcome to return.
+ * fails cleanly rather than the whole DAG throwing. Lifecycle read and terminal
+ * status-write failures propagate because the child has no trustworthy outcome.
  */
 export async function runChildWorkflow(
   deps: WorkflowDeps,
@@ -138,10 +143,6 @@ export async function runChildWorkflow(
 
   // Ordinary refusals return a failed outcome; failures before a child row exists
   // carry an empty childRunId. Terminal-write rejection escapes to the run owner.
-  const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => {
-    return { childRunId, status: 'failed', error };
-  };
-
   // A `workflow:` child freezes its own source AT ITS OWN START, from the parent's
   // AUTHORING directory rather than the parent's frozen copy of it. Both halves matter:
   // taking the bytes now (not at parent start) is what lets an author fix a child
@@ -488,36 +489,38 @@ export async function runChildWorkflow(
 
       // 6. Read the child back for the node-facing outcome (status + summary + cost +
       //    tokens). Works for synchronous completion AND a child paused at its gate.
-      const finalChild = await deps.store.getWorkflowRun(childRunId);
+      const finalChild = await readWorkflowLifecycle(childRunId, () =>
+        deps.store.getWorkflowRun(childRunId)
+      );
       if (!finalChild) {
         return failOutcome('Child run row disappeared after execution.', childRunId);
       }
       return childOutcomeFromRun(finalChild);
     } catch (err) {
-      if (err instanceof TerminalStatusWriteError) throw err;
-
-      // Ordinary setup/read-back failures become failed child outcomes after cleanup.
-      // A terminal write rejection escapes instead: cleanup may not have released the lock.
-      //
-      // Wedge guard (symmetric to continueBlockedRun's post-CAS handler): a throw in
-      // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
-      // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
-      // stranding the pre-created child at 'pending' (or 'running' on a later window) —
-      // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
-      // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
-      // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
-      // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
-      await requireTerminalStatusWrite(
-        deps.store.cancelWorkflowRun(childRunId, { cancel_reason: 'precondition_failed' }),
-        {
-          workflowRunId: childRunId,
-          site: 'executor.child_setup_cancel',
-        }
-      );
-      return failOutcome(
-        `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
-        childRunId
-      );
+      return recoverChildSetupFailure(deps, childRunId, childWorkflowName, err);
     }
   });
+}
+
+async function recoverChildSetupFailure(
+  deps: WorkflowDeps,
+  childRunId: string,
+  childWorkflowName: string,
+  err: unknown
+): Promise<ChildWorkflowOutcome> {
+  if (err instanceof TerminalStatusWriteError || err instanceof WorkflowStatusReadError) throw err;
+
+  // Early setup may leave a child pending, so failWorkflowRun's running-only CAS
+  // cannot release it. Cancellation covers both pending and running children.
+  await requireTerminalStatusWrite(
+    deps.store.cancelWorkflowRun(childRunId, { cancel_reason: 'precondition_failed' }),
+    {
+      workflowRunId: childRunId,
+      site: 'executor.child_setup_cancel',
+    }
+  );
+  return failOutcome(
+    `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
+    childRunId
+  );
 }

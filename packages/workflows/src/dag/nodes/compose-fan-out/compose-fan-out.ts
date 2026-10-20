@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
@@ -17,7 +18,7 @@ import { resolveWorkflowName } from '../../../router';
 import type { WorkflowDeps } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
 import { type ProviderFailure } from '@archon/provider-contract';
-import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../../../schemas';
+import type { ComposeFanOutNode, ResolvedWorkflow } from '../../../schemas';
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
 import { mapWithLimit } from '../../../utils/map-with-limit';
@@ -183,16 +184,11 @@ function blocked(
 async function readParentStatus(
   ctx: RunLayersContext,
   node: ComposeFanOutNode
-): Promise<'accepting' | 'stopped' | { error: string }> {
+): Promise<'accepting' | 'stopped'> {
   const parentRunId = ctx.workflowRun.id;
-  let runStatus: WorkflowRunStatus | null;
-  try {
-    runStatus = await ctx.deps.store.getWorkflowRunStatus(parentRunId);
-  } catch (err) {
-    return {
-      error: `could not verify parent status after composed fan-out: ${(err as Error).message}`,
-    };
-  }
+  const runStatus = await readWorkflowLifecycle(parentRunId, () =>
+    ctx.deps.store.getWorkflowRunStatus(parentRunId)
+  );
   const claimedWorkMayFinishPaused =
     runStatus === 'paused' && ctx.claimedWorkPausePolicy === 'finish_through_parent_pause';
   if (runStatus === 'running' || claimedWorkMayFinishPaused) return 'accepting';
@@ -368,9 +364,6 @@ export async function executeComposeFanOutNode(
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   const parent = await readParentStatus(ctx, node);
-  if (typeof parent === 'object') {
-    return failResult(parent.error, 'unknown', totalCostUsd, totalTokens);
-  }
   if (parent === 'stopped') {
     return {
       ...serializeNodeOutput(execution),

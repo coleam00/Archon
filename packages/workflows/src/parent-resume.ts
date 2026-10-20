@@ -1,4 +1,5 @@
 /** Re-entering a run paused on its sub-runs once they release it, and returning a paused run's slot. */
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { createLogger } from '@archon/paths';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
@@ -271,24 +272,7 @@ export async function continueBlockedRun(
       }
     );
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
-
-    // The hydrate CAS above already flipped the parent paused→running, and
-    // executeWorkflow's own failWorkflowRun catch-all doesn't cover its early
-    // setup (config load, env/credential resolution). Without this handler a
-    // throw there would strand the parent at 'running' — a non-terminal status
-    // resumeWorkflow refuses, leaving destructive abandon as the only exit.
-    // Land it in 'failed' instead so it stays resumable.
-    getLog().error(
-      { err: err as Error, parentRunId, childRunId: trigger.childRunId },
-      'workflow.parent_auto_resume_execute_failed'
-    );
-    const error = `Auto-resume after sub-run failed: ${(err as Error).message}`;
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(parentRunId, error), {
-      workflowRunId: parentRunId,
-      site: 'workflow.parent_auto_resume_fail_mark_failed',
-    });
-    return { success: false, workflowRunId: parentRunId, error };
+    return recoverParentSetupFailure(deps, parentRunId, trigger.childRunId, err);
   }
 }
 
@@ -313,4 +297,26 @@ export async function releaseContinuablePauseSlot(
       'workflow.paused_slot_release_failed'
     );
   }
+}
+
+async function recoverParentSetupFailure(
+  deps: WorkflowDeps,
+  parentRunId: string,
+  childRunId: string | undefined,
+  err: unknown
+): Promise<WorkflowExecutionResult> {
+  if (err instanceof TerminalStatusWriteError || err instanceof WorkflowStatusReadError) throw err;
+
+  // Hydration already claimed the parent; early executor setup can fail before
+  // reaching its terminal-write boundary.
+  getLog().error(
+    { err: err as Error, parentRunId, childRunId },
+    'workflow.parent_auto_resume_execute_failed'
+  );
+  const error = `Auto-resume after sub-run failed: ${(err as Error).message}`;
+  await requireTerminalStatusWrite(deps.store.failWorkflowRun(parentRunId, error), {
+    workflowRunId: parentRunId,
+    site: 'workflow.parent_auto_resume_fail_mark_failed',
+  });
+  return { success: false, workflowRunId: parentRunId, error };
 }

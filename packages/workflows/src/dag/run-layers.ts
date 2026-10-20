@@ -17,7 +17,7 @@ import {
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
-import { WorkflowStatusReadError } from '../workflow-status-read';
+import { WorkflowStatusReadError, readWorkflowLifecycle } from '../workflow-status-read';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
 import { writeNodeArtifact } from '../artifacts-index';
@@ -670,11 +670,9 @@ async function aggregateLayerResults(
  * True when the walk stops here.
  */
 async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Promise<boolean> {
-  const dagStatus = await ctx.deps.store
-    .getWorkflowRunStatus(ctx.workflowRun.id)
-    .catch((error: unknown) => {
-      throw new WorkflowStatusReadError(ctx.workflowRun.id, error);
-    });
+  const dagStatus = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
+    ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
+  );
   if (dagStatus === null || dagStatus !== 'running') {
     const effectiveStatus = dagStatus ?? 'deleted';
     if (

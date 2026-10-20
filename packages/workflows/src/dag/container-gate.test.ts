@@ -44,6 +44,38 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     };
   }
 
+  it.each(['status', 'full-row'] as const)(
+    'propagates the post-DAG container %s read failure',
+    async kind => {
+      const store = createMockStore();
+      const cause = new Error('Unreadable lifecycle');
+      if (kind === 'status') {
+        store.getWorkflowRunStatus.mockResolvedValueOnce('running').mockRejectedValue(cause);
+      } else store.getWorkflowRun.mockRejectedValue(cause);
+      const backend = makeWritebackBackend();
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: wbTestDir,
+            workflow: {
+              name: 'wb',
+              nodes: [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+            },
+            workflowRun: makeWorkflowRun('wb-run'),
+            priorCompletedNodes: new Map([['a', { output: 'out' }]]),
+            execContext: CONTAINER_EXEC,
+            containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(backend.applyChanges).not.toHaveBeenCalled();
+      expect(backend.discardChanges).not.toHaveBeenCalled();
+    }
+  );
+
   /** Run a single pre-completed bash node under a container context so the gate runs. */
   async function runGate(opts: {
     backend: ReturnType<typeof makeWritebackBackend>;

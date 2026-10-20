@@ -42,79 +42,71 @@ describe('interactive loop_group gate and resume', () => {
     await removeTempTree(testDir);
   });
 
-  it.each([0, 2])(
-    'retains %i prior iterations when the pre-start status read throws',
-    async prior => {
-      const store = createMockStore();
-      const error = new Error('Status read failed');
-      let rejected = false;
-      store.getWorkflowRunStatus.mockImplementation(async () => {
-        const groupStarted = persistedEvents(store).some(
-          event => event.event_type === 'node_started' && event.step_name === 'grp'
-        );
-        if (groupStarted && !rejected) {
-          rejected = true;
-          throw error;
-        }
-        return 'running';
-      });
-      const iterations = await failedLoopIterations('grp', () =>
-        executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflowRun: makeWorkflowRun('group-pre-start-throw', {
-              ...(prior > 0
-                ? {
-                    metadata: {
-                      approval: {
-                        type: 'interactive_loop',
-                        nodeId: 'grp',
-                        iteration: prior,
-                        message: 'Review.',
-                        completionSignaled: false,
-                        signaledOutput: null,
-                      },
-                      loop_feedback_given: true,
-                      loop_user_input: 'Continue.',
-                    },
-                  }
-                : {}),
-            }),
-            workflow: {
-              name: 'group-pre-start-throw',
-              nodes: [
-                {
-                  id: 'grp',
-                  kind: 'loop_group',
-                  loop_group: {
-                    until: 'DONE',
-                    max_iterations: 3,
-                    fresh_context: true,
-                    nodes: [
-                      { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
-                    ],
-                  },
-                },
-              ],
-            },
-          })
-        )
+  it.each([0, 2])('propagates pre-start status errors after %i prior iterations', async prior => {
+    const store = createMockStore();
+    const error = new Error('Status read failed');
+    let rejected = false;
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      const groupStarted = persistedEvents(store).some(
+        event => event.event_type === 'node_started' && event.step_name === 'grp'
       );
-      expect(iterations).toBe(prior);
-      expect(mockSendQueryDag).not.toHaveBeenCalled();
-      expect(
-        persistedEvents(store).filter(event => event.event_type === 'loop_iteration_started')
-      ).toEqual([]);
-      expect(
-        persistedEvents(store).find(event => event.event_type === 'node_failed')?.data
-      ).toMatchObject({
-        error: error.message,
-        failure_kind: 'unknown',
-      });
-    }
-  );
+      if (groupStarted && !rejected) {
+        rejected = true;
+        throw error;
+      }
+      return 'running';
+    });
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('group-pre-start-throw', {
+            ...(prior > 0
+              ? {
+                  metadata: {
+                    approval: {
+                      type: 'interactive_loop',
+                      nodeId: 'grp',
+                      iteration: prior,
+                      message: 'Review.',
+                      completionSignaled: false,
+                      signaledOutput: null,
+                    },
+                    loop_feedback_given: true,
+                    loop_user_input: 'Continue.',
+                  },
+                }
+              : {}),
+          }),
+          workflow: {
+            name: 'group-pre-start-throw',
+            nodes: [
+              {
+                id: 'grp',
+                kind: 'loop_group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 3,
+                  fresh_context: true,
+                  nodes: [
+                    { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+                  ],
+                },
+              },
+            ],
+          },
+        })
+      )
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause: error });
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(
+      persistedEvents(store).filter(event => event.event_type === 'loop_iteration_started')
+    ).toEqual([]);
+    expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
 
   describe('legacy interactive group at max_iterations (#4290)', () => {
     const runGroupAtCap = async (

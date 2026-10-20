@@ -66,7 +66,7 @@ import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
 import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
-import { WorkflowStatusReadError } from './workflow-status-read';
+import { WorkflowStatusReadError, readWorkflowLifecycle } from './workflow-status-read';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
@@ -533,7 +533,9 @@ export async function executeWorkflow(
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
     // executeDagWorkflow throws on fatal errors; check DB status for result
-    const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
+    const finalStatus = await readWorkflowLifecycle(workflowRun.id, () =>
+      deps.store.getWorkflowRun(workflowRun.id)
+    );
     // Sub-run re-entry (#2121 Phase 2): if this run is a `workflow:` child that just
     // reached a terminal state, re-enter its paused parent in-process. Guarded to be
     // a no-op on the synchronous first-run path (parent still 'running').

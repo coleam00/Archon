@@ -513,6 +513,25 @@ describe('terminal failure writes', () => {
     expect(keepAwake.activeCount()).toBe(0);
   });
 
+  it('propagates the final full-row read failure without terminal compensation', async () => {
+    const cause = new Error('Unsupported persisted status');
+    const store = makeStore({
+      getWorkflowRun: mock(async () => {
+        throw cause;
+      }),
+    });
+    const platform = makePlatform();
+    await expect(startWorkflow({ store, platform })).rejects.toMatchObject({
+      name: 'WorkflowStatusReadError',
+      cause,
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(sentMessages(platform).some(message => message.includes('failed'))).toBe(false);
+    expect(keepAwake.activeCount()).toBe(0);
+  });
+
   it('does not recover a rejected DAG terminal write with a second failure write', async () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(
       new TerminalStatusWriteError(new Error('terminal completion write failed'))

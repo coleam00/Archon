@@ -64,15 +64,31 @@ describe('executeDagWorkflow -- final status derivation', () => {
     await removeTempTree(testDir);
   });
 
-  it.each(['direct', 'loop-group', 'compose'] as const)(
-    'propagates a between-layer status error through %s without reporting failed work',
-    async kind => {
+  it.each([
+    ['direct', 'between'],
+    ['loop-group', 'between'],
+    ['compose', 'between'],
+    ['loop-group', 'before'],
+    ['loop-group', 'after'],
+    ['compose', 'after'],
+  ] as const)(
+    'propagates %s %s-body status errors without reporting failed work',
+    async (kind, phase) => {
       const store = createMockStore();
       const error = new Error(
         'Unsupported workflow run status for run corrupt: "unsupported-status"'
       );
+      let completedReads = 0;
       store.getWorkflowRunStatus.mockImplementation(async () => {
-        if (persistedEvents(store).some(event => event.event_type === 'node_completed'))
+        const events = persistedEvents(store);
+        if (
+          phase === 'before'
+            ? events.some(
+                event => event.event_type === 'node_started' && event.step_name === 'group'
+              )
+            : events.some(event => event.event_type === 'node_completed') &&
+              (phase !== 'after' || ++completedReads === 2)
+        )
           throw error;
         return 'running';
       });
@@ -85,11 +101,15 @@ describe('executeDagWorkflow -- final status derivation', () => {
           depends_on: ['first'],
         },
       ];
+      if (phase !== 'between') body.pop();
       if (kind === 'compose') {
         await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
         await writeFile(
           join(testDir, '.archon', 'workflows', 'status-body.yaml'),
-          'name: status-body\ndescription: Status read test\nnodes:\n  - id: first\n    prompt: First.\n  - id: second\n    prompt: Second.\n    depends_on: [first]\n'
+          'name: status-body\ndescription: Status read test\nnodes:\n  - id: first\n    prompt: First.\n' +
+            (phase === 'between'
+              ? '  - id: second\n    prompt: Second.\n    depends_on: [first]\n'
+              : '')
         );
       }
       const nodes: DagNode[] =
@@ -142,7 +162,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
         events.some(
           event => event.event_type === 'node_completed' && event.step_name?.endsWith('first')
         )
-      ).toBe(true);
+      ).toBe(phase !== 'before');
       expect(events.some(event => event.step_name?.endsWith('second'))).toBe(false);
       expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
       expect(emitted).not.toContain('node_failed');
@@ -150,7 +170,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
       expect(
         platform.sendMessage.mock.calls.some(([, message]) => message.includes('failed'))
       ).toBe(false);
-      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
@@ -529,30 +549,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       { id: 'step', kind: 'agent', source: { kind: 'inline', prompt: 'Do thing.' } },
     ]);
     expect(failureKinds).toEqual({ step: 'config' });
-  });
-
-  it('an error escaping a node that already started is unknown, not config', async () => {
-    const { failureKinds } = await runDag(
-      [
-        {
-          id: 'group',
-          kind: 'loop_group',
-          loop_group: {
-            fresh_context: false,
-            until_bash: 'exit 1',
-            max_iterations: 3,
-            nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
-          },
-        },
-      ],
-      store => {
-        // Only the group's own status check fails; the run-level checks still answer.
-        store.getWorkflowRunStatus.mockImplementationOnce(async () => {
-          throw new Error('database is locked');
-        });
-      }
-    );
-    expect(failureKinds.group).toBe('unknown');
   });
 
   it('one completed node and one failed node is a node_error', async () => {

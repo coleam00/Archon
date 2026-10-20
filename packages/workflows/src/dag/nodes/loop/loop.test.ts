@@ -62,6 +62,64 @@ describe('loop node execution', () => {
     await removeTempTree(testDir);
   });
 
+  it.each(['pre-iteration', 'retry'] as const)(
+    'propagates the loop %s lifecycle read failure',
+    async phase => {
+      const store = createMockStore();
+      const cause = new Error('Unreadable loop status');
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (
+          phase === 'pre-iteration' ||
+          persistedEvents(store).some(event => event.event_type === 'node_retry_scheduled')
+        )
+          throw cause;
+        return 'running';
+      });
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          errors: ['crash'],
+          failure: { class: 'transient', evidence: 'crash' },
+          sessionId: 's',
+        };
+      });
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: {
+              name: 'unreadable-loop',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'loop',
+                  retry: { max_attempts: 1, delay_ms: 0 },
+                  loop: { prompt: 'Work.', until: 'DONE', max_iterations: 2, fresh_context: false },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('unreadable-loop'),
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        persistedEvents(store).filter(event => event.event_type === 'node_failed')
+      ).toHaveLength(0);
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(phase === 'retry' ? 1 : 0);
+    }
+  );
+
   it('records the subtasks and hooks a loop iteration streams', async () => {
     const store = createMockStore();
     mockSendQueryDag.mockImplementation(async function* () {

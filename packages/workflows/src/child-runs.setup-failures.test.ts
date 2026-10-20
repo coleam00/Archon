@@ -6,7 +6,7 @@ import {
   setForceRenameFailure,
 } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, writeFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -216,6 +216,36 @@ nodes:
     );
     expect(afterCompleted).toBe(false);
   });
+
+  it.each(['executor', 'read-back'] as const)(
+    'propagates a child %s lifecycle read failure without cancellation or parent failure',
+    async site => {
+      const parent = await writeSubRunPair();
+      const store = new InMemoryStore();
+      const cause = new Error('child lifecycle unreadable');
+      const read = store.getWorkflowRun.bind(store);
+      let completedReads = 0;
+      store.getWorkflowRun = async id => {
+        const row = store.runs.get(id);
+        if (row?.parent_run_id && row.status === 'completed') {
+          completedReads++;
+          if (completedReads === (site === 'executor' ? 1 : 2)) throw cause;
+        }
+        return read(id);
+      };
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      const fail = spyOn(store, 'failWorkflowRun');
+      await expect(
+        executeWorkflow(makeDeps(store), makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+          conversationId: 'conv-db',
+        })
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(cancel).not.toHaveBeenCalled();
+      expect(fail).not.toHaveBeenCalled();
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect([...store.runs.values()].find(row => !row.parent_run_id)?.status).toBe('running');
+    }
+  );
 
   it('reports an ordinary failed child when the recovery write succeeds', async () => {
     // The other side of the branch: the child's status IS recorded, so the parent

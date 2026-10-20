@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError, readWorkflowLifecycle } from '../../../workflow-status-read';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -15,7 +16,7 @@ import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import type { WorkflowCommandSurface } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
-import type { WorkflowNode, WorkflowRun } from '../../../schemas';
+import type { WorkflowNode } from '../../../schemas';
 import { readSubrunMetadata } from '../../../schemas';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { type JsonValue } from '../../../output-ref';
@@ -279,20 +280,10 @@ export async function executeWorkflowNode(
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
   // several, the most recent wins.
-  let existing: WorkflowRun | undefined;
-  try {
-    const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c =>
-        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        executionNodeId
-    );
-    existing = children.length > 0 ? children[children.length - 1] : undefined;
-  } catch (err) {
-    return failResult(
-      `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`,
-      'unknown'
-    );
-  }
+  const children = (
+    await readWorkflowLifecycle(parentRun.id, () => deps.store.findChildRuns(parentRun.id))
+  ).filter(c => readSubrunMetadata(c.metadata).parentNodeId === executionNodeId);
+  const existing = children.length > 0 ? children[children.length - 1] : undefined;
 
   const childArgs = {
     parentRun,
@@ -330,7 +321,12 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
+    if (
+      err instanceof TerminalStatusWriteError ||
+      err instanceof NodeEventWriteError ||
+      err instanceof WorkflowStatusReadError
+    )
+      throw err;
 
     // Only a read of the parent's source releases the parent; a child's fault stays the
     // child's, so the launch types those reads (see runChildWorkflow).

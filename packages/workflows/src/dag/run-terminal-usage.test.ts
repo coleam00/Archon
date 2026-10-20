@@ -1634,7 +1634,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('charges an attempt once on resume when its failure is recorded twice', async () => {
+  it('does not re-fail paid work when the pre-retry lifecycle read rejects', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield {
         type: 'result',
@@ -1647,9 +1647,6 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       };
     });
     const store = durableStore();
-    // The status read before the retry fails, so the dispatch catch re-finishes the
-    // attempt's start record: a second `node_failed` row for the same attempt id.
-    // The retry wait's own read tolerates a failure; the one before the attempt does not.
     let readsAfterFailure = 0;
     store.getWorkflowRunStatus.mockImplementation(async () => {
       if (
@@ -1660,17 +1657,19 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       }
       return 'running';
     });
-    await run(
-      {
-        name: 'double-terminal',
-        budget: { max_spend_usd: 5 },
-        nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
-      },
-      store
-    );
+    await expect(
+      run(
+        {
+          name: 'double-terminal',
+          budget: { max_spend_usd: 5 },
+          nodes: [ai('a', undefined, { retry: { max_attempts: 2, delay_ms: 1 } })],
+        },
+        store
+      )
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError' });
     expect(
       persistedEvents(store).filter(e => e.event_type === 'node_failed' && e.step_name === 'a')
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     const snapshot = await foldDagResumeSnapshot(persistedEvents(store), 'budget-run');
     expect(snapshot.budget).toEqual({ workUnits: 1, spendUsd: 0.1 });
   });

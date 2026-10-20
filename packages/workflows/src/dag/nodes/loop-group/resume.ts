@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import { resolveBashPath } from '@archon/git';
 import { executeWaitNode } from '../wait/wait';
 import { snapshotBodySessionCursorAncestry } from '../../pause';
@@ -329,7 +330,9 @@ export async function resumeTerminalWait(
       ...snapshotBodySessionCursorAncestry(resume.bodySessionCursorAncestry),
     }
   );
-  const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const status = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
+    ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
+  );
   if (status === 'paused') {
     return {
       state: 'running',

@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
@@ -54,8 +55,8 @@ describe('executeDagWorkflow -- workflow: node', () => {
     await removeTempTree(testDir);
   });
 
-  it.each(['node', 'terminal'] as const)(
-    'mixed child fan-out rejections preserve the %s write failure',
+  it.each(['node', 'terminal', 'status'] as const)(
+    'mixed child fan-out rejections preserve the %s failure',
     async kind => {
       await writeBlock(
         'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
@@ -65,17 +66,19 @@ describe('executeDagWorkflow -- workflow: node', () => {
       const ordinary = new Error('source read failed');
       const cause = new Error('write rejected');
       const primary =
-        kind === 'terminal'
-          ? new TerminalStatusWriteError(cause)
-          : new NodeEventWriteError(
-              {
-                workflow_run_id: 'child',
-                event_type: 'node_completed',
-                step_name: 'work',
-                data: {},
-              },
-              cause
-            );
+        kind === 'status'
+          ? new WorkflowStatusReadError('child', cause)
+          : kind === 'terminal'
+            ? new TerminalStatusWriteError(cause)
+            : new NodeEventWriteError(
+                {
+                  workflow_run_id: 'child',
+                  event_type: 'node_completed',
+                  step_name: 'work',
+                  data: {},
+                },
+                cause
+              );
       let siblingSettled = false;
       mockLogFn.mockClear();
       const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
@@ -115,6 +118,31 @@ describe('executeDagWorkflow -- workflow: node', () => {
       );
     }
   );
+
+  it('propagates unreadable child rows without failing the workflow node', async () => {
+    const store = createMockStore();
+    const cause = new Error('Unsupported child status');
+    store.findChildRuns.mockRejectedValue(cause);
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'child-lookup',
+            nodes: [{ id: 'child', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          workflowRun: makeWorkflowRun('child-lookup'),
+          runChildWorkflow: mock(async () => {
+            throw new Error('must not launch');
+          }),
+        })
+      )
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+    expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it('propagates child-result persistence rejection through workflow outcome handling', async () => {
     await writeBlock(

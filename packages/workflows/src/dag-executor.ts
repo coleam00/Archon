@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { readWorkflowLifecycle } from './workflow-status-read';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { sourceReleaseNotice } from './deps';
@@ -512,7 +513,9 @@ export async function executeDagWorkflow(
   // suspended. Only 'paused' triggers this.
   if (execContext.kind === 'container' && containerCtx) {
     try {
-      const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+      const pausedStatus = await readWorkflowLifecycle(workflowRun.id, () =>
+        deps.store.getWorkflowRunStatus(workflowRun.id)
+      );
       if (pausedStatus === 'paused') {
         await suspendContainerForPause(
           deps,
