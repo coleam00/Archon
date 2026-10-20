@@ -53,7 +53,7 @@ import {
   loopControlSchema,
   type LoopControl,
 } from './loop';
-import { workflowNodeHooksSchema } from './hooks';
+import { validateNodeHooks, workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
 
 // ---------------------------------------------------------------------------
@@ -2043,11 +2043,10 @@ const dagNodeVariantSchema = z
   });
 
 export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
-  .preprocess(rejectMisplacedKeys, dagNodeVariantSchema)
+  .preprocess(validateRawDagNode, dagNodeVariantSchema)
   // Refinements do not reach OpenAPI; retain the include-specific fan-out contract
   // structurally so generated authoring types cannot offer workflow-only concurrency.
-  // Both branches retain the authored target until validation succeeds; normalizing
-  // either side earlier can make invalid input throw when the intersection merges.
+  // Retain authored targets on both sides until validation succeeds to avoid merge throws.
   .and(
     z.union([
       // The OpenAPI converter cannot emit ZodNever; an empty enum admits no value.
@@ -2420,9 +2419,10 @@ const LOOP_SETTING_OWNERS: ReadonlyMap<string, readonly NodeMode[]> = (() => {
  * flat schema strips loop settings, and a misplaced key's value is beside the
  * point, so its placement is reported instead of a type error on the value.
  */
-function rejectMisplacedKeys(value: unknown, ctx: z.RefinementCtx): unknown {
+function validateRawDagNode(value: unknown, ctx: z.RefinementCtx): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
   const node = value as Record<string, unknown>;
+  validateNodeHooks(node.hooks, ctx);
   const id = typeof node.id === 'string' ? node.id.trim() : '';
   const modes = selectedModes(node);
   // Without an id or a single mode the variant schema's own error comes first.
