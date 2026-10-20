@@ -595,9 +595,9 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   output; referencing the failed producer's own output fails the condition's node loudly
   (see [Reading across a skipped branch](#reading-across-a-skipped-branch))
 
-:::danger[You cannot compare a whole AI output to a literal]
-A `when:` that compares the **entire output** of a `prompt:` or `command:` node with no
-`output_format` — or of any `loop:`/`loop_group:` node — against a literal is
+:::danger[Current-node whole AI output comparisons are rejected]
+A `when:` that uses `$nodeId.output` to compare the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
+`output_format`, or of any `loop_group:` node, against a literal is
 **rejected at load time**:
 
 ```yaml
@@ -608,6 +608,8 @@ A `when:` that compares the **entire output** of a `prompt:` or `command:` node 
   depends_on: [analyze]
   when: "$analyze.output == 'BUG'"
 ```
+
+This loader rule does not reject previous-iteration `$LOOP_PREV.<nodeId>.output` comparisons.
 
 The model writes `This is a BUG.` and the byte-for-byte comparison is false, so the node
 is skipped with no error and the run finishes looking successful having quietly done less
@@ -1791,9 +1793,13 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   included command cannot start a fresh execution because its references cannot be proven safe.
   Command nodes fail composition immediately; loop commands retain a private compilation error
   so a paused loop can still resume from its persisted, validated prompt snapshot.
-  The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
-  **entry** nodes (those with no upstream inside the block). If both the include and an entry
-  define `when:` and either condition contains `||`, loading fails because the grammar cannot
+  The include node's `depends_on` and default `trigger_rule` wire the block's
+  **entry** nodes (those with no upstream inside the block). The include's `when:`
+  gates the **whole block**, including descendants. Cached nodes on resume are checked
+  against the gate again. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the
+  loop containing the include, even when a descendant runs inside a nested loop.
+  If both the include and an entry define `when:` and either condition contains `||`,
+  loading fails because the grammar cannot
   group them without changing precedence; put the gate only on the include or inside the block.
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every

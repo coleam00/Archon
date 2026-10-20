@@ -219,9 +219,9 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const group = node.loop_group;
   // This iteration's $LOOP_PREV.* outputs and $LOOP_USER_INPUT reply, which every body
   // node resolves through iterCtx.loopBodyScopes. On iteration 1 loopPrevOutputs is
-  // undefined → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first
+  // empty → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first
   // resumed iteration of an interactive loop.
-  const prevSnapshot = state.loopPrevOutputs;
+  const prevSnapshot = state.loopPrevOutputs ?? new Map<string, NodeOutput>();
   const userInputForIter =
     resume.isLoopResume && i === resume.startIteration ? resume.loopUserInput : '';
   const iterScope = loopBodyScope(bodyNodes, prevSnapshot, userInputForIter, ctx.artifactsDir);
@@ -314,7 +314,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // "$LOOP_USER_INPUT" token into the script source; this env var covers indirect reads
     // (${LOOP_USER_INPUT}, printenv, env) that splice can't reach.
     bodyLoopUserInput: userInputForIter,
-    loopPrevOutputs: prevSnapshot ?? new Map(),
+    loopPrevOutputs: prevSnapshot,
     loopBodyScopes: [...ctx.loopBodyScopes, iterScope],
   };
   return { iterCtx, scopedNodeOutputs, prevSnapshot, terminalSuspendNode };

@@ -773,6 +773,11 @@ A body node can also gate on the previous iteration's typed output with `when:`:
 This is a condition reference, not text substitution. On iteration 1 it resolves to
 `''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
+An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
+entire block. A false gate skips the whole block; when true, each node still follows
+its own conditions and trigger rule. If the block contains a nested loop, the include's
+gate still reads the previous iteration of the loop containing that include.
+
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
 same text semantics as every other body surface: the previous iteration's output is
 substituted into the value each pass (so `with: { prev: $LOOP_PREV.test.output }`
