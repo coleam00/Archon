@@ -307,6 +307,7 @@ export function describeWorkflowStoreConformance(
       if (!beforeResume) throw new Error('Missing paused run');
       expect(planEndTurn(beforeResume)).toMatchObject({ kind: 'request' });
       const resumed = await store.resumeWorkflowRun(run.id);
+      expect(executionClaim(resumed.metadata)).not.toBe(executionClaim(beforeResume.metadata));
       expect(runAttention(resumed)).toBeNull();
       expect(planEndTurn(resumed)).toEqual({ kind: 'refused', reason: 'nothing_stalled' });
       await stream.refresh();
@@ -319,6 +320,7 @@ export function describeWorkflowStoreConformance(
       const plan = planEndTurn(current);
       if (plan.kind !== 'request') throw new Error(plan.reason);
       expect(plan.calls.map(call => call.nodeId)).toEqual(['ci']);
+      expect(plan.calls).toEqual(calls);
       await store.updateWorkflowRun(run.id, { metadata: plan.metadata });
       const stall = stream.stall();
       if (!stall) throw new Error('Missing republished stall');
