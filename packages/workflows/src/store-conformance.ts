@@ -1484,6 +1484,97 @@ export function describeWorkflowStoreConformance(
       });
       expect(await types(store, run.id)).toEqual(['workflow_unpaused', 'node_suspended']);
     });
+    test('refuses unknown wait fields without changing the run or events', async () => {
+      const run = await running(store);
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      const future = { ...wait, futureField: true };
+      await expect(
+        store.pauseWorkflowRunForWait(run.id, future, {
+          kind: 'started',
+          stepName: 'wait',
+        })
+      ).rejects.toThrow();
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+    });
+
+    test('future wait fields preserve attention actions, continuations and event signals', async () => {
+      const run = await running(store);
+      await store.pauseWorkflowRunForWait(run.id, attentionWait, {
+        kind: 'started',
+        stepName: 'ask',
+      });
+      const currentRun = async (): Promise<WorkflowRun> => {
+        const current = await store.getWorkflowRun(run.id);
+        if (!current) throw new Error('Expected paused run');
+        return current;
+      };
+      const seedFuture = async (context: WorkflowWaitContext): Promise<void> => {
+        await store.updateWorkflowRun(run.id, {
+          metadata: { wait: { ...context, futureField: true } },
+        });
+      };
+      await seedFuture(attentionWait);
+      expect(pausedAttentionWait(await currentRun())).toEqual(attentionWait);
+      expect(
+        (await listAttentionQueue({ store, branchOf: async () => null })).map(item => item.runId)
+      ).toContain(run.id);
+      const labeled = await store.labelAttentionWait(run.id, {
+        pauseId: 'ask-1',
+        set: { ci: 'pr' },
+        unset: [],
+        via: 'cli',
+      });
+      expect(labeled).toMatchObject({ labeled: true, wait: { revision: 2, labels: { ci: 'pr' } } });
+      const stored = workflowWaitContextSchema.parse(
+        (await store.getWorkflowRun(run.id))?.metadata.wait
+      );
+      expect(stored).not.toHaveProperty('futureField');
+      await seedFuture(stored);
+      expect(await store.answerAttentionWait(run.id, attentionAnswer('use-main'))).toEqual({
+        answered: true,
+      });
+      const answered = workflowWaitContextSchema.parse(
+        (await store.getWorkflowRun(run.id))?.metadata.wait
+      );
+      expect(answered).toMatchObject({
+        answer: { decision: 'use-main' },
+        revision: 2,
+        labels: { ci: 'pr' },
+      });
+      expect((await store.listDueWorkflowContinuations(new Date())).map(row => row.id)).toContain(
+        run.id
+      );
+      await store.resumeWorkflowRun(run.id);
+      const event = {
+        ...wait,
+        kind: 'event' as const,
+        event: 'ready',
+        pauseId: 'event-1',
+        resumeAt: '2099-01-01T00:00:00.000Z',
+      };
+      await store.pauseWorkflowRunForWait(run.id, event, { kind: 'started', stepName: 'wait' });
+      await seedFuture(event);
+      const deadline = pendingWorkflowWaitDeadline(await currentRun());
+      expect(deadline).toEqual(event);
+      if (!deadline || deadline.kind !== 'event') throw new Error('Expected event wait');
+      await store.resumeWorkflowRun(run.id);
+      await store.pauseWorkflowRunForWait(run.id, deadline, { kind: 'continued' });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(event);
+      await seedFuture(event);
+      expect(await store.signalWorkflowWait(run.id, deadline, { ready: true })).toEqual({
+        signaled: true,
+      });
+      const signaled = pendingWorkflowWaitDeadline(await currentRun());
+      expect(signaled).toEqual(workflowWaitContextSchema.parse(signaled));
+      expect(signaled).toMatchObject({
+        ...event,
+        signaledAt: expect.any(String),
+        payload: { ready: true },
+      });
+    });
+
     test('continued waits do not duplicate the start; consumption matches the exact running cursor', async () => {
       const run = await running(store);
       await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });

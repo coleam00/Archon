@@ -34,6 +34,7 @@ import {
   isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
+  readWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
   pausedUsageLimitWait,
@@ -272,17 +273,17 @@ export function createTransactionView(
       const run = runs.get(id);
       const labeled = run && labeledAttentionWait(run, write);
       if (!run || !labeled) return { labeled: false };
-      run.metadata.wait = labeled;
+      run.metadata.wait = workflowWaitContextSchema.parse(labeled);
       record(attentionLabeledEvent(id, labeled, write));
       return { labeled: true, wait: structuredClone(labeled) };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
       if (!run) return { signaled: false };
-      const wait = run.metadata.wait;
+      const wait = readWorkflowWaitContext(run.metadata.wait);
       if (
         run.status !== 'paused' ||
-        !isWorkflowWaitContext(wait) ||
+        !wait ||
         wait.kind !== 'event' ||
         wait.signaledAt ||
         wait.event !== expected.event ||
@@ -292,11 +293,11 @@ export function createTransactionView(
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
-      run.metadata.wait = {
+      run.metadata.wait = workflowWaitContextSchema.parse({
         ...wait,
         signaledAt: new Date().toISOString(),
         ...(payload === undefined ? {} : { payload: structuredClone(payload) }),
-      };
+      });
       record({
         workflow_run_id: id,
         event_type: 'wait_signaled',

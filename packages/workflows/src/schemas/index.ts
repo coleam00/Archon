@@ -236,6 +236,7 @@ export {
   isTerminalRunStatus,
   runAttention,
   isWorkflowWaitContext,
+  readWorkflowWaitContext,
   pendingWorkflowWaitDeadline,
   pausedUsageLimitWait,
   workflowWaitStepName,
