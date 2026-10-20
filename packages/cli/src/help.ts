@@ -246,7 +246,7 @@ const commandHelp: HelpEntry[] = [
         description:
           'Stream readable changes until stopped; the open set comes first\n' +
           'A degraded warning means coverage may have gaps. Repair and replay:\n' +
-          'https://archon.diy/guides/attention-queue/#stream-the-queue',
+          'https://archon.diy/getting-started/operate/#stream-the-queue',
       },
       {
         spec: '--after <cursor>',

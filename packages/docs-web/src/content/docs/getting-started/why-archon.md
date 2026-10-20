@@ -16,7 +16,7 @@ Ask a coding agent to fix a bug and the result depends on the run. It may skip t
 Archon moves the process into a file you own. The workflow fixes the steps, the checks and the gates. The agent supplies judgment inside each step. You get:
 
 - **The same process every time.** Plan, implement, review, validate and open the pull request, in the order you wrote down.
-- **Human on the loop, not in it.** You take yourself out of the loop and sit on top of it. Queues move work forward on their own. When a run reaches a decision it can't make, it pauses as one [attention item](/guides/attention-queue/): what it is, why it matters, a recommendation and the choices. You answer and it carries on.
+- **Human on the loop, not in it.** You take yourself out of the loop and sit on top of it. Queues move work forward on their own. When a run reaches a decision it can't make, it pauses as one [attention item](/getting-started/operate/): what it is, why it matters, a recommendation and the choices. You answer and it carries on.
 - **Governance built in.** Approval gates, an event log and transcript for every run, and the cost of every run, stored in your own database.
 - **Your agents and subscriptions.** Archon runs Claude Code, Codex and Pi through their own CLIs and SDKs, with the accounts and project guidance you already have.
 - **Self-hosted.** One install on your machine or server. SQLite by default, PostgreSQL if you want it.
