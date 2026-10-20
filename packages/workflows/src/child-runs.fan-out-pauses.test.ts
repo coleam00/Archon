@@ -116,6 +116,47 @@ ${fanOut}
         .map(r => [r.user_message, r])
     );
 
+  it('keeps ancestry query failures per child while a sibling holds the only slot', async () => {
+    await writeWorkflow('ancestry-child', fanAskChild('ancestry-child', 'b'));
+    await writeWorkflow(
+      'ancestry-parent',
+      fanAskParent('ancestry-parent', 'ancestry-child', '["a","b","c"]', '      max_parallel: 1')
+    );
+    const store = new InMemoryStore();
+    const ancestry = store.getRunAncestry;
+    let calls = 0;
+    store.getRunAncestry = async id => {
+      if (++calls === 1) throw new Error('ancestry query unavailable');
+      return ancestry(id);
+    };
+    const deps = makeDeps(store);
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('ancestry-parent'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result).toMatchObject({ success: true, paused: true });
+    const children = childByItem(store, 'ancestry-child');
+    expect(children.has('a')).toBe(false);
+    expect(children.get('b')?.status).toBe('paused');
+    expect(children.has('c')).toBe(false);
+    const parent = [...store.runs.values()].find(run => run.workflow_name === 'ancestry-parent')!;
+    expect(parent.status).toBe('paused');
+    expect(parent.metadata.approval).toMatchObject({
+      type: 'fan_out',
+      childRunIds: [children.get('b')!.id],
+      unspawnedItems: 1,
+    });
+    expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+    await answerChild(deps, store, children.get('b')!.id, 'ancestry-child');
+    expect(childByItem(store, 'ancestry-child').get('c')?.status).toBe('completed');
+    expect((await store.getWorkflowRun(parent.id))?.status).toBe('completed');
+  });
+
   it('a fan-out child that pauses waits as its own run; the parent continues when it finishes (#4044)', async () => {
     await writeWorkflow('fan-ask', fanAskChild('fan-ask', 'b'));
     await writeWorkflow(

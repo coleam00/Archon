@@ -9,8 +9,6 @@ import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
-  nodeDescriptorSchema,
-  nodeInvocationSchema,
   executionBindingSchema,
   executionSpendSchema,
   nodeExecutionMetadataSchema,
@@ -26,15 +24,15 @@ import { executionMetadata } from './node-execution';
 import { unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas';
 
+export const persistedNodeMetadataSchema = nodeExecutionMetadataSchema.omit({
+  runId: true,
+  path: true,
+  lifecycle: true,
+});
+
 /** Existing flat wire keys remain readable by older binaries. */
 export const serializedNodeDataSchema = z.object({
-  node: nodeDescriptorSchema.optional(),
-  invocation: nodeInvocationSchema.optional(),
-  attempt: nodeExecutionMetadataSchema.shape.attempt.optional(),
-  binding: executionBindingSchema.optional(),
-  timing: nodeExecutionMetadataSchema.shape.timing.optional(),
-  spend: executionSpendSchema.optional(),
-  accounting: nodeExecutionMetadataSchema.shape.accounting.optional(),
+  ...persistedNodeMetadataSchema.partial().shape,
   type: z.string().optional(),
   command: z.string().nullable().optional(),
   runtime: z.string().optional(),
@@ -240,29 +238,13 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       },
     };
   }
-  const {
-    node,
-    invocation,
-    attempt,
-    binding,
-    timing,
-    spend,
-    accounting,
-    lifecycle,
-    diagnostics: d,
-  } = record;
+  const { node, binding, timing, spend, lifecycle, diagnostics: d } = record;
   const legacyType = node.kind === 'exec' ? (node.runtime === 'sh' ? 'bash' : 'script') : node.kind;
   return {
     ...identity,
     event_type: executionEventTypes[lifecycle.status],
     data: {
-      node,
-      invocation,
-      attempt,
-      binding,
-      timing,
-      spend,
-      accounting,
+      ...persistedNodeMetadataSchema.parse(record),
       type: legacyType,
       ...(node.kind === 'agent'
         ? { command: node.source.kind === 'command' ? node.source.name : null }

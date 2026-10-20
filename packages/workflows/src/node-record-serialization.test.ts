@@ -17,7 +17,7 @@ const record = (): NodeExecutionRecord => ({
   path: 'group.review',
   node: { id: 'review', kind: 'agent', source: { kind: 'command', name: 'review-pr' } },
   invocation: { id: 'inv-1', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
-  attempt: { id: 'attempt-1', startedAt: '2026-09-22T10:00:00Z' },
+  attempt: { id: 'attempt-1', startedAt: '2026-09-22T10:00:00Z', continuedFrom: 'attempt-0' },
   binding: {
     provider: 'claude',
     model: {

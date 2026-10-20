@@ -22,7 +22,7 @@ import {
   type PreparedWorkflowSource,
 } from './run-source';
 import type { ResolvedWorkflow } from './schemas';
-import { SUBRUN_METADATA_KEYS } from './schemas';
+import { SUBRUN_METADATA_KEYS, type WorkflowRun } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -39,6 +39,27 @@ import {
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
 const CHILD_WORKFLOW_DEPTH_CAP = 5;
+
+async function childAncestryFailure(
+  store: WorkflowDeps['store'],
+  parentRun: WorkflowRun,
+  childWorkflowName: string
+): Promise<string | undefined> {
+  let ancestry: WorkflowRun[];
+  try {
+    ancestry = [parentRun, ...(await store.getRunAncestry(parentRun.id))];
+  } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
+    return `Failed to read sub-run ancestry: ${(error as Error).message}`;
+  }
+  if (ancestry.some(run => run.workflow_name === childWorkflowName)) {
+    return `Sub-run cycle detected: '${childWorkflowName}' is already an ancestor of this run.`;
+  }
+  if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
+    return `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflowName}'.`;
+  }
+  return undefined;
+}
 
 /** Safety bound on the descendant walk (guards a corrupted run tree). */
 const MAX_DESCENDANT_RUNS = 64;
@@ -210,20 +231,8 @@ export async function runChildWorkflow(
       return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
     }
 
-    // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
-    //    The child's ancestor chain is the parent plus the parent's ancestors; a
-    //    resolved target already in the chain is a cycle.
-    const ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
-    if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
-      return failOutcome(
-        `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
-      );
-    }
-    if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
-      return failOutcome(
-        `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
-      );
-    }
+    const ancestryFailure = await childAncestryFailure(deps.store, parentRun, childWorkflow.name);
+    if (ancestryFailure !== undefined) return failOutcome(ancestryFailure);
 
     // 2b. Enforce the RESOLVED child's declared `inputs:` contract (#2470) — the exact
     //     same resolution `include:` performs at load time, through the same shared

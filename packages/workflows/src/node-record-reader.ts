@@ -6,6 +6,7 @@ import {
   type NodeInvocation,
 } from './schemas/node-execution';
 import {
+  persistedNodeMetadataSchema,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
@@ -34,15 +35,7 @@ export interface ReadNodeRecordEvent {
 
 const eventDataSchema = z.record(z.string(), z.unknown());
 const eventTypes = new Set<string>(NODE_STATE_EVENT_TYPES);
-const metadataKeys = [
-  'node',
-  'invocation',
-  'attempt',
-  'binding',
-  'timing',
-  'spend',
-  'accounting',
-] as const;
+const metadataKeys = persistedNodeMetadataSchema.keyof().options;
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
@@ -134,13 +127,7 @@ export function readNodeRecordEvent(
     metadata = nodeExecutionMetadataSchema.parse({
       runId: envelope.workflow_run_id,
       path: envelope.step_name,
-      node: raw.node,
-      invocation: raw.invocation,
-      attempt: raw.attempt,
-      binding: raw.binding,
-      timing: raw.timing,
-      spend: raw.spend,
-      accounting: raw.accounting,
+      ...persistedNodeMetadataSchema.parse(raw),
       lifecycle,
     });
   }
