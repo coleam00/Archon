@@ -7,7 +7,7 @@
  * in a `beforeEach`: it restores the defaults below and drops every recorded call.
  */
 import { mock, spyOn } from 'bun:test';
-import { basename, join } from 'node:path';
+import { join, relative } from 'node:path';
 import * as git from '@archon/git';
 import type { IsolationRequest, PRIsolationRequest } from '../types';
 
@@ -18,19 +18,19 @@ export const adoptionWarnings = (): unknown[][] =>
 // Fixed test home — path assertions use this constant; no duplication of production isDocker() logic.
 export const TEST_ARCHON_HOME = '/test/.archon';
 
-// Captured before the module mock replaces the package re-export.
-const { isPathInside } = await import('@archon/paths/archon-paths');
+// Capture the production contracts before the package re-export is mocked.
+const {
+  isPathInside,
+  parseOwnerRepo,
+  resolveRepoProjectIdentity,
+  getArchonHome,
+  getProjectWorktreesPath,
+} = await import('@archon/paths');
+export const realProjectWorktreesLayout = relative(
+  getArchonHome(),
+  getProjectWorktreesPath('owner', 'repo')
+);
 
-const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
-const parseOwnerRepo = (name: string): { owner: string; repo: string } | null => {
-  const [owner, repo, ...rest] = name.split('/');
-  if (rest.length > 0 || !owner || !repo) return null;
-  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
-  return SAFE_NAME.test(owner) && SAFE_NAME.test(repo) ? { owner, repo } : null;
-};
-
-// Resolves paths against TEST_ARCHON_HOME for both @archon/git and the provider.
-// The identity helpers mirror the real @archon/paths ones the provider delegates to.
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
@@ -49,13 +49,7 @@ mock.module('@archon/paths', () => ({
     join(TEST_ARCHON_HOME, 'workspaces', owner, repo, 'worktrees'),
   isDocker: () => false,
   parseOwnerRepo,
-  resolveRepoProjectIdentity: (name: string, cwd: string) => {
-    const parsed = parseOwnerRepo(name);
-    if (parsed) return parsed;
-    const repo = basename(cwd);
-    if (repo === '' || repo === '.' || repo === '..') return null;
-    return { owner: '_local', repo };
-  },
+  resolveRepoProjectIdentity,
 }));
 
 export const mockAccess = mock((_path?: unknown): Promise<void> => Promise.resolve());

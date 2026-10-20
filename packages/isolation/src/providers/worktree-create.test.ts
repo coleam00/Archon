@@ -176,6 +176,36 @@ describe('a new checkout', () => {
     expect(gitCalls()).toContainEqual([...LOCKED_ADD, 'archon/issue-42']);
   });
 
+  test.each<IsolationRequest>([
+    issueRequest,
+    { ...issueRequest, workflowType: 'review' },
+    { ...issueRequest, workflowType: 'thread' },
+    { ...issueRequest, workflowType: 'task', taskBranch: { kind: 'new' } },
+  ])(
+    'checks out an existing remote-only $workflowType branch with no known base',
+    async request => {
+      const branch = provider.generateBranchName(request);
+      execSpy.mockImplementation(async (_cmd, args) => ({
+        stdout: args.includes('ls-remote') ? `remote-sha\trefs/heads/${branch}\n` : '',
+        stderr: '',
+      }));
+
+      const env = await provider.create(request);
+
+      expect(env.resolvedBaseBranch).toBeUndefined();
+      expect(env.metadata).not.toHaveProperty('cutFromCommit');
+      expect(env.metadata).toHaveProperty('branchCreated', true);
+      expect(gitCalls()).toContainEqual([
+        ...LOCKED_ADD.slice(0, -1),
+        '--track',
+        expect.any(String),
+        '-b',
+        branch,
+        `origin/${branch}`,
+      ]);
+    }
+  );
+
   test('refreshes the index of a worktree it created, once, after creating it', async () => {
     let addedBeforeRefresh = false;
     refreshWorktreeIndexSpy.mockImplementation(async () => {
