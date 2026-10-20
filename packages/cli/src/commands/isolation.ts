@@ -545,7 +545,11 @@ async function completeBranch(
       );
       return 'failed';
     }
-    env = matches.length === 1 ? await isolationDb.findActiveByBranchName(branch) : null;
+    const selected = matches[0];
+    env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
+    if (env && env.id !== selected?.id) {
+      throw new Error('environment changed during lookup; refusing ambiguous deletion');
+    }
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');

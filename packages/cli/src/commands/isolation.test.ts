@@ -334,6 +334,30 @@ describe('isolationCompleteCommand', () => {
     );
   });
 
+  it.each([false, true])('refuses a changed lookup target even with force=%s', async force => {
+    mockListActive.mockResolvedValueOnce([mockEnv]);
+    mockFindActiveByBranchName.mockResolvedValueOnce(
+      makeEnvironment({
+        id: 'newer-env',
+        codebase_id: 'other-codebase',
+        codebase_default_cwd: '/other/repo',
+        working_path: '/other/worktree',
+      })
+    );
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockFindActiveByBranchName).toHaveBeenCalledWith('feature-branch');
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('environment changed during lookup')
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+  });
+
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
@@ -416,9 +440,13 @@ describe('isolationCompleteCommand', () => {
   );
 
   it('finishes removing the first shared ref before checking the last one', async () => {
+    const lastEnv = makeEnvironment({ id: 'last-env', branch_name: 'last' });
     mockListActive
       .mockResolvedValueOnce([makeEnvironment({ branch_name: 'first' })])
-      .mockResolvedValueOnce([makeEnvironment({ id: 'last-env', branch_name: 'last' })]);
+      .mockResolvedValueOnce([lastEnv]);
+    mockFindActiveByBranchName
+      .mockResolvedValueOnce(makeEnvironment({ branch_name: 'first' }))
+      .mockResolvedValueOnce(lastEnv);
     let firstRemoved = false;
     const removalHeld = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
