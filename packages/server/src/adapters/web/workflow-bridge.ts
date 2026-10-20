@@ -4,6 +4,10 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import {
+  TERMINAL_RUN_EVENT_TYPES,
+  terminalRunStatusForEventType,
+  type RunTerminalStatus,
+  TERMINAL_RUN_EVENT_TYPE,
   nodeSkipReasonSchema,
   skipCauseSchema,
   type NodeSkipReason,
@@ -210,16 +214,18 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-type RowWorkflowStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+type RowWorkflowStatus = 'running' | RunTerminalStatus | 'paused';
 const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
+  ...Object.fromEntries(
+    TERMINAL_RUN_EVENT_TYPES.map(
+      eventType => [eventType, terminalRunStatusForEventType(eventType)] as const
+    )
+  ),
   workflow_started: 'running',
   run_attention_changed: 'running',
   wait_started: 'paused',
   wait_completed: 'running',
   source_released: 'paused',
-  workflow_completed: 'completed',
-  workflow_failed: 'failed',
-  workflow_cancelled: 'cancelled',
 } satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
@@ -246,7 +252,7 @@ interface WorkflowStatusSsePayload {
   type: 'workflow_status';
   runId: string;
   workflowName: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+  status: RowWorkflowStatus;
   error?: string;
   approval?: Pick<
     Extract<WorkflowEmitterEvent, { type: 'approval_pending' }>,
@@ -289,7 +295,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
       runId,
       workflowName: dataStr(data, 'workflow_name', 'workflowName') ?? '',
       status: workflowStatus,
-      error: row.event_type === 'workflow_failed' ? dataStr(data, 'error') : undefined,
+      error: row.event_type === TERMINAL_RUN_EVENT_TYPE.failed ? dataStr(data, 'error') : undefined,
       timestamp,
     };
     return JSON.stringify(payload);

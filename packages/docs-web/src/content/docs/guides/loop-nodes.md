@@ -592,8 +592,12 @@ warning.
 
 - From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
   *encapsulated* inside it — the outer DAG stays acyclic.
-- Each iteration runs the body's topological layers in full (concurrent nodes
-  within a layer run in parallel, same as a normal DAG).
+- Each iteration runs the body's topological layers in full. Within a layer,
+  ordinary nodes settle before nodes that can suspend, including nested groups
+  containing interactions. Nodes within each phase can run in parallel. Before an
+  interaction pauses the run, sibling work must either finish or reach its own
+  interaction, including work inside nested groups. Any failure skips those
+  interactions.
 - The body is **sealed**: a body node's `depends_on` may only reference sibling
   body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
   refs in body prompts.
@@ -602,7 +606,11 @@ warning.
   event data. Nested groups compose the prefix.
 - A body node that **fails** fails the whole group immediately with that node's
   error (no further iterations run) — same semantics as a failed node in a
-  top-level DAG.
+  top-level DAG. Runnable cleanup still runs, including independent branches inside
+  nested groups. After a body failure, gates, waits, and interactive loops are
+  skipped, even with `trigger_rule: all_done`. Nested groups containing interactions
+  run their body once, then skip their interaction and further iterations. This applies at any depth
+  and preserves the original failure without creating an attention item.
 - `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
   output**: the first completed, non-empty output among the body's terminal nodes,
   in body order. A terminal pause is read past, as described next.

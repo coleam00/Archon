@@ -24,7 +24,11 @@ import type {
   ApprovalContext,
   WorkflowWaitContext,
 } from '../../../schemas';
-import { dagNodeSchema, workflowDefinitionSchema } from '../../../schemas';
+import {
+  dagNodeSchema,
+  workflowDefinitionSchema,
+  workflowWaitContextSchema,
+} from '../../../schemas';
 import { expandWorkflowIncludes } from '../../../include-expander';
 import type { IWorkflowStore, PersistedNodeOutput } from '../../../store';
 
@@ -370,6 +374,24 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       .find(event => event.event_type === 'node_suspended' && event.step_name === 'grp');
     expect(groupSuspension?.data?.suspend_point).toBe('wait');
     expect(groupSuspension?.data?.cost_usd).toBeUndefined();
+
+    const persisted = workflowWaitContextSchema.parse(paused.metadata.wait);
+    const earlyStore = createEscalationStore('run-wait-escalation');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(earlyStore),
+        platform,
+        cwd: testDir,
+        workflow: ready(waitTerminatedLoopGroupWorkflow()),
+        workflowRun: makeWorkflowRun('run-wait-escalation', {
+          metadata: { wait: { ...persisted, futureField: true } },
+        }),
+      })
+    );
+    const continued = earlyStore.pauseWorkflowRunForWait.mock.calls[0];
+    expect(workflowWaitContextSchema.parse(continued?.[1])).toEqual(persisted);
+    expect(continued?.[1]).toEqual(persisted);
+    expect(continued?.[2]).toEqual({ kind: 'continued' });
 
     const expiredWait = {
       ...(paused.metadata.wait as WorkflowWaitContext),

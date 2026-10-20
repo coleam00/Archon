@@ -29,7 +29,6 @@ import type {
   WorkflowEventDoorbell,
   WorkflowRunDelivery,
 } from './engine-port';
-import type { TERMINAL_RUN_EVENT_TYPES } from './file-store/transaction-view';
 import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-subscription';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -39,6 +38,7 @@ import {
   isApprovalContext,
   isGateResolved,
   isWorkflowWaitContext,
+  terminalRunStatusForEventType,
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
@@ -158,16 +158,6 @@ export type AttentionWatchStore = Pick<
   | 'listWorkflowRuns'
 >;
 
-const TERMINAL_EVENT_STATUS = {
-  workflow_completed: 'completed',
-  workflow_failed: 'failed',
-  workflow_cancelled: 'cancelled',
-} as const satisfies Record<(typeof TERMINAL_RUN_EVENT_TYPES)[number], RunTerminalStatus>;
-
-function isTerminalEventType(type: string): type is keyof typeof TERMINAL_EVENT_STATUS {
-  return Object.hasOwn(TERMINAL_EVENT_STATUS, type);
-}
-
 /** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
   return item.kind === 'unreadable' || item.kind === 'usage_limit' ? null : item.occurrence;
@@ -230,7 +220,7 @@ interface RunView {
 
 function terminalOutcome(
   event: WorkflowEventRow,
-  status: (typeof TERMINAL_EVENT_STATUS)[keyof typeof TERMINAL_EVENT_STATUS]
+  status: RunTerminalStatus
 ): 'succeeded' | 'failed' | null {
   try {
     return getTerminalRecord(status, [event])?.outcome ?? null;
@@ -557,8 +547,8 @@ export async function watchAttentionQueue(
           revision: item.revision,
         });
     }
-    if (isTerminalEventType(event.event_type) && inScope) {
-      const status = TERMINAL_EVENT_STATUS[event.event_type];
+    const status = terminalRunStatusForEventType(event.event_type);
+    if (status !== undefined && inScope) {
       await emit({
         type: 'terminal',
         cursor,
