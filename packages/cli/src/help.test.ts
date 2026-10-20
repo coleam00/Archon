@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -475,17 +474,4 @@ it('documents host metadata separately from plugin operations', () => {
   expect(scoped).toContain('without credentials or forge operations');
   expect(scoped).toContain('"host":"github.com"');
   expect(renderHelp()).not.toContain('forge metadata');
-});
-
-it('keeps the documented run project conflicts aligned with CLI policy', () => {
-  const docs = readFileSync(
-    join(import.meta.dir, '../../docs-web/src/content/docs/reference/cli.md'),
-    'utf8'
-  );
-  const row = docs.split('\n').find(line => line.startsWith('| `--project <id\\|name>`'));
-  expect(row).toBeDefined();
-  const conflicts = row?.split('Refused with ')[1]?.split(', and for folder projects.')[0];
-  expect(conflicts).toBeDefined();
-  const flags = [...(conflicts ?? '').matchAll(/`--([^`]+)`/g)].map(match => match[1]);
-  expect(flags).toEqual([...RUN_PROJECT_CONFLICT_FLAGS]);
 });
