@@ -204,9 +204,9 @@ posixOnly.each(['end', 'timeout', 'abort'] as const)(
           expect(prepared.groups).toEqual([
             { pgid: root, leaderReaped: true, signalAttempted: false },
           ]);
-          expect(await processTools.inspectProcessGroups([root])).toContainEqual(
-            expect.objectContaining({ pid: job, pgid: root })
-          );
+          const childGroup = Bun.spawnSync(['/bin/ps', '-p', String(job), '-o', 'pgid=']);
+          expect(childGroup.exitCode).toBe(0);
+          expect(Number(childGroup.stdout.toString().trim())).toBe(root);
           const processes = Bun.spawnSync(['/bin/ps', '-A', '-o', 'args=']).stdout.toString();
           expect(
             processes.split('\n').some(line => line.trim().endsWith(`archon-node-lifeline ${root}`))

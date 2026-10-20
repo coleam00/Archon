@@ -51,7 +51,7 @@ posix.each(['inspection failure', 'surviving group'] as const)(
     const inspect = spyOn(processTools, 'inspectProcessGroups').mockImplementation(async groups => {
       expect(groups).toEqual([ownerPid, nodePgid]);
       if (mode === 'inspection failure') throw new Error('fixture ps failure');
-      return [{ pid: nodePgid + 1, pgid: nodePgid, state: 'S' }];
+      return [nodePgid];
     });
     mockGetWorkflowRun.mockResolvedValue(makePausedRun({ status: 'running' }));
     mockCancelWorkflowRun.mockClear();

@@ -8,13 +8,8 @@ import {
 } from './plugin-process';
 
 describe('inspectProcessGroups', () => {
-  test('selects numeric groups and includes zombie members', async () => {
-    expect(
-      await inspectProcessGroups([12], async () => ' 123 12 S\n 124 120 S\n 125 12 Z\n')
-    ).toEqual([
-      { pid: 123, pgid: 12, state: 'S' },
-      { pid: 125, pgid: 12, state: 'Z' },
-    ]);
+  test('selects matching numeric groups', async () => {
+    expect(await inspectProcessGroups([12], async () => ' 12\n 120\n 12\n')).toEqual([12, 12]);
   });
 
   test('distinguishes no members from failed or malformed inspection', async () => {
@@ -27,7 +22,7 @@ describe('inspectProcessGroups', () => {
     await expect(inspectProcessGroups([12], async () => 'invalid listing')).rejects.toThrow(
       'Invalid POSIX process listing'
     );
-    await expect(inspectProcessGroups([12], async () => '99999999999999999 12 S')).rejects.toThrow(
+    await expect(inspectProcessGroups([12], async () => '99999999999999999')).rejects.toThrow(
       'Invalid POSIX process identifier'
     );
   });
@@ -43,9 +38,7 @@ describe('inspectProcessGroups', () => {
       const exited = once(child, 'exit');
       try {
         const members = await inspectProcessGroups([child.pid]);
-        expect(members).toContainEqual(
-          expect.objectContaining({ pid: child.pid, pgid: child.pid })
-        );
+        expect(members).toContain(child.pid);
         await expect(confirmProcessGroupsGone([child.pid], 0)).rejects.toThrow('still running');
       } finally {
         child.kill('SIGKILL');
