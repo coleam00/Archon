@@ -50,6 +50,7 @@ export function conversationDetachTests(
   let conversationId: string;
   let workerId: string;
   let projectId: string;
+  let projectPath: string;
   let sessionId: string;
   let projectName: string;
   let userId: string;
@@ -65,6 +66,7 @@ export function conversationDetachTests(
     conversationId = crypto.randomUUID();
     workerId = crypto.randomUUID();
     projectId = crypto.randomUUID();
+    projectPath = `/project/${projectId}`;
     sessionId = crypto.randomUUID();
     userId = crypto.randomUUID();
     await db.query("INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Test')", [
@@ -72,8 +74,8 @@ export function conversationDetachTests(
     ]);
     projectName = `My App ${projectId}`;
     await db.query(
-      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, '/project')",
-      [projectId, projectName]
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [projectId, projectName, projectPath]
     );
     for (const id of [conversationId, workerId]) {
       await db.query(
@@ -486,7 +488,7 @@ export function conversationDetachTests(
                       version: 2,
                       run,
                       execution: {
-                        cwd: '/project',
+                        cwd: projectPath,
                         conversationId: 'platform',
                         isolation: { kind: 'in-place' },
                       },
@@ -551,6 +553,8 @@ export function conversationDetachTests(
               if ('error' in trailingResult) await insert();
               else expect(trailingResult.value).toBeDefined();
             } else {
+              if (admission === 'resource')
+                expect(leadingResult).toEqual({ status: 'admitted', requestId: runId, runId });
               const refused =
                 'error' in trailingResult
                   ? await detachConversationProject(input())

@@ -191,10 +191,26 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
   expect(await store.claimStartBindingPreparation(owner)).toBe(true);
   const prepared = launch(codebase.id);
   expect(await store.completeStartBindingPreparation({ ...owner, launch: prepared })).toEqual({
-    status: 'admitted',
+    status: 'queued',
     requestId: prepared.run.id,
-    runId: prepared.run.id,
+    blocker: { kind: 'run', id: second.run.id },
   });
+  expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
+    status: 'complete',
+    intent: binding,
+    requestStatus: 'queued',
+  });
+  expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+  expect(await store.drainResourceStarts({ hostId: 'host', resource: 'two' })).toEqual([]);
+  await store.claimPendingWorkflowRun(second.run.id);
+  await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
+  expect(await store.drainResourceStarts({ hostId: 'host', resource: 'two' })).toEqual([
+    {
+      status: 'admitted',
+      requestId: prepared.run.id,
+      runId: prepared.run.id,
+    },
+  ]);
   expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
     status: 'complete',
     intent: binding,
