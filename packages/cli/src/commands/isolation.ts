@@ -318,7 +318,11 @@ async function checkCompletionLiveRun(
   }
 }
 
-async function checkCompletionPullRequests(branch: string, blockers: string[]): Promise<void> {
+async function checkCompletionPullRequests(
+  env: CompletionEnvironment,
+  branch: string,
+  blockers: string[]
+): Promise<void> {
   try {
     const ghResult = await execFileAsync(
       'gh',
