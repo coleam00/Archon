@@ -1806,15 +1806,9 @@ function validateBindingDirective(
 // ---------------------------------------------------------------------------
 
 /**
- * Validates a raw YAML object as a DAG node and transforms it to a typed DagNode.
- * `dagNodeSchema` wraps it, rejecting misplaced keys on the raw object first.
- *
- * `validateDagNode` requires a non-empty id and exactly one mode key from NODE_MODE_SHAPES,
- * then runs the selected mode's checks from MODE_VALIDATORS and the checks shared by every mode.
- *
- * Note: provider identity, at the workflow and node level, is validated at load time in
- * loader/provider-checks.ts. Model strings are passed through to the SDK
- * unchanged — the SDK is the source of truth for what model names exist.
+ * Validates and normalizes a selected mode after `dagNodeSchema` rejects misplaced keys.
+ * Provider identity is validated in loader/provider-checks.ts; model strings pass
+ * through unchanged to the SDK, which owns that vocabulary.
  */
 const dagNodeVariantSchema = z
   .preprocess(rejectRetiredThinking, dagNodeFlatSchema)
@@ -2056,8 +2050,20 @@ const dagNodeVariantSchema = z
     } satisfies LoopNode;
   });
 
-export const dagNodeSchema = z
+export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
   .preprocess(rejectMisplacedKeys, dagNodeVariantSchema)
+  // Refinements do not reach OpenAPI; retain the include-specific fan-out contract
+  // structurally so generated authoring types cannot offer workflow-only concurrency.
+  .and(
+    z.union([
+      // The OpenAPI converter cannot emit ZodNever; an empty enum admits no value.
+      z.object({ include: z.never().meta({ type: 'string', enum: [] }).optional() }),
+      z.object({
+        include: NODE_MODE_SHAPES.include.include.trim(),
+        fan_out: composeFanOutConfigSchema.optional(),
+      }),
+    ])
+  )
   .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------

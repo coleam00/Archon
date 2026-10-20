@@ -2422,6 +2422,15 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     }
   });
 
+  test.each([undefined, { items: '$list.output', as: 'item', max_parallel: 3 }])(
+    'normalizes an include target with or without fan-out (%j)',
+    fan_out => {
+      const node = dagNodeSchema.parse({ id: 'review', include: '  block  ', fan_out });
+      expect(node.kind).toBe(fan_out ? 'compose_fan_out' : 'include');
+      expect('include' in node && node.include).toBe('block');
+    }
+  );
+
   // #2512: `fan_out:` on an include node is now the composed fan-out surface — it parses
   // to a deferred ComposeFanOutNode instead of being rejected as launch-only.
   test('include + fan_out parses to a deferred compose_fan_out node', () => {

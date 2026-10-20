@@ -5376,7 +5376,26 @@ export interface components {
       input?: string;
       /** @enum {string} */
       isolation?: 'inherit' | 'worktree';
-    };
+    } & (
+      | {
+          /** @enum {string} */
+          include?: never;
+        }
+      | {
+          include: string;
+          fan_out?: {
+            items: string;
+            as: string;
+            /** @default 5 */
+            max_parallel: number;
+            /**
+             * @default all_done
+             * @enum {string}
+             */
+            join: 'all_success' | 'all_done' | 'first_success';
+          };
+        }
+    );
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
