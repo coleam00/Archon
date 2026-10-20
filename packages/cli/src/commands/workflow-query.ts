@@ -626,58 +626,13 @@ export async function workflowRunsCommand(
     verbose?: boolean;
   } = {}
 ): Promise<number> {
-  // Open-work inbox (#2747): terminal failed runs nothing has adopted or
-  // superseded — the operator's "what ended with work on the table" query.
-  // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
-  if (opts.open) {
-    if (opts.status) {
-      const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
-      if (opts.json) {
-        await writeJsonLine({ ok: false, error: msg });
-        return 1;
-      }
-      throw new Error(msg);
-    }
-    let codebase = null;
-    if (!opts.all) {
-      try {
-        codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-      } catch (error) {
-        const err = error as Error;
-        getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-        const message = `Failed to resolve workflow runs project: ${err.message}`;
-        if (opts.json) {
-          await writeJsonLine({ ok: false, error: message });
-          return 1;
-        }
-        throw new Error(message, { cause: err });
-      }
-    }
-    const runs = await host.deps.store.findOpenWorkRuns({
-      codebaseId: opts.all ? undefined : (codebase?.id ?? undefined),
-      limit: opts.limit ?? 20,
-    });
+  if (opts.open && opts.status) {
+    const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
     if (opts.json) {
-      await writeJsonLine({
-        runs: opts.verbose ? await withRunDetail(host, runs) : runs,
-        total: runs.length,
-        scopeFallback: !opts.all && !codebase,
-      });
-      return 0;
+      await writeJsonLine({ ok: false, error: msg });
+      return 1;
     }
-    if (runs.length === 0) {
-      console.log('No open workflow runs — nothing ended with work on the table.');
-      return 0;
-    }
-    console.log(`\nOpen work (${String(runs.length)}):\n`);
-    for (const run of runs) {
-      const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
-      console.log(
-        `  ${run.id.slice(0, 8)}  ${run.workflow_name}${outcome}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
-      );
-    }
-    console.log('');
-    return 0;
+    throw new Error(msg);
   }
 
   let statusFilter: WorkflowRunStatus | undefined;
@@ -710,6 +665,35 @@ export async function workflowRunsCommand(
       throw new Error(message, { cause: err });
     }
   }
+  // The open-work inbox contains terminal failed runs with no adopter or successor.
+  if (opts.open) {
+    const runs = await host.deps.store.findOpenWorkRuns({
+      codebaseId: opts.all ? undefined : (codebase?.id ?? undefined),
+      limit: opts.limit ?? 20,
+    });
+    if (opts.json) {
+      await writeJsonLine({
+        runs: opts.verbose ? await withRunDetail(host, runs) : runs,
+        total: runs.length,
+        scopeFallback: !opts.all && !codebase,
+      });
+      return 0;
+    }
+    if (runs.length === 0) {
+      console.log('No open workflow runs — nothing ended with work on the table.');
+      return 0;
+    }
+    console.log(`\nOpen work (${String(runs.length)}):\n`);
+    for (const run of runs) {
+      const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
+      console.log(
+        `  ${run.id.slice(0, 8)}  ${run.workflow_name}${outcome}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+      );
+    }
+    console.log('');
+    return 0;
+  }
+
   // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
   // so pass codebaseId/status straight through — no conditional spread needed.
   const codebaseId = opts.all ? undefined : codebase?.id;
