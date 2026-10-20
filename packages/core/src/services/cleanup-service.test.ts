@@ -686,6 +686,12 @@ describe('runScheduledCleanup', () => {
         branchName: 'pr-99',
         canonicalRepoPath: '/workspace/repo',
       });
+      expect(mockDeleteRemoteBranch).toHaveBeenCalledWith(
+        '/workspace/repo',
+        'pr-99',
+        expect.any(Object),
+        'origin'
+      );
     }
   );
 
@@ -1288,6 +1294,12 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockDestroy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/merged-branch',
       expect.objectContaining({ branchName: 'merged-branch' })
+    );
+    expect(mockDeleteRemoteBranch).toHaveBeenCalledWith(
+      '/workspace/repo',
+      'merged-branch',
+      expect.any(Object),
+      'origin'
     );
   });
 
