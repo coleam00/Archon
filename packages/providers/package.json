@@ -278,6 +278,12 @@
     ],
     [
       "src/community/pi/credential-authority.integration.test.ts"
+    ],
+    [
+      "src/mcp/readiness.test.ts"
+    ],
+    [
+      "src/claude/mcp-readiness.boundary.test.ts"
     ]
   ]
 }
