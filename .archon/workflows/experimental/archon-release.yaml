@@ -12,13 +12,15 @@ description: |
   NOT for: Hotfix recovery from a broken release CI run (manual recovery
            path), publishing release notes only, retroactive tagging.
 
-  Pass `--dry-run` (or `dry-run`) anywhere in the message to preview the
-  release without releasing it: no version bump on disk, no commit, pull
-  request, tag, GitHub release or tap update. The preview still fetches and
+  Pass `--dry-run` (or `dry-run`) in the message to preview the release
+  without releasing it: no version bump on disk, no commit, pull request,
+  tag, GitHub release or tap update. The preview still fetches and
   fast-forwards the live dev checkout, compiles the binary and drafts the
   changelog with a provider call.
-  Keep the flag inside the quoted message: a bare `--dry-run` on the command
-  line is the CLI's own in-memory simulation, and the workflow never runs.
+  Keep the flag inside the quoted message and off the front: the shell
+  strips the quotes, so a message that starts with `--dry-run` is read as
+  the CLI's own in-memory simulation and the workflow never runs — use
+  `dry-run`, or put the bump type first (`patch --dry-run`).
   Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
 
   Examples:
@@ -245,6 +247,18 @@ nodes:
     runtime: bun
     timeout: 5000
     depends_on: [detect-stack, parse-args]
+    # Declared because the release tail reads these fields by name: the loader
+    # rejects a reference the declaration does not authorize, and the engine
+    # certifies the producer's own stdout against it.
+    output_format:
+      type: object
+      properties:
+        oldVersion: { type: string }
+        newVersion: { type: string }
+        bump: { type: string, enum: [patch, minor, major] }
+        stack: { type: string }
+        versionFile: { type: string }
+      required: [oldVersion, newVersion, bump]
 
   - id: collect-commits
     bash: |
