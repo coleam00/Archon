@@ -240,7 +240,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       expect(output.node_output_spill_path).toStartWith(
         join(artifactsDir, '.archon', 'node-output-spills', 'persisted') + '/'
       );
-      expect(output.node_output_spill_path).toEndWith('.group.emit.nodeoutput');
+      expect(output.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     }
     expect(await readFile(iter1.node_output_spill_path, 'utf8')).toBe('a'.repeat(40_000));
     expect(await readFile(iter2.node_output_spill_path, 'utf8')).toBe('b'.repeat(40_000));

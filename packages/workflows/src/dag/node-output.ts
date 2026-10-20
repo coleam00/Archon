@@ -30,8 +30,7 @@ export function utf8SequenceLength(leadByte: number): number {
  */
 export function formatPersistedNodeOutput(
   output: string,
-  artifactsDir: string,
-  spillKey: string
+  artifactsDir: string
 ): {
   nodeOutput: string;
   truncated: boolean;
@@ -65,7 +64,7 @@ export function formatPersistedNodeOutput(
     'node-output-spills',
     'persisted'
   );
-  const spillPath = writeSpillFile(spillDir, `${randomUUID()}.${spillKey}.nodeoutput`, output);
+  const spillPath = writeSpillFile(spillDir, `${randomUUID()}.nodeoutput`, output);
 
   return {
     nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,

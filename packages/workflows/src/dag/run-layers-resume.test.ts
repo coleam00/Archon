@@ -298,7 +298,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(dirname(data.node_output_spill_path)).toBe(
       join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
-    expect(data.node_output_spill_path).toEndWith('.step1.nodeoutput');
+    expect(data.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 
@@ -753,7 +753,7 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(dirname(data.prior_output_spill_path)).toBe(
       join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
-    expect(data.prior_output_spill_path).toEndWith('.producer.nodeoutput');
+    expect(data.prior_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     expect(await readFile(data.prior_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 
@@ -1197,7 +1197,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
     expect(dirname(data.prior_output_spill_path)).toBe(
       join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
-    expect(data.prior_output_spill_path).toEndWith('.consumer.nodeoutput');
+    expect(data.prior_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     expect(await readFile(data.prior_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 
