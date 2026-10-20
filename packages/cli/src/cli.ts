@@ -1072,6 +1072,15 @@ async function main(): Promise<number> {
             return await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
           }
 
+          case 'end-turn': {
+            const endTurnRunId = positionals[2];
+            if (!endTurnRunId) {
+              return await fail(jsonFlag, 'Usage: archon workflow end-turn <run-id>');
+            }
+            const { workflowEndTurnCommand } = await import('./commands/workflow-end-turn');
+            return await workflowEndTurnCommand(workflowHost, endTurnRunId, jsonFlag, effectiveCwd);
+          }
+
           case 'cancel': {
             const cancelRunId = positionals[2];
             if (!cancelRunId) {
@@ -1302,7 +1311,8 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+              `${problem}
+Available: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
             );
           }
         }

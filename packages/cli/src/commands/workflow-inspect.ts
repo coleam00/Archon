@@ -44,7 +44,7 @@ export function formatToolAttention(
           `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
       )
       .join('\n') +
-    `\nInspect with archon workflow logs ${attention.runId}, or explicitly cancel the run.`
+    `\nInspect with archon workflow logs ${attention.runId}. To fail the stalled attempt as a timeout and let the run continue, run archon workflow end-turn ${attention.runId}; or cancel the run.`
   );
 }
 

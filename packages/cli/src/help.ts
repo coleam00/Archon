@@ -318,6 +318,12 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'end-turn',
+    spec: 'workflow end-turn <run-id>',
+    description: 'End the turn behind stalled tool calls; the node fails as a timeout',
+  },
+  {
+    command: 'workflow',
     subcommand: 'respond',
     spec: 'workflow respond <run-id> <decision> [text]',
     description:
