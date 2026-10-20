@@ -1997,6 +1997,85 @@ describe('pre-dispatch gates --json error envelope', () => {
   });
 });
 
+describe('workflow run flag conflicts', () => {
+  const missingSource = join(tmpdir(), 'archon-missing-workflow-source');
+  const cases: [string, string[], string][] = [
+    [
+      'branch with no-worktree',
+      ['--branch', 'b', '--no-worktree'],
+      'Error: --branch and --no-worktree are mutually exclusive.\n' +
+        '  --branch creates an isolated worktree (safe).\n' +
+        '  --no-worktree runs directly in your repo (no isolation).\n' +
+        'Use one or the other.',
+    ],
+    [
+      'from with no-worktree',
+      ['--no-worktree', '--from', 'main'],
+      'Error: --from/--from-branch has no effect with --no-worktree.\n' +
+        'Remove --from or drop --no-worktree.',
+    ],
+    [
+      'base with no-worktree',
+      ['--no-worktree', '--base', 'main'],
+      'Error: --base has no effect with --no-worktree.\nRemove --base or drop --no-worktree.',
+    ],
+    [
+      'resume with branch',
+      ['--resume', '--branch', 'b'],
+      'Error: --resume and --branch are mutually exclusive.\n' +
+        '  --resume reuses the existing worktree from the failed run.\n' +
+        '  Remove --branch when using --resume.',
+    ],
+    [
+      'workflow-source with resume',
+      ['--workflow-source', tmpdir(), '--resume'],
+      'Error: --workflow-source and --resume are mutually exclusive.\n' +
+        '  A resumed run executes the source it captured when it started.\n' +
+        '  Drop --workflow-source, or start a fresh run to pick up new source.',
+    ],
+    [
+      'workflow-source with container',
+      ['--workflow-source', tmpdir(), '--container'],
+      'Error: --workflow-source and --container are mutually exclusive.\n' +
+        '  A container run reads source from the project it mounts.\n' +
+        '  Run without --container to execute source from another directory.',
+    ],
+    [
+      'workflow-source that is not a directory',
+      ['--workflow-source', missingSource],
+      `Error: --workflow-source is not a directory: ${missingSource}\n` +
+        '  Point it at the checkout holding .archon/workflows/.',
+    ],
+    [
+      'the first conflict when several apply',
+      ['--branch', 'b', '--no-worktree', '--from', 'main'],
+      'Error: --branch and --no-worktree are mutually exclusive.\n' +
+        '  --branch creates an isolated worktree (safe).\n' +
+        '  --no-worktree runs directly in your repo (no isolation).\n' +
+        'Use one or the other.',
+    ],
+  ];
+
+  for (const [name, flags, error] of cases) {
+    it(`refuses ${name}`, () => {
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        'run',
+        'x',
+        ...flags,
+        '--json',
+        '--cwd',
+        listRepo,
+      ]);
+
+      expect({ status, envelope: envelope() }).toEqual({
+        status: 1,
+        envelope: { ok: false, error },
+      });
+    });
+  }
+});
+
 describe('workflow test --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the
