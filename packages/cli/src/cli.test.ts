@@ -2167,6 +2167,50 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
   }
 });
 
+it('CLI complete returns failure after reporting an ambiguous branch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-cli-complete-'));
+  try {
+    const db = new SqliteAdapter(join(root, 'archon.db'));
+    try {
+      for (const id of ['first', 'second']) {
+        await db.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $1, $2)',
+          [id, root]
+        );
+        await db.query(
+          `INSERT INTO remote_agent_isolation_environments
+           (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name)
+           VALUES ($1, $1, 'task', $1, 'worktree', $2, 'shared')`,
+          [id, join(root, id)]
+        );
+      }
+    } finally {
+      await db.close();
+    }
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'complete', 'shared', 'absent', '--force'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: root,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+        },
+      }
+    );
+    expect({ stdout: result.stdout, stderr: result.stderr }).toMatchObject({
+      stdout: expect.stringContaining('Complete: 0 completed, 1 failed, 1 not found'),
+    });
+    expect(result.stderr).toContain('multiple active environments');
+    expect(result.status).toBe(1);
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
 describe('registration base branch parsing', () => {
   it('rejects the registration flag outside workflow run', () => {
     const result = spawnSync(

@@ -14,6 +14,7 @@ import {
   getDefaultBranch,
   getUniqueCommitCount,
   isPatchEquivalent,
+  GitFailure,
 } from '@archon/git';
 import {
   getIsolationProvider,
@@ -281,9 +282,9 @@ export async function isolationCleanupMergedCommand(
   );
 }
 
-type CompletionEnvironment = NonNullable<
-  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
->;
+type CompletionEnvironment = Awaited<
+  ReturnType<typeof isolationDb.listAllActiveWithCodebase>
+>[number];
 type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
 type CompletionOutcome = 'completed' | 'failed' | 'notFound';
 
@@ -318,12 +319,16 @@ async function checkCompletionLiveRun(
   }
 }
 
-async function checkCompletionPullRequests(branch: string, blockers: string[]): Promise<void> {
+async function checkCompletionPullRequests(
+  env: CompletionEnvironment,
+  branch: string,
+  blockers: string[]
+): Promise<void> {
   try {
     const ghResult = await execFileAsync(
       'gh',
       ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,title'],
-      { timeout: 15000 }
+      { timeout: 15000, cwd: env.codebase_default_cwd }
     );
     const prs = JSON.parse(ghResult.stdout) as { number: number; title: string }[];
     for (const pr of prs) {
@@ -382,6 +387,32 @@ async function checkMissingRemoteBranch(
   }
 }
 
+async function isCompletionRemoteRefMissing(
+  env: CompletionEnvironment,
+  branch: string,
+  remote: string
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        env.codebase_default_cwd,
+        'show-ref',
+        '--verify',
+        '--quiet',
+        `refs/remotes/${remote}/${branch}`,
+      ],
+      { timeout: 15000 }
+    );
+    return false;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 1) return true;
+    getLog().warn({ err: error, branch }, 'isolation.complete_remote_ref_check_failed');
+    return false;
+  }
+}
+
 async function checkCompletionUnpushedCommits(
   env: CompletionEnvironment,
   branch: string,
@@ -405,11 +436,10 @@ async function checkCompletionUnpushedCommits(
     }
   } catch (error) {
     const err = error as Error;
-    // git gives the same "unknown revision" for a ref GitHub deleted after a
-    // squash merge and for one that was never pushed. The safety decision is the
-    // same either way — is the content on the base? — but the operator's message
-    // must not assert a deletion that may never have happened.
-    if (err.message.includes('unknown revision') || err.message.includes('bad revision')) {
+    if (
+      !(err instanceof GitFailure && err.kind === 'timeout') &&
+      (await isCompletionRemoteRefMissing(env, branch, remote))
+    ) {
       if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
         await checkMissingRemoteBranch(env, branch, remote, repoConfig, blockers);
       }
@@ -464,7 +494,7 @@ async function getCompletionBlockers(
   // Collect every blocker in safety-check order before attempting removal.
   await checkCompletionWorktree(env, branch, blockers);
   await checkCompletionLiveRun(env, branch, blockers);
-  await checkCompletionPullRequests(branch, blockers);
+  await checkCompletionPullRequests(env, branch, blockers);
   await checkCompletionCommits(env, branch, blockers);
   return blockers;
 }
@@ -504,9 +534,18 @@ async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
+  let env: CompletionEnvironment | undefined;
   try {
-    env = await isolationDb.findActiveByBranchName(branch);
+    const matches = (await isolationDb.listAllActiveWithCodebase()).filter(
+      candidate => candidate.branch_name === branch
+    );
+    if (matches.length > 1) {
+      console.error(
+        `  Failed: ${branch} — multiple active environments match this branch; refusing ambiguous deletion`
+      );
+      return 'failed';
+    }
+    env = matches[0];
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');
@@ -560,4 +599,7 @@ export async function isolationCompleteCommand(
   console.log(
     `\nComplete: ${counts.completed} completed, ${counts.failed} failed, ${counts.notFound} not found`
   );
+  if (counts.failed > 0) {
+    throw new Error(`Failed to complete ${String(counts.failed)} branch(es)`);
+  }
 }
