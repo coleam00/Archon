@@ -1,7 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  constants,
+  lstatSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  type Stats,
+} from 'node:fs';
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -90,10 +98,23 @@ export async function readArtifactFile(path: string): Promise<string | undefined
   const contained = containedParent(path);
   if (contained !== undefined) {
     if (!checkParents(contained, false)) return undefined;
-    const entry = lstatIfPresent(path);
-    if (entry === undefined || entry.isSymbolicLink()) return undefined;
-    if (!entry.isFile()) {
-      throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
+    let handle;
+    try {
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === 'ENOENT' || code === 'ELOOP') return undefined;
+      throw error;
+    }
+    try {
+      if (!(await handle.stat()).isFile()) {
+        throw new ArtifactWriteError(
+          `Refusing artifact owner read: '${path}' is not a regular file`
+        );
+      }
+      return await handle.readFile('utf8');
+    } finally {
+      await handle.close();
     }
   }
   try {

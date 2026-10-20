@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, openSync, writeSync } from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import {
   chmod,
   lstat,
@@ -8,6 +9,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -15,7 +17,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { ArtifactWriteError, withContainerArtifactsRoot } from './artifact-writes';
+import {
+  ArtifactWriteError,
+  readArtifactFile,
+  withContainerArtifactsRoot,
+} from './artifact-writes';
 import { writeNodeArtifact, writeNodeArtifactsListing } from './artifacts-index';
 import { recordCheckoutSample, type CheckoutSample } from './checkout-observation';
 import { formatPersistedNodeOutput } from './dag/node-output';
@@ -123,6 +129,41 @@ describe('in a container-mounted artifacts directory', () => {
     expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('second');
   });
 
+  test.skipIf(process.platform === 'win32').each(['symlink', 'FIFO'])(
+    'reads the opened regular metadata when its pathname is replaced by a %s',
+    async kind => {
+      await mkdir(join(root, 'nodes'));
+      const path = join(root, 'nodes', 'probe.meta.json');
+      const original = JSON.stringify({ nodeId: 'probe' });
+      await writeFile(path, original);
+      const replacement = join(root, 'replacement');
+      if (kind === 'symlink') {
+        await writeFile(join(outside, 'sentinel'), JSON.stringify({ nodeId: 'foreign' }));
+        await symlink(join(outside, 'sentinel'), replacement);
+      } else {
+        expect(Bun.spawnSync(['mkfifo', replacement]).exitCode).toBe(0);
+      }
+      const realOpen = fsPromises.open;
+      let swapped = false;
+      const intercepted = spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+        const handle = await realOpen(...args);
+        if (args[0] === path) {
+          await rename(replacement, path);
+          swapped = true;
+        }
+        return handle;
+      });
+      try {
+        expect(await contained(() => readArtifactFile(path))).toBe(original);
+        expect(swapped).toBe(true);
+        const entry = await lstat(path);
+        expect(kind === 'symlink' ? entry.isSymbolicLink() : entry.isFIFO()).toBe(true);
+      } finally {
+        intercepted.mockRestore();
+      }
+    }
+  );
+
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     "unreadable regular metadata rejects without replacing another producer's output",
     async () => {
@@ -149,11 +190,11 @@ describe('in a container-mounted artifacts directory', () => {
       await mkdir(join(root, 'nodes'));
       const path = join(root, 'nodes', 'probe.meta.json');
       expect(Bun.spawnSync(['mkfifo', path]).exitCode).toBe(0);
-      const descriptor = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
       let released = false;
       // Bound a broken reader's wait so the regression fails without leaving blocked I/O.
       const release = setTimeout(() => {
         released = true;
+        const descriptor = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
         writeSync(descriptor, JSON.stringify({ nodeId: 'another-node' }));
         closeSync(descriptor);
       }, 1000);
@@ -166,7 +207,6 @@ describe('in a container-mounted artifacts directory', () => {
         expect(await readdir(join(root, 'nodes'))).toEqual(['probe.meta.json']);
       } finally {
         clearTimeout(release);
-        if (!released) closeSync(descriptor);
       }
     }
   );
