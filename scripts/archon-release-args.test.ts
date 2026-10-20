@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseArgs } from 'node:util';
+import { cliArgOptions } from '../packages/cli/src/args';
 import { evaluateCondition } from '../packages/workflows/src/condition-evaluator';
 import { certifyExecOutput } from '../packages/workflows/src/dag/nodes/exec/exec-output';
 import {
@@ -8,18 +10,20 @@ import {
   type JsonValue,
 } from '../packages/workflows/src/output-ref';
 import { execNodeSchema, type ExecNode, type NodeOutput } from '../packages/workflows/src/schemas';
-import { parseWhenExpression, type WhenAtom } from '../packages/workflows/src/when-atom';
 
 /**
- * The release workflow's argument parsing, run the way the engine runs a `script:` node:
- * a Bun subprocess with the body on `-e` and the run message in the environment.
+ * The release workflow's own contract, checked against the workflow's own bodies.
  *
- * The workflow's release tail is gated on this node's output, so a body that stops
- * reading the message turns a `--dry-run` request into a real release, and nothing else
- * in the repository reports it: the corpus lint reads the YAML but never runs a body.
+ * The workflow's release tail is gated on the argument node's output, so a body that
+ * stops reading the message turns a `--dry-run` request into a real release, and a
+ * release node that loses its dry-run guard runs inside a preview. Nothing else in the
+ * repository reports either: the corpus lint reads the YAML but never runs a body.
  */
 const REPO = join(import.meta.dir, '..');
 const WORKFLOW = join(REPO, '.archon', 'workflows', 'experimental', 'archon-release.yaml');
+
+/** The node that reports the run's outcome. It runs in both modes. */
+const SUMMARY_ID = 'final-summary';
 
 /** One node of the workflow, as the YAML declares it. */
 interface WorkflowNode {
@@ -29,25 +33,38 @@ interface WorkflowNode {
   when?: string;
   depends_on?: string[];
   wait?: { form?: string };
+  cancel?: string;
   output_format?: Record<string, unknown>;
 }
 
-function workflowNodes(): WorkflowNode[] {
-  const workflow: unknown = Bun.YAML.parse(readFileSync(WORKFLOW, 'utf8'));
-  if (typeof workflow !== 'object' || workflow === null) {
-    throw new Error('archon-release.yaml did not parse into an object');
-  }
-  const nodes: unknown = (workflow as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) throw new Error('archon-release.yaml has no nodes list');
-  return nodes.map(node => {
-    if (typeof node !== 'object' || node === null) {
-      throw new Error('archon-release.yaml has a node that is not an object');
-    }
-    return node as WorkflowNode;
-  });
+/** The workflow, as the YAML declares it. */
+interface WorkflowSource {
+  description: string;
+  nodes: WorkflowNode[];
 }
 
-const NODES = workflowNodes();
+function workflowSource(): WorkflowSource {
+  const parsed: unknown = Bun.YAML.parse(readFileSync(WORKFLOW, 'utf8'));
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('archon-release.yaml did not parse into an object');
+  }
+  const { description, nodes } = parsed as { description?: unknown; nodes?: unknown };
+  if (typeof description !== 'string') throw new Error('archon-release.yaml has no description');
+  if (!Array.isArray(nodes)) throw new Error('archon-release.yaml has no nodes list');
+  return {
+    description,
+    nodes: nodes.map(node => {
+      if (typeof node !== 'object' || node === null) {
+        throw new Error('archon-release.yaml has a node that is not an object');
+      }
+      return node as WorkflowNode;
+    }),
+  };
+}
+
+const SOURCE = workflowSource();
+
+const NODES = SOURCE.nodes;
 
 function nodeById(id: string): WorkflowNode {
   const node = NODES.find(candidate => candidate.id === id);
@@ -66,25 +83,34 @@ function parseArgsBody(): string {
 const BODY = parseArgsBody();
 
 /**
- * Runs the node's body with the given run message, the way the engine runs it: the
- * message arrives in the environment, because a `script:` body never substitutes it
- * into the source. `undefined` leaves the variable unset. Returns the stdout the
- * engine would certify, with the trailing newline trimmed.
+ * Runs a `script:` body the way the engine runs it: a Bun subprocess with the body on
+ * `-e`. The run message arrives in the environment, because a `script:` body never
+ * substitutes it into the source. Returns the stdout the body printed.
  */
-function runParseArgs(message: string | undefined): string {
-  const env: Record<string, string | undefined> = { ...process.env };
-  if (message === undefined) delete env.ARGUMENTS;
-  else env.ARGUMENTS = message;
-  const result = Bun.spawnSync([process.execPath, '--no-env-file', '-e', BODY], {
+function runScript(body: string, env: Record<string, string | undefined>): string {
+  const result = Bun.spawnSync([process.execPath, '--no-env-file', '-e', body], {
     cwd: REPO,
     env,
     stdout: 'pipe',
     stderr: 'pipe',
   });
   if (result.exitCode !== 0) {
-    throw new Error(`parse-args exited ${String(result.exitCode)}: ${result.stderr.toString()}`);
+    throw new Error(
+      `the script body exited ${String(result.exitCode)}: ${result.stderr.toString()}`
+    );
   }
-  return result.stdout.toString().replace(/\n$/, '');
+  return result.stdout.toString();
+}
+
+/**
+ * The producer's stdout, as the engine records it: the trailing newline trimmed.
+ * `undefined` leaves the message variable unset.
+ */
+function runParseArgs(message: string | undefined): string {
+  const env: Record<string, string | undefined> = { ...process.env };
+  if (message === undefined) delete env.ARGUMENTS;
+  else env.ARGUMENTS = message;
+  return runScript(BODY, env).replace(/\n$/, '');
 }
 
 /** The producer's printed JSON. */
@@ -104,7 +130,13 @@ function parseArgsNode(): ExecNode {
   });
 }
 
-/** The run messages the workflow documents, and the output each one must produce. */
+/**
+ * The run messages the workflow accepts, and the output each one must produce.
+ *
+ * These are message texts, not command lines: the CLI parses any argument that starts
+ * with `--` as one of its own options, so `"--dry-run minor"` reaches the workflow
+ * only through the API/chat route, which delivers the message byte for byte.
+ */
 const MESSAGES: readonly (readonly [string, JsonValue])[] = [
   ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
   // The workflow's description offers both spellings, in any position.
@@ -122,6 +154,81 @@ describe('archon-release argument parsing', () => {
 
   test('defaults to a patch release when the run message is unset', () => {
     expect(parseArgsJson(undefined)).toEqual({ bump: 'patch', dryRun: 'false' });
+  });
+});
+
+/**
+ * The command's arguments, as the shell splits them: a quoted run message is one
+ * argument even when it carries a space, and a trailing comment is not part of it.
+ */
+function shellArguments(command: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let quoted = false;
+  let started = false;
+  for (const char of command) {
+    if (!quoted && char === '#') break;
+    if (char === '"' || char === "'") {
+      quoted = !quoted;
+      started = true;
+      continue;
+    }
+    if (!quoted && /\s/.test(char)) {
+      if (started) {
+        args.push(current);
+        current = '';
+        started = false;
+      }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) args.push(current);
+  return args;
+}
+
+/**
+ * The example commands in the workflow's description, as the CLI receives them: the
+ * program name is not an argument the CLI parses.
+ */
+function documentedExamples(): string[][] {
+  const examples: string[][] = [];
+  for (const line of SOURCE.description.split('\n')) {
+    const text = line.trim();
+    if (!text.startsWith('archon workflow run ')) continue;
+    examples.push(shellArguments(text).slice(1));
+  }
+  return examples;
+}
+
+/** The CLI's parse of a documented example, the way the CLI parses argv. */
+function parseExample(argv: string[]): { positionals: string[] } {
+  try {
+    return parseArgs({ args: argv, options: cliArgOptions, allowPositionals: true, strict: true });
+  } catch (error) {
+    throw new Error(
+      `the CLI rejects the documented example "${argv.join(' ')}": ${(error as Error).message}`
+    );
+  }
+}
+
+/**
+ * The workflow's own examples must reach the workflow.
+ *
+ * The CLI parses any argument that starts with `--` as one of its own options, so a
+ * documented example whose message starts with `--` never reaches the workflow: the
+ * CLI answers with its own in-memory simulation instead of the release preview.
+ */
+describe('the documented commands', () => {
+  test('every documented example reaches the workflow', () => {
+    const examples = documentedExamples();
+    expect(examples.length).toBeGreaterThan(0);
+    for (const argv of examples) {
+      const parsed = parseExample(argv);
+      // An argument the CLI consumes as an option is an argument the workflow never sees.
+      expect(parsed.positionals).toEqual(argv);
+    }
   });
 });
 
@@ -157,22 +264,6 @@ describe('the parse-args output contract', () => {
   });
 });
 
-/**
- * The release phase: the nodes the closing summary waits on, minus the one that starts
- * the chain. That entry is the review gate — a dry run ends at it — so it runs in both
- * modes and carries no dry-run guard; every node after it belongs to the release.
- */
-function releasePhase(): { gate: WorkflowNode[]; phase: WorkflowNode[] } {
-  const waited = (nodeById('final-summary').depends_on ?? []).map(nodeById);
-  const waitedIds = new Set(waited.map(node => node.id));
-  const startsChain = (node: WorkflowNode): boolean =>
-    !(node.depends_on ?? []).some(dep => waitedIds.has(dep));
-  return {
-    gate: waited.filter(startsChain),
-    phase: waited.filter(node => !startsChain(node)),
-  };
-}
-
 /** The node's output as the engine records it: its printed JSON and its declared paths. */
 function parseArgsOutput(message: string): NodeOutput {
   const json = parseArgsJson(message);
@@ -184,24 +275,88 @@ function parseArgsOutput(message: string): NodeOutput {
   };
 }
 
-/** The comparison that reads the parsed dry-run flag. */
-type DryRunAtom = WhenAtom & { ref: { kind: 'node'; nodeId: string; field: string | undefined } };
-
-function isDryRunAtom(atom: WhenAtom): atom is DryRunAtom {
-  return (
-    atom.ref.kind === 'node' && atom.ref.nodeId === 'parse-args' && atom.ref.field === 'dryRun'
-  );
+/** The nodes that wait for `id` directly. */
+function directDependents(id: string): WorkflowNode[] {
+  return NODES.filter(node => (node.depends_on ?? []).includes(id));
 }
 
-/** The atom's own text, rebuilt from its parsed form so the engine evaluates it. */
-function atomText(atom: DryRunAtom): string {
-  const path = atom.ref.field === undefined ? 'output' : `output.${atom.ref.field}`;
-  return `$${atom.ref.nodeId}.${path} ${atom.operator} '${atom.expected}'`;
+/**
+ * Every node the graph reaches from `id` by waiting for it, directly or through
+ * another node.
+ */
+function transitiveDependents(id: string): Set<string> {
+  const reached = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (next === undefined) break;
+    for (const dependent of directDependents(next)) {
+      if (reached.has(dependent.id)) continue;
+      reached.add(dependent.id);
+      queue.push(dependent.id);
+    }
+  }
+  return reached;
+}
+
+/**
+ * The approval a dry run stops at: the approval no other approval waits for. The
+ * release has two gates — the changelog review and the PR merge — and the dry run
+ * ends at the first.
+ */
+function reviewGate(): WorkflowNode {
+  const approvals = NODES.filter(node => node.wait?.form === 'approval');
+  const first = approvals.filter(
+    gate =>
+      !approvals.some(other => other.id !== gate.id && transitiveDependents(other.id).has(gate.id))
+  );
+  const gate = first.at(0);
+  if (gate === undefined || first.length !== 1) {
+    throw new Error(
+      `archon-release.yaml must have exactly one first release approval, found ${first.length}`
+    );
+  }
+  return gate;
+}
+
+/**
+ * The release phase: the part of the graph that waits for the review gate.
+ *
+ * The set comes from the graph, not from the closing summary's wait list, so a release
+ * node added to the workflow joins it by construction instead of running inside a
+ * preview with the guard green. The nodes that must run in both modes stay out of it:
+ * a cancel node stops the run, and the summary reports it.
+ */
+function releasePhase(): { gate: WorkflowNode; phase: WorkflowNode[] } {
+  const gate = reviewGate();
+  const downstream = transitiveDependents(gate.id);
+  const phase = NODES.filter(
+    node => downstream.has(node.id) && node.cancel === undefined && node.id !== SUMMARY_ID
+  );
+  return { gate, phase };
+}
+
+/**
+ * The node outputs a release leaves behind: both approvals granted, homebrew present.
+ * The dry run stops at the first approval, so the second one is the release's own.
+ */
+function scenario(dryRun: boolean): Map<string, NodeOutput> {
+  const approved: NodeOutput = {
+    state: 'completed',
+    output: '{"decision":"approve"}',
+    structuredOutput: { decision: 'approve' },
+  };
+  return new Map<string, NodeOutput>([
+    ['parse-args', parseArgsOutput(dryRun ? 'dry-run' : 'minor')],
+    ['review-changelog', approved],
+    ['wait-for-merge', approved],
+    ['check-homebrew', { state: 'completed', output: 'true' }],
+  ]);
 }
 
 /** The parsed flag as the engine records it: a dry run and a real run. */
-const DRY_RUN_OUTPUT = new Map<string, NodeOutput>([['parse-args', parseArgsOutput('dry-run')]]);
-const RELEASE_OUTPUT = new Map<string, NodeOutput>([['parse-args', parseArgsOutput('minor')]]);
+const DRY_RUN_OUTPUT = scenario(true);
+const RELEASE_OUTPUT = scenario(false);
 
 /** The gate a dry run ends at: it runs in both modes. */
 function assertApprovalGate(node: WorkflowNode): void {
@@ -210,33 +365,27 @@ function assertApprovalGate(node: WorkflowNode): void {
   }
 }
 
-/** Every release-phase node carries a dry-run guard, and that guard switches with the flag. */
+/**
+ * Every release-phase node is gated off by the dry-run flag, and its guard opens again
+ * for a real release.
+ *
+ * The whole `when:` expression is evaluated, not just its dry-run atom: an expression
+ * that ORs the flag with something else opens the node in a dry run, and an atom-only
+ * check would miss that.
+ */
 function assertDryRunGuard(node: WorkflowNode): void {
   const when = node.when;
   if (typeof when !== 'string') {
     throw new Error(`Node '${node.id}' runs in a dry run: it declares no when: guard`);
   }
-  const clauses = parseWhenExpression(when);
-  if (clauses === null) {
+  const dry = evaluateCondition(when, DRY_RUN_OUTPUT);
+  if (!dry.parsed) {
     throw new Error(`Node '${node.id}' has an unparseable when: ${when}`);
   }
-  for (const clause of clauses) {
-    const guards = clause.filter(isDryRunAtom);
-    if (guards.length === 0) {
-      throw new Error(`Node '${node.id}' has a when: clause with no dry-run guard: ${when}`);
-    }
-    for (const guard of guards) assertGuardSwitchesWithTheFlag(node, guard, when);
-  }
-}
-
-/** The guard closes for a dry run and opens for a real one. */
-function assertGuardSwitchesWithTheFlag(node: WorkflowNode, guard: DryRunAtom, when: string): void {
-  const text = atomText(guard);
-  const dry = evaluateCondition(text, DRY_RUN_OUTPUT);
-  if (!dry.parsed || dry.result) {
+  if (dry.result) {
     throw new Error(`Node '${node.id}' is not gated off by the dry-run flag: ${when}`);
   }
-  const release = evaluateCondition(text, RELEASE_OUTPUT);
+  const release = evaluateCondition(when, RELEASE_OUTPUT);
   if (!release.parsed || !release.result) {
     throw new Error(`Node '${node.id}' never runs, dry run or not: ${when}`);
   }
@@ -245,9 +394,62 @@ function assertGuardSwitchesWithTheFlag(node: WorkflowNode, guard: DryRunAtom, w
 describe('archon-release dry-run gate', () => {
   test('every node in the release phase is gated off by the dry-run flag', () => {
     const { gate, phase } = releasePhase();
-    expect(gate.length).toBeGreaterThan(0);
     expect(phase.length).toBeGreaterThan(0);
-    for (const node of gate) assertApprovalGate(node);
+    assertApprovalGate(gate);
     for (const node of phase) assertDryRunGuard(node);
+  });
+});
+
+/**
+ * The version producer's output, as the engine substitutes it into the summary.
+ * Deterministic JSON, so the text is a fixture rather than a run.
+ */
+const BUMP_VERSION_OUTPUT = JSON.stringify({
+  oldVersion: '0.12.1',
+  newVersion: '0.12.2',
+  bump: 'minor',
+  stack: 'node',
+  versionFile: 'package.json',
+});
+
+/**
+ * The closing summary's body with the engine's node-output substitutions applied. The
+ * engine substitutes one reference in one pass, so the same shape replaces them here:
+ * the output text goes in verbatim.
+ */
+function summaryBody(parseArgsText: string, bumpVersionText: string): string {
+  const body = nodeById(SUMMARY_ID).script;
+  if (typeof body !== 'string') {
+    throw new Error('archon-release.yaml has no final-summary script node');
+  }
+  return body.replace(/\$(parse-args|bump-version)\.output/g, (_match: string, nodeId: string) =>
+    nodeId === 'parse-args' ? parseArgsText : bumpVersionText
+  );
+}
+
+/** The summary the operator sees: a preview of a release, or the release itself. */
+function runSummary(dryRun: boolean): string {
+  const body = summaryBody(runParseArgs(dryRun ? 'dry-run' : 'minor'), BUMP_VERSION_OUTPUT);
+  return runScript(body, { ...process.env });
+}
+
+/**
+ * The closing summary is the only place the operator is told whether a release
+ * happened, and nothing else in the repository runs its body: a plausible edit to the
+ * mode comparison turns a dry run into a "release complete" report with the suite green.
+ */
+describe('the closing summary', () => {
+  test('a dry run reports the preview, not a release', () => {
+    const summary = runSummary(true);
+    expect(summary).toContain('DRY RUN COMPLETE');
+    expect(summary).toContain('v0.12.2');
+    expect(summary).not.toContain('RELEASE COMPLETE');
+  });
+
+  test('a real run reports the release', () => {
+    const summary = runSummary(false);
+    expect(summary).toContain('RELEASE COMPLETE');
+    expect(summary).toContain('v0.12.2');
+    expect(summary).not.toContain('DRY RUN COMPLETE');
   });
 });

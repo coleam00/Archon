@@ -17,13 +17,15 @@ description: |
   request, tag, GitHub release or tap update. The preview still fetches and
   fast-forwards the live dev checkout, compiles the binary and drafts the
   changelog with a provider call.
+  Keep the flag inside the quoted message: a bare `--dry-run` on the command
+  line is the CLI's own in-memory simulation, and the workflow never runs.
   Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
 
   Examples:
     archon workflow run archon-release ""                  # patch release
     archon workflow run archon-release "minor"             # minor release
     archon workflow run archon-release "patch --dry-run"   # dry-run patch
-    archon workflow run archon-release "--dry-run"         # dry-run patch (implicit)
+    archon workflow run archon-release "dry-run"           # dry-run patch (implicit)
 
 provider: claude
 model: sonnet
