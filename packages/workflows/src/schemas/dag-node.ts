@@ -2058,11 +2058,7 @@ export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
       }),
     ])
   )
-  .transform(node =>
-    node.kind === 'include' || node.kind === 'compose_fan_out'
-      ? { ...node, include: node.include.trim() }
-      : node
-  )
+  .transform(node => ('include' in node ? { ...node, include: node.include.trim() } : node))
   .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
