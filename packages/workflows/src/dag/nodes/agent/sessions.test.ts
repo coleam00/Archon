@@ -1281,6 +1281,79 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     });
   }
 
+  it('discards a named owner session after changed inputs invalidate its loop attempt', async () => {
+    const nodes = ownerWorkflow('claude', true);
+    nodes[0].always_run = true;
+    let attempt = 0;
+    mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
+      if (prompt === 'review' && attempt === 0) throw new Error('review interrupted');
+      if (prompt === 'owner' && attempt === 1) throw new Error('owner interrupted');
+      yield {
+        type: 'agent_message_chunk',
+        text: prompt === 'source' ? (attempt === 0 ? 'A' : 'B') : prompt,
+      };
+      yield {
+        type: 'result',
+        sessionId: prompt === 'source' ? (attempt === 0 ? 'SA' : 'SB') : 'O',
+        ...(options?.outputFormat ? { structuredOutput: { done: true } } : {}),
+        ...(session ? { resumed: true } : {}),
+      };
+    });
+    const store = await runAddressableWorkflow(nodes);
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'corrections.owner'
+      )?.data?.session_id
+    ).toBe('O');
+
+    for (attempt = 1; attempt <= 2; attempt++) {
+      const rows = persistedEvents(store);
+      const snapshot = await foldDagResumeSnapshot(rows, 'addressable-run');
+      store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      store.listWorkflowEvents.mockResolvedValue(
+        rows.map((event, index) => ({
+          ...event,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: event.step_name ?? null,
+          data: event.data ?? {},
+        }))
+      );
+      store.failWorkflowRun.mockClear();
+      const before = rows.length;
+      await runAddressableWorkflow(nodes, store, snapshot.completedNodeOutputs);
+      if (attempt === 1) {
+        const restarted = persistedEvents(store).slice(before);
+        expect(store.failWorkflowRun).toHaveBeenCalled();
+        expect(
+          restarted.some(
+            e => e.event_type === 'node_prior_cache_invalidated' && e.step_name === 'corrections'
+          )
+        ).toBe(true);
+        expect(
+          restarted.some(e => e.event_type === 'node_failed' && e.step_name === 'corrections.owner')
+        ).toBe(true);
+        expect(
+          restarted.some(
+            e => e.event_type === 'node_completed' && e.step_name === 'corrections.owner'
+          )
+        ).toBe(false);
+      }
+    }
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      mockSendQueryDag.mock.calls.filter(c => c[0] === 'owner').map(c => [c[2], c[3]?.forkSession])
+    ).toEqual([
+      ['SA', true],
+      ['SB', true],
+      ['SB', true],
+    ]);
+  });
+
   it('restores private ownership from serialized interactive pause state in a new execution', async () => {
     const nodes = ownerWorkflow('claude', true);
     const group = nodes[1];
