@@ -599,9 +599,11 @@ async function completeBranch(
   }
 
   try {
+    const { codebase_default_cwd, codebase_name, ...observedRegistration } = env;
     const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
       force: options.force,
       deleteRemoteBranch: options.deleteRemote ?? true,
+      observedRegistration,
     });
     return reportCompletionResult(branch, result);
   } catch (error) {

@@ -3,6 +3,7 @@
  * Handles removal triggered by events, schedule, or commands
  */
 import { lstat } from 'node:fs/promises';
+import { getEnvironmentForRemoval } from './cleanup-registration';
 import {
   readOwnedWorktree,
   type OwnedWorktree,
@@ -381,20 +382,16 @@ export async function onConversationClosed(
     });
 }
 
-/**
- * Options for removing an isolation environment
- */
 export interface RemoveEnvironmentOptions {
   force?: boolean;
   deleteRemoteBranch?: boolean;
+  /** Fence removal to the registration the caller checked, without joined codebase fields. */
+  observedRegistration?: IsolationEnvironmentRow;
 }
 
 const NON_WORKTREE_CLEANUP_REASON =
   'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
 
-/**
- * Result from removeEnvironment indicating what actually happened
- */
 export interface RemoveEnvironmentResult {
   /** Whether the worktree was removed from disk */
   worktreeRemoved: boolean;
@@ -428,7 +425,7 @@ export async function removeEnvironment(
     warnings: [],
   };
 
-  const env = await isolationEnvDb.getById(envId);
+  const env = await getEnvironmentForRemoval(envId, options?.observedRegistration);
   if (!env) {
     getLog().debug({ envId }, 'env_not_found');
     return { ...noopResult, skippedReason: 'environment not found' };

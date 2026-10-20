@@ -261,6 +261,7 @@ describe('isolationCompleteCommand', () => {
     );
     expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      observedRegistration: expect.objectContaining({ id: 'env-123' }),
       force: true,
       deleteRemoteBranch: true,
     });
@@ -395,6 +396,7 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], {});
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(row.id, {
+      observedRegistration: row,
       force: undefined,
       deleteRemoteBranch: true,
     });
@@ -498,6 +500,7 @@ describe('isolationCompleteCommand', () => {
     });
     await isolationCompleteCommand(['feature-branch'], { force: true });
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      observedRegistration: expect.objectContaining({ id: 'env-123' }),
       force: true,
       deleteRemoteBranch: true,
     });
@@ -573,6 +576,7 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      observedRegistration: expect.objectContaining({ id: 'env-123' }),
       force: false,
       deleteRemoteBranch: true,
     });
@@ -949,6 +953,7 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      observedRegistration: expect.objectContaining({ id: 'env-123' }),
       force: false,
       deleteRemoteBranch: true,
     });
@@ -1072,6 +1077,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockGetLiveRunBlocker).not.toHaveBeenCalled();
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      observedRegistration: expect.objectContaining({ id: 'env-123' }),
       force: true,
       deleteRemoteBranch: true,
     });
