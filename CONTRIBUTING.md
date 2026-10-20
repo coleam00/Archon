@@ -77,7 +77,11 @@ touching only prose or files no check reads skips the test, service and binary j
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
 `.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
-Markdown read by tests, bundled skills, generated docs, and the docs manifest. A conformance test
+the Markdown a test names, bundled skills, generated docs, and the docs manifest. One check
+reads past that list: the user-controlled variable rule's guard reads every page of the docs
+site and the bundled skill, so it runs on every pull request
+(`bun run validate --only variables-rule`) rather than through this list, and a page that
+starts stating the rule is caught on the pull request that adds it. A conformance test
 requires every tracked Markdown path with a directory named in a test file to run the suite,
 even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
 `INERT_PATHS`

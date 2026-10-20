@@ -20,6 +20,8 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
+ *   - `reference/variables.md` and `guides/script-nodes.md` state the user-controlled variable
+ *     rule, which `scripts/variables-rule-parity.test.ts` holds to the engine.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
