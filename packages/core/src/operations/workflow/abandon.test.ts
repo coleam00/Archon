@@ -1097,6 +1097,40 @@ describe('abandon owned worktrees', () => {
     });
   });
 
+  test('reset keeps equal PIDs on different hosts independent', async () => {
+    mockPersistWorkflowEvent.mockClear();
+    const foreign = owned('foreign');
+    foreign.metadata.execution_owner = {
+      host: `${hostname()}-foreign`,
+      pid: 4242,
+      uid: process.getuid?.(),
+    };
+    const local = owned('local');
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([foreign, local]);
+    const released = { path: '/wt/local', branch: 'b-local' };
+    reclaim.mockResolvedValueOnce({ released, warnings: [] });
+
+    const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
+
+    expect(result.abandoned).toBe(2);
+    expect(result.cleanupWarnings).toEqual([
+      expect.stringContaining(`execution owner belongs to host ${hostname()}-foreign`),
+    ]);
+    expect(reclaim.mock.calls).toEqual([[local, isolationStore]]);
+    expect(result.releasedWorktrees).toEqual([released]);
+    expect(mockRequestDetachedRunStop).toHaveBeenCalledTimes(1);
+    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(local.id);
+    expect(mockPersistWorkflowEvent.mock.calls).toEqual([
+      [
+        {
+          workflow_run_id: foreign.id,
+          event_type: 'workflow_cleanup_warning',
+          data: { warnings: result.cleanupWarnings },
+        },
+      ],
+    ]);
+  });
+
   test('ordinary cancel retains worktrees', async () => {
     mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'running' }));
     mockRequestDetachedRunStop.mockResolvedValueOnce({
