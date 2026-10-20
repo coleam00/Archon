@@ -1802,7 +1802,7 @@ Both work transparently. Most users never need to configure a database.
 
 ```bash
 # One-off AI chat
-archon chat "How does error handling work in this codebase?"
+archon chat "How does error handling work in this codebase?" </dev/null
 
 # Interactive setup wizard
 archon setup

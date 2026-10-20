@@ -14,15 +14,20 @@ export async function chatCommand(
   const lines = createInterface({ input, output: process.stdout, terminal, prompt: 'archon> ' });
   // Subscribe before the first turn: piped follow-ups can arrive while it is running.
   const messages = lines[Symbol.asyncIterator]();
-  lines.on('SIGINT', () => lines.close());
+  let interrupted = false;
+  lines.on('SIGINT', () => {
+    interrupted = true;
+    lines.close();
+  });
   const send = async (text: string): Promise<void> => {
     await handleMessage(adapter, conversationId, text, { actor: { kind: 'operator' } });
-    if (terminal) lines.prompt();
+    if (terminal && !interrupted) lines.prompt();
   };
   try {
     if (message) await send(message);
     else if (terminal) lines.prompt();
     for await (const text of messages) {
+      if (interrupted) break;
       if (text.trim() === '/exit' || text.trim() === '/quit') break;
       if (text.trim()) await send(text);
     }

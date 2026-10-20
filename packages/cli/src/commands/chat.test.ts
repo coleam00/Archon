@@ -4,6 +4,7 @@
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import type { handleMessage } from '@archon/core';
 import { Readable, PassThrough } from 'node:stream';
+import * as readline from 'node:readline';
 
 // Mock logger before any imports
 const mockLogger = {
@@ -156,3 +157,34 @@ test('an interactive turn failure propagates and stops further dispatch', async 
   );
   expect(mockHandleMessage.mock.calls.map(call => call[2])).toEqual(['first', 'second']);
 });
+
+test.each([undefined, 'initial'])(
+  'Ctrl-C during a turn stops buffered dispatch (initial: %s)',
+  async initial => {
+    const input = new PassThrough();
+    const lines = readline.createInterface({ input });
+    const createInterface = spyOn(readline, 'createInterface').mockReturnValue(lines);
+    const started = Promise.withResolvers<void>();
+    const turn = Promise.withResolvers<void>();
+    mockHandleMessage.mockImplementation(async () => {
+      started.resolve();
+      await turn.promise;
+    });
+    const session = runChat(initial, input);
+    try {
+      if (!initial) input.write('first\n');
+      await started.promise;
+      input.write('/setproject beta\ncancel a run\n');
+      lines.emit('SIGINT');
+      turn.resolve();
+      await session;
+      expect(mockHandleMessage.mock.calls.map(call => call[2])).toEqual([initial ?? 'first']);
+    } finally {
+      turn.resolve();
+      lines.close();
+      input.destroy();
+      createInterface.mockRestore();
+      await session;
+    }
+  }
+);
