@@ -278,8 +278,6 @@ export async function executeWorkflow(
     resumeCause,
     priorUsage,
     priorNodeSessions,
-    execContext = { kind: 'host' },
-    container: containerCtx,
     resolveChildIsolation,
     cutFromCommit,
   } = opts;
@@ -295,6 +293,7 @@ export async function executeWorkflow(
   );
   if (dispatched.stopped) return dispatched.result;
   const dispatch = dispatched.value;
+  const { execContext, container: containerCtx } = dispatch.execution;
   const { executionUserId, isContinuation, prepared, baseBranch, docsDir } = dispatch;
   const { config, dbEnvVars, aiProfile, resolvedModelOverrides, scope, effectiveRunConfig } =
     prepared;
@@ -372,7 +371,8 @@ export async function executeWorkflow(
       workflowRun,
       workflowSourceDir,
       opts,
-      isContinuation
+      isContinuation,
+      dispatch.execution
     );
     if (sourced.stopped) {
       sourceExecutionStopped = true;

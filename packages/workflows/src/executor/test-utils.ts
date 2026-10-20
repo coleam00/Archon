@@ -370,6 +370,7 @@ export const repoCodebase = {
 export function containerBackend(): NonNullable<ExecuteWorkflowOptions['container']>['backend'] {
   return {
     suspend: mock(async () => undefined),
+    prepareSuspend: mock(async () => mock(async () => undefined)),
     finalize: mock(async () => ({ requiresApproval: false })),
     applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
     discardChanges: mock(async () => undefined),

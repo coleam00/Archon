@@ -230,8 +230,8 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
-    releaseRunForUnreadableSource: (id, release) =>
-      write([id], view => view.releaseRunForUnreadableSource(id, release)),
+    releaseRunForUnreadableSource: (id, release, beforePublish) =>
+      write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>
