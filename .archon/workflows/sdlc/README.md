@@ -766,14 +766,12 @@ back:
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
-removes each worktree whose pull request merged, with its local branch. It also attempts
-remote branch deletion. If it fails, cleanup warns and can still finish local
-removal, leaving the remote branch behind. Archon cannot retry remote deletion
-after retiring the registration. If the ref changed or belongs to a replacement,
-leave it alone; do not bypass a lease refusal or substitute its new tip.
-For a transient network, authentication or policy failure, resolve it first, then
-verify from the primary checkout that the branch still belongs to the completed
-work and is no longer in use. Use the configured `worktree.remote` (default:
+removes each worktree whose pull request merged, with its local branch. Remote
+branches are retained with a warning: after registration retirement, a Git commit
+ID cannot prove whether the branch belongs to a replacement registration. Force
+does not bypass this refusal. For manual cleanup, first verify from the primary
+checkout that the branch still belongs to the completed work and is no longer in
+use. Leave replacement refs alone. Use the configured `worktree.remote` (default:
 `origin`) and branch reported by cleanup. Inspect the push destinations with
 `git remote get-url --push --all <remote>`. For each intended destination, use
 that exact URL as `<push-url>` in both commands:
@@ -785,7 +783,7 @@ git push --force-with-lease=refs/heads/<branch>:<verified-oid> -- <push-url> :re
 
 Verify the advertised commit belongs to the completed work before entering its
 OID as `<verified-oid>`; an empty result means the ref is absent. The lease refuses
-a changed tip but cannot detect a same-commit republish. Retry only while no one
+a changed tip but cannot detect a same-commit republish. Delete only while no one
 is reusing or publishing that branch; leave it alone if ownership is uncertain.
 
 A worktree with uncommitted changes, a run

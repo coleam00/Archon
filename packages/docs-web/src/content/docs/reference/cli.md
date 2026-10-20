@@ -734,7 +734,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and attempt remote branch deletion |
+| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1484,15 +1484,11 @@ created that branch. It keeps pre-existing local branches and branches on legacy
 records that lack branch-creation tracking. Merged cleanup (`--merged`, including
 `--include-closed`) and `archon complete` can delete those local branches after
 their checks. Completion with `--force` bypasses commit-safety checks, so it can
-delete a branch with unmerged commits. Merged cleanup and completion also attempt
-remote branch deletion. Cleanup reads the remote ref before claiming the registration,
-then deletes it with an explicit Git lease after retirement. With a single fetch/push
-destination, a ref that advances in the meantime is retained, including with `--force`.
-The lease compares commit IDs, not registration ownership: it cannot protect a
-replacement that publishes the same commit, or a remote with separate fetch/push URLs.
-A remote inspection or deletion failure produces a warning;
-local removal and registration retirement can still complete while the remote
-branch remains. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
+delete a branch with unmerged commits. Merged cleanup and completion retain
+remote branches and warn after local removal. A remote commit ID cannot prove which
+registration owns a branch: a replacement may publish the same commit after the
+selected registration retires. This refusal also applies with `--force` and with
+separate fetch/push URLs. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
@@ -1504,7 +1500,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into the base branch (also attempts remote deletion)
+# Remove environments with branches merged into the base branch (retains remote refs for operator inspection)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -1562,24 +1558,21 @@ the branch Archon created for it holds such a commit.
 A completed run removes the worktree it created when it completes, if the checkout is
 clean, every commit on its HEAD and branch is on a remote, and the configured remote
 does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which also deletes it. When
+adopted. A branch that was published waits for `--merged`, which removes its local branch. When
 the remote cannot be read, the worktree stays and the record says `check_failed`. The
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
 
 #### Recovering remote branch cleanup
 
-Remote deletion is attempted once, after local removal and registration retirement.
-Archon cleanup and completion select active registrations, so retrying either
-command cannot retry remote deletion for a retired registration.
+Cleanup and completion retain remote refs because ownership cannot be proved after
+registration retirement. Retrying either command cannot delete a retired
+registration's remote branch.
 
-If the ref changed or belongs to a replacement registration, leave it alone.
-A lease refusal is not a transient failure; do not retry it with an unconditional
-deletion or simply replace the expected OID with the new tip.
-
-For a network, authentication or policy failure, first resolve the failure. From
-the surviving primary checkout, verify that the branch still belongs to the
-completed work and is no longer in use. Use `worktree.remote` (default: `origin`)
+If the ref belongs to a replacement registration or ownership is uncertain, leave
+it alone. To remove a ref manually, first ensure no one is reusing or publishing
+that branch. From the surviving primary checkout, verify that the branch still
+belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`)
 and the branch reported by cleanup. Inspect the push destinations:
 
 ```bash
@@ -1597,7 +1590,7 @@ git push --force-with-lease=refs/heads/<branch>:<verified-oid> -- <push-url> :re
 ```
 
 The explicit lease refuses deletion if the tip changes after inspection. It cannot
-detect a same-commit republish, so retry only while no one is reusing or publishing
+detect a same-commit republish, so delete only while no one is reusing or publishing
 that branch. If ownership is uncertain, leave the remote branch in place.
 
 ### `validate workflows [name]`
@@ -1641,10 +1634,9 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
-Also attempt remote branch deletion. If that fails, completion warns and
-can still finish local removal, leaving the remote branch behind. Archon cannot
-retry remote deletion after retiring the registration; follow
-[recovering remote branch cleanup](#recovering-remote-branch-cleanup).
+Remote branches are retained with a warning because registration ownership cannot
+be proved after local removal. This also applies with `--force`; follow
+[recovering remote branch cleanup](#recovering-remote-branch-cleanup) for manual cleanup.
 
 ```bash
 archon complete feature-auth

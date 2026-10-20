@@ -230,7 +230,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 
 /**
  * Cleanup merged isolation environments (branches merged into each repo's base branch)
- * Also deletes remote branches for merged environments
+ * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
@@ -613,7 +613,7 @@ async function completeBranch(
 }
 
 /**
- * Complete branch lifecycle — remove worktree, local branch, remote branch, mark DB as destroyed
+ * Complete branch lifecycle: remove worktree and local branch, then retire the registration
  */
 export async function isolationCompleteCommand(
   branchNames: string[],

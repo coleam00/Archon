@@ -451,10 +451,10 @@ export async function deleteBranchTracked(
 }
 
 /** Read the exact advertised ref; an empty value means the branch is absent. */
-export async function readRemoteBranchOid(
+async function readRemoteBranchOid(
   repoPath: string,
   branchName: string,
-  remote = 'origin'
+  remote: string
 ): Promise<string> {
   const ref = `refs/heads/${branchName}`;
   const { stdout } = await execFileAsync(
@@ -478,12 +478,39 @@ export async function deleteRemoteBranchTracked(
   repoPath: string,
   branchName: string,
   result: DestroyResult,
-  remote = 'origin',
-  expectedOid?: string
+  remote = 'origin'
 ): Promise<boolean> {
   try {
-    // Delayed cleanup supplies the ref observed before releasing its registration claim.
-    const oid = expectedOid ?? (await readRemoteBranchOid(repoPath, branchName, remote));
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'remote', 'get-url', '--push', '--all', remote],
+      { timeout: GIT_OPERATION_TIMEOUT_MS }
+    );
+    const destinations = stdout.trim().split('\n').filter(Boolean);
+    if (!destinations.length) throw new Error('No push destination');
+    let deleted = true;
+    for (const destination of destinations) {
+      if (!(await deleteRemoteBranchAtDestination(repoPath, branchName, result, destination)))
+        deleted = false;
+    }
+    return deleted;
+  } catch {
+    result.warnings.push(
+      `Failed to delete remote branch '${branchName}': could not resolve push destinations`
+    );
+    getLog().error({ repoPath, branchName }, 'remote_branch_destination_failed');
+    return false;
+  }
+}
+
+async function deleteRemoteBranchAtDestination(
+  repoPath: string,
+  branchName: string,
+  result: DestroyResult,
+  remote: string
+): Promise<boolean> {
+  try {
+    const oid = await readRemoteBranchOid(repoPath, branchName, remote);
     if (!oid) return true;
     await execFileAsync(
       'git',

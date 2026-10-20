@@ -28,9 +28,11 @@ const ownedDestroyOptions = { canonicalRepoPath: REPO, creationId: 'test-creatio
 beforeEach(() => {
   resetWorktreeMocks();
   execSpy.mockImplementation(async (_file, args) => ({
-    stdout: args.includes('ls-remote')
-      ? `${'a'.repeat(40)}\trefs/heads/${args.at(-1)?.replace('refs/heads/', '')}\n`
-      : '',
+    stdout: args.includes('get-url')
+      ? '/remote.git\n'
+      : args.includes('ls-remote')
+        ? `${'a'.repeat(40)}\trefs/heads/${args.at(-1)?.replace('refs/heads/', '')}\n`
+        : '',
     stderr: '',
   }));
   mockAccess.mockResolvedValue(undefined);
@@ -57,7 +59,7 @@ const failGit = (
 ): void => {
   execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
     if (args.includes(token)) throw error;
-    return { stdout: extra(args), stderr: '' };
+    return { stdout: args.includes('get-url') ? '/remote.git\n' : extra(args), stderr: '' };
   });
 };
 
@@ -146,7 +148,7 @@ describe('ownership and removal', () => {
         '-C',
         '/workspace/repo',
         'push',
-        'origin',
+        '/remote.git',
         `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
         ':refs/heads/feature-branch',
       ],
@@ -191,7 +193,7 @@ describe('ownership and removal', () => {
         '-C',
         '/metadata/repository',
         'push',
-        'origin',
+        '/remote.git',
         `--force-with-lease=refs/heads/${branchName}:${'a'.repeat(40)}`,
         `:refs/heads/${branchName}`,
       ],
@@ -295,7 +297,7 @@ describe('a checkout that is already gone', () => {
         '-C',
         '/workspace/repo',
         'push',
-        'origin',
+        '/remote.git',
         `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
         ':refs/heads/feature-branch',
       ],
@@ -382,13 +384,22 @@ describe('branch cleanup', () => {
     expect(result.warnings.some(w => w.includes('Unexpected error deleting branch'))).toBe(true);
   });
 
-  test.each(['initial inspection', 'push', 'failure inspection'] as const)(
+  test.each([
+    'destination resolution',
+    'initial inspection',
+    'push',
+    'failure inspection',
+  ] as const)(
     'remote %s failure does not expose credentials in warnings or diagnostics',
     async stage => {
       const secret = 'probe-secret';
       const failure = new Error(`Command failed: git https://user:${secret}@localhost/repo`);
       let inspections = 0;
       execSpy.mockImplementation(async (_cmd, args) => {
+        if (args.includes('get-url')) {
+          if (stage === 'destination resolution') throw failure;
+          return { stdout: '/remote.git\n', stderr: '' };
+        }
         if (args.includes('ls-remote')) {
           inspections++;
           if (stage === 'initial inspection' || (stage === 'failure inspection' && inspections > 1))
@@ -404,7 +415,9 @@ describe('branch cleanup', () => {
         const result = await destroyBranch(true);
         expect(result.remoteBranchDeleted).toBe(false);
         expect(result.warnings).toEqual([
-          "Failed to delete remote branch 'feature-branch': remote inspection or leased deletion failed",
+          stage === 'destination resolution'
+            ? "Failed to delete remote branch 'feature-branch': could not resolve push destinations"
+            : "Failed to delete remote branch 'feature-branch': remote inspection or leased deletion failed",
         ]);
         expect(JSON.stringify([warning.mock.calls, error.mock.calls])).not.toContain(secret);
       } finally {
@@ -416,6 +429,7 @@ describe('branch cleanup', () => {
 
   test('returns remoteBranchDeleted=false with warning on network error', async () => {
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args.includes('get-url')) return { stdout: '/remote.git\n', stderr: '' };
       if (args.includes('ls-remote')) throw new Error('network unreachable');
       if (args.includes('push')) throw new Error('fatal: Could not read from remote repository');
       return { stdout: '', stderr: '' };
@@ -445,11 +459,16 @@ describe('branch cleanup', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       'git',
+      ['-C', '/workspace/repo', 'remote', 'get-url', '--push', '--all', 'upstream'],
+      expect.any(Object)
+    );
+    expect(execSpy).toHaveBeenCalledWith(
+      'git',
       [
         '-C',
         '/workspace/repo',
         'push',
-        'upstream',
+        '/remote.git',
         `--force-with-lease=refs/heads/archon/issue-42:${'a'.repeat(40)}`,
         ':refs/heads/archon/issue-42',
       ],

@@ -864,54 +864,44 @@ test.each(['worktreeRemoved', 'directoryClean'] as const)(
   }
 );
 
-test.each([false, true])(
-  'remote cleanup preserves relative URL resolution (decoy repository: %s)',
-  async decoy => {
-    await git(repo, 'remote', 'rename', 'upstream', 'origin');
-    await git(repo, 'remote', 'set-url', 'origin', '../remote.git');
+test.each([false, true].flatMap(force => [false, true].map(split => ({ force, split }))))(
+  'local cleanup retains an unchanged remote ref with a warning (force=$force, split=$split)',
+  async ({ force, split }) => {
+    const pushRemote = split ? join(root, 'push.git') : join(root, 'remote.git');
+    await git(repo, 'remote', 'add', 'origin', join(root, 'remote.git'));
+    if (split) {
+      await git(root, 'init', '--bare', '-q', pushRemote);
+      await git(repo, 'remote', 'set-url', '--push', 'origin', pushRemote);
+    }
     await git(repo, 'push', '-q', 'origin', env.branch_name);
-    const wrongRemote = join(repo, 'remote.git');
-    if (decoy) {
-      await mkdir(wrongRemote);
-      await git(wrongRemote, 'init', '--bare', '-q');
-      await git(repo, 'push', '-q', wrongRemote, env.branch_name);
-    }
-    const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+    const ref = `refs/heads/${env.branch_name}`;
+    const published = await git(repo, 'ls-remote', pushRemote, ref);
+    expect(published).toContain(ref);
+    const result = await removeEnvironment(env, { force, deleteRemoteBranch: true });
     expect(result.worktreeRemoved).toBe(true);
-    expect(result.warnings).toEqual([]);
-    expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe('');
-    if (decoy) {
-      expect(await git(wrongRemote, 'branch', '--list', env.branch_name)).toContain(
-        env.branch_name
-      );
-    }
+    expect(result.branchDeleted).toBe(true);
+    expect(result.warnings.join(' ')).toContain('Remote branch retained');
     expect(await status()).toBe('destroyed');
+    expect(await git(repo, 'ls-remote', pushRemote, ref)).toBe(published);
   }
 );
 
-test('remote deletion keeps a durable Git anchor when the codebase path is removed', async () => {
-  await git(repo, 'remote', 'rename', 'upstream', 'origin');
-  await git(env.working_path, 'push', '-q', 'origin', env.branch_name);
-  await db.query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
-    env.working_path,
-    codebaseId,
-  ]);
-  const result = await removeEnvironment(env, { deleteRemoteBranch: true });
-  expect(result.worktreeRemoved).toBe(true);
-  expect(result.warnings).toEqual([]);
-  expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe('');
-  expect(await status()).toBe('destroyed');
-});
-
-test.each([
-  { force: false, published: true },
-  { force: true, published: true },
-  { force: false, published: false },
-  { force: true, published: false },
-])(
-  'remote cleanup retains a replacement published after commit (force=$force, published=$published)',
-  async ({ force, published }) => {
+test.each(
+  [false, true].flatMap(force =>
+    [false, true].flatMap(split =>
+      ['same', 'advanced', 'absent'].map(tip => ({ force, split, tip }))
+    )
+  )
+)(
+  'remote cleanup retains a replacement published after commit (force=$force, split=$split, tip=$tip)',
+  async ({ force, split, tip }) => {
+    const published = tip !== 'absent';
     await git(repo, 'remote', 'add', 'origin', join(root, 'remote.git'));
+    const pushRemote = split ? join(root, 'push.git') : join(root, 'remote.git');
+    if (split) {
+      await git(root, 'init', '--bare', '-q', pushRemote);
+      await git(repo, 'remote', 'set-url', '--push', 'origin', pushRemote);
+    }
     if (published) await git(repo, 'push', '-q', 'origin', env.branch_name);
     const originalOid = await git(repo, 'rev-parse', env.branch_name);
     const acquire = isolationDb.withWorktreeRegistration;
@@ -932,7 +922,8 @@ test.each([
           metadata: { ...worktreeRegistrationMetadata(replacement.metadata) },
         });
         replacementId = registered.id;
-        await git(replacement.workingPath, 'commit', '--allow-empty', '-qm', 'replacement');
+        if (tip === 'advanced')
+          await git(replacement.workingPath, 'commit', '--allow-empty', '-qm', 'replacement');
         replacementOid = await git(replacement.workingPath, 'rev-parse', 'HEAD');
         await git(replacement.workingPath, 'push', '-q', 'origin', replacement.branchName);
         return result;
@@ -940,78 +931,39 @@ test.each([
     );
     try {
       const result = await removeEnvironment(env, { force, deleteRemoteBranch: true });
-      expect(replacementOid).not.toBe(originalOid);
-      expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe(
+      if (tip === 'advanced') expect(replacementOid).not.toBe(originalOid);
+      else expect(replacementOid).toBe(originalOid);
+      expect(await git(repo, 'ls-remote', pushRemote, `refs/heads/${env.branch_name}`)).toBe(
         `${replacementOid}\trefs/heads/${env.branch_name}`
       );
       expect((await isolationDb.getById(replacementId))?.status).toBe('active');
       expect(existsSync(env.working_path)).toBe(true);
       expect(result.worktreeRemoved).toBe(true);
-      if (published) expect(result.warnings.join(' ')).toContain('Failed to delete remote branch');
-      else expect(result.warnings).toEqual([]);
+      expect(result.warnings.join(' ')).toContain('Remote branch retained');
     } finally {
       claim.mockRestore();
     }
   }
 );
 
-test.each(['deleted', 'absent', 'surviving', 'unreachable'] as const)(
-  'remote cleanup keeps network outside the registration claim (%s)',
-  async outcome => {
-    const acquire = isolationDb.withWorktreeRegistration;
-    let inClaim = false;
-    const claim = spyOn(isolationDb, 'withWorktreeRegistration').mockImplementation(
-      async (observed, remove) => {
-        inClaim = true;
-        try {
-          return await acquire(observed, remove);
-        } finally {
-          inClaim = false;
-        }
-      }
-    );
-    const network: { operation: string; inClaim: boolean }[] = [];
-    const originalExec = gitModule.execFileAsync;
-    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
-      async (file, args, options) => {
-        const operation = args.includes('push')
-          ? 'push'
-          : args.includes('ls-remote')
-            ? 'ls-remote'
-            : null;
-        if (!operation) return originalExec(file, args, options);
-        network.push({ operation, inClaim });
-        if (operation === 'push') expect(await status()).toBe('destroyed');
-        if (operation === 'ls-remote' && network.length === 1)
-          return { stdout: `${'a'.repeat(40)}\trefs/heads/${env.branch_name}\n`, stderr: '' };
-        if (operation === 'push' && outcome !== 'deleted') throw new Error('remote rejected push');
-        if (operation === 'ls-remote' && outcome === 'unreachable')
-          throw new Error('remote unavailable');
-        return {
-          stdout: outcome === 'surviving' ? `abc123\trefs/heads/${env.branch_name}\n` : '',
-          stderr: '',
-        };
-      }
-    );
-    try {
-      const result = await removeEnvironment(env, { deleteRemoteBranch: true });
-      expect(network).toEqual([
-        { operation: 'ls-remote', inClaim: false },
-        { operation: 'push', inClaim: false },
-        ...(outcome === 'deleted' ? [] : [{ operation: 'ls-remote', inClaim: false }]),
-      ]);
-      expect(result.worktreeRemoved).toBe(true);
-      expect(result.branchDeleted).toBe(true);
-      expect(result.warnings).toHaveLength(
-        outcome === 'surviving' || outcome === 'unreachable' ? 1 : 0
-      );
-      expect(await status()).toBe('destroyed');
-    } finally {
-      exec.mockRestore();
-      claim.mockRestore();
-    }
+test('remote cleanup refuses network work without registration ownership proof', async () => {
+  const originalExec = gitModule.execFileAsync;
+  const network: string[] = [];
+  const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
+    if (args.includes('push') || args.includes('ls-remote')) network.push(args.join(' '));
+    return originalExec(file, args, options);
+  });
+  try {
+    const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+    expect(network).toEqual([]);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.warnings.join(' ')).toContain('Remote branch retained');
+    expect(await status()).toBe('destroyed');
+  } finally {
+    exec.mockRestore();
   }
-);
+});
 
 test('ordinary cleanup accepts an unchanged legacy registration with joined codebase fields', async () => {
   const { worktree_registration_id, ...metadata } = env.metadata;

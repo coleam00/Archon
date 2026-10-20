@@ -506,6 +506,57 @@ describe('WorktreeProvider against real git', () => {
     expect(await registeredWorktrees()).toEqual([repoPath]);
   });
 
+  test.each(
+    [false, true].flatMap(force =>
+      ['deleted', 'rejected', 'multiple'].map(outcome => ({ force, outcome }))
+    )
+  )(
+    'remote destruction uses push destinations (force=$force, outcome=$outcome)',
+    async ({ force, outcome }) => {
+      const fetchPath = join(root, 'fetch.git');
+      const pushPath = join(root, 'push.git');
+      const otherPush = join(root, 'other.git');
+      for (const destination of [fetchPath, pushPath, otherPush])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'push', '-q', fetchPath, 'main');
+      await git(fetchPath, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+      await git(repoPath, 'remote', 'add', 'origin', fetchPath);
+      await git(repoPath, 'remote', 'set-url', '--push', 'origin', '../push.git');
+      if (outcome === 'multiple')
+        await git(repoPath, 'remote', 'set-url', '--add', '--push', 'origin', otherPush);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      const ref = `refs/heads/${created.branchName}`;
+      await git(repoPath, 'push', '-q', 'origin', created.branchName);
+      const published = await git(repoPath, 'ls-remote', pushPath, ref);
+      expect(published).toContain(ref);
+      expect(await git(repoPath, 'ls-remote', fetchPath, ref)).toBe('');
+      if (outcome === 'rejected') await git(pushPath, 'config', 'receive.denyDeletes', 'true');
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.remoteBranchDeleted).toBe(outcome !== 'rejected');
+      expect(await git(repoPath, 'ls-remote', pushPath, ref)).toBe(
+        outcome === 'rejected' ? published : ''
+      );
+      if (outcome === 'multiple') expect(await git(repoPath, 'ls-remote', otherPush, ref)).toBe('');
+      expect(result.warnings.length).toBe(outcome === 'rejected' ? 1 : 0);
+    }
+  );
+
   describe('ordinary destruction status', () => {
     async function createOwned() {
       await git(repoPath, 'remote', 'add', 'origin', repoPath);

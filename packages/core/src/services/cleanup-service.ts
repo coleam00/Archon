@@ -50,7 +50,6 @@ import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
 import { loadRepoConfig } from '../config/config-loader';
-import { prepareRemoteBranchCleanup } from './cleanup-remote-branch';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -384,6 +383,7 @@ export async function onConversationClosed(
 
 export interface RemoveEnvironmentOptions {
   force?: boolean;
+  /** Requests finished-branch cleanup; remote refs are retained when ownership cannot be proved. */
   deleteRemoteBranch?: boolean;
 }
 
@@ -440,19 +440,9 @@ export async function removeEnvironment(
 
   // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
-  let cleanRemoteBranch: Awaited<ReturnType<typeof prepareRemoteBranchCleanup>> | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
-    // Resolve the configured remote only when remote-branch deletion is requested —
-    // that's the one destroy path that pushes to a remote.
-    if (options?.deleteRemoteBranch && codebase?.default_cwd) {
-      cleanRemoteBranch = await prepareRemoteBranchCleanup(
-        codebase.default_cwd,
-        env.branch_name,
-        configuredRemote(await loadRepoConfig(codebase.default_cwd))
-      );
-    }
   }
 
   // Check if directory exists before attempting removal
@@ -490,7 +480,13 @@ export async function removeEnvironment(
     );
 
     const removed = destroyResult.worktreeRemoved && destroyResult.directoryClean;
-    if (removed) await cleanRemoteBranch?.(destroyResult);
+    // A remote OID cannot prove registration ownership after the claim commits:
+    // a replacement may publish the same commit before a delayed push executes.
+    if (removed && options?.deleteRemoteBranch) {
+      destroyResult.warnings.push(
+        `Remote branch retained '${env.branch_name}': registration ownership cannot be verified after local cleanup; inspect the push destination before deleting it manually`
+      );
+    }
     if (destroyResult.warnings.length > 0) {
       getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
     }
@@ -903,7 +899,6 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             continue;
           }
 
-          // Safe to remove merged branch (also delete remote branch)
           const mergedResult = await removeEnvironment(env, {
             force: false,
             deleteRemoteBranch: true,
