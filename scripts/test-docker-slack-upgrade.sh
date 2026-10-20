@@ -161,7 +161,7 @@ done
 test "$(docker inspect -f '{{.State.Running}}' "$container")" = false
 result=$(docker inspect -f '{{.State.ExitCode}}' "$container")
 test "$result" != 0
-docker logs "$container" 2>&1 | grep -F 'does not match checksums.txt'
+docker logs "$container" 2>&1 | grep -F 'does not match the image bundle receipt'
 if docker logs "$container" 2>&1 | grep -F 'server_ready'; then
   echo 'Server started despite failed provisioning' >&2
   exit 1

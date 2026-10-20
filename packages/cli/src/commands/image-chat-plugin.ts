@@ -71,6 +71,7 @@ export async function provisionImageSlack(
         bytes: await readFile(join(bundleDir, executable)),
         sha256: file.sha256,
         label: executable,
+        digestSource: 'the image bundle receipt',
       }),
       bundle.descriptor
     );

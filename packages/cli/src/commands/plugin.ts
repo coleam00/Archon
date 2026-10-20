@@ -195,11 +195,18 @@ async function inspectInstallableChat(
   return descriptor;
 }
 
+interface BinaryPluginArtifact {
+  bytes: Uint8Array;
+  sha256: string;
+  label: string;
+  digestSource: string;
+}
+
 async function downloadBinary(
   ref: PluginRef,
   source: ResolvedBinarySource,
   env: PluginEnvironment
-): Promise<{ bytes: Uint8Array; sha256: string; label: string }> {
+): Promise<BinaryPluginArtifact> {
   const { tag, manifest } = source;
   const githubUrl = env.githubUrl ?? 'https://github.com';
   const platform = env.platform ?? process.platform;
@@ -215,7 +222,12 @@ async function downloadBinary(
     throw new Error(`Release ${tag} of ${ref.owner}/${ref.repo} has no checksums.txt`);
   const expected = expectedDigest(new TextDecoder().decode(checksums), asset);
   if (!expected) throw new Error(`checksums.txt of release ${tag} has no entry for ${asset}`);
-  return { bytes, sha256: expected, label: asset };
+  return {
+    bytes,
+    sha256: expected,
+    label: asset,
+    digestSource: `checksums.txt of release ${tag}`,
+  };
 }
 
 export async function installBinaryPlugin(
@@ -225,7 +237,7 @@ export async function installBinaryPlugin(
   broken: readonly BrokenReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment,
-  acquire: () => Promise<{ bytes: Uint8Array; sha256: string; label: string }>,
+  acquire: () => Promise<BinaryPluginArtifact>,
   expectedChatDescriptor?: ChatPluginDescriptor
 ): Promise<void> {
   const { tag, commit, manifest } = source;
@@ -259,11 +271,11 @@ export async function installBinaryPlugin(
     }
   }
 
-  const { bytes, sha256: expected, label } = await acquire();
+  const { bytes, sha256: expected, label, digestSource } = await acquire();
   const digest = createHash('sha256').update(bytes).digest('hex');
   if (digest !== expected) {
     throw new Error(
-      `${label} does not match checksums.txt of release ${tag} (expected ${expected}, got ${digest}). Nothing was installed.`
+      `${label} does not match ${digestSource} (expected ${expected}, got ${digest}). Nothing was installed.`
     );
   }
 

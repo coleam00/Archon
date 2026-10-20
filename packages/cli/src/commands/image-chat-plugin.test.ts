@@ -101,7 +101,7 @@ dockerTest(
 dockerTest('tampered bundle is refused before any executable runs', async () => {
   const data = await fixture();
   await writeFile(join(data.bundleDir, 'archon-chat-slack'), '#!/bin/sh\ntouch ' + data.marker);
-  await expect(data.install()).rejects.toThrow('does not match checksums.txt');
+  await expect(data.install()).rejects.toThrow('does not match the image bundle receipt');
   expect(await Bun.file(data.marker).exists()).toBe(false);
   expect(await readReceipts(data.pluginsDir)).toEqual([]);
 });
