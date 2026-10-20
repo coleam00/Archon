@@ -308,6 +308,13 @@ describe('dagNodeSchema — durable wait', () => {
       dagNodeSchema.safeParse({ id: 'repeating', wait: { duration_ms: 1 }, always_run: true })
         .success
     ).toBe(false);
+    const retried = dagNodeSchema.safeParse({
+      id: 'retried',
+      wait: { duration_ms: 1 },
+      retry: { max_attempts: 2 },
+    });
+    expect(retried.success).toBe(false);
+    expect(retried.error?.issues.map(issue => issue.path)).toEqual([['retry']]);
     expect(
       dagNodeSchema.safeParse({ id: 'invalid-date', wait: { until: 'tomorrow' } }).success
     ).toBe(false);
