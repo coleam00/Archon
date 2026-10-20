@@ -142,7 +142,7 @@ export function startNodeExecution(input: {
 export interface ExecutionObservations {
   tokensUnknown?: boolean;
   tokens?: TokenUsage;
-  costUsd?: number;
+  costUsd?: number | null;
   /** Some provider call in the attempt reported no cost, so `costUsd` is a floor. */
   costPartial?: boolean;
   stopReason?: string;
@@ -214,10 +214,13 @@ export function finishNodeExecution(
                 start.spend.tokens,
                 value => tokenUsageSchema.safeParse(value).success
               ),
-          costUsd: withCostPartial(
-            observed(result.costUsd, start.spend.costUsd, Number.isFinite),
-            result.costPartial === true
-          ),
+          costUsd:
+            result.costUsd === null
+              ? { source: 'unavailable', reason: 'incomplete' }
+              : withCostPartial(
+                  observed(result.costUsd, start.spend.costUsd, Number.isFinite),
+                  result.costPartial === true
+                ),
           stopReason: observed(result.stopReason, start.spend.stopReason),
           numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),
         },
@@ -238,4 +241,11 @@ function withCostPartial(cost: CostMeasurement, partial: boolean): CostMeasureme
 /** Excludes output bodies and diagnostics from the shared public execution facts. */
 export function executionMetadata(record: NodeExecutionRecord): NodeExecutionMetadata {
   return nodeExecutionMetadataSchema.parse(record);
+}
+
+/** Null distinguishes a known incomplete cost from an unreported measurement. */
+export function exactExecutionCost(spend: NodeExecutionRecord['spend']): number | null | undefined {
+  const cost = spend.costUsd;
+  if (cost.source === 'provider') return cost.partial ? null : cost.value;
+  return cost.reason === 'incomplete' ? null : undefined;
 }

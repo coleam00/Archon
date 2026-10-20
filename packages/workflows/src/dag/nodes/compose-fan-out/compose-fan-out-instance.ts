@@ -37,7 +37,7 @@ export interface ComposeInstanceOutcome {
   error?: string;
   /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
   providerFailure?: ProviderFailure;
-  costUsd?: number;
+  costUsd?: number | null;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
 }

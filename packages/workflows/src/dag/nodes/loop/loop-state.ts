@@ -26,7 +26,7 @@ export interface LoopResume {
   feedbackGiven: boolean;
   iterationLimit: number;
   /** Usage consumed through the gate, which the resumed loop's totals start from. */
-  costUsd: number | undefined;
+  costUsd: number | null | undefined;
   tokens: TokenUsage | undefined;
 }
 
@@ -63,7 +63,7 @@ export interface LoopState {
    * iteration's report is the node's report.
    */
   resolvedModel: ResolvedModel | undefined;
-  costUsd: number | undefined;
+  costUsd: number | null | undefined;
   tokens: TokenUsage | undefined;
   tokensUnknown: boolean;
   /**
@@ -89,7 +89,7 @@ export interface LoopFailureExtras {
   failureKind: NodeFailureKind;
   providerFailure?: ProviderFailure;
   output?: string;
-  costUsd?: number;
+  costUsd?: number | null;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   loopIterations?: number;

@@ -564,7 +564,9 @@ async function aggregateLayerResults(
         // row with no trace. Exactly the silent loss #2469 exists to
         // remove. Guarded here, at the single aggregation point, so one bad node
         // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
+        if (output.costUsd === null || ctx.totalCostUsd === null) {
+          ctx.totalCostUsd = null;
+        } else if (Number.isFinite(output.costUsd)) {
           ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
         } else {
           getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');

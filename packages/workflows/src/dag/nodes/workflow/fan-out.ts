@@ -275,7 +275,7 @@ export async function executeFanOutWorkflowNode(
   const failResult = async (
     error: string,
     failureKind: NodeFailureKind,
-    costUsd?: number,
+    costUsd?: number | null,
     tokens?: TokenUsage,
     blockedOnChildRunId?: string
   ): Promise<NodeExecutionResult> => {
@@ -303,7 +303,7 @@ export async function executeFanOutWorkflowNode(
   // on resume but re-runs an unfinished one (which re-inspects children by child_index).
   const writeCompleted = async (
     output: string,
-    costUsd?: number,
+    costUsd?: number | null,
     tokens?: TokenUsage,
     structured?: unknown
   ): Promise<NodeExecutionResult> => {

@@ -75,7 +75,7 @@ export async function finishRun(ctx: RunTerminalContext): Promise<string | undef
   const anyCompleted = nodeCounts.completed > 0;
   const anyFailed = nodeCounts.failed > 0;
   const runTranscriptUsage: WorkflowUsage = {
-    ...(ctx.totalCostUsd !== undefined ? { cost_usd: ctx.totalCostUsd } : {}),
+    ...(typeof ctx.totalCostUsd === 'number' ? { cost_usd: ctx.totalCostUsd } : {}),
     ...(ctx.totalTokens !== undefined ? { tokens: ctx.totalTokens } : {}),
   };
 

@@ -373,7 +373,11 @@ describe('node record serializers', () => {
       { costUsd: 0.2, costPartial: true }
     );
     expect(partial.spend.costUsd).toEqual({ source: 'provider', value: 0.2, partial: true });
-    expect(serializeNodeOutput(partial)).toMatchObject({ costUsd: 0.2 });
+    expect(serializeNodeOutput(partial)).toMatchObject({ costUsd: null });
+    expect(readNodeRecordEvent(serializeNodeStateRecord(partial))?.rawUsage.costUsd).toBeNull();
+    expect(
+      readDeferredNodeUsageEvent(serializeDeferredNodeUsage(partial))?.rawUsage.costUsd
+    ).toBeNull();
     // With no reported cost at all there is nothing to mark: the cost stays unavailable.
     const unreported = finishNodeExecution(started, { status: 'completed' }, { costPartial: true });
     expect(unreported.spend.costUsd).toEqual(started.spend.costUsd);

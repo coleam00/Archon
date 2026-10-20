@@ -21,7 +21,7 @@ import {
   type NodeStateRecord,
   type ExecutionOutput,
 } from './schemas/node-execution';
-import { executionMetadata } from './node-execution';
+import { executionMetadata, exactExecutionCost } from './node-execution';
 import { unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas';
 
@@ -309,7 +309,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
 }
 
 export type NodeExecutionResult = NodeOutput & {
-  costUsd?: number;
+  costUsd?: number | null;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   loopIterations?: number;
@@ -331,7 +331,9 @@ export function serializeNodeOutput(
     ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
       ? { tokensUnknown: true }
       : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
+    ...(exactExecutionCost(record.spend) !== undefined
+      ? { costUsd: exactExecutionCost(record.spend) }
+      : {}),
     ...(record.diagnostics?.loopIterations !== undefined
       ? { loopIterations: record.diagnostics.loopIterations }
       : {}),

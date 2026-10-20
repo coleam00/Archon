@@ -225,7 +225,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
    */
   warnedProviderConflicts: Set<string>;
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
-  totalCostUsd: number | undefined;
+  totalCostUsd: number | null | undefined;
   totalTokens: TokenUsage | undefined;
   totalTokensUnknown?: boolean;
   /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */

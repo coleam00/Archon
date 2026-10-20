@@ -228,7 +228,7 @@ export async function executeComposeFanOutNode(
   const failResult = async (
     error: string,
     failureKind: NodeFailureKind,
-    costUsd?: number,
+    costUsd?: number | null,
     tokens?: TokenUsage,
     providerFailure?: ProviderFailure
   ): Promise<NodeExecutionResult> => {
@@ -257,7 +257,7 @@ export async function executeComposeFanOutNode(
   // cold resume skips a finished fan-out but re-runs an unfinished one.
   const writeCompleted = async (
     output: string,
-    costUsd?: number,
+    costUsd?: number | null,
     tokens?: TokenUsage,
     structured?: unknown
   ): Promise<NodeExecutionResult> => {

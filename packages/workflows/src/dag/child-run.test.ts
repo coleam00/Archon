@@ -84,3 +84,9 @@ describe('childOutcomeFromRun cache reporting', () => {
     expect(outcome.tokens).not.toHaveProperty('cachePartial');
   });
 });
+
+it('preserves unknown child cost through the persisted nullable total', () => {
+  expect(childOutcomeFromRun(settledRun({ total_cost_usd: null })).costUsd).toBeNull();
+  expect(childOutcomeFromRun(settledRun({ total_cost_usd: 0 })).costUsd).toBe(0);
+  expect(childOutcomeFromRun(settledRun({})).costUsd).toBeUndefined();
+});

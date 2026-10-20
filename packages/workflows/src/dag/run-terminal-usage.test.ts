@@ -1477,8 +1477,8 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(completed?.data?.spend).toMatchObject({
       costUsd: { source: 'provider', value: 0.2, partial: true },
     });
-    // Run telemetry keeps the reported value exactly as before.
-    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.2);
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+    expect((await foldDagResumeSnapshot(persistedEvents(store), 'budget-run')).costUsd).toBeNull();
   });
 
   it('rebuilds the same totals on cold resume and refuses again without calling the provider', async () => {

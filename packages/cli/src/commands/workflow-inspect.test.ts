@@ -812,6 +812,7 @@ describe('workflowGetCommand', () => {
     ],
     [{ total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 }, '$0', '0', '0'],
     [{}, 'unknown', 'unknown', 'unknown'],
+    [{ total_cost_usd: null, total_tokens_in: 10, total_tokens_out: 2 }, 'unknown', '10', '2'],
     [
       { total_cost_usd: 'free', total_tokens_in: 'unknown', total_tokens_out: 3 },
       'unknown',

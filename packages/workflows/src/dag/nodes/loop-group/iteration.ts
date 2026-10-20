@@ -324,7 +324,10 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
 function addIterationUsage(run: LoopGroupRun, iterCtx: RunLayersContext, i: number): void {
   const { usage } = run.progress;
   if (iterCtx.totalCostUsd !== undefined) {
-    usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
+    usage.costUsd =
+      usage.costUsd === null || iterCtx.totalCostUsd === null
+        ? null
+        : (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
   }
   usage.tokensUnknown ||= iterCtx.totalTokensUnknown;
   if (usage.tokensUnknown) {

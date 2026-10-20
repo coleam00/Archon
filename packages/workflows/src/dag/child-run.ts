@@ -24,7 +24,7 @@ export interface ChildWorkflowOutcome {
    */
   declaredOutputPaths?: DeclaredOutputPaths;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
+  costUsd?: number | null;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   error?: string;
@@ -140,7 +140,10 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd: typeof usage.total_cost_usd === 'number' ? usage.total_cost_usd : undefined,
+    costUsd:
+      usage.total_cost_usd === null || typeof usage.total_cost_usd === 'number'
+        ? usage.total_cost_usd
+        : undefined,
     ...(usage.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };

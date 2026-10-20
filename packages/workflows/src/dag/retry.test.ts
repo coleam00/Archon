@@ -56,80 +56,86 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     await removeTempTree(testDir);
   });
 
-  it('node succeeds on retry after a transient error', async () => {
-    let callCount = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      callCount++;
-      if (callCount === 1) {
+  it.each([false, true])(
+    'node succeeds on retry and preserves incomplete cost=%s',
+    async partialCost => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errorSubtype: 'error_during_execution',
+            errors: ['Claude Code crash: process exited with code 1'],
+            failure: {
+              class: 'transient',
+              evidence: 'Claude Code crash: process exited with code 1',
+            },
+            sessionId: 'failed-retry-sess',
+            cost: 0.01,
+            tokens: { input: 10, output: 1, cacheRead: 5, cacheWrite: 0 },
+          };
+          return;
+        }
+        yield { type: 'agent_message_chunk', text: 'Recovered' };
+        if (partialCost) yield { type: 'result', sessionId: 'retry-sess' };
         yield {
           type: 'result',
-          isError: true,
-          errorSubtype: 'error_during_execution',
-          errors: ['Claude Code crash: process exited with code 1'],
-          failure: {
-            class: 'transient',
-            evidence: 'Claude Code crash: process exited with code 1',
-          },
-          sessionId: 'failed-retry-sess',
-          cost: 0.01,
-          tokens: { input: 10, output: 1, cacheRead: 5, cacheWrite: 0 },
+          sessionId: 'retry-sess',
+          cost: 0.02,
+          tokens: { input: 20, output: 2, cacheRead: 10, cacheWrite: 0 },
         };
-        return;
-      }
-      yield { type: 'agent_message_chunk', text: 'Recovered' };
-      yield {
-        type: 'result',
-        sessionId: 'retry-sess',
-        cost: 0.02,
-        tokens: { input: 20, output: 2, cacheRead: 10, cacheWrite: 0 },
-      };
-    });
+      });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('dag-retry-succeed-run');
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('dag-retry-succeed-run');
 
-    const nodes: DagNode[] = [
-      {
-        id: 'my-node',
-        kind: 'agent',
-        source: { kind: 'command', name: 'my-cmd' },
-        retry: { max_attempts: 2, delay_ms: 1 },
-      },
-    ];
+      const nodes: DagNode[] = [
+        {
+          id: 'my-node',
+          kind: 'agent',
+          source: { kind: 'command', name: 'my-cmd' },
+          retry: { max_attempts: 2, delay_ms: 1 },
+        },
+      ];
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-dag-retry-succeed',
-        cwd: testDir,
-        workflow: { name: 'dag-retry-succeed', nodes },
-        workflowRun,
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-dag-retry-succeed',
+          cwd: testDir,
+          workflow: { name: 'dag-retry-succeed', nodes },
+          workflowRun,
+        })
+      );
 
-    // Node was called at least twice (first fails transiently, second succeeds)
-    expect(callCount).toBeGreaterThanOrEqual(2);
-    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
-    expect(runUsageWrites(mockDeps.store)).toEqual([
-      {
-        total_cost_usd: 0.03,
-        total_tokens_in: 30,
-        total_tokens_out: 3,
-        total_cache_read_tokens: 15,
-        total_cache_write_tokens: 0,
-      },
-    ]);
-    const terminals = (
-      mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
-    ).mock.calls
-      .map(([event]) => event)
-      .filter(event => event.event_type === 'node_failed' || event.event_type === 'node_completed');
-    expect(terminals).toHaveLength(2);
-    expect(terminals[0].data?.invocation).toEqual(terminals[1].data?.invocation);
-    expect(terminals[0].data?.attempt).not.toEqual(terminals[1].data?.attempt);
-  });
+      // Node was called at least twice (first fails transiently, second succeeds)
+      expect(callCount).toBeGreaterThanOrEqual(2);
+      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+      expect(runUsageWrites(mockDeps.store)).toEqual([
+        {
+          total_cost_usd: partialCost ? null : 0.03,
+          total_tokens_in: 30,
+          total_tokens_out: 3,
+          total_cache_read_tokens: 15,
+          total_cache_write_tokens: 0,
+        },
+      ]);
+      const terminals = (
+        mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls
+        .map(([event]) => event)
+        .filter(
+          event => event.event_type === 'node_failed' || event.event_type === 'node_completed'
+        );
+      expect(terminals).toHaveLength(2);
+      expect(terminals[0].data?.invocation).toEqual(terminals[1].data?.invocation);
+      expect(terminals[0].data?.attempt).not.toEqual(terminals[1].data?.attempt);
+    }
+  );
 
   it('retains the failed invocation when a durable resume starts another attempt', async () => {
     const store = createMockStore();

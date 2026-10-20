@@ -110,8 +110,8 @@ export interface DagResumeSnapshot {
   unresolvedNodeStarts: Set<string>;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
-  /** Cumulative reported USD cost from completed/failed attempts and abandoned deferred segments. */
-  costUsd?: number;
+  /** Cumulative exact USD cost; null when an attempt reports only an incomplete cost. */
+  costUsd?: number | null;
   /**
    * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
    * from `costUsd`, which is telemetry and cannot tell unknown spend from none.

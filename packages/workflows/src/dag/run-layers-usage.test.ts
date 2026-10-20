@@ -177,73 +177,88 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     expect(eventTokenTotal).toEqual({ input: 100, output: 10 });
   });
 
-  it('keeps a cold-resumed run token total unknown when a prior node could not count', async () => {
-    const store = createMockStore();
-    const deps = createMockDeps(store);
-    const workflowRun = makeWorkflowRun('resume-unknown-tokens');
-    const workflow = {
-      name: 'resume-unknown-tokens',
-      nodes: [
-        { id: 'step1', kind: 'agent', source: { kind: 'inline', prompt: 'One.' } },
-        {
-          id: 'step2',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'Two.' },
-          depends_on: ['step1'],
-          retry: { max_attempts: 1, delay_ms: 1 },
-        },
-      ] as DagNode[],
-    };
-    let calls = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      calls++;
-      if (calls === 1) {
-        yield { type: 'agent_message_chunk', text: 'first output' };
-        yield { type: 'result', sessionId: 's1', cost: 0.1, tokensUnknown: true };
-      } else {
-        // No assistant output fails step2 after step1's row is durable.
-        yield { type: 'result', sessionId: 's2' };
-      }
-    });
-    await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
-    expect(store.failWorkflowRun).toHaveBeenCalled();
-
-    // Cold resume reads the persisted rows through the same handoff the executor uses.
-    const rows = persistedEvents(store);
-    store.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
-    const inspection = await inspectResumableRun(deps, workflowRun);
-    if (!inspection) throw new Error('Expected the failed run to be resumable');
-    (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
-
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'second output' };
-      yield {
-        type: 'result',
-        sessionId: 's3',
-        cost: 0.2,
-        tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+  it.each(['tokens', 'cost'])(
+    'keeps cold-resumed %s usage unknown after an incomplete prior node',
+    async axis => {
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const workflowRun = makeWorkflowRun('resume-unknown-tokens');
+      const workflow = {
+        name: 'resume-unknown-tokens',
+        nodes: [
+          { id: 'step1', kind: 'agent', source: { kind: 'inline', prompt: 'One.' } },
+          {
+            id: 'step2',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Two.' },
+            depends_on: ['step1'],
+            retry: { max_attempts: 1, delay_ms: 1 },
+          },
+        ] as DagNode[],
       };
-    });
-    await executeDagWorkflow(
-      dagOptions({
-        deps,
-        cwd: testDir,
-        workflow,
-        workflowRun,
-        priorCompletedNodes: inspection.priorCompletedNodes,
-        priorUsage: inspection.priorUsage,
-      })
-    );
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield { type: 'agent_message_chunk', text: 'first output' };
+          yield {
+            type: 'result',
+            sessionId: 's1',
+            cost: 0.1,
+            ...(axis === 'tokens' ? { tokensUnknown: true } : { tokens: { input: 10, output: 1 } }),
+          };
+          if (axis === 'cost') yield { type: 'result', sessionId: 's1' };
+        } else {
+          // No assistant output fails step2 after step1's row is durable.
+          yield { type: 'result', sessionId: 's2' };
+        }
+      });
+      await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
+      expect(store.failWorkflowRun).toHaveBeenCalled();
 
-    expect(store.completeWorkflowRun).toHaveBeenCalled();
-    const usage = runUsageWrites(store).at(-1);
-    expect(usage?.total_cost_usd).toBeCloseTo(0.3);
-    expect(usage?.total_tokens_unknown).toBe(true);
-    expect(usage?.total_tokens_in).toBeNull();
-    expect(usage?.total_tokens_out).toBeNull();
-    expect(usage?.total_cache_read_tokens).toBeNull();
-    expect(usage?.total_cache_write_tokens).toBeNull();
-  });
+      // Cold resume reads the persisted rows through the same handoff the executor uses.
+      const rows = persistedEvents(store);
+      store.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
+      const inspection = await inspectResumableRun(deps, workflowRun);
+      if (!inspection) throw new Error('Expected the failed run to be resumable');
+      (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
+
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'second output' };
+        yield {
+          type: 'result',
+          sessionId: 's3',
+          cost: 0.2,
+          tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 },
+        };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow,
+          workflowRun,
+          priorCompletedNodes: inspection.priorCompletedNodes,
+          priorUsage: inspection.priorUsage,
+        })
+      );
+
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      const usage = runUsageWrites(store).at(-1);
+      if (axis === 'cost') {
+        expect(usage?.total_cost_usd).toBeNull();
+        expect(usage?.total_tokens_in).toBe(180);
+        expect(usage?.total_tokens_out).toBe(21);
+        return;
+      }
+      expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+      expect(usage?.total_tokens_unknown).toBe(true);
+      expect(usage?.total_tokens_in).toBeNull();
+      expect(usage?.total_tokens_out).toBeNull();
+      expect(usage?.total_cache_read_tokens).toBeNull();
+      expect(usage?.total_cache_write_tokens).toBeNull();
+    }
+  );
 
   it('stores node_output in node_completed event data for AI nodes', async () => {
     const store = createMockStore();

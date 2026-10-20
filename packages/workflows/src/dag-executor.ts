@@ -378,7 +378,7 @@ export async function executeDagWorkflow(
       data: runBudgetRefusalEventData(refusal, ledger.limits, ledger.usage),
     });
     await logWorkflowError(logDir, workflowRun.id, failMsg, {
-      ...(runCtx.totalCostUsd !== undefined ? { cost_usd: runCtx.totalCostUsd } : {}),
+      ...(typeof runCtx.totalCostUsd === 'number' ? { cost_usd: runCtx.totalCostUsd } : {}),
       ...(runCtx.totalTokens !== undefined ? { tokens: runCtx.totalTokens } : {}),
     }).catch((logErr: Error) => {
       getLog().error(

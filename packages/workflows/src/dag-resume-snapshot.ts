@@ -117,7 +117,7 @@ interface UsageContribution {
   stepName: string;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
-  costUsd?: number;
+  costUsd?: number | null;
 }
 
 /** What one fold accumulates across a run's rows. */
@@ -194,10 +194,11 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
   return normalized;
 }
 
-function readCost(runId: string, stepName: string, costUsd: unknown): number | undefined {
+function readCost(runId: string, stepName: string, costUsd: unknown): number | null | undefined {
   // Same guard shape as tokens: a non-finite value from a provider must not
   // silently poison the total (NaN > 0 is false, which would drop the run's
   // cost from the persisted metadata with no trace).
+  if (costUsd === null) return null;
   if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
   getLog().warn({ runId, stepName, costUsd }, 'db.workflow_dag_node_cost_invalid_ignored');
   return undefined;

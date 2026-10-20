@@ -330,7 +330,7 @@ function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: strin
   if (usage.folded) return;
   usage.folded = true;
   if (usage.cost !== undefined) {
-    state.costUsd = (state.costUsd ?? 0) + usage.cost;
+    state.costUsd = state.costUsd === null ? null : (state.costUsd ?? 0) + usage.cost;
   }
   if (!state.tokensUnknown && usage.tokens !== undefined) {
     state.tokens = sumTokenUsage(

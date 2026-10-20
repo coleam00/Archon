@@ -1,3 +1,4 @@
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 // @archon-test-isolated
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
@@ -8,6 +9,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   mockLogFn,
+  runUsageWrites,
+  persistedEvents,
   createMockStore,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -17,7 +20,7 @@ import {
   readTranscript,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
-import { type RunChildWorkflowFn } from '../../child-run';
+import { childOutcomeFromRun, type RunChildWorkflowFn } from '../../child-run';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
 
@@ -150,6 +153,58 @@ describe('executeDagWorkflow -- workflow: node', () => {
     expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'keeps an unknown persisted child cost unknown in its parent (fan-out=%s)',
+    async fanOut => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async args =>
+        childOutcomeFromRun({
+          ...makeWorkflowRun(`child-${args.childIndex ?? 0}`),
+          status: 'completed',
+          metadata: { summary: 'done', total_cost_usd: args.childIndex === 1 ? 0.3 : null },
+        })
+      );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflowRun: makeWorkflowRun('parent-unknown-cost'),
+          workflow: {
+            name: 'parent',
+            nodes: [
+              {
+                id: 'child',
+                kind: 'workflow',
+                workflow: 'child-workflow',
+                ...(fanOut
+                  ? {
+                      fan_out: {
+                        items: '["a","b"]',
+                        as: 'item',
+                        max_parallel: 2,
+                        join: 'all_success' as const,
+                      },
+                    }
+                  : {}),
+              },
+            ],
+          },
+        })
+      );
+      expect(eventsOf(store).filter(event => event.event_type === 'node_failed')).toEqual([]);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+      expect(
+        (await foldDagResumeSnapshot(persistedEvents(store), 'parent-unknown-cost')).costUsd
+      ).toBeNull();
+    }
+  );
 
   it('executeWorkflowNode writes node_error to transcript on failure', async () => {
     const store = createMockStore();

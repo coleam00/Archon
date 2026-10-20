@@ -1,3 +1,4 @@
+import { exactExecutionCost } from '../../../node-execution';
 import { finalizeLoopFromSignal } from '../../loop-completion';
 import { requireProvider } from '@archon/provider-contract';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
@@ -414,9 +415,11 @@ function readLoopResume(
         ? Math.max(node.loop.max_iterations, startIteration)
         : node.loop.max_iterations,
     costUsd:
-      gate !== undefined
-        ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
-        : undefined,
+      savedExecution && exactExecutionCost(savedExecution.spend) === null
+        ? null
+        : gate !== undefined
+          ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
+          : undefined,
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)

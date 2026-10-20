@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import { tokenUsageSchema } from '@archon/provider-contract';
-import { runUsageMismatch } from './usage';
+import { runUsageMismatch, sumReportedCost } from './usage';
 
 // Each case is the shape of a historical aggregation defect, or a difference the
 // comparison must not report, so a comparison that passes on anything fails here.
@@ -69,4 +69,14 @@ describe('runUsageMismatch', () => {
     expect(runUsageMismatch({}, { costUsd: 0 })).toEqual([]);
     expect(runUsageMismatch({ costUsd: 0.1 + 0.2 }, { costUsd: 0.3 })).toEqual([]);
   });
+});
+
+it('keeps incomplete costs unknown in either aggregation order, including zero', () => {
+  for (const known of [0, 0.3]) {
+    expect(sumReportedCost([{ costUsd: known }, { costUsd: null }])).toBeNull();
+    expect(sumReportedCost([{ costUsd: null }, { costUsd: known }])).toBeNull();
+    expect(sumReportedCost([{ costUsd: known }])).toBe(known);
+  }
+  expect(sumReportedCost([{}, {}])).toBeUndefined();
+  expect(runUsageMismatch({ costUsd: null }, { costUsd: 0 })).toEqual(['cost']);
 });

@@ -70,7 +70,7 @@ export async function finalizeLoopFromSignal(
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
-  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
+  finalizeUsage: { costUsd?: number | null; tokens?: TokenUsage } | undefined,
   finalizeStructuredOutput: unknown,
   logDir: string,
   execution?: NodeExecutionRecord,
@@ -127,7 +127,7 @@ export async function finalizeLoopFromSignal(
       ...(output.declaredOutputPaths !== undefined
         ? persistedOutputContract(output.declaredOutputPaths)
         : {}),
-      ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
+      ...(typeof finalizeUsage?.costUsd === 'number' ? { cost_usd: finalizeUsage.costUsd } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
   };

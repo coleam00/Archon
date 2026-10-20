@@ -106,7 +106,7 @@ export function buildRunTerminalTelemetry(input: {
     ...(firstFailed ? { errorClass: failureKind.success ? failureKind.data : 'unknown' } : {}),
     ...(failedNode.success ? { failedNodeType: telemetryNodeType(failedNode.data) } : {}),
     // Absent when no provider reported spend, so absence never reads as "free".
-    ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(typeof usage.costUsd === 'number' ? { costUsd: usage.costUsd } : {}),
     ...(usage.tokens !== undefined
       ? {
           tokensIn: usage.tokens.input,

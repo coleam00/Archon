@@ -65,7 +65,7 @@ export async function executeWorkflowNode(
   const failResult = async (
     error: string,
     failureKind: NodeFailureKind,
-    costUsd?: number,
+    costUsd?: number | null,
     tokens?: TokenUsage,
     tokensUnknown?: boolean
   ): Promise<NodeExecutionResult> => {

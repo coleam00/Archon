@@ -39,17 +39,21 @@ export function sumTokenUsage(
 }
 
 /**
- * Sum finite reported costs, preserving absence when no contribution reported cost.
+ * Sum finite exact costs; null is sticky when any contribution is known incomplete.
+ * Preserve absence when no contribution reported cost.
  *
  * Fan-out callers include every child, not only completed ones: a child persists its usage at
  * its run tail whatever its outcome (#2469), so a failed or cancelled child still
  * contributes what it burned. That matters most here — `all_done` is the default join,
  * which makes a partly-failed fan-out the ordinary case rather than the exceptional one.
  */
-export function sumReportedCost(outcomes: readonly { costUsd?: number }[]): number | undefined {
+export function sumReportedCost(
+  outcomes: readonly { costUsd?: number | null }[]
+): number | null | undefined {
   let sum = 0;
   let any = false;
   for (const o of outcomes) {
+    if (o.costUsd === null) return null;
     if (o.costUsd !== undefined && Number.isFinite(o.costUsd)) {
       sum += o.costUsd;
       any = true;
@@ -75,7 +79,7 @@ export function sumFanOutTokens(
 
 /** Run-level usage as either aggregation reports it: the live run total or the event-log fold. */
 export interface RunUsageFigures {
-  costUsd?: number;
+  costUsd?: number | null;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
 }
@@ -101,7 +105,11 @@ const RECONCILED_TOKEN_AXES = tokenUsageSchema
  */
 export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost' | 'tokens')[] {
   const mismatched: ('cost' | 'tokens')[] = [];
-  if (Math.abs((a.costUsd ?? 0) - (b.costUsd ?? 0)) > COST_TOLERANCE_USD) mismatched.push('cost');
+  if (
+    (a.costUsd === null) !== (b.costUsd === null) ||
+    Math.abs((a.costUsd ?? 0) - (b.costUsd ?? 0)) > COST_TOLERANCE_USD
+  )
+    mismatched.push('cost');
   if (!tokensAgree(a, b)) mismatched.push('tokens');
   return mismatched;
 }

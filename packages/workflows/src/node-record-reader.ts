@@ -1,3 +1,4 @@
+import { exactExecutionCost } from './node-execution';
 import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
@@ -143,7 +144,11 @@ export function readNodeRecordEvent(
       metadata.spend.tokens.reason === 'incomplete'
         ? { tokensUnknown: true }
         : {}),
-      ...(Object.hasOwn(raw, 'cost_usd') ? { costUsd: raw.cost_usd } : {}),
+      ...(metadata && exactExecutionCost(metadata.spend) === null
+        ? { costUsd: null }
+        : Object.hasOwn(raw, 'cost_usd')
+          ? { costUsd: raw.cost_usd }
+          : {}),
     },
     ...(metadata === undefined ? {} : { metadata }),
   };
@@ -169,7 +174,7 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
       tokens: raw.tokens,
       tokensUnknown:
         data.spend?.tokens.source === 'unavailable' && data.spend.tokens.reason === 'incomplete',
-      costUsd: raw.cost_usd,
+      costUsd: data.spend && exactExecutionCost(data.spend) === null ? null : raw.cost_usd,
     },
   };
 }

@@ -154,7 +154,7 @@ export async function runNodeRetryLoop(
   iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
-  let accumulatedCostUsd: number | undefined;
+  let accumulatedCostUsd: number | null | undefined;
   let accumulatedTokens: TokenUsage | undefined;
   let accumulatedTokensUnknown = false;
   // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
@@ -177,7 +177,10 @@ export async function runNodeRetryLoop(
     }
     output = await run();
     if (output.costUsd !== undefined) {
-      accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
+      accumulatedCostUsd =
+        accumulatedCostUsd === null || output.costUsd === null
+          ? null
+          : (accumulatedCostUsd ?? 0) + output.costUsd;
     }
     accumulatedTokensUnknown ||= output.tokensUnknown === true;
     if (accumulatedTokensUnknown) {
