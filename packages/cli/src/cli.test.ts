@@ -2076,6 +2076,39 @@ describe('workflow run flag conflicts', () => {
   }
 });
 
+describe('workflow argument refusals', () => {
+  const cases: [string, string[], string][] = [
+    [
+      'extra reset-sessions positionals',
+      ['reset-sessions', 'wf', 'planner'],
+      'unexpected positional argument(s): planner',
+    ],
+    [
+      'a non-positive wait timeout',
+      ['wait', 'some-run-id', '--timeout', '0'],
+      '--timeout must be a positive number',
+    ],
+    ['a non-positive runs limit', ['runs', '--limit', '0'], '--limit must be a positive integer'],
+  ];
+
+  for (const [name, args, error] of cases) {
+    it(`refuses ${name}`, () => {
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        ...args,
+        '--json',
+        '--cwd',
+        listRepo,
+      ]);
+
+      expect({ status, envelope: envelope() }).toMatchObject({
+        status: 1,
+        envelope: { ok: false, error: expect.stringContaining(error) },
+      });
+    });
+  }
+});
+
 describe('workflow test --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
     // A --cwd that does not exist makes findRepoRoot throw inside the
