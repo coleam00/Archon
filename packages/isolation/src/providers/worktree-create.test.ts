@@ -1136,6 +1136,7 @@ describe('base branch and remote', () => {
       taskBranch: { kind: 'new', fromBranch: git.toBranchName('develop') },
     });
 
+    baseSynced('main', 'fast-forward', 'upstream');
     cutFrom('develop', 'archon/task-my-feature');
   });
 
