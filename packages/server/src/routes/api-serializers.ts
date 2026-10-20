@@ -3,7 +3,6 @@ import type { Codebase, Conversation } from '@archon/core';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
-import { workflowRunUsageSchema } from '@archon/workflows/schemas/workflow-run-usage';
 import {
   isApprovalContext,
   runAttention,
@@ -13,7 +12,11 @@ import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { getLog } from './api-route-kit';
 import { codebaseSchema } from './schemas/codebase.schemas';
 import { conversationSchema, messageSchema } from './schemas/conversation.schemas';
-import { dashboardWorkflowRunSchema, workflowRunSchema } from './schemas/workflow.schemas';
+import {
+  dashboardWorkflowRunSchema,
+  workflowRunSchema,
+  workflowRunMetadataSchema,
+} from './schemas/workflow.schemas';
 
 // ---------------------------------------------------------------------------
 // API transform helpers (Date → ISO string for wire shape)
@@ -95,14 +98,15 @@ function toApiRunAttention(row: WorkflowRun): ApiWorkflowRun['attention'] {
 
 function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
   const wireMetadata = { ...metadata };
-  // Historical usage remains in storage; values outside the wire contract are unreported.
-  for (const [key, schema] of Object.entries(workflowRunUsageSchema.shape)) {
+  const approval = wireMetadata.approval;
+  if (isApprovalContext(approval)) {
+    wireMetadata.approval = { ...approval, decisions: getApprovalDecisions(approval) };
+  }
+  // Historical metadata remains in storage; invalid optional values are omitted on the wire.
+  for (const [key, schema] of Object.entries(workflowRunMetadataSchema.shape)) {
     if (!schema.safeParse(wireMetadata[key]).success) delete wireMetadata[key];
   }
-  const approval = wireMetadata.approval;
-  return isApprovalContext(approval)
-    ? { ...wireMetadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
-    : wireMetadata;
+  return wireMetadata;
 }
 
 export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {

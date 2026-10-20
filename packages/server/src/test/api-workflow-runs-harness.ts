@@ -92,6 +92,7 @@ export const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
 export const mockListAttentionQueueRows = mock(async (): Promise<DashboardWorkflowRun[]> => []);
+export const mockFindOpenWorkRuns = mock<IWorkflowStore['findOpenWorkRuns']>(async () => []);
 export const mockListDashboardRuns = makeListDashboardRunsMock();
 export const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
@@ -390,6 +391,7 @@ mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,
+  findOpenWorkRuns: mockFindOpenWorkRuns,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
