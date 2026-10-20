@@ -1,3 +1,4 @@
+import { ArtifactExchangeError } from '../../../artifact-exchange';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import {
@@ -31,7 +32,7 @@ import { expandComposeInstance } from './compose-fan-out-expansion';
 
 /** One settled composed fan-out instance, reduced into the aggregate (#2512). */
 export interface ComposeInstanceOutcome {
-  status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
+  status: 'completed' | 'failed' | 'cancelled' | 'ambiguous' | 'error';
   output: string;
   structuredOutput?: unknown;
   error?: string;
@@ -148,8 +149,9 @@ async function claimInstanceStart(
     }
     await deriveInstanceSinks(ctx, instance.execution);
   } catch (err) {
+    ctx.onRequiredArtifactFailure?.(err);
     return {
-      status: 'failed',
+      status: 'error',
       output: '',
       error: `instance ${instance.snapshot.identity} could not persist its start: ${(err as Error).message}`,
     };
@@ -177,6 +179,7 @@ function instanceRunContext(
     workflowSourceRoots: ctx.workflowSourceRoots,
     runChildWorkflow: ctx.runChildWorkflow,
     execContext: ctx.execContext,
+    artifactExchange: ctx.artifactExchange,
     workflowRun: ctx.workflowRun,
     workflowName: ctx.workflowName,
     config: ctx.config,
@@ -303,6 +306,7 @@ async function recordInstanceTerminal(
     await ctx.deps.store.persistWorkflowEvent(serializeNodeStateRecord(record));
     await deriveInstanceSinks(ctx, record);
   } catch (err) {
+    ctx.onRequiredArtifactFailure?.(err);
     return {
       ...outcome,
       status: 'ambiguous',
@@ -316,7 +320,8 @@ async function recordInstanceTerminal(
 async function settleInstance(
   instance: InstanceRun,
   instanceCtx: RunLayersContext,
-  primarySink: string
+  primarySink: string,
+  bodyError?: string
 ): Promise<ComposeInstanceOutcome> {
   // Every instance exit carries the work it already paid for.
   const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
@@ -325,15 +330,15 @@ async function settleInstance(
     tokensUnknown: instanceCtx.totalTokensUnknown,
   };
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
-  if (failed.length > 0) {
+  if (bodyError !== undefined || failed.length > 0) {
     const providerFailure = aggregateProviderFailure(
       failed.map(o => o.providerFailure),
       Date.now()
     );
     const outcome: ComposeInstanceOutcome = {
-      status: 'failed',
+      status: bodyError === undefined ? 'failed' : 'error',
       output: '',
-      error: failed[0].error ?? 'composed instance node failed',
+      error: bodyError ?? failed[0]?.error ?? 'composed instance node failed',
       ...(providerFailure !== undefined ? { providerFailure } : {}),
       ...instanceUsage,
     };
@@ -426,13 +431,42 @@ export async function runComposeInstance(
   if (notStarted !== undefined) return notStarted;
 
   const instanceCtx = instanceRunContext(instance, expanded.nodes, threaded);
+  // Node executors can turn required write failures into failed outputs; all_done
+  // must still distinguish these engine operations from authored child failures.
+  const exchange = instanceCtx.artifactExchange;
+  let requiredFailure: string | undefined;
+  instanceCtx.onRequiredArtifactFailure = error => {
+    requiredFailure ??= error instanceof Error ? error.message : String(error);
+    scope.ctx.onRequiredArtifactFailure?.(error);
+  };
+  if (exchange) {
+    const observeExchange = async (operation: 'publish' | 'collect'): Promise<void> => {
+      try {
+        await exchange[operation]();
+      } catch (cause) {
+        instanceCtx.onRequiredArtifactFailure?.(new ArtifactExchangeError(operation, cause));
+        throw cause;
+      }
+    };
+    instanceCtx.artifactExchange = {
+      publish: () => observeExchange('publish'),
+      collect: () => observeExchange('collect'),
+    };
+  }
   try {
     await runLayers(instanceCtx);
   } catch (error) {
     if (error instanceof RunSourceUnreadableError) {
       await releaseSourceUnreadableInstance(instance, error);
+      throw error;
     }
-    throw error;
+    if (isLifecycleWriteError(error)) throw error;
+    return settleInstance(
+      instance,
+      instanceCtx,
+      expanded.primarySink,
+      error instanceof Error ? error.message : String(error)
+    );
   }
-  return settleInstance(instance, instanceCtx, expanded.primarySink);
+  return settleInstance(instance, instanceCtx, expanded.primarySink, requiredFailure);
 }

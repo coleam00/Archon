@@ -1,3 +1,4 @@
+import { withArtifactWriteRoot, withArtifactWriteFailureObserver } from '../artifact-writes';
 /**
  * The layer walker: runs a DAG's (or subgraph's) topological layers, deciding per node
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
@@ -53,6 +54,16 @@ async function settleSequentially(
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(ctx: RunLayersContext): Promise<void> {
+  return withArtifactWriteFailureObserver(
+    error => {
+      getLog().error({ err: error, workflowRunId: ctx.workflowRun.id }, 'artifacts.write_failed');
+      ctx.onRequiredArtifactFailure?.(error);
+    },
+    () => runObservedLayers(ctx)
+  );
+}
+
+async function runObservedLayers(ctx: RunLayersContext): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
@@ -105,7 +116,6 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
     const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
-    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
 
     if (layerHadFailure) {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
@@ -477,6 +487,36 @@ async function recordPreExecutionFailure(
   };
 }
 
+function aggregateNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
+  // SINGLE aggregation point for this segment's run-level usage: the run
+  // row's persisted totals and the transcript. Per-node cost/tokens must be
+  // summed here and ONLY here. Terminal telemetry does not read this: it
+  // folds the persisted node events (getDagResumeSnapshot) across segments.
+  if (output.costUsd !== undefined) {
+    // Same guard as tokens below, and for the same reason: cost comes from
+    // providers (incl. community ones), and one NaN poisons the run total for
+    // every other node — NaN > 0 is false, so the cost is dropped from the run
+    // row with no trace. Exactly the silent loss #2469 exists to
+    // remove. Guarded here, at the single aggregation point, so one bad node
+    // costs only its own contribution.
+    if (Number.isFinite(output.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+    } else {
+      getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
+    }
+  }
+  ctx.totalTokensUnknown ||= output.tokensUnknown === true;
+  if (ctx.totalTokensUnknown) {
+    ctx.totalTokens = undefined;
+    return;
+  }
+  if (output.tokens === undefined) return;
+  ctx.totalTokens = sumTokenUsage(
+    [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
+    { nodeId }
+  );
+}
+
 /**
  * Fold one layer's settled results into the run context: outputs, usage, session
  * cursors, and typed artifacts. Returns whether any node in the layer failed.
@@ -489,35 +529,13 @@ async function aggregateLayerResults(
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
   let layerHadFailure = false;
+  const artifactErrors: unknown[] = [];
+  for (const result of layerResults) {
+    if (result.status === 'fulfilled') aggregateNodeUsage(ctx, result.value);
+  }
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
       const { nodeId, output, sessionProvider } = result.value;
-      // SINGLE aggregation point for this segment's run-level usage: the run
-      // row's persisted totals and the transcript. Per-node cost/tokens must be
-      // summed here and ONLY here. Terminal telemetry does not read this: it
-      // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
-      }
-      ctx.totalTokensUnknown ||= output.tokensUnknown === true;
-      if (ctx.totalTokensUnknown) {
-        ctx.totalTokens = undefined;
-      } else if (output.tokens !== undefined) {
-        ctx.totalTokens = sumTokenUsage(
-          [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
-          { nodeId }
-        );
-      }
       ctx.nodeOutputs.set(nodeId, output);
       if (
         ctx.nodeSessionHandles !== undefined &&
@@ -547,8 +565,7 @@ async function aggregateLayerResults(
       // Typed artifact: when a node declares `output_type`, persist its output
       // as a typed sidecar so other nodes and later runs can locate it by type.
       // The writer keeps top-level node paths stable and qualifies loop body
-      // paths with ctx.loopGroupPath. Best-effort — a metadata write must never
-      // fail an otherwise-successful node.
+      // paths with ctx.loopGroupPath. Separated container failures stop the run.
       const completedNode = nodeById.get(nodeId);
       if (output.state === 'completed' && completedNode?.output_type) {
         const meta = {
@@ -565,6 +582,10 @@ async function aggregateLayerResults(
             { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
             'artifacts.write_failed'
           );
+          if (ctx.artifactExchange) {
+            artifactErrors.push(err);
+            ctx.onRequiredArtifactFailure?.(err);
+          }
         }
         // Scope mirror (#1846): persistence-participating nodes also write their
         // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
@@ -575,8 +596,11 @@ async function aggregateLayerResults(
           ctx.scopeArtifactsDir &&
           nodeUsesPersistedScope(completedNode, ctx.workflowPersistSessions)
         ) {
+          const scopeArtifactsDir = ctx.scopeArtifactsDir;
           try {
-            await writeNodeArtifact(ctx.scopeArtifactsDir, meta, output.output);
+            await withArtifactWriteRoot(undefined, () =>
+              writeNodeArtifact(scopeArtifactsDir, meta, output.output)
+            );
           } catch (err) {
             getLog().warn(
               {
@@ -602,6 +626,10 @@ async function aggregateLayerResults(
       if (output.state === 'failed') layerHadFailure = true;
     }
   }
+  settledValuesOrThrow(layerResults, ctx.workflowRun.id);
+  if (artifactErrors.length === 1) throw artifactErrors[0];
+  if (artifactErrors.length > 1)
+    throw new AggregateError(artifactErrors, 'Layer artifact persistence failed');
   return layerHadFailure;
 }
 

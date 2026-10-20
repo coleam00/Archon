@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
+import { NODES_SUBDIR } from './artifact-exchange';
 import { nodeArtifactSchema } from './schemas/node-artifact';
 import type { ArtifactManifest } from './schemas/terminal-record';
 
@@ -69,7 +70,8 @@ export async function observeArtifactManifest(
           continue;
         }
         manifest.files.push({ path, size: Number(stat.size) });
-        if (relative(scanRoot, directory) !== 'nodes' || !name.endsWith('.meta.json')) continue;
+        if (relative(scanRoot, directory) !== NODES_SUBDIR || !name.endsWith('.meta.json'))
+          continue;
         if ((await realpath(directory)) !== resolve(directory)) {
           manifest.limitations.push({ path, kind: 'link_excluded' });
           continue;

@@ -170,6 +170,20 @@ bindings are withheld: any plugin-chosen string, even one that looks like a mach
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin
 process retains the host environment.
+For separated container artifacts, the host adds `containerExecCoordination: true` to
+the session request. `serveProvider` installs a runtime gate for that session through
+`@archon/provider-contract/container-exec`. Container providers must use
+`admitContainerCommand` for long commands and `coordinateContainerCommand` for short
+commands and signals. Long commands acknowledge admission from inside the producer;
+a local Docker client spawn is insufficient. The gate uses
+`_archon/container_exec/acquire` and `_archon/container_exec/release` requests over the
+existing connection, with session-scoped leases. Release reports whether admission
+became unconfirmed. Disconnecting with an active lease blocks further host transfers
+and commands until explicit recovery. Host-only and legacy container sessions do not
+request this coordination. Older plugins that reject the new session field fail
+before dispatch; update the provider plugin to run separated container sessions.
+No runtime callbacks are serialized into `ExecutionContext`.
+
 This is an Archon provider protocol, not a generic plain-ACP adapter.
 
 The language-neutral definitions are in
