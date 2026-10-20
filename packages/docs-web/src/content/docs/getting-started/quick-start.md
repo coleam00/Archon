@@ -110,5 +110,5 @@ BRIEF
 ## Next steps
 
 - [Build your first workflow](/getting-started/first-workflow/)
-- [SDLC pack workflows](/reference/sdlc-workflows/): the bundled software factory, from intake to merge
+- [Set up the SDLC factory](/getting-started/sdlc-factory/): the bundled software factory, from issue to merge
 - [Configuration](/getting-started/configuration/): project settings and environment variables
