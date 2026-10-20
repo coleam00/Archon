@@ -310,7 +310,7 @@ function observedRegistrationPredicate(
 /** Mark only the observed worktree registration destroyed, never a replacement registration. */
 export async function markWorktreeDestroyed(
   observed: IsolationEnvironmentRow,
-  query: typeof pool.query = pool.query
+  query: typeof pool.query = pool.query.bind(pool)
 ): Promise<void> {
   const predicate = observedRegistrationPredicate(observed, 2);
   const result = await query(
