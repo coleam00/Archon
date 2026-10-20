@@ -38,7 +38,11 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
         };
       })(),
       {
-        accountInfo: async () => ({ tokenSource: 'claude.ai', apiKeySource: 'none' }),
+        accountInfo: async () => ({
+          email: 'agent-shell@example.com',
+          subscriptionType: 'Claude Max',
+          apiProvider: 'firstParty',
+        }),
         close: (): void => undefined,
       }
     ),

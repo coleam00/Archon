@@ -142,10 +142,17 @@ nodes:
           required: [delivers, parts]
       required: [continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
 
+  # Every review node writes under review/, and a fresh run's artifacts directory
+  # has none. Agents told to create it have skipped that step, so the declared
+  # scope.md pointer failed and took the whole delivery run down with it.
+  - id: review-dir
+    bash: mkdir -p "$ARTIFACTS_DIR/review"
+
   - id: scope
     command: review-scope
     context: fresh
     mutates_checkout: false
+    depends_on: [review-dir]
     output_format:
       type: object
       properties:

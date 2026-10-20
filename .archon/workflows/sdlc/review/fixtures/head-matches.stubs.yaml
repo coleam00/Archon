@@ -2,6 +2,7 @@
 # Unselected lenses have no stubs, so running one fails this fixture.
 mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: false, errors: false, docs: true, reason: "stub: a typed contract and its docs changed" }
+review-dir: ""
 scope:
   head_matches: true
   pr: { repo: { host: github.com, path: example/repo }, number: 1 }
