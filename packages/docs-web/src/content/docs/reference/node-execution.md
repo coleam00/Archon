@@ -63,7 +63,7 @@ The reader reconstructs lifecycle from the event type and the corresponding erro
 
 `fan_out_instances` is a separate durable event: its `data.instances` restores the first valid instance snapshot for the fan-out wrapper. It is outside the node-record data schema and the tables below.
 
-Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. This reference changes no schema, key, or behavior. See the [database reference](/reference/database/) for persistence context.
+Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. See the [database reference](/reference/database/) for persistence context.
 
 ## Schema field tables
 

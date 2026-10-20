@@ -128,8 +128,7 @@ export function serializeDeferredNodeUsage(
   record: NodeExecutionRecord
 ): SerializedDeferredNodeUsageEvent {
   const serialized = serializeNodeStateRecord(record);
-  const { node: _node, invocation: _invocation, attempt: _attempt, ...segment } = serialized.data;
-  const data = serializedDeferredNodeUsageDataSchema.parse(segment);
+  const data = serializedDeferredNodeUsageDataSchema.parse(serialized.data);
   return {
     workflow_run_id: serialized.workflow_run_id,
     step_name: serialized.step_name,

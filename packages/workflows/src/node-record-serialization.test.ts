@@ -83,7 +83,7 @@ describe('node record serializers', () => {
       },
     });
     expect(Object.keys(event.data).sort()).toEqual(
-      ['accounting', 'spend', 'tokens', 'cost_usd'].sort()
+      ['accounting', 'spend', 'tokens', 'cost_usd', 'node', 'invocation', 'attempt'].sort()
     );
     expect(readNodeRecordEvent(event)).toBeUndefined();
   });

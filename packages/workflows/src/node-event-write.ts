@@ -57,15 +57,7 @@ export async function persistUnsettledNodeUsage(
       ...execution,
       spend: observeExecutionSpend(execution.spend, usage),
     });
-    await persistNodeEvent(store, {
-      ...event,
-      data: {
-        ...event.data,
-        node: execution.node,
-        invocation: execution.invocation,
-        attempt: execution.attempt,
-      },
-    });
+    await persistNodeEvent(store, event);
   } catch (error) {
     createLogger('workflow').error(
       { err: error, workflowRunId: execution.runId, nodeId: execution.path },

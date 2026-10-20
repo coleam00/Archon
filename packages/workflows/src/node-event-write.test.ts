@@ -318,3 +318,58 @@ it('keeps paid loop attempts that replay the same gate separate from its continu
   expect(result.costUsd).toBeCloseTo(0.67);
   expect(result.tokens).toEqual({ input: 130, output: 65, cacheRead: 26, cacheWrite: 13 });
 });
+
+it.each([false, true])(
+  'replaces a failed child cumulative total on re-drive (fan-out: %s)',
+  async fanOut => {
+    const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
+    const { serializeNodeStateRecord } = await import('./node-record-serialization');
+    const failed = completedRecord();
+    failed.node = { id: 'build', kind: 'workflow', ...(fanOut ? { fanOut: true } : {}) };
+    failed.lifecycle = { status: 'failed', error: 'child failed' };
+    failed.spend.costUsd = { source: 'provider', value: 0.37 };
+    failed.spend.tokens = { source: 'provider', value: { input: 100, output: 50 } };
+    const completed = structuredClone(failed);
+    completed.attempt.id = 'redrive';
+    completed.lifecycle = { status: 'completed' };
+    completed.spend.costUsd = { source: 'provider', value: 0.47 };
+    completed.spend.tokens = { source: 'provider', value: { input: 110, output: 55 } };
+    const events = [serializeNodeStateRecord(failed), serializeNodeStateRecord(completed)];
+    const snapshot = await foldDagResumeSnapshot(events, failed.runId);
+    expect(snapshot.costUsd).toBeCloseTo(0.47);
+    expect(snapshot.tokens).toEqual({ input: 110, output: 55 });
+  }
+);
+
+it.each(['deferred', 'suppressed'] as const)(
+  'counts only new spend from a %s loop continuation',
+  async outcome => {
+    const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
+    const { serializeNodeStateRecord } = await import('./node-record-serialization');
+    const gate = completedRecord();
+    gate.node = { id: 'build', kind: 'loop' };
+    gate.lifecycle = { status: 'suspended', point: 'interactive_loop' };
+    gate.spend.costUsd = { source: 'provider', value: 0.37 };
+    gate.spend.tokens = { source: 'provider', value: { input: 100, output: 50 } };
+    const continuation = structuredClone(gate);
+    continuation.attempt = { ...gate.attempt, id: 'continued', continuedFrom: gate.attempt.id };
+    continuation.spend.costUsd = { source: 'provider', value: 0.47 };
+    continuation.spend.tokens = { source: 'provider', value: { input: 110, output: 55 } };
+    const events = [
+      serializeDeferredNodeUsage(gate),
+      serializeNodeStateRecord(gate),
+      serializeDeferredNodeUsage(continuation),
+    ];
+    if (outcome === 'suppressed') {
+      continuation.lifecycle = {
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin: 'peer' },
+      };
+      events.push(serializeNodeStateRecord(continuation));
+    }
+    const snapshot = await foldDagResumeSnapshot(events, gate.runId);
+    expect(snapshot.costUsd).toBeCloseTo(0.47);
+    expect(snapshot.tokens).toEqual({ input: 110, output: 55 });
+  }
+);

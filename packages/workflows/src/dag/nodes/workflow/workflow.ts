@@ -1,6 +1,6 @@
 import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { pauseGateRespectingExternalTransition } from '../../pause';
-import { finishNodeExecution } from '../../../node-execution';
+import { finishNodeExecution, observeExecutionSpend } from '../../../node-execution';
 import {
   serializeNodeStateRecord,
   serializeNodeOutput,
@@ -230,6 +230,7 @@ export async function executeWorkflowNode(
     const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
+    execution.spend = observeExecutionSpend(execution.spend, usage);
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },

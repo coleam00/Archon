@@ -214,7 +214,9 @@ describe('executeDagWorkflow -- workflow: node', () => {
     }
   );
 
-  it.each([false, true])('settles recovered child usage once (fan-out: %s)', async fanOut => {
+  it.each(
+    [false, true].flatMap(fanOut => [false, true].map(terminal => [fanOut, terminal] as const))
+  )('settles recovered child usage once (fan-out=%s, failed=%s)', async (fanOut, terminal) => {
     await writeBlock(
       'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    prompt: Work',
       'child-workflow'
@@ -230,8 +232,18 @@ describe('executeDagWorkflow -- workflow: node', () => {
     );
     let recovering = false;
     const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
-      if (!recovering) throw failure;
-      return { childRunId: 'paid', status: 'completed', output: 'done', ...usage };
+      if (!recovering) {
+        if (terminal)
+          return { childRunId: 'paid', status: 'failed', error: 'child failed', ...usage };
+        throw failure;
+      }
+      return {
+        childRunId: 'paid',
+        status: 'completed',
+        output: 'done',
+        costUsd: 0.47,
+        tokens: { input: 110, output: 55 },
+      };
     });
     const workflow = {
       name: 'recovery',
@@ -253,7 +265,8 @@ describe('executeDagWorkflow -- workflow: node', () => {
       workflowRun: makeWorkflowRun('recovery'),
       runChildWorkflow,
     });
-    await expect(executeDagWorkflow(options)).rejects.toBe(failure);
+    if (terminal) await executeDagWorkflow(options);
+    else await expect(executeDagWorkflow(options)).rejects.toBe(failure);
     const prior = await store.getDagResumeSnapshot('recovery');
     expect(prior.costUsd).toBeCloseTo(0.37);
     recovering = true;
@@ -263,12 +276,12 @@ describe('executeDagWorkflow -- workflow: node', () => {
       priorUsage: prior,
     });
     const settled = await store.getDagResumeSnapshot('recovery');
-    expect(settled.costUsd).toBeCloseTo(0.37);
-    expect(settled.tokens).toEqual(usage.tokens);
+    expect(settled.costUsd).toBeCloseTo(0.47);
+    expect(settled.tokens).toEqual({ input: 110, output: 55 });
     expect(runUsageWrites(store).at(-1)).toMatchObject({
-      total_cost_usd: 0.37,
-      total_tokens_in: 100,
-      total_tokens_out: 50,
+      total_cost_usd: 0.47,
+      total_tokens_in: 110,
+      total_tokens_out: 55,
     });
   });
 
@@ -350,6 +363,75 @@ describe('executeDagWorkflow -- workflow: node', () => {
         total_tokens_in: tokensUnknown ? null : 100,
         total_tokens_out: tokensUnknown ? null : 50,
       });
+    }
+  );
+
+  it.each(
+    (
+      ['cancelled', 'completed', 'failed', 'paused', 'running', 'pending', 'error'] as const
+    ).flatMap(status =>
+      [false, true].flatMap(held =>
+        [false, true].map(tokensUnknown => [status, held, tokensUnknown] as const)
+      )
+    )
+  )(
+    'retains child usage after a refused pause (%s, held=%s, unavailable=%s)',
+    async (status, held, tokensUnknown) => {
+      const store = createMockStore();
+      let reconciling = false;
+      store.pauseWorkflowRun.mockImplementation(async () => {
+        reconciling = true;
+        if (status === 'error') throw new Error('pause unavailable');
+        throw new WorkflowRunPauseConflictError('parent');
+      });
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        reconciling && status !== 'error' ? status : 'running'
+      );
+      store.getWorkflowRun.mockResolvedValue({
+        ...makeWorkflowRun('parent'),
+        status: 'paused',
+        metadata: { approval: { nodeId: 'peer', type: 'approval', message: 'peer gate' } },
+      });
+      if (held) {
+        store.findChildRuns.mockResolvedValue([
+          {
+            ...makeWorkflowRun('held'),
+            status: 'paused',
+            metadata: {
+              parent_node_id: 'child',
+              total_cost_usd: 0.37,
+              total_tokens_in: tokensUnknown ? null : 100,
+              total_tokens_out: tokensUnknown ? null : 50,
+              ...(tokensUnknown ? { total_tokens_unknown: true } : {}),
+            },
+          },
+        ]);
+      }
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        childRunId: 'paid',
+        status: 'paused',
+        costUsd: 0.37,
+        ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('parent'),
+          workflow: {
+            name: 'parent',
+            nodes: [{ id: 'child', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          runChildWorkflow,
+        })
+      );
+      expect(runChildWorkflow).toHaveBeenCalledTimes(held ? 0 : 1);
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.37,
+        total_tokens_in: tokensUnknown ? null : 100,
+        total_tokens_out: tokensUnknown ? null : 50,
+      });
+      expect(eventsOf(store).some(event => event.event_type === 'node_suspended')).toBe(false);
     }
   );
 

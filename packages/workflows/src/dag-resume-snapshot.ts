@@ -134,7 +134,7 @@ interface ResumeFold {
   /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
   readonly usageContributions: UsageContribution[];
-  readonly unsettledUsage: Map<string, UsageContribution>;
+  readonly keyedUsage: Map<string, UsageContribution>;
   readonly loopUsage: Map<
     string,
     { usage: UsageContribution; continuedFrom?: string; counted: boolean }
@@ -243,7 +243,7 @@ function addUsage(
 ): void {
   const usage = readUsage(fold.runId, stepName, rawUsage);
   if (!usage) return;
-  if (checkpoint) fold.unsettledUsage.set(checkpoint, usage);
+  if (checkpoint) fold.keyedUsage.set(checkpoint, usage);
   else fold.usageContributions.push(usage);
 }
 
@@ -481,18 +481,27 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type === 'node_skipped_prior_success') return;
   if (foldLoopUsage(fold, row.step_name, record.data, record.rawUsage)) return;
-  const checkpoint = usageCheckpointKey(row.step_name, record.data);
-  const prior = checkpoint ? fold.unsettledUsage.get(checkpoint) : undefined;
-  if (checkpoint) fold.unsettledUsage.delete(checkpoint);
-  if (prior) {
-    const settled = readUsage(fold.runId, row.step_name, record.rawUsage);
-    fold.usageContributions.push({
-      ...prior,
-      ...settled,
-      tokensUnknown:
-        settled?.tokensUnknown || (settled?.tokens === undefined && prior.tokensUnknown),
-    });
-  } else addUsage(fold, row.step_name, record.rawUsage);
+  settleNodeUsage(fold, row.step_name, record);
+}
+
+function settleNodeUsage(fold: ResumeFold, path: string, record: NodeRecord): void {
+  const checkpoint = usageCheckpointKey(path, record.data);
+  const prior = checkpoint ? fold.keyedUsage.get(checkpoint) : undefined;
+  const settled = readUsage(fold.runId, path, record.rawUsage);
+  if (!prior && !settled) return;
+  const usage = {
+    ...prior,
+    ...settled,
+    stepName: path,
+    tokensUnknown:
+      settled?.tokensUnknown || (settled?.tokens === undefined && prior?.tokensUnknown),
+  };
+  if (checkpoint && record.data.node?.kind === 'workflow') {
+    fold.keyedUsage.set(checkpoint, usage);
+  } else {
+    if (checkpoint) fold.keyedUsage.delete(checkpoint);
+    fold.usageContributions.push(usage);
+  }
 }
 
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
@@ -588,11 +597,7 @@ function countedUsage(
         costUsd: usage.costUsd === undefined ? undefined : usage.costUsd - (base.costUsd ?? 0),
       };
     });
-  const counted = [
-    ...fold.usageContributions,
-    ...fold.unsettledUsage.values(),
-    ...loopUsage,
-  ].filter(
+  const counted = [...fold.usageContributions, ...fold.keyedUsage.values(), ...loopUsage].filter(
     contribution =>
       !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
   );
@@ -674,7 +679,7 @@ export async function foldDagResumeSnapshot(
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
     usageContributions: [],
-    unsettledUsage: new Map(),
+    keyedUsage: new Map(),
     loopUsage: new Map(),
     authoritativeInstanceScopes: new Set(),
     budget: emptyRunBudgetUsage(),
