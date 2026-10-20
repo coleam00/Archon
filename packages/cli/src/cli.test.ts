@@ -564,7 +564,8 @@ describe('workflow answer flag rejection and command discovery', () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
-      error: expect.stringContaining('Workflow run not found'),
+      action: 'end_turn',
+      error: 'not_found',
     });
   });
 
