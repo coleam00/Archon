@@ -697,7 +697,10 @@ test('explicit project binds a separate clone while preserving launch source and
       expect(row.output_root).toBe(join(home, 'workspaces', 'acme', 'app'));
       expect(existsSync(join(row.output_root, 'logs', `${row.id}.jsonl`))).toBe(true);
       const inPlace = flags.includes('--no-worktree');
-      if (inPlace) expect(row.working_path).toBe(await canonicalizeProjectPath(clone));
+      if (inPlace)
+        expect(await canonicalizeProjectPath(row.working_path)).toBe(
+          await canonicalizeProjectPath(clone)
+        );
       else
         expect(
           git(row.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
