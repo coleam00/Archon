@@ -1,3 +1,4 @@
+import { requireContainerRunContext } from './container-context';
 import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { requireProvider } from '@archon/provider-contract';
@@ -62,6 +63,7 @@ export async function resolveRunDispatch(
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions
 ): Promise<RunPhase<RunDispatch>> {
+  if (opts.execContext?.kind === 'container') requireContainerRunContext(opts.container);
   const { preCreatedRun } = opts;
   const isContinuation =
     preCreatedRun !== undefined &&

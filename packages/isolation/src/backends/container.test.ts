@@ -785,6 +785,37 @@ function seedContainerRow(
 }
 
 describe('ContainerBackend.suspend', () => {
+  test.each(['exec', 'stop', 'container'])(
+    'bounds every Docker call when %s fails during a source release',
+    async failing => {
+      const store = fakeStore();
+      seedContainerRow(store, { artifactsMount: '/artifacts' });
+      const identity = spyOn(containerModule, 'currentHostIdentity').mockReturnValue({
+        uid: 1000,
+        gid: 1000,
+      });
+      const calls: { args: string[]; timeout: number | undefined }[] = [];
+      const docker: DockerRunner = async (args, options) => {
+        calls.push({ args, timeout: options?.timeout });
+        if (args[0] === failing || args[0] === 'stop') throw new Error('Docker timed out');
+        return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
+      };
+      try {
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        const stop = await backend.prepareSuspend('env-c', 2_000);
+        await expect(stop()).rejects.toThrow('Failed to suspend');
+        expect(calls.map(call => call.args[0])).toEqual(['exec', 'stop', 'container']);
+        expect(calls.map(call => call.timeout)).toEqual([2_000, 2_000, 2_000]);
+        expect(calls[1]?.args).toEqual(['stop', '--time', '1', 'archon-res-1']);
+        expect(calls.reduce((total, call) => total + (call.timeout ?? 60_000), 0)).toBeLessThan(
+          10_000
+        );
+      } finally {
+        identity.mockRestore();
+      }
+    }
+  );
+
   test('docker stops the container by name', async () => {
     const store = fakeStore();
     seedContainerRow(store);

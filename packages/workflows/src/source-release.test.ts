@@ -12,6 +12,7 @@ import {
   deliveredMessages,
   persistedEvents,
 } from './dag/test-utils';
+import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { releaseUnreadableRunSource } from './source-release';
 import type { SourceReleaseWrite } from './store';
 import type { ContainerWriteBackBackend } from './container-context';
@@ -57,26 +58,37 @@ describe('source release suspension', () => {
       });
       const active = await store.claimPendingWorkflowRun(pending.id);
       if (!active) throw new Error('run was not claimed');
-      expect(
-        await releaseUnreadableRunSource(
-          { ...deps, store },
-          platform,
-          'conv',
-          active.id,
-          { ...release, claimId: executionClaim(active.metadata) },
-          execContext,
-          { envId: 'env', writeBack: 'approve', backend }
-        )
-      ).toEqual({ released: true });
-      expect(await store.getWorkflowRun(active.id)).toMatchObject({
-        status: 'paused',
-        metadata: { source_release: { nodeId: 'workflow-source' } },
+      const live: WorkflowEmitterEvent[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+        if (event.runId === active.id) live.push(event);
       });
-      expect(deliveredMessages(platform).join('\n')).toContain(error.message);
-      const events = await store.listWorkflowEvents(active.id);
-      expect(events.map(event => event.event_type)).toEqual(['source_released']);
-      expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
-      expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
+      try {
+        expect(
+          await releaseUnreadableRunSource(
+            { ...deps, store },
+            platform,
+            'conv',
+            active.id,
+            { ...release, claimId: executionClaim(active.metadata) },
+            execContext,
+            { envId: 'env', writeBack: 'approve', backend }
+          )
+        ).toEqual({ released: true });
+        expect(await store.getWorkflowRun(active.id)).toMatchObject({
+          status: 'paused',
+          metadata: { source_release: { nodeId: 'workflow-source' } },
+        });
+        expect(deliveredMessages(platform).join('\n')).toContain(error.message);
+        const events = await store.listWorkflowEvents(active.id);
+        expect(events.map(event => event.event_type)).toEqual(['source_released']);
+        expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(deps.store.completeWorkflowRun).not.toHaveBeenCalled();
+        expect(live).not.toContainEqual(
+          expect.objectContaining({ type: 'container_lifecycle', phase: 'stopped' })
+        );
+      } finally {
+        unsubscribe();
+      }
     }
   );
 
@@ -84,7 +96,7 @@ describe('source release suspension', () => {
     const { deps, platform, stop, backend, run } = setup();
     deps.store.releaseRunForUnreadableSource.mockImplementation(
       async (_id, _release, beforePublish) => {
-        expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 2_000);
         expect(stop).not.toHaveBeenCalled();
         await beforePublish?.();
         expect(stop).toHaveBeenCalledTimes(1);
@@ -98,6 +110,14 @@ describe('source release suspension', () => {
       expect.objectContaining({ event_type: 'container_stopped' })
     );
     expect(backend.suspend).not.toHaveBeenCalled();
+  });
+
+  it('rejects container execution without its backend before releasing the source', async () => {
+    const { deps, platform } = setup();
+    await expect(
+      releaseUnreadableRunSource(deps, platform, 'conv', 'run', release, execContext)
+    ).rejects.toThrow('Container execution requires a container backend context');
+    expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
   });
 
   it('host execution does no backend preparation or suspension', async () => {

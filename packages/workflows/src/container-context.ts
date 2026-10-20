@@ -77,8 +77,11 @@ export interface WriteBackApplySummary {
 export interface ContainerWriteBackBackend {
   /** `docker stop` on pause; the upper volume persists for resume. */
   suspend(envId: string): Promise<void>;
-  /** Prepare a repeatable stop action with no store I/O, for a locked source release. */
-  prepareSuspend(envId: string): Promise<() => Promise<void>>;
+  /**
+   * Prepare a repeatable stop action without store I/O. A Docker timeout bounds each
+   * of at most three calls and uses a one-second stop grace for locked source release.
+   */
+  prepareSuspend(envId: string, dockerTimeoutMs?: number): Promise<() => Promise<void>>;
   /** Inspect the overlay diff → whether a write-back gate is warranted + summary. */
   finalize(envId: string): Promise<WriteBackFinalizeResult>;
   /** Apply the overlay diff to the live root (the ONE live-root write). */
@@ -110,3 +113,10 @@ export interface ContainerRunContext {
 
 /** Synthetic node id for the engine-level write-back gate (there is no DAG node). */
 export const WRITEBACK_GATE_NODE_ID = '__writeback__';
+
+export function requireContainerRunContext(
+  container: ContainerRunContext | undefined
+): ContainerRunContext {
+  if (!container) throw new Error('Container execution requires a container backend context');
+  return container;
+}

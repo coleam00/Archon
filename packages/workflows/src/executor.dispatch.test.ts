@@ -41,6 +41,26 @@ const parsedWorkflow = (definition: object) =>
   resolveWorkflow(workflowDefinitionSchema.parse(definition));
 
 describe('refusals before any side effect', () => {
+  it.each([{}, { preCreatedRun: makeRun({ status: 'pending' }) }, resumeOf(makeRun())])(
+    'rejects a container execution without a backend before admission: %j',
+    async options => {
+      const store = makeStore();
+      await expect(
+        startWorkflow({
+          store,
+          options: {
+            ...options,
+            execContext: { kind: 'container', containerId: 'cid' },
+          },
+        })
+      ).rejects.toThrow('Container execution requires a container backend context');
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+      expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+      expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a structurally valid but semantically invalid outcome declaration', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
@@ -92,7 +112,11 @@ describe('refusals before any side effect', () => {
           description: 'unsupported durable wait in container isolation',
           nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
         }),
-        options: { ...options, execContext: { kind: 'container', containerId: 'cid' } },
+        options: {
+          ...options,
+          execContext: { kind: 'container', containerId: 'cid' },
+          container: { envId: 'env', writeBack: 'approve', backend: containerBackend() },
+        },
       })
     ).rejects.toThrow('durable wait, which is not supported in container isolation');
     expect(store.createWorkflowRun).not.toHaveBeenCalled();

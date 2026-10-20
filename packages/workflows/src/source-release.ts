@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '@archon/provider-contract';
-import type { ContainerRunContext } from './container-context';
+import { requireContainerRunContext, type ContainerRunContext } from './container-context';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { reportContainerSuspension, type ContainerSuspendOutcome } from './dag/container-gate';
 import type { SourceReleaseWrite } from './store';
@@ -13,13 +13,15 @@ export async function releaseUnreadableRunSource(
   execContext?: ExecutionContext,
   container?: ContainerRunContext
 ): Promise<{ released: boolean }> {
-  if (execContext?.kind !== 'container' || !container) {
+  if (execContext?.kind !== 'container') {
     return deps.store.releaseRunForUnreadableSource(runId, release);
   }
+  const containerCtx = requireContainerRunContext(container);
   let beforePublish: (() => Promise<void>) | undefined;
   let outcome: ContainerSuspendOutcome | undefined;
   try {
-    const suspend = await container.backend.prepareSuspend(container.envId);
+    // Three Docker calls at most must fit within the file store's 10s lock wait.
+    const suspend = await containerCtx.backend.prepareSuspend(containerCtx.envId, 2_000);
     beforePublish = async () => {
       try {
         await suspend();
@@ -37,7 +39,7 @@ export async function releaseUnreadableRunSource(
       deps,
       platform,
       conversationId,
-      container,
+      containerCtx,
       execContext,
       runId,
       outcome

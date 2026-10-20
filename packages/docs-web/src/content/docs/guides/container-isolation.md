@@ -78,6 +78,8 @@ An **empty diff** skips the gate and completes silently. Set `container.write_ba
 
 Any pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, **`docker stop`s the container**. A multi-day wait costs ~0 CPU/RAM. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
 
+Unreadable-source suspension uses a one-second Docker stop grace and a two-second timeout per Docker call (ownership restoration, stop, and failure inspection), keeping Docker work under the file store's ten-second lock wait. Other pauses retain Docker's default stop grace.
+
 Stopping is best-effort: a backend failure is logged and reported to the operator, and the run stays paused for retry. No `container_stopped` event is emitted on failure; the container may keep consuming resources until resume or teardown.
 
 Container pauses are only resumable **from the CLI**, where the Docker backend is wired. Approving or rejecting a container run from chat or the Web UI records the decision but cannot continue the container. The run stays paused until you run `archon workflow resume <run-id>` from the CLI in the same project. Do not re-send the decision: the gate is already resolved.
