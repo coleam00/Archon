@@ -606,7 +606,7 @@ describe('the merge queue scripts', () => {
       [decision({}), BASE_GREEN],
       [decision({ head: OLD }), BASE_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), BASE_GREEN],
-      [decision({ action: 'ask', attention: ATTENTION }), BASE_GREEN],
+      [decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' }), BASE_GREEN],
     ] as const;
     for (const [decided, base] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));
@@ -620,7 +620,8 @@ describe('the merge queue scripts', () => {
     const at = install();
     for (const [declared, refusal] of [
       [decision({ action: 'return', brief: ' ', reason: 'CI red in its test' }), 'the sweep returned pull request 42 with no brief'],
-      [decision({ action: 'ask', class: 'unclear', attention: null }), 'the sweep asked about pull request 42 with no question'],
+      [decision({ action: 'ask', class: 'unclear', attention: null, brief: 'rework PR 42' }), 'the sweep asked about pull request 42 with no question'],
+      [decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: '' }), 'the sweep asked about pull request 42 with no brief for a return'],
     ] as const) {
       seed(at, item(BUILT, undefined, CLAIMED));
       const refused = run(at, 'record', recordInputs([declared]));
@@ -641,6 +642,14 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
     seed(at, item(BUILT, undefined, CLAIMED));
     ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red; reran' })], { ...BASE_GREEN, reran: true }, FACTS_BASE_RED)));
+  }, 60_000);
+
+  test('a red default branch with no pull request waiting raises its hold question', () => {
+    const at = install();
+    const inputs = { ...recordInputs([], BASE_RED, FACTS_BASE_RED), INPUTS_ITEMS: '[]' };
+    const raised = ok(run(at, 'record', inputs));
+    expect(raised).toMatchObject({ merged: [], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
+    expect(raised.attention).toContain('dev is red since PR 43 merged');
   }, 60_000);
 
   test('a rerun is recorded at its head, for the next sweep to read', () => {
@@ -710,7 +719,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], BASE_RED);
+    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
     expect(raised).toMatchObject({ merged: [43], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
     expect(raised.attention).toContain('dev is red since PR 43 merged');

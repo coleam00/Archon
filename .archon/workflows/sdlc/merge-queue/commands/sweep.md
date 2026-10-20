@@ -32,7 +32,7 @@ Work through them one at a time, in that order. An `own_pr` pull request never g
 
 **An approval holds** when it is pinned to the head, or when the only change from the approved head to the head is merges of the default branch and the resolution of their conflicts, and the verdict is Ready at the head. Judge that from `git diff <approved>..<head>` against what the default branch brought in. Anything else in that diff, or any doubt, voids the approval: ask again.
 
-Every pull request gets exactly one decision. A `return` always carries a `brief`, and an `ask` always carries its attention item: the record refuses either without it. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
+Every pull request gets exactly one decision. A `return` always carries a `brief`, and an `ask` always carries its attention item and, unless it is about an `own_pr` pull request, the `brief` a `return` answer starts from: the record refuses any of these without it. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
 
 ## The attention items
 

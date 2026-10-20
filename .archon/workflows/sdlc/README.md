@@ -644,7 +644,8 @@ then the project's file, whose lines win where the two conflict.
 - **Record.** The `record` script refuses a sweep that decided a pull request this
   run did not claim, because that item belongs to another run. It also refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question, and a red default branch the sweep neither re-ran nor raised: the pull
+  question or, on a pull request a build round owns, without the brief a `return`
+  answer starts from, and a red default branch the sweep neither re-ran nor raised: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item

@@ -28,7 +28,6 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type BaseAttention,
-  type Checks,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -38,6 +37,7 @@ import {
   type MergeStatus,
   type PolicyClass,
   type PrFacts,
+  readBase,
   readPr,
   type SweepAction,
   withMerge,
@@ -100,13 +100,16 @@ function message(error: unknown): string {
 /**
  * Why a declared decision cannot be acted on, or null. A return hands the item to the
  * build queue, which needs a brief to start from and cannot work an own pull request no
- * build round owns; an ask needs its question.
+ * build round owns. An ask needs its question, and on a pull request a build round owns it
+ * also needs the brief a `return` answer starts from: the queue always offers one.
  */
 function invalidDecision(decision: Decision, item: Item): string | null {
   const pr = `pull request ${String(decision.number)}`;
   if (decision.action === 'return' && item.own_pr === true) return `the sweep returned own ${pr}, which no build round owns`;
   if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
-  if (decision.action === 'ask' && decision.attention === null) return `the sweep asked about ${pr} with no question`;
+  if (decision.action !== 'ask') return null;
+  if (decision.attention === null) return `the sweep asked about ${pr} with no question`;
+  if (item.own_pr !== true && decision.brief.trim() === '') return `the sweep asked about ${pr} with no brief for a return`;
   return null;
 }
 
@@ -155,11 +158,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
 }
 
 /** The default branch as facts read it. */
-interface Base {
-  readonly branch: string;
-  readonly head: string;
-  readonly checks: Checks;
-}
+type Base = ReturnType<typeof readBase>;
 
 /** A red default branch the sweep neither re-ran nor raised would hold every merge in silence. */
 function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
