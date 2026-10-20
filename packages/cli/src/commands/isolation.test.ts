@@ -984,9 +984,10 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
-  it('reports all blockers together when multiple checks fail', async () => {
+  it('reports all blockers in safety-check order when multiple checks fail', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
+    mockGetUniqueCommitCount.mockResolvedValueOnce(2);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
@@ -1003,11 +1004,14 @@ describe('isolationCompleteCommand', () => {
     ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is running');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ open PR #140 — "fix: metrics"');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
+    expect(consoleErrorSpy.mock.calls).toEqual([
+      ['  Blocked: feature-branch'],
+      ['    ✗ uncommitted changes in worktree'],
+      ['    ✗ run run-live is running'],
+      ['    ✗ open PR #140 — "fix: metrics"'],
+      ['    ✗ 2 commit(s) unique to this branch'],
+      ['  Use --force to override.'],
+    ]);
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
