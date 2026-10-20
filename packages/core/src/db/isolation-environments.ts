@@ -261,8 +261,9 @@ function observedRegistrationPredicate(
   const $ = (offset: number): string => `$${String(first + offset)}`;
   const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const sqlite = getDatabaseType() === 'sqlite';
+  const tokenSql = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
   const sql = ` AND provider = 'worktree'
-       AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
+       AND ${legacy ? `COALESCE(${tokenSql}, '')` : tokenSql} = ${$(0)}
        AND working_path = ${$(1)}${
          legacy
            ? `

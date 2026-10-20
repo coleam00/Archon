@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { commit } from '@archon/workflows/file-store';
 import { sameWorktreeRegistration, type IsolationEnvironmentRow } from '@archon/isolation/types';
+import type { IIsolationStore } from '@archon/isolation';
 import { createFileWorkflowHost } from '../workflows/file-host';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 import type { IDatabase } from './adapters/types';
@@ -102,10 +103,11 @@ const changedFields = {
   metadata: { nested: { left: 2, right: [null, true, 'value'] } },
 } satisfies IsolationEnvironmentRow;
 
-for (const tokened of [false, true]) {
+for (const token of [undefined, 'original', '']) {
+  const tokened = typeof token === 'string';
   const observed: IsolationEnvironmentRow = {
     ...row,
-    metadata: { ...row.metadata, ...(tokened ? { worktree_registration_id: 'original' } : {}) },
+    metadata: { ...row.metadata, ...(tokened ? { worktree_registration_id: token } : {}) },
   };
   const cases: [string, IsolationEnvironmentRow][] = [
     ['unchanged', observed],
@@ -121,6 +123,7 @@ for (const tokened of [false, true]) {
       { ...observed, metadata: { ...observed.metadata, worktree_registration_id: 'replacement' } },
     ],
     ['token removed', { ...observed, metadata: row.metadata }],
+    ['null token', { ...observed, metadata: { ...row.metadata, worktree_registration_id: null } }],
     ...Object.entries(changedFields).map(([key, value]): [string, IsolationEnvironmentRow] => [
       key,
       {
@@ -129,15 +132,17 @@ for (const tokened of [false, true]) {
           key === 'metadata'
             ? {
                 ...changedFields.metadata,
-                ...(tokened ? { worktree_registration_id: 'original' } : {}),
+                ...(tokened ? { worktree_registration_id: token } : {}),
               }
             : value,
       },
     ]),
   ];
-  for (const [name, current] of cases) {
-    for (const operation of ['claim', 'retire'] as const) {
-      test(`${pgUrl ? 'postgres' : 'sqlite'}/file ${tokened ? 'tokened' : 'legacy'} ${operation}: ${name}`, async () => {
+  for (const [name, candidate] of cases) {
+    for (const operation of ['claim', 'retire', 'status', 'metadata'] as const) {
+      test(`${pgUrl ? 'postgres' : 'sqlite'}/file ${tokened ? `token ${JSON.stringify(token)}` : 'legacy'} ${operation}: ${name}`, async () => {
+        const current: IsolationEnvironmentRow =
+          operation === 'status' ? { ...candidate, status: 'destroyed' } : candidate;
         await db.query('DELETE FROM remote_agent_isolation_environments', []);
         await db.query(
           `INSERT INTO remote_agent_isolation_environments
@@ -164,30 +169,69 @@ for (const tokened of [false, true]) {
           changes: { documents: { 'host/isolation.json': [current] } },
         }));
         const matches = sameWorktreeRegistration(current, observed);
-        const accepts = matches && (operation === 'retire' || current.status === 'active');
+        const accepts =
+          matches &&
+          (operation === 'retire' ||
+            (operation === 'status'
+              ? current.status === 'destroyed'
+              : current.status === 'active'));
         const expected = tokened
-          ? !['id', 'working_path', 'registration token', 'token removed', 'provider'].includes(
-              name
-            )
+          ? ![
+              'id',
+              'working_path',
+              'registration token',
+              'token removed',
+              'null token',
+              'provider',
+            ].includes(name)
           : ['unchanged', 'metadata key order', 'token removed', 'status'].includes(name);
         expect(matches).toBe(expected);
         for (const store of [sql, file]) {
-          let called = false;
-          const action =
-            operation === 'claim'
-              ? store.withWorktreeRegistration(observed, async mark => {
-                  called = true;
-                  await mark();
-                })
-              : store.markWorktreeDestroyed(observed);
-          if (accepts) await action;
-          else await expect(action).rejects.toThrow('changed during cleanup');
-          if (operation === 'claim') expect(called).toBe(accepts);
-          expect((await store.getById(current.id))?.status).toBe(
-            accepts ? 'destroyed' : current.status
-          );
+          await checkOperation(store, operation, observed, current, accepts, name);
         }
       });
     }
   }
+}
+
+type Operation = 'claim' | 'retire' | 'status' | 'metadata';
+
+async function checkOperation(
+  store: IIsolationStore,
+  operation: Operation,
+  observed: IsolationEnvironmentRow,
+  current: IsolationEnvironmentRow,
+  accepts: boolean,
+  name: string
+): Promise<void> {
+  let called = false;
+  const actions = {
+    claim: () =>
+      store.withWorktreeRegistration(observed, async mark => {
+        called = true;
+        await mark();
+      }),
+    retire: () => store.markWorktreeDestroyed(observed),
+    status: () => store.updateStatus(observed.id, 'active', observed),
+    metadata: () => store.updateMetadata(observed.id, { adopted: true }, observed),
+  };
+  const action = actions[operation]();
+  if (accepts) await action;
+  else if (name === 'id') await expect(action).rejects.toThrow();
+  else
+    await expect(action).rejects.toThrow(
+      operation === 'metadata' ? 'changed during adoption' : 'changed during cleanup'
+    );
+  if (operation === 'claim') expect(called).toBe(accepts);
+  const persisted = await store.getById(current.id);
+  const resultingStatus = {
+    claim: 'destroyed',
+    retire: 'destroyed',
+    status: 'active',
+    metadata: current.status,
+  } as const;
+  expect(persisted?.status).toBe(accepts ? resultingStatus[operation] : current.status);
+  expect(persisted?.metadata).toEqual(
+    accepts && operation === 'metadata' ? { ...current.metadata, adopted: true } : current.metadata
+  );
 }
