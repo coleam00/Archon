@@ -94,6 +94,7 @@ describe('test-suite change decision', () => {
     'packages/docs-web/src/content/docs/reference/api.md',
     'packages/docs-web/src/content/docs/reference/node-execution.md',
     'packages/docs-web/src/content/docs/reference/variables.md',
+    'packages/docs-web/src/content/docs/guides/script-nodes.md',
     'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
     'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
   ])('runs suite and workspace tests for required Markdown input %s', file => {
