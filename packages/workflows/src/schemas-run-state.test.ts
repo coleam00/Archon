@@ -3,6 +3,11 @@ import { describe, test, expect } from 'bun:test';
 import {
   approvalContextSchema,
   isApprovalContext,
+  isWorkflowWaitContext,
+  readWorkflowWaitContext,
+  pausedAttentionWait,
+  pausedUsageLimitWait,
+  pendingWorkflowWaitDeadline,
   bodySessionCursorsSchema,
   bodySessionCursorAncestrySchema,
 } from './schemas/workflow-run';
@@ -14,7 +19,9 @@ import {
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   nodeOutputSchema,
+  runAttention,
 } from './schemas';
+import type { WorkflowWaitContext } from './schemas';
 
 describe('nodeOutputSchema', () => {
   test('requires provenance on skipped outputs while pending remains cause-free', () => {
@@ -70,6 +77,110 @@ describe('persisted workflow continuation schemas', () => {
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2026-08-25T10:00:00.000Z',
   };
+
+  const owners = [
+    { owner: 'node', nodeId: 'later' },
+    {
+      owner: 'loop_group',
+      nodeId: 'group',
+      bodyWaitId: 'later',
+      iteration: 2,
+      sessionId: null,
+      sessionProvider: null,
+    },
+  ];
+  const conditions = [
+    { kind: 'time', resumeAt: timeWait.resumeAt },
+    { kind: 'event', resumeAt: timeWait.resumeAt, event: 'ready' },
+    { kind: 'attention', message: 'Fix CI' },
+    { kind: 'quota', resumeAt: timeWait.resumeAt, pauseId: 'quota-1' },
+  ];
+  const waitCases = owners.flatMap(owner =>
+    conditions
+      .filter(condition => owner.owner !== 'loop_group' || condition.kind !== 'quota')
+      .map(condition => ({ ...owner, ...condition, waitingSince: timeWait.waitingSince }))
+  );
+  test.each(waitCases)('recognizes future wait keys (%j)', value => {
+    const wait = workflowWaitContextSchema.parse(value);
+    for (const occurrence of [{}, { pauseId: 'pause-1' }]) {
+      const known = { ...wait, ...occurrence };
+      const future = { ...known, futureField: true };
+      expect(isWorkflowWaitContext(future)).toBe(true);
+      expect(readWorkflowWaitContext(future)).toEqual(known);
+      expect(future).toEqual({ ...known, futureField: true });
+      expect(workflowWaitContextSchema.safeParse(future).success).toBe(false);
+      const run = { status: 'paused' as const, metadata: { wait: future } };
+      if (known.kind === 'attention') {
+        expect(pausedAttentionWait(run)).toEqual(known);
+        expect(runAttention({ id: 'future', ...run })).toMatchObject({ kind: 'attention' });
+      } else if (known.kind === 'quota') {
+        expect(pausedUsageLimitWait(run)).toEqual(known);
+      }
+      expect(pendingWorkflowWaitDeadline(run)).toEqual(
+        known.kind === 'attention' ? undefined : known
+      );
+    }
+  });
+
+  test('retains modern attention values while ignoring future top-level fields', () => {
+    const known = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: timeWait.waitingSince,
+      message: 'Fix CI',
+      pauseId: 'ask-2',
+      form: 'select',
+      options: [{ id: 'retry', label: 'Retry' }],
+      answer: { decision: 'retry', text: 'done' },
+      answeredVia: 'cli',
+      answeredAt: timeWait.waitingSince,
+      labels: { ci: 'pr' },
+      revision: 3,
+      reaskedFrom: 'ask-1',
+    } satisfies WorkflowWaitContext;
+    expect(readWorkflowWaitContext({ ...known, futureField: true })).toEqual(known);
+  });
+
+  test('validates known fields and discriminators when reading future waits', () => {
+    for (const invalid of [
+      null,
+      [],
+      'wait',
+      42,
+      { ...timeWait, kind: 'future' },
+      { ...timeWait, owner: 'future' },
+      { ...timeWait, nodeId: undefined },
+      { ...timeWait, waitingSince: 42 },
+      { ...timeWait, resumeAt: 'tomorrow' },
+      { ...timeWait, kind: 'event' },
+      { ...timeWait, owner: 'loop_group' },
+      { ...timeWait, event: 'ready' },
+      { ...timeWait, bodyWaitId: 'body' },
+      { ...timeWait, kind: 'attention', message: 'Fix CI' },
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: timeWait.waitingSince,
+        message: 'Fix CI',
+        answer: { text: 'done', futureAnswerField: true },
+      },
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: timeWait.waitingSince,
+        message: 'Fix CI',
+        options: [{ id: 'retry', futureOptionField: true }],
+      },
+    ]) {
+      expect(readWorkflowWaitContext(invalid)).toBeUndefined();
+      if (invalid && typeof invalid === 'object') {
+        expect(readWorkflowWaitContext({ ...invalid, futureField: true })).toBeUndefined();
+      }
+    }
+  });
 
   test('round trips named owner cursors in approvals and every loop wait kind', () => {
     const bodySessionCursors = { owner: { sessionId: 'O', provider: 'pi' } };

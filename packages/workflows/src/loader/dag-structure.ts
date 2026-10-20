@@ -7,6 +7,7 @@ import type {
   WorkflowNode,
 } from '../schemas';
 import {
+  canSuspend,
   isExecNode,
   isAgentNode,
   isLoopNode,
@@ -234,16 +235,6 @@ function hasDurableWait(node: DagNode | IncludeDirective): boolean {
   if (isIncludeDirective(node)) return false;
   if (isWaitNode(node)) return true;
   return isLoopGroupNode(node) && node.loop_group.nodes.some(hasDurableWait);
-}
-
-function canSuspend(node: DagNode | IncludeDirective): boolean {
-  if (isIncludeDirective(node)) return false;
-  if (isGateNode(node) || isWaitNode(node) || isWorkflowNode(node)) return true;
-  if (isLoopNode(node) && node.loop.interactive) return true;
-  return (
-    isLoopGroupNode(node) &&
-    (node.loop_group.interactive === true || node.loop_group.nodes.some(canSuspend))
-  );
 }
 
 function checkSuspensionOrdering(

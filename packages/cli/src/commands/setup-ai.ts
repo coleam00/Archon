@@ -16,6 +16,7 @@ import {
   getPluginsPath,
 } from '@archon/paths';
 import { setInstallDefault } from './ai';
+import { DEFAULT_CHAT_MODEL_OPTIONS } from './setup-model-options';
 import { checkProviderDiagnostics, type CheckResult } from './doctor';
 import { providerCommand } from './provider';
 import {
@@ -31,23 +32,6 @@ import {
   collectCodexAuth,
   collectPiConfig,
 } from './setup-provider-auth';
-
-/**
- * Curated default-chat-model suggestions for the built-in SDK providers
- * (#1999). CONVENIENCE only, not authority — mirrors CLAUDE_MODEL_OPTIONS /
- * CODEX_MODEL_OPTIONS in packages/web/src/experiments/console/lib/
- * model-options.ts (the web package can't be imported from the CLI, same
- * mirroring convention as that file's effort vocabularies). The prompt always
- * keeps a free-text escape; nothing blocks an unlisted model string.
- */
-const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string }[]> = {
-  claude: [
-    { value: 'sonnet', hint: 'balanced (SDK default)' },
-    { value: 'opus', hint: 'most capable' },
-    { value: 'haiku', hint: 'fastest' },
-  ],
-  codex: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.6-terra' }, { value: 'gpt-5.6-luna' }],
-};
 
 /** Sentinel select values for the default-chat-model prompt. Prefixed with
  *  `__` so they can never collide with a real model id. */

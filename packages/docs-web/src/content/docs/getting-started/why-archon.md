@@ -23,7 +23,7 @@ Archon moves the process into a file you own. The workflow fixes the steps, the 
 
 ## Core concepts
 
-A **workflow** is a YAML file in `.archon/workflows/`. It lists **nodes** and the dependencies between them, and Archon runs them as a graph. Nodes without a dependency between them run in parallel.
+A **workflow** is a YAML file in `.archon/workflows/`. It lists **nodes** and the dependencies between them, and Archon runs them as a graph. Nodes without a dependency between them normally run in parallel. [Loop bodies settle ordinary work before interactions](/guides/loop-nodes/#how-it-works); checkout guards can also require sequential execution.
 
 Each node does one thing:
 

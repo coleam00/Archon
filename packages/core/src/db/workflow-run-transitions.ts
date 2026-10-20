@@ -20,6 +20,7 @@ import {
   RUN_STOP_REASON_METADATA_KEY,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunOriginSchema,
+  validateWorkflowWaitMetadata,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
@@ -40,6 +41,7 @@ export async function insertWorkflowRun(
   query: TransactionQuery,
   data: WorkflowRunInsert
 ): Promise<WorkflowRun> {
+  validateWorkflowWaitMetadata(data.metadata);
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
   try {
@@ -267,6 +269,7 @@ export async function completeWorkflowRun(
   completion: { duration_ms: number },
   metadata?: Record<string, unknown>
 ): Promise<void> {
+  validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {

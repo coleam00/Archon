@@ -1,6 +1,7 @@
 import { unlink } from 'fs/promises';
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import type { AttachedFile, HandleMessageContext } from '@archon/core';
+import type { Context } from 'hono';
+import type { AttachedFile, Conversation, HandleMessageContext, RunActor } from '@archon/core';
 import { generateTitleForUser, resolveTitleRequest } from '@archon/core';
 import { parseWorkflowRunConfig } from '@archon/core/config';
 import * as messageDb from '@archon/core/db/messages';
@@ -15,7 +16,7 @@ import { authorizeDispatchConversation } from './api-request-auth';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { dispatchResponseSchema } from './schemas/conversation.schemas';
 
-// Body validation is handled manually in the handler (multipart vs JSON
+// Body validation is handled manually below (multipart vs JSON
 // branching), mirroring sendMessageRoute. The OpenAPI spec describes the
 // shapes via the description; declaring `request.body` would force JSON
 // validation to run on multipart payloads and reject them.
@@ -130,13 +131,359 @@ function parseRunModelOverridesFields(
   };
 }
 
-export function registerWorkflowRunLaunchRoute(
-  app: OpenAPIHono,
-  {
-    webAdapter,
-    dispatchToOrchestrator,
-  }: { webAdapter: WebAdapter; dispatchToOrchestrator: OrchestratorDispatch }
-): void {
+type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
+
+type FormValue = string | File | (string | File)[];
+
+/** A launch request whose body passed validation; nothing is authorized or written yet. */
+interface RunLaunchRequest {
+  conversationId: string;
+  message: string;
+  workflowInputs?: Record<string, string>;
+  workflowModelOverrides?: RunModelOverrides;
+  workflowRunConfig?: WorkflowRunConfigInput;
+  // Between-run continuation (#2747): run-id only — no name-based newest-wins.
+  adoptRunId?: string;
+  supersedesRunId?: string;
+  fileEntries: File[];
+}
+
+type RunLaunchOptions = Omit<RunLaunchRequest, 'conversationId' | 'message' | 'fileEntries'>;
+
+const CONFIG_PATH_REFUSAL = 'configPath is not supported; send validated config content';
+
+function parseInlineRunConfig(raw: unknown): Parsed<WorkflowRunConfigInput | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  try {
+    return { ok: true, value: parseWorkflowRunConfig(raw, { kind: 'http', label: 'inline' }) };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * Decode a multipart field that carries an object JSON-encoded, since a form field can only be
+ * a string. A malformed field is refused rather than ignored — silently dropping it would start
+ * the run without the values the caller thought it sent.
+ */
+function decodeFormJsonField(
+  raw: FormValue | undefined,
+  error: string,
+  logEvent: string,
+  logContext: Record<string, string>
+): Parsed<unknown> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (typeof raw !== 'string') return { ok: false, error };
+  try {
+    return { ok: true, value: JSON.parse(raw) as unknown };
+  } catch (parseErr: unknown) {
+    getLog().warn({ err: parseErr, ...logContext }, logEvent);
+    return { ok: false, error };
+  }
+}
+
+function parseMultipartRunOptions(
+  body: Record<string, FormValue>,
+  workflowName: string
+): Parsed<RunLaunchOptions> {
+  // Declared inputs (#2554).
+  const decodedInputs = decodeFormJsonField(
+    body.inputs,
+    'inputs must be a JSON-encoded object of string values',
+    'run_workflow.inputs_parse_failed',
+    { workflowName }
+  );
+  if (!decodedInputs.ok) return decodedInputs;
+  const inputs = parseRunInputsField(decodedInputs.value);
+  if (!inputs.ok) return inputs;
+
+  const decodeModelMap = (label: 'tiers' | 'aliases'): Parsed<unknown> =>
+    decodeFormJsonField(
+      body[label],
+      `${label} must be a JSON-encoded object`,
+      'run_workflow.model_overrides_parse_failed',
+      { workflowName, field: label }
+    );
+  const tiers = decodeModelMap('tiers');
+  if (!tiers.ok) return tiers;
+  const aliases = decodeModelMap('aliases');
+  if (!aliases.ok) return aliases;
+  const overrides = parseRunModelOverridesFields(tiers.value, aliases.value);
+  if (!overrides.ok) return overrides;
+
+  const decodedConfig = decodeFormJsonField(
+    body.config,
+    'config must be a JSON-encoded object',
+    'run_workflow.config_parse_failed',
+    { workflowName }
+  );
+  if (!decodedConfig.ok) return decodedConfig;
+  const runConfig = parseInlineRunConfig(decodedConfig.value);
+  if (!runConfig.ok) return runConfig;
+
+  return {
+    ok: true,
+    value: {
+      workflowInputs: inputs.inputs,
+      workflowModelOverrides: overrides.overrides,
+      workflowRunConfig: runConfig.value,
+    },
+  };
+}
+
+async function parseMultipartRunRequest(
+  c: Context,
+  workflowName: string
+): Promise<Parsed<RunLaunchRequest>> {
+  let body: Record<string, FormValue>;
+  try {
+    body = await c.req.parseBody({ all: true });
+  } catch (parseErr: unknown) {
+    getLog().warn({ err: parseErr }, 'run_workflow.multipart_parse_failed');
+    return { ok: false, error: 'Invalid multipart form data' };
+  }
+
+  const { message, conversationId } = body;
+  if (typeof message !== 'string' || !message) {
+    return { ok: false, error: 'message must be a non-empty string' };
+  }
+  if (typeof conversationId !== 'string' || !conversationId || !/^[\w-]+$/.test(conversationId)) {
+    return { ok: false, error: 'conversationId must be a non-empty alphanumeric string' };
+  }
+  if (body.configPath !== undefined) return { ok: false, error: CONFIG_PATH_REFUSAL };
+
+  const options = parseMultipartRunOptions(body, workflowName);
+  if (!options.ok) return options;
+  const files = Array.isArray(body.files) ? body.files : [body.files];
+  return {
+    ok: true,
+    value: {
+      conversationId,
+      message,
+      ...options.value,
+      fileEntries: files.filter((e): e is File => e instanceof File),
+    },
+  };
+}
+
+function parseRunIdField(raw: unknown, field: string): Parsed<string | undefined> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (typeof raw !== 'string' || !raw) {
+    return { ok: false, error: `${field} must be a non-empty run id` };
+  }
+  return { ok: true, value: raw };
+}
+
+function parseContinuationFields(body: {
+  adopt_run_id?: unknown;
+  supersedes_run_id?: unknown;
+}): Parsed<Pick<RunLaunchRequest, 'adoptRunId' | 'supersedesRunId'>> {
+  const adopt = parseRunIdField(body.adopt_run_id, 'adopt_run_id');
+  if (!adopt.ok) return adopt;
+  const supersede = parseRunIdField(body.supersedes_run_id, 'supersedes_run_id');
+  if (!supersede.ok) return supersede;
+  if (adopt.value && supersede.value) {
+    return { ok: false, error: 'adopt_run_id and supersedes_run_id are mutually exclusive' };
+  }
+  return { ok: true, value: { adoptRunId: adopt.value, supersedesRunId: supersede.value } };
+}
+
+async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>> {
+  let body: {
+    conversationId?: unknown;
+    message?: unknown;
+    inputs?: unknown;
+    tiers?: unknown;
+    aliases?: unknown;
+    config?: unknown;
+    configPath?: unknown;
+    adopt_run_id?: unknown;
+    supersedes_run_id?: unknown;
+  };
+  try {
+    body = await c.req.json();
+  } catch (parseErr: unknown) {
+    getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
+    return { ok: false, error: 'Invalid JSON in request body' };
+  }
+
+  const { conversationId, message } = body;
+  if (typeof conversationId !== 'string' || !conversationId) {
+    return { ok: false, error: 'conversationId must be a non-empty string' };
+  }
+  if (typeof message !== 'string' || !message) {
+    return { ok: false, error: 'message must be a non-empty string' };
+  }
+  if (body.configPath !== undefined) return { ok: false, error: CONFIG_PATH_REFUSAL };
+
+  const inputs = parseRunInputsField(body.inputs);
+  if (!inputs.ok) return inputs;
+  const continuation = parseContinuationFields(body);
+  if (!continuation.ok) return continuation;
+  const overrides = parseRunModelOverridesFields(body.tiers, body.aliases);
+  if (!overrides.ok) return overrides;
+  const runConfig = parseInlineRunConfig(body.config);
+  if (!runConfig.ok) return runConfig;
+
+  return {
+    ok: true,
+    value: {
+      conversationId,
+      message,
+      workflowInputs: inputs.inputs,
+      workflowModelOverrides: overrides.overrides,
+      workflowRunConfig: runConfig.value,
+      ...continuation.value,
+      fileEntries: [],
+    },
+  };
+}
+
+/** An authorized launch with its attachments on disk. */
+interface RunLaunch {
+  workflowName: string;
+  request: RunLaunchRequest;
+  actor: RunActor;
+  savedFiles: AttachedFile[];
+}
+
+function actorUserId(actor: RunActor): string | undefined {
+  return actor.kind === 'user' ? actor.userId : undefined;
+}
+
+async function persistLaunchFiles(
+  request: RunLaunchRequest,
+  workflowName: string
+): ReturnType<typeof persistUploadedFiles> {
+  const { conversationId, fileEntries } = request;
+  if (fileEntries.length === 0) return { ok: true, savedFiles: [] };
+  const result = await persistUploadedFiles(conversationId, fileEntries);
+  if (result.ok) {
+    getLog().info(
+      { conversationId, fileCount: result.savedFiles.length, workflowName },
+      'run_workflow.files_uploaded'
+    );
+  }
+  return result;
+}
+
+async function removeLaunchFiles(launch: RunLaunch): Promise<void> {
+  const { conversationId } = launch.request;
+  for (const file of launch.savedFiles) {
+    await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
+      }
+    });
+  }
+}
+
+/**
+ * Persist the user message and register its DB ID (same as the message endpoint). File
+ * metadata (name/mime/size — no path, since the on-disk file is ephemeral) goes into message
+ * metadata when present. Returns false, with the uploads removed, when the message cannot be
+ * saved.
+ */
+async function recordLaunchMessage(
+  conv: Conversation,
+  launch: RunLaunch,
+  webAdapter: WebAdapter
+): Promise<boolean> {
+  const { workflowName, request, savedFiles } = launch;
+  const userId = actorUserId(launch.actor);
+  const meta =
+    savedFiles.length > 0
+      ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
+      : undefined;
+  try {
+    await messageDb.addMessage(conv.id, 'user', request.message, meta, userId);
+  } catch (e: unknown) {
+    getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+    await removeLaunchFiles(launch);
+    return false;
+  }
+  webAdapter.setConversationDbId(request.conversationId, conv.id);
+  if (!conv.title) {
+    // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
+    // assistant default (#1855). Both calls never throw.
+    void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
+      generateTitleForUser(
+        conv.id,
+        request.message,
+        titleRequest,
+        getArchonWorkspacesPath(),
+        userId,
+        workflowName
+      )
+    );
+  }
+  return true;
+}
+
+/**
+ * The message and every run option ride typed fields, never a chat command string: tokenizing
+ * the message would rewrite it and let a word in it set `--force` (#4159), and encoding inputs
+ * would invent a chat grammar (#2554/#2555).
+ */
+function launchContext(launch: RunLaunch): Omit<HandleMessageContext, 'isolationHints'> {
+  const { request, savedFiles } = launch;
+  const { workflowInputs, workflowModelOverrides, workflowRunConfig } = request;
+  return {
+    actor: launch.actor,
+    workflowName: launch.workflowName,
+    ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
+    ...(workflowInputs ? { workflowInputs } : {}),
+    ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
+    ...(workflowRunConfig ? { workflowRunConfig } : {}),
+    ...(request.adoptRunId ? { workflowAdoptRunId: request.adoptRunId } : {}),
+    ...(request.supersedesRunId ? { workflowSupersedesRunId: request.supersedesRunId } : {}),
+  };
+}
+
+interface RunLaunchDeps {
+  webAdapter: WebAdapter;
+  dispatchToOrchestrator: OrchestratorDispatch;
+}
+
+async function launchWorkflowRun(
+  c: Context,
+  workflowName: string,
+  request: RunLaunchRequest,
+  { webAdapter, dispatchToOrchestrator }: RunLaunchDeps
+): Promise<Response> {
+  // The conversation id arrives in the body, so attachments are written only
+  // once it is known that the caller may reach this conversation.
+  const access = await authorizeDispatchConversation(c, request.conversationId);
+  if ('error' in access) return access.error;
+
+  const uploaded = await persistLaunchFiles(request, workflowName);
+  if (!uploaded.ok) return apiError(c, uploaded.status, uploaded.error);
+  const launch: RunLaunch = {
+    workflowName,
+    request,
+    actor: access.actor,
+    savedFiles: uploaded.savedFiles,
+  };
+
+  try {
+    if (access.conversation) {
+      const recorded = await recordLaunchMessage(access.conversation, launch, webAdapter);
+      if (!recorded) return apiError(c, 500, 'Failed to save workflow request to history');
+    }
+    const result = await dispatchToOrchestrator(
+      request.conversationId,
+      request.message,
+      launchContext(launch),
+      launch.savedFiles.length > 0 ? launch.savedFiles : undefined
+    );
+    return c.json(result);
+  } catch (error) {
+    getLog().error({ err: error }, 'run_workflow_failed');
+    return apiError(c, 500, 'Failed to run workflow');
+  }
+}
+
+export function registerWorkflowRunLaunchRoute(app: OpenAPIHono, deps: RunLaunchDeps): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
 
   // POST /api/workflows/:name/run - Run a workflow via the orchestrator
@@ -153,275 +500,10 @@ export function registerWorkflowRunLaunchRoute(
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
-
-    let message: string;
-    let conversationId: string;
-    let workflowInputs: Record<string, string> | undefined;
-    let workflowModelOverrides: RunModelOverrides | undefined;
-    let workflowRunConfig: WorkflowRunConfigInput | undefined;
-    // Between-run continuation (#2747): run-id only — no name-based newest-wins.
-    let adoptRunId: string | undefined;
-    let supersedesRunId: string | undefined;
-    let fileEntries: File[] = [];
-
-    const contentType = c.req.header('content-type') ?? '';
-
-    if (contentType.includes('multipart/form-data')) {
-      let body: Record<string, string | File | (string | File)[]>;
-      try {
-        body = await c.req.parseBody({ all: true });
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr }, 'run_workflow.multipart_parse_failed');
-        return apiError(c, 400, 'Invalid multipart form data');
-      }
-
-      const rawMessage = body.message;
-      const rawConv = body.conversationId;
-      if (typeof rawMessage !== 'string' || !rawMessage) {
-        return apiError(c, 400, 'message must be a non-empty string');
-      }
-      if (typeof rawConv !== 'string' || !rawConv || !/^[\w-]+$/.test(rawConv)) {
-        return apiError(c, 400, 'conversationId must be a non-empty alphanumeric string');
-      }
-      message = rawMessage;
-      conversationId = rawConv;
-
-      if (body.configPath !== undefined) {
-        return apiError(c, 400, 'configPath is not supported; send validated config content');
-      }
-
-      // Declared inputs (#2554). A form field can only be a string, so the map travels
-      // JSON-encoded. A malformed field is refused rather than ignored — silently
-      // dropping it would start the run without the values the caller thought it sent.
-      const rawInputs = body.inputs;
-      if (rawInputs !== undefined) {
-        if (typeof rawInputs !== 'string') {
-          return apiError(c, 400, 'inputs must be a JSON-encoded object of string values');
-        }
-        let decoded: unknown;
-        try {
-          decoded = JSON.parse(rawInputs);
-        } catch (parseErr: unknown) {
-          getLog().warn({ err: parseErr, workflowName }, 'run_workflow.inputs_parse_failed');
-          return apiError(c, 400, 'inputs must be a JSON-encoded object of string values');
-        }
-        const parsed = parseRunInputsField(decoded);
-        if (!parsed.ok) return apiError(c, 400, parsed.error);
-        workflowInputs = parsed.inputs;
-      }
-
-      const decodeObjectField = (
-        raw: string | File | (string | File)[] | undefined,
-        label: 'tiers' | 'aliases'
-      ): { ok: true; value?: unknown } | { ok: false; error: string } => {
-        if (raw === undefined) return { ok: true };
-        if (typeof raw !== 'string') {
-          return { ok: false, error: `${label} must be a JSON-encoded object` };
-        }
-        try {
-          return { ok: true, value: JSON.parse(raw) as unknown };
-        } catch (parseErr: unknown) {
-          getLog().warn(
-            { err: parseErr, workflowName, field: label },
-            'run_workflow.model_overrides_parse_failed'
-          );
-          return { ok: false, error: `${label} must be a JSON-encoded object` };
-        }
-      };
-      const decodedTiers = decodeObjectField(body.tiers, 'tiers');
-      if (!decodedTiers.ok) return apiError(c, 400, decodedTiers.error);
-      const decodedAliases = decodeObjectField(body.aliases, 'aliases');
-      if (!decodedAliases.ok) return apiError(c, 400, decodedAliases.error);
-      const parsedOverrides = parseRunModelOverridesFields(
-        decodedTiers.value,
-        decodedAliases.value
-      );
-      if (!parsedOverrides.ok) return apiError(c, 400, parsedOverrides.error);
-      workflowModelOverrides = parsedOverrides.overrides;
-
-      if (body.config !== undefined) {
-        if (typeof body.config !== 'string') {
-          return apiError(c, 400, 'config must be a JSON-encoded object');
-        }
-        let decodedConfig: unknown;
-        try {
-          decodedConfig = JSON.parse(body.config) as unknown;
-        } catch (parseErr: unknown) {
-          getLog().warn({ err: parseErr, workflowName }, 'run_workflow.config_parse_failed');
-          return apiError(c, 400, 'config must be a JSON-encoded object');
-        }
-        try {
-          workflowRunConfig = parseWorkflowRunConfig(decodedConfig, {
-            kind: 'http',
-            label: 'inline',
-          });
-        } catch (error) {
-          return apiError(c, 400, (error as Error).message);
-        }
-      }
-
-      const rawFiles = body.files;
-      const fileList: (string | File)[] = Array.isArray(rawFiles)
-        ? rawFiles
-        : rawFiles !== undefined
-          ? [rawFiles]
-          : [];
-      fileEntries = fileList.filter((e): e is File => e instanceof File);
-    } else {
-      let body: {
-        conversationId?: unknown;
-        message?: unknown;
-        inputs?: unknown;
-        tiers?: unknown;
-        aliases?: unknown;
-        config?: unknown;
-        configPath?: unknown;
-        adopt_run_id?: unknown;
-        supersedes_run_id?: unknown;
-      };
-      try {
-        body = await c.req.json();
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
-        return apiError(c, 400, 'Invalid JSON in request body');
-      }
-      if (typeof body.conversationId !== 'string' || !body.conversationId) {
-        return apiError(c, 400, 'conversationId must be a non-empty string');
-      }
-      if (typeof body.message !== 'string' || !body.message) {
-        return apiError(c, 400, 'message must be a non-empty string');
-      }
-      if (body.configPath !== undefined) {
-        return apiError(c, 400, 'configPath is not supported; send validated config content');
-      }
-      const parsed = parseRunInputsField(body.inputs);
-      if (!parsed.ok) return apiError(c, 400, parsed.error);
-      workflowInputs = parsed.inputs;
-      for (const [field, target] of [
-        ['adopt_run_id', 'adopt'],
-        ['supersedes_run_id', 'supersede'],
-      ] as const) {
-        const raw = body[field];
-        if (raw === undefined) continue;
-        if (typeof raw !== 'string' || !raw) {
-          return apiError(c, 400, `${field} must be a non-empty run id`);
-        }
-        if (target === 'adopt') adoptRunId = raw;
-        else supersedesRunId = raw;
-      }
-      if (adoptRunId && supersedesRunId) {
-        return apiError(c, 400, 'adopt_run_id and supersedes_run_id are mutually exclusive');
-      }
-      const parsedOverrides = parseRunModelOverridesFields(body.tiers, body.aliases);
-      if (!parsedOverrides.ok) return apiError(c, 400, parsedOverrides.error);
-      workflowModelOverrides = parsedOverrides.overrides;
-      if (body.config !== undefined) {
-        try {
-          workflowRunConfig = parseWorkflowRunConfig(body.config, {
-            kind: 'http',
-            label: 'inline',
-          });
-        } catch (error) {
-          return apiError(c, 400, (error as Error).message);
-        }
-      }
-      conversationId = body.conversationId;
-      message = body.message;
-    }
-
-    // The conversation id arrives in the body, so attachments are written only
-    // once it is known that the caller may reach this conversation.
-    const access = await authorizeDispatchConversation(c, conversationId);
-    if ('error' in access) return access.error;
-    const conv = access.conversation;
-    const actor = access.actor;
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
-
-    let savedFiles: AttachedFile[] = [];
-    if (fileEntries.length > 0) {
-      const result = await persistUploadedFiles(conversationId, fileEntries);
-      if (!result.ok) {
-        return apiError(c, result.status, result.error);
-      }
-      savedFiles = result.savedFiles;
-      getLog().info(
-        { conversationId, fileCount: savedFiles.length, workflowName },
-        'run_workflow.files_uploaded'
-      );
-    }
-
-    try {
-      // Persist user message and register DB ID (same as message endpoint).
-      // File metadata (name/mime/size — no path, since the on-disk file is
-      // ephemeral) goes into message metadata when present.
-      if (conv) {
-        try {
-          const meta =
-            savedFiles.length > 0
-              ? {
-                  files: savedFiles.map(f => ({
-                    name: f.name,
-                    mimeType: f.mimeType,
-                    size: f.size,
-                  })),
-                }
-              : undefined;
-          await messageDb.addMessage(conv.id, 'user', message, meta, userId);
-        } catch (e: unknown) {
-          getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
-          for (const file of savedFiles) {
-            await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, filePath: file.path, conversationId },
-                  'upload.rollback_failed'
-                );
-              }
-            });
-          }
-          return apiError(c, 500, 'Failed to save workflow request to history');
-        }
-        webAdapter.setConversationDbId(conversationId, conv.id);
-        if (!conv.title) {
-          // Resolve the `small` tier (config tiers + per-user prefs) instead of the raw
-          // assistant default (#1855). Both calls never throw.
-          void resolveTitleRequest(conv.ai_assistant_type, userId).then(titleRequest =>
-            generateTitleForUser(
-              conv.id,
-              message,
-              titleRequest,
-              getArchonWorkspacesPath(),
-              userId,
-              workflowName
-            )
-          );
-        }
-      }
-
-      // The message and every run option ride typed fields, never a chat command
-      // string: tokenizing the message would rewrite it and let a word in it set
-      // `--force` (#4159), and encoding inputs would invent a chat grammar (#2554/#2555).
-      const extraContext: Omit<HandleMessageContext, 'isolationHints'> = {
-        actor,
-        workflowName,
-        ...(savedFiles.length > 0 ? { attachedFiles: savedFiles } : {}),
-        ...(workflowInputs ? { workflowInputs } : {}),
-        ...(workflowModelOverrides ? { workflowModelOverrides } : {}),
-        ...(workflowRunConfig ? { workflowRunConfig } : {}),
-        ...(adoptRunId ? { workflowAdoptRunId: adoptRunId } : {}),
-        ...(supersedesRunId ? { workflowSupersedesRunId: supersedesRunId } : {}),
-      };
-      const filesToCleanup = savedFiles.length > 0 ? savedFiles : undefined;
-      const result = await dispatchToOrchestrator(
-        conversationId,
-        message,
-        extraContext,
-        filesToCleanup
-      );
-      return c.json(result);
-    } catch (error) {
-      getLog().error({ err: error }, 'run_workflow_failed');
-      return apiError(c, 500, 'Failed to run workflow');
-    }
+    const parsed = (c.req.header('content-type') ?? '').includes('multipart/form-data')
+      ? await parseMultipartRunRequest(c, workflowName)
+      : await parseJsonRunRequest(c);
+    if (!parsed.ok) return apiError(c, 400, parsed.error);
+    return launchWorkflowRun(c, workflowName, parsed.value, deps);
   });
 }

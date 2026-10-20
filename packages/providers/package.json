@@ -150,6 +150,36 @@
       "src/community/pi/provider.test.ts"
     ],
     [
+      "src/community/pi/provider-models.test.ts"
+    ],
+    [
+      "src/community/pi/provider-auth.test.ts"
+    ],
+    [
+      "src/community/pi/provider-custom-models.test.ts"
+    ],
+    [
+      "src/community/pi/provider-output.test.ts"
+    ],
+    [
+      "src/community/pi/provider-sessions.test.ts"
+    ],
+    [
+      "src/community/pi/provider-tools.test.ts"
+    ],
+    [
+      "src/community/pi/provider-context.test.ts"
+    ],
+    [
+      "src/community/pi/provider-extensions.test.ts"
+    ],
+    [
+      "src/community/pi/provider-lifecycle.test.ts"
+    ],
+    [
+      "src/community/pi/provider-extension-loader.test.ts"
+    ],
+    [
       "src/community/pi/provider.integration.test.ts"
     ],
     [
