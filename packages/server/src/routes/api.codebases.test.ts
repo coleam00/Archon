@@ -250,6 +250,8 @@ mock.module('@archon/core/utils/commands', () => ({
 
 // Import the module under test AFTER all mock.module() calls
 import { registerApiRoutes } from './api';
+import * as registrationIdentity from '@archon/core/services/project-registration-identity';
+import { getLog } from './api-route-kit';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -341,31 +343,120 @@ describe('GET /api/codebases', () => {
     expect(body[1]?.name).toBe('zebra-project');
   });
 
-  test('deduplicates by repository_url (keeps most recently updated)', async () => {
-    const older = {
+  test('deduplicates GitHub transport spellings and keeps the newest row regardless of order', async () => {
+    const variants = [
+      'https://github.com/user/repo',
+      'https://github.com/user/repo/',
+      'https://github.com/user/repo.git',
+      'https://github.com/user/repo.git/',
+      'git@github.com:user/repo.git',
+      'ssh://git@github.com/user/repo',
+      'https://GitHub.com/USER/Repo',
+    ].map((repository_url, index) => ({
       ...MOCK_CODEBASE,
-      id: 'older',
-      name: 'my-project',
-      repository_url: 'https://github.com/user/repo',
+      id: `variant-${String(index)}`,
+      name: 'zebra-project',
+      repository_url,
       updated_at: '2024-01-01T00:00:00Z',
-    };
-    const newer = {
+    }));
+    const newest = {
       ...MOCK_CODEBASE,
-      id: 'newer',
-      name: 'my-project',
-      repository_url: 'https://github.com/user/repo.git',
+      id: 'newest',
+      name: 'zebra-project',
       updated_at: '2024-06-01T00:00:00Z',
     };
-    mockListCodebases.mockImplementationOnce(async () => [older, newer]);
+    const unrelated = {
+      ...MOCK_CODEBASE,
+      id: 'unrelated',
+      name: 'alpha-project',
+      repository_url: 'https://github.com/user/other',
+    };
+    mockListCodebases.mockImplementationOnce(async () => [
+      ...variants.slice(0, 1),
+      newest,
+      ...variants.slice(1),
+      unrelated,
+    ]);
 
-    const app = makeApp();
-    const response = await app.request('/api/codebases');
+    const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([unrelated, newest]);
+  });
 
-    const body = (await response.json()) as Array<{ id: string }>;
-    // Only one entry should survive dedup (the newer one)
-    expect(body.length).toBe(1);
-    expect(body[0]?.id).toBe('newer');
+  test('keeps different hosts and case-sensitive non-GitHub repository paths separate', async () => {
+    const rows = [
+      'https://example.com/user/repo',
+      'https://other.example/user/repo',
+      'https://example.com/User/Repo',
+    ].map((repository_url, index) => ({
+      ...MOCK_CODEBASE,
+      id: `distinct-${String(index)}`,
+      repository_url,
+    }));
+    mockListCodebases.mockImplementationOnce(async () => rows);
+
+    const response = await makeApp().request('/api/codebases');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(rows);
+  });
+
+  test('retains every unresolved and URL-less row, warning with each original error', async () => {
+    const unresolved = ['first', 'second'].map(id => ({
+      ...MOCK_CODEBASE,
+      id,
+      name: `broken-${id}`,
+      repository_url: '../unreadable.git',
+      default_cwd: `/projects/${id}`,
+    }));
+    const urlLess = ['folder-one', 'folder-two'].map(id => ({
+      ...MOCK_CODEBASE,
+      id,
+      name: 'folder',
+      repository_url: null,
+    }));
+    const healthy = {
+      ...MOCK_CODEBASE,
+      id: 'healthy',
+      name: 'healthy',
+      updated_at: '2024-06-01T00:00:00Z',
+    };
+    const older = {
+      ...healthy,
+      id: 'older',
+      repository_url: 'git@github.com:user/repo.git',
+      updated_at: '2024-01-01T00:00:00Z',
+    };
+    const rows = [healthy, ...unresolved, older, ...urlLess];
+    mockListCodebases.mockImplementationOnce(async () => rows);
+    const originalError = new Error('local remote access denied');
+    const realIdentity = registrationIdentity.remoteIdentity;
+    const identitySpy = spyOn(registrationIdentity, 'remoteIdentity').mockImplementation(
+      async (url, cwd) => {
+        if (url === '../unreadable.git') throw originalError;
+        return realIdentity(url, cwd);
+      }
+    );
+    const warningSpy = spyOn(getLog(), 'warn');
+    warningSpy.mockClear();
+    try {
+      const response = await makeApp().request('/api/codebases');
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([...unresolved, ...urlLess, healthy]);
+      expect(identitySpy).toHaveBeenCalledTimes(4);
+      for (const row of [healthy, ...unresolved, older]) {
+        expect(identitySpy).toHaveBeenCalledWith(row.repository_url, row.default_cwd);
+      }
+      expect(warningSpy).toHaveBeenCalledTimes(2);
+      for (const row of unresolved) {
+        expect(warningSpy).toHaveBeenCalledWith(
+          { err: originalError, codebaseId: row.id, codebaseName: row.name },
+          'list_codebases_remote_identity_unavailable'
+        );
+      }
+    } finally {
+      identitySpy.mockRestore();
+      warningSpy.mockRestore();
+    }
   });
 
   test('parses commands when stored as JSON string', async () => {
