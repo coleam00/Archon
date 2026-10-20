@@ -1,5 +1,5 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureWorkflowNoMatch } from '@archon/paths';
 import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import {
   resolveTopLevelInputs,
@@ -246,6 +246,23 @@ export function buildRegisterProjectTool(ctx: {
         getLog().error({ err, projectName }, 'chat_tools.register_project_failed');
         return `Could not register project: ${err.message}`;
       }
+    },
+  };
+}
+
+export function buildReportWorkflowNoMatchTool(): NativeTool {
+  let reported = false;
+  return {
+    name: 'report_workflow_no_match',
+    description:
+      'Report that the user wants work done but no available workflow fits. Do not use for ordinary questions or missing project/input details.',
+    inputSchema: defineNativeToolInputSchema({ properties: {}, required: [] }),
+    handler: async () => {
+      if (!reported) {
+        captureWorkflowNoMatch('native_tool');
+        reported = true;
+      }
+      return 'No workflow match recorded. Explain the closest option and its limits, workflow authoring for repeatable work, or a coding agent for one-off work.';
     },
   };
 }

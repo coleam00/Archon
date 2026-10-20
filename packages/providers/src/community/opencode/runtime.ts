@@ -49,7 +49,8 @@ async function startEmbeddedOpencode(
     options: Record<string, unknown>
   ) => Promise<{ client: unknown; server: { url: string; close(): void } }>,
   startupPort: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  env: Record<string, string> = {}
 ): Promise<{ client: unknown; server: { url: string; close(): void } }> {
   // Clear any pre-existing OpenCode server credential env vars so the embedded
   // server uses the random password generated in buildEmbeddedServerConfig rather
@@ -62,13 +63,25 @@ async function startEmbeddedOpencode(
     delete process.env.OPENCODE_SERVER_USERNAME;
   }
 
-  return await createOpencode({
-    hostname: '127.0.0.1',
-    port: startupPort,
-    timeout: OPENCODE_START_TIMEOUT_MS,
-    signal,
-    config: buildEmbeddedServerConfig(startupPort),
-  });
+  const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  // The SDK spawns synchronously before returning its startup promise. Restore before
+  // awaiting it: overlapping queries must never inherit another request's environment.
+  // runtime-env.integration.spec.ts checks this contract against the installed SDK.
+  try {
+    Object.assign(process.env, env);
+    return createOpencode({
+      hostname: '127.0.0.1',
+      port: startupPort,
+      timeout: OPENCODE_START_TIMEOUT_MS,
+      signal,
+      config: buildEmbeddedServerConfig(startupPort),
+    });
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 export interface OpencodeClientLike {
@@ -94,12 +107,8 @@ export interface OpencodeClientLike {
 export interface EmbeddedRuntime {
   client: OpencodeClientLike;
   server: { url: string; close(): void };
-  refCount: number;
-  /** Promise that created this runtime - used to prevent race conditions on release */
-  creationPromise: Promise<EmbeddedRuntime>;
 }
 
-let embeddedRuntimePromise: Promise<EmbeddedRuntime> | undefined;
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -182,84 +191,29 @@ function pickRandomStartupPort(): number {
   return Math.floor(Math.random() * 40000) + 20000;
 }
 
-export async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRuntime> {
-  if (signal?.aborted) {
-    throw new Error('OpenCode runtime startup aborted');
+export async function acquireEmbeddedRuntime(
+  signal?: AbortSignal,
+  env?: Record<string, string>
+): Promise<EmbeddedRuntime> {
+  if (signal?.aborted) throw new Error('OpenCode runtime startup aborted');
+  const { createOpencode } = await import('@opencode-ai/sdk');
+  for (let attempt = 0; ; attempt += 1) {
+    if (signal?.aborted) throw new Error('OpenCode runtime startup aborted');
+    const startupPort = pickRandomStartupPort();
+    try {
+      const runtime = await startEmbeddedOpencode(createOpencode, startupPort, signal, env);
+      return { client: runtime.client as OpencodeClientLike, server: runtime.server };
+    } catch (error) {
+      if (!isPortBindConflict(error) || attempt >= OPENCODE_START_MAX_RETRIES - 1) throw error;
+      getLog().warn(
+        { err: error, startupPort, attempt: attempt + 1, maxAttempts: OPENCODE_START_MAX_RETRIES },
+        'opencode.runtime_start_retry_after_port_conflict'
+      );
+    }
   }
-
-  if (!embeddedRuntimePromise) {
-    let resolveRuntime: ((runtime: EmbeddedRuntime) => void) | undefined;
-    let rejectRuntime: ((error: unknown) => void) | undefined;
-
-    const promise = new Promise<EmbeddedRuntime>((resolve, reject) => {
-      resolveRuntime = resolve;
-      rejectRuntime = reject;
-    });
-    embeddedRuntimePromise = promise;
-
-    (async (): Promise<void> => {
-      try {
-        const { createOpencode } = await import('@opencode-ai/sdk');
-
-        let runtime: { client: unknown; server: { url: string; close(): void } } | undefined;
-        let lastError: unknown;
-
-        for (let attempt = 0; attempt < OPENCODE_START_MAX_RETRIES; attempt += 1) {
-          if (signal?.aborted) {
-            throw new Error('OpenCode runtime startup aborted');
-          }
-
-          const startupPort = pickRandomStartupPort();
-
-          try {
-            runtime = await startEmbeddedOpencode(createOpencode, startupPort, signal);
-            break;
-          } catch (error) {
-            lastError = error;
-            if (!isPortBindConflict(error) || attempt >= OPENCODE_START_MAX_RETRIES - 1) {
-              throw error;
-            }
-
-            getLog().warn(
-              {
-                err: error,
-                startupPort,
-                attempt: attempt + 1,
-                maxAttempts: OPENCODE_START_MAX_RETRIES,
-              },
-              'opencode.runtime_start_retry_after_port_conflict'
-            );
-          }
-        }
-
-        if (!runtime) {
-          throw lastError instanceof Error
-            ? lastError
-            : new Error('OpenCode runtime failed to start after retries');
-        }
-
-        resolveRuntime?.({
-          client: runtime.client as OpencodeClientLike,
-          server: runtime.server,
-          refCount: 0,
-          creationPromise: promise,
-        });
-      } catch (error) {
-        embeddedRuntimePromise = undefined;
-        rejectRuntime?.(error);
-      }
-    })();
-  }
-
-  const runtime = await embeddedRuntimePromise;
-  runtime.refCount += 1;
-  return runtime;
 }
 
 export function releaseEmbeddedRuntime(runtime: EmbeddedRuntime): void {
-  runtime.refCount = Math.max(0, runtime.refCount - 1);
-  if (runtime.refCount > 0) return;
-
   try {
     runtime.server.close();
   } finally {
@@ -273,10 +227,6 @@ export function releaseEmbeddedRuntime(runtime: EmbeddedRuntime): void {
         getLog().debug({ port, pid }, 'opencode.killing_embedded_process');
         killProcess(pid);
       }
-    }
-
-    if (embeddedRuntimePromise === runtime.creationPromise) {
-      embeddedRuntimePromise = undefined;
     }
   }
 }
@@ -319,9 +269,4 @@ export async function probeOpencodeRuntime(
   return Bun.which('opencode', { PATH: process.env.PATH }) === null
     ? 'executable-missing'
     : 'ready';
-}
-
-/** Reset the embedded runtime state. For testing only. */
-export function resetEmbeddedRuntime(): void {
-  embeddedRuntimePromise = undefined;
 }

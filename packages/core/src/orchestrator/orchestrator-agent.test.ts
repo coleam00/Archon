@@ -17,6 +17,7 @@ import {
   makeSession,
   mockAddMessage,
   mockCaptureApprovalResolved,
+  mockCaptureWorkflowNoMatch,
   mockCreateWorkflowEvent,
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
@@ -87,25 +88,38 @@ describe('provider cwd resolution', () => {
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
   });
 
-  test('scoped CLI chat binds the selected project in the shell environment without a command prefix', async () => {
-    const codebase = makeCodebaseForSync();
-    mockLoadConfig.mockResolvedValueOnce(
-      makeConfig({ tiers: { large: { provider: 'copilot', model: 'gpt-5' } } })
-    );
-    mockGetOrCreateConversation.mockResolvedValueOnce(
-      makeConversation({ codebase_id: codebase.id, ai_assistant_type: 'copilot' })
-    );
-    mockGetCodebase.mockResolvedValueOnce(codebase);
-    mockListCodebases.mockResolvedValueOnce([codebase]);
-    mockGetCodebaseEnvVars.mockResolvedValueOnce({ ARCHON_WORKFLOW_CODEBASE_ID: 'other-project' });
-
-    const scopePlatform = makePlatform();
-    await handleMessage(scopePlatform, 'conv-1', 'inspect this run', { actor: operator });
-
-    expect(mockSendQuery.mock.calls[0]?.[3]?.env).toMatchObject({
-      ARCHON_WORKFLOW_CODEBASE_ID: codebase.id,
-    });
-  });
+  test.each(['copilot', 'opencode'] as const)(
+    '%s chat binds the selected project in the shell environment without a command prefix',
+    async provider => {
+      const { getProviderCapabilities } = await import('@archon/providers');
+      const caps =
+        provider === 'copilot'
+          ? (await import('@archon/providers/community/copilot')).COPILOT_CAPABILITIES
+          : (await import('@archon/providers/community/opencode')).OPENCODE_CAPABILITIES;
+      const capsMock = getProviderCapabilities as ReturnType<typeof mock>;
+      capsMock.mockReturnValue(caps);
+      try {
+        const codebase = makeCodebaseForSync();
+        mockLoadConfig.mockResolvedValueOnce(
+          makeConfig({ tiers: { large: { provider, model: 'gpt-5' } } })
+        );
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ codebase_id: codebase.id, ai_assistant_type: provider })
+        );
+        mockGetCodebase.mockResolvedValueOnce(codebase);
+        mockListCodebases.mockResolvedValueOnce([codebase]);
+        mockGetCodebaseEnvVars.mockResolvedValueOnce({
+          ARCHON_WORKFLOW_CODEBASE_ID: 'other-project',
+        });
+        await handleMessage(makePlatform(), 'conv-1', 'inspect this run', { actor: operator });
+        expect(mockSendQuery.mock.calls[0]?.[3]?.env).toMatchObject({
+          ARCHON_WORKFLOW_CODEBASE_ID: codebase.id,
+        });
+      } finally {
+        capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+      }
+    }
+  );
 
   test('scoped chat uses conversation.cwd when set (active worktree path)', async () => {
     const codebase = makeCodebaseForSync();
@@ -653,14 +667,44 @@ describe('typed chat tools', () => {
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
+  test('a typed no-match decision emits one distinct event; ordinary replies emit none', async () => {
+    mockCaptureWorkflowNoMatch.mockClear();
+    await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
+    expect(mockCaptureWorkflowNoMatch).not.toHaveBeenCalled();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+      const report = options.nativeTools.find(tool => tool.name === 'report_workflow_no_match')!;
+      await report.handler({});
+      await report.handler({});
+      yield {
+        type: 'agent_message_chunk' as const,
+        text: 'No workflow fits. Here are the alternatives.',
+      };
+      yield { type: 'result' as const, sessionId: 'session-1' };
+    });
+    await handleMessage(makePlatform(), 'conv-1', 'please do this work', { actor: operator });
+    expect(mockCaptureWorkflowNoMatch).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowNoMatch).toHaveBeenCalledWith('native_tool');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
-    expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project']);
+    expect(turnToolNames()).toEqual([
+      'invoke_workflow',
+      'register_project',
+      'report_workflow_no_match',
+    ]);
 
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
-    expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project', 'manage_run']);
+    expect(turnToolNames()).toEqual([
+      'invoke_workflow',
+      'register_project',
+      'report_workflow_no_match',
+      'manage_run',
+    ]);
   });
 
   test('a background surface dispatches the typed prompt verbatim after the turn', async () => {

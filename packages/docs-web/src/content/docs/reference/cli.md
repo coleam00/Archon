@@ -243,6 +243,10 @@ archon telemetry status
 
 Useful for verifying that an opt-out env var (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, `CI=true`, `POSTHOG_API_KEY=off`) is being picked up. Inspecting status never creates a `telemetry-id` file while opted out.
 
+### `telemetry no-match`
+
+Reports an agent decision that the user requested work but no available workflow fits. Chat uses `report_workflow_no_match` on native-tool providers and `archon telemetry no-match` on CLI providers. This emits the anonymous `workflow_no_match` event (transport only), respects telemetry opt-out, and launches nothing. Ordinary questions and missing project or input details are not no-match decisions.
+
 ### `telemetry reset`
 
 Rotate the persisted anonymous install UUID at `~/.archon/telemetry-id`. The previous ID is overwritten and not recoverable.
@@ -1770,7 +1774,7 @@ for recovery details.
 
 ## Environment
 
-For project-scoped by-ID run management, prefix the command with `ARCHON_WORKFLOW_CODEBASE_ID=<registered-project-id>`, for example `ARCHON_WORKFLOW_CODEBASE_ID=<id> archon workflow get <run-id> --json`. This requires every full ID or prefix to match exactly one run in that project before reading or changing it. Copilot chat supplies the selected project's ID through the provider's shell environment, so by-ID commands inherit the scope without a command prefix. OpenCode cannot receive per-request environment values; its chat guidance asks for the prefix, but an omitted prefix retains the operator behavior described below. Without this variable, full run IDs retain their install-wide operator behavior; short prefixes resolve from the current project. This scopes run lookup, not process permissions.
+For project-scoped by-ID run management, prefix the command with `ARCHON_WORKFLOW_CODEBASE_ID=<registered-project-id>`, for example `ARCHON_WORKFLOW_CODEBASE_ID=<id> archon workflow get <run-id> --json`. This requires every full ID or prefix to match exactly one run in that project before reading or changing it. Copilot and OpenCode chat supply the selected project's ID through the provider's shell environment, so by-ID commands inherit the scope without a command prefix. CLI startup preserves this inherited scope through environment loading. Without this variable, full run IDs retain their install-wide operator behavior; short prefixes resolve from the current project. This scopes run lookup, not process permissions.
 
 At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 

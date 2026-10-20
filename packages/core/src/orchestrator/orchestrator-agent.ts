@@ -25,7 +25,12 @@ import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
-import { buildInvokeWorkflowTool, buildRegisterProjectTool, type ChatLaunch } from './chat-tools';
+import {
+  buildInvokeWorkflowTool,
+  buildRegisterProjectTool,
+  buildReportWorkflowNoMatchTool,
+  type ChatLaunch,
+} from './chat-tools';
 import { ensureArchonWorkspacesPath } from '@archon/paths';
 import type { ResolvedWorkflow, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { loadConfig } from '../config/config-loader';
@@ -663,6 +668,7 @@ function attachNativeTools(
         },
       }),
       buildRegisterProjectTool({ registerProject }),
+      buildReportWorkflowNoMatchTool(),
     ];
     if (conversation.codebase_id !== null) {
       tools.push(

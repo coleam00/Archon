@@ -93,19 +93,36 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       }
       find.mockResolvedValue([]);
       const refused = [
-        () => workflowGetCommand(host, FULL_ID, true, undefined, '/repo'),
-        () => workflowLogsCommand(host, FULL_ID, false, '/repo'),
-        () => workflowWaitCommand(host, FULL_ID, true, '/repo'),
-        () => workflowArtifactsCommand(host, [FULL_ID], { json: true, cwd: '/repo' }),
-        () => workflowAnswerCommand(host, FULL_ID, 'occurrence', [], 'answer', true, '/repo'),
-        () => workflowResumeCommand(host, FULL_ID, true, '/repo'),
-        () => workflowCancelCommand(host, FULL_ID, true, '/repo'),
-        () => workflowAbandonCommand(host, FULL_ID, true, '/repo'),
-        () => workflowApproveCommand(host, FULL_ID, undefined, true, '/repo'),
-        () => workflowRejectCommand(host, FULL_ID, undefined, true, '/repo'),
-        () => workflowRespondCommand(host, FULL_ID, 'revise', undefined, true, '/repo'),
+        ...[false, true].flatMap(json => [
+          () => workflowGetCommand(host, FULL_ID, json, undefined, '/repo'),
+          () => workflowWaitCommand(host, FULL_ID, json, '/repo'),
+          () => workflowArtifactsCommand(host, [FULL_ID], { json, cwd: '/repo' }),
+          () => workflowAnswerCommand(host, FULL_ID, 'occurrence', [], 'answer', json, '/repo'),
+          () => workflowAbandonCommand(host, FULL_ID, json, '/repo'),
+          () => workflowCancelCommand(host, FULL_ID, json, '/repo'),
+          ...[false, true].flatMap(detach => [
+            () => workflowResumeCommand(host, FULL_ID, json, '/repo', detach),
+            () => workflowApproveCommand(host, FULL_ID, undefined, json, '/repo', detach),
+            () => workflowRejectCommand(host, FULL_ID, undefined, json, '/repo', detach),
+            () => workflowRespondCommand(host, FULL_ID, 'revise', undefined, json, '/repo', detach),
+          ]),
+        ]),
+        ...[false, true].flatMap(follow => [
+          () => workflowLogsCommand(host, FULL_ID, follow, '/repo', 'jsonl'),
+          () => workflowLogsCommand(host, FULL_ID, follow, '/repo', 'text'),
+        ]),
       ];
-      for (const command of refused) expect(await command()).toBe(1);
+      for (const command of refused) {
+        const before = find.mock.calls.length;
+        const result = await command().catch((error: unknown) => {
+          if (!(error instanceof Error)) throw error;
+          expect(error.message).toContain('selected project');
+          return 1;
+        });
+        expect(result).toBe(1);
+        expect(find.mock.calls.length).toBe(before + 1);
+        expect(find).toHaveBeenLastCalledWith(FULL_ID, 'cb-1');
+      }
       await expect(
         workflowEventEmitCommand(host, FULL_ID, 'workflow_completed', {}, '/repo')
       ).rejects.toThrow('selected project');

@@ -18,7 +18,11 @@ const invoked = (p: string): string[] => [...p.matchAll(/workflow: "([^"]+)"/g)]
 describe('buildRoutingRulesWithProject', () => {
   test.each(['tools', 'cli'] as const)('%s gives useful options when no workflow fits', channel => {
     const rules = buildRoutingRulesWithProject(channel);
-    expect(rules).toContain('If no listed workflow fits');
+    expect(rules).toContain('no listed workflow fits');
+    expect(rules).toContain(
+      channel === 'tools' ? 'report_workflow_no_match' : 'archon telemetry no-match'
+    );
+    expect(rules).toContain('Do not report no match for ordinary questions');
     expect(rules).toContain('closest available option and its limits');
     expect(rules).toContain('author a workflow for repeatable work');
     expect(rules).toContain('coding agent directly for one-off work');

@@ -9,6 +9,7 @@
  *    of its value or source (including shell exports and direnv). A leaked
  *    ANTHROPIC_API_KEY can override Claude subscription auth and incur API
  *    billing; other project keys can override Archon's defaults/environment.
+ *    The inherited chat project scope is also preserved across env loading.
  *    Install credentials belong in ~/.archon/.env, loaded after this strip.
  *    Exception: a detached child (--internal-detached-run-config) gets the six
  *    DETACHED_INSTALL_CONTEXT_KEYS restored afterwards from the trusted detached
@@ -23,6 +24,7 @@
  *    Auth vars (CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_USE_BEDROCK,
  *    CLAUDE_CODE_USE_VERTEX) are kept.
  */
+import { WORKFLOW_CODEBASE_ID_ENV } from './workflow-scope';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import {
@@ -41,7 +43,8 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
 ]);
 
 /**
- * Strip every key named in CWD .env files, whatever its value or source
+ * Strip keys named in CWD .env files except the inherited chat project scope,
+ * whatever their value or source
  * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
@@ -84,6 +87,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     }
   }
 
+  cwdKeys.delete(WORKFLOW_CODEBASE_ID_ENV);
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
   }

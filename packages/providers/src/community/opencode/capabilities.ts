@@ -33,9 +33,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   toolRestrictions: true,
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
   requiresAllPropertiesRequired: false, // OpenCode does not enforce the required-coverage rule
-  // One embedded server is shared by every node and starts with no request env, so a codebase's
-  // env vars cannot reach it without leaking into another codebase's node.
-  envInjection: false,
+  envInjection: true,
   costControl: false,
   costReporting: true, // tokens.ts maps SDK info.cost when the SDK reports one
   tokenReporting: true,

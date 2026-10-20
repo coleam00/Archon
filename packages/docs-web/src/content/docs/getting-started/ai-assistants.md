@@ -334,7 +334,7 @@ OpenCode handles authentication internally — Archon does not pass API keys thr
 2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
 3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
 
-OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Codebase env vars are not passed to OpenCode: every node shares one embedded server that starts without them, so Archon warns when a node would have received any.
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Each query starts its own embedded OpenCode server with that request's environment, including codebase env vars. Concurrent queries do not share a server or project scope; native OpenCode settings and permission policy still load normally.
 
 ### Configuration Options
 
@@ -364,7 +364,7 @@ assistants:
 | MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers) |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
-| Codebase env vars (`envInjection`) | ❌ | Not delivered: all nodes share one embedded OpenCode server, so a codebase's env would leak into another's node. Archon warns when env vars are configured |
+| Codebase env vars (`envInjection`) | ✅ | Delivered to the request's own embedded server |
 | Skills | ❌ | Not translated to an OpenCode request yet; a node naming `skills:` fails the run at start |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |

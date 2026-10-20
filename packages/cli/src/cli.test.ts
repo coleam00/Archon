@@ -59,6 +59,40 @@ it('plugin rejection guidance lists only public commands', async () => {
   }
 });
 
+describe('chat project execution context', () => {
+  it('preserves inherited scope through every CWD and Archon env file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-chat-scope-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    const key = 'ARCHON_WORKFLOW_CODEBASE_ID';
+    const previous = process.env[key];
+    try {
+      const { stripCwdEnv } = await import('@archon/paths/strip-cwd-env');
+      for (const filename of ['.env', '.env.local', '.env.development', '.env.production']) {
+        writeFileSync(join(repo, filename), `${key}=foreign-project\n`);
+        process.env[key] = 'selected-project';
+        stripCwdEnv(repo);
+        expect(process.env[key]).toBe('selected-project');
+        writeFileSync(join(repo, filename), '');
+      }
+      writeFileSync(join(home, '.env'), `${key}=home-project\n`);
+      writeFileSync(join(repo, '.archon/.env'), `${key}=repo-project\n`);
+      for (const scope of ['selected-project', '', undefined]) {
+        const env: NodeJS.ProcessEnv = { ARCHON_HOME: home, [key]: scope };
+        const trusted = await loadCliEnv(repo, { env });
+        expect(env[key]).toBe(scope);
+        expect(trusted[key]).toBe(scope);
+      }
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+      await removeTempTree(root);
+    }
+  });
+});
+
 describe('forge user trust boundary', () => {
   it('resolves a workflow probe without changing the host environment', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-probe-env-'));

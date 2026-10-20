@@ -455,21 +455,21 @@ async function runAiAlias(
 }
 
 export async function runTelemetry({ subcommand, json }: CliRouteContext): Promise<number> {
-  const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
-    () => import('../commands/telemetry'),
-    { providers: false }
-  );
+  const { telemetryStatusCommand, telemetryResetCommand, telemetryWorkflowNoMatchCommand } =
+    await loadRoute(() => import('../commands/telemetry'), { providers: false });
   switch (subcommand) {
     case 'status':
       return telemetryStatusCommand();
     case 'reset':
       return telemetryResetCommand();
+    case 'no-match':
+      return telemetryWorkflowNoMatchCommand();
     default: {
       const problem =
         subcommand === undefined
           ? 'Missing telemetry subcommand'
           : `Unknown telemetry subcommand: ${subcommand}`;
-      return await fail(json, `${problem}\nAvailable: status, reset`);
+      return await fail(json, `${problem}\nAvailable: status, reset, no-match`);
     }
   }
 }

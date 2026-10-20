@@ -1,8 +1,5 @@
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
-/**
- * Shared mocks and fixture builders for the `handleMessage` suites in `orchestrator/`.
- * Importing this module registers every `mock.module()` those suites rely on.
- */
+/** Shared handleMessage mocks and fixtures; importing registers the suites' module mocks. */
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { mock, beforeEach } from 'bun:test';
@@ -136,6 +133,9 @@ mock.module('../services/run-live-owner', () => ({
 export const mockEnsureArchonWorkspacesPath = mock(() =>
   Promise.resolve('/home/test/.archon/workspaces')
 );
+export const mockCaptureWorkflowNoMatch = mock<typeof Paths.captureWorkflowNoMatch>(
+  () => undefined
+);
 export const mockCaptureChatTurn = mock<typeof Paths.captureChatTurn>(() => undefined);
 export const mockCaptureApprovalResolved = mock(() => undefined);
 // The one canonicalizer every `default_cwd` writer resolves through (#2927).
@@ -156,6 +156,7 @@ mock.module('@archon/paths', () => ({
   getArchonHome: mock(() => '/home/test/.archon'),
   getCredentialKeyPath: mock(() => '/home/test/.archon/credential-key'),
   captureChatTurn: mockCaptureChatTurn,
+  captureWorkflowNoMatch: mockCaptureWorkflowNoMatch,
   captureCodebaseRegistered: mock(() => undefined),
 }));
 

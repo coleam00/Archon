@@ -9,7 +9,12 @@
  * The previous ID is overwritten and not recoverable. Useful when a user wants
  * to "start fresh" for privacy reasons or when copying an install image.
  */
-import { getTelemetryStatus, resetTelemetryId, type TelemetryStatus } from '@archon/paths';
+import {
+  getTelemetryStatus,
+  resetTelemetryId,
+  captureWorkflowNoMatch,
+  type TelemetryStatus,
+} from '@archon/paths';
 
 function formatStatus(status: TelemetryStatus): string {
   const lines: string[] = [];
@@ -49,4 +54,10 @@ export function telemetryResetCommand(): number {
     console.error(`Error: failed to rotate telemetry ID: ${err.message}`);
     return 1;
   }
+}
+
+export function telemetryWorkflowNoMatchCommand(): number {
+  captureWorkflowNoMatch('cli');
+  console.log('No workflow match recorded.');
+  return 0;
 }

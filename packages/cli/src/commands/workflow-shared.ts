@@ -2,6 +2,8 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
+import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
+
 import type { Conversation } from '@archon/core/schemas/conversation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -301,7 +303,7 @@ export async function resolveRunIdArg(
   requirePrefixMatch = false,
   codebaseId?: string
 ): Promise<string> {
-  const scope = process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+  const scope = process.env[WORKFLOW_CODEBASE_ID_ENV];
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (FULL_RUN_ID_RE.test(runId)) return runId;
   if (cwd === undefined && codebaseId === undefined) {
@@ -342,7 +344,7 @@ async function resolveProjectScopedRunId(
   runId: string,
   codebaseId: string
 ): Promise<string> {
-  if (!codebaseId) throw new Error('ARCHON_WORKFLOW_CODEBASE_ID must name a registered project.');
+  if (!codebaseId) throw new Error(`${WORKFLOW_CODEBASE_ID_ENV} must name a registered project.`);
   const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
   if (
     matches.length !== 1 ||

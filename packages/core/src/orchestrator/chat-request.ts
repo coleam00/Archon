@@ -1,3 +1,4 @@
+import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
 import type { ProviderCapabilities, SendQueryOptions } from '@archon/providers/types';
 import {
   getProviderCapabilities,
@@ -458,7 +459,7 @@ export async function prepareChatTurnRequest(
 
   const caps = getProviderCapabilities(providerKey);
   if (!caps.nativeTools && caps.envInjection && conversation.codebase_id) {
-    effectiveEnv.ARCHON_WORKFLOW_CODEBASE_ID = conversation.codebase_id;
+    effectiveEnv[WORKFLOW_CODEBASE_ID_ENV] = conversation.codebase_id;
   }
   // Warn if provider doesn't support env injection but env vars are configured
   if (Object.keys(effectiveEnv).length > 0) {
