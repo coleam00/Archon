@@ -16,7 +16,7 @@
  * no assertion context — counters keep failures actionable.
  *
  * Runs in its own `bun test` invocation because Bun's `mock.module` is
- * process-wide and would poison `provider.test.ts`, which installs benign
+ * process-wide and would poison the provider unit tests, which install benign
  * stubs for the same modules (see CLAUDE.md on test isolation).
  */
 import { expect, mock, test } from 'bun:test';

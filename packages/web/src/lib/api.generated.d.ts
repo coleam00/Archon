@@ -1259,7 +1259,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List registered codebases */
+    /** List codebases with the newest representative of each resolved repository remote */
     get: {
       parameters: {
         query?: never;
