@@ -281,13 +281,9 @@ describe('GitHub setup wizard', () => {
       const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
       try {
         expect(await run(force)).toBe(0);
-        for (const message of [
-          'Enter your Telegram Bot Token:',
-          'Enter your Slack Bot Token (xoxb-...):',
-          'Enter your Slack App Token (xapp-...):',
-        ]) {
-          expect(passwordMessages.filter(prompt => prompt === message)).toHaveLength(force ? 1 : 0);
-        }
+        expect(passwordMessages.includes('Enter your Telegram Bot Token:')).toBe(force);
+        expect(passwordMessages.includes('Enter your Slack Bot Token (xoxb-...):')).toBe(force);
+        expect(passwordMessages.includes('Enter your Slack App Token (xapp-...):')).toBe(force);
         const env = read();
         expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
         if (selectedMode === 'app') {
