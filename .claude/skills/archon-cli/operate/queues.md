@@ -59,8 +59,9 @@ Optional inputs, with their defaults in each workflow's YAML:
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
-The build and merge queues change their checkout, so each run needs its own worktree.
-A plain launch from a git checkout gets one.
+The build queue changes its checkout, so each run needs its own worktree. A plain
+launch from a git checkout gets one. The merge queue never changes its checkout and
+needs none.
 
 ## Intake
 

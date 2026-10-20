@@ -20,6 +20,7 @@ sweep:
     - { number: 42, action: wait, class: clear, head: "1111111", reran: false, reason: "stub: dev is red, so nothing merges", brief: "", attention: null }
   base:
     summary: "stub: the unit job fails in a file PR 41 changed"
+    reran: false
     attention:
       what: "stub: dev CI is red since PR 41 merged"
       why: "stub: every merge waits while it is red"

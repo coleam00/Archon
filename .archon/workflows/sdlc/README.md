@@ -642,7 +642,11 @@ then the project's file, whose lines win where the two conflict.
   maintainer, naming the pull requests merged since it was last green, with a revert
   or fix-forward recommendation.
 - **Record.** The `record` script refuses a sweep that decided a pull request this
-  run did not claim, because that item belongs to another run. A claimed pull request
+  run did not claim, because that item belongs to another run. It also refuses a
+  `return` without a brief, a `return` for an own pull request, an `ask` without its
+  question, and a red default branch the sweep neither re-ran nor raised: the pull
+  request waits for the next sweep, and the record fails, naming each, once every
+  other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
   waits the same way. It reads every pull request back: the forge, not the sweep, says
   what merged, at the head the forge merged. A sweep that says it merged a pull

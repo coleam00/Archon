@@ -15,7 +15,7 @@ The queues move work forward without you:
 
 1. `archon-intake` triages each new issue and labels its route.
 2. `archon-build-queue` claims a ready issue, writes the brief and runs `archon-ship` on it until its pull request is reviewed Ready.
-3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict, CI and open threads, and sends back to the build queue the ones that conflict.
+3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict and CI at the head and a base branch that is not red, judges open review threads itself, and sends back to the build queue the ones that conflict.
 4. `archon-discoveries` files, tracks or drops what runs noticed outside their own task.
 
 Anything unclear pauses as one attention item with a recommendation. The pack binds no trigger by default: start the queues by hand, or add the bindings its README shows.

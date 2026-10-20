@@ -19,7 +19,7 @@
  * that cannot be written is reported and left for the next sweep; neither stops the
  * rest of the batch from being recorded.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEMS and INPUTS_SETTLED from facts; INPUTS_SWEEP,
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED and INPUTS_BASE from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
  */
 
@@ -28,6 +28,7 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type BaseAttention,
+  type Checks,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -85,6 +86,8 @@ interface Sweep {
   readonly decisions: readonly Decision[];
   readonly base: {
     readonly summary: string;
+    /** The sweep re-ran the default branch's failed jobs this run. */
+    readonly reran: boolean;
     readonly attention: BaseAttention | null;
   };
   readonly summary: string;
@@ -94,15 +97,17 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** A return hands the item to the build queue, and no build round owns an own pull request. */
-function withoutOwnPrReturn(decision: Decision, item: Item): Decision {
-  if (decision.action !== 'return' || item.own_pr !== true) return decision;
-  return {
-    ...decision,
-    action: 'wait',
-    brief: '',
-    reason: `${decision.reason} (no build round owns an own pull request, so the next sweep asks instead)`,
-  };
+/**
+ * Why a declared decision cannot be acted on, or null. A return hands the item to the
+ * build queue, which needs a brief to start from and cannot work an own pull request no
+ * build round owns; an ask needs its question.
+ */
+function invalidDecision(decision: Decision, item: Item): string | null {
+  const pr = `pull request ${String(decision.number)}`;
+  if (decision.action === 'return' && item.own_pr === true) return `the sweep returned own ${pr}, which no build round owns`;
+  if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
+  if (decision.action === 'ask' && decision.attention === null) return `the sweep asked about ${pr} with no question`;
+  return null;
 }
 
 /**
@@ -111,20 +116,27 @@ function withoutOwnPrReturn(decision: Decision, item: Item): Decision {
  * its work item belongs to another run, and every other decision is still recorded; a
  * claimed one the sweep left out waits for the next sweep.
  */
-function decide(items: readonly Item[], sweep: Sweep): Decision[] {
+function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decision[]; refused: string[] } {
+  if (sweep === null) return { decisions: [], refused: [] };
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const strays = sweep.decisions.filter(decision => !wanted.has(decision.number)).map(decision => decision.number);
   if (strays.length > 0) {
     note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
   }
   const decided = new Map<number, Decision>();
-  for (const declared of sweep.decisions) {
-    const item = wanted.get(declared.number);
-    if (item === undefined || decided.has(declared.number)) continue;
-    const decision = withoutOwnPrReturn(declared, item);
-    // An ask the sweep wrote no item for has nothing to raise; it waits like any other undecided one.
-    const asks = decision.action === 'ask' && decision.attention !== null;
-    decided.set(decision.number, asks ? decision : { ...decision, action: decision.action === 'ask' ? 'wait' : decision.action, attention: null });
+  const refused: string[] = [];
+  for (const decision of sweep.decisions) {
+    const item = wanted.get(decision.number);
+    if (item === undefined || decided.has(decision.number)) continue;
+    const invalid = invalidDecision(decision, item);
+    if (invalid === null) {
+      decided.set(decision.number, decision.action === 'ask' ? decision : { ...decision, attention: null });
+      continue;
+    }
+    // Refused output waits for the next sweep, and the record fails once the rest is written.
+    const refusal = `${invalid}; it waits for the next sweep`;
+    refused.push(refusal);
+    decided.set(decision.number, { ...decision, action: 'wait', brief: '', attention: null, reason: `${refusal} (the sweep said: ${decision.reason})` });
   }
   for (const item of items) {
     if (decided.has(item.pr.number)) continue;
@@ -139,7 +151,20 @@ function decide(items: readonly Item[], sweep: Sweep): Decision[] {
       attention: null,
     });
   }
-  return [...decided.values()];
+  return { decisions: [...decided.values()], refused };
+}
+
+/** The default branch as facts read it. */
+interface Base {
+  readonly branch: string;
+  readonly head: string;
+  readonly checks: Checks;
+}
+
+/** A red default branch the sweep neither re-ran nor raised would hold every merge in silence. */
+function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
+  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null || sweep.base.reran) return null;
+  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep neither reran it nor raised it`;
 }
 
 interface Outcome {
@@ -258,7 +283,8 @@ function main(): void {
     return;
   }
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
-  const decisions = sweep === null ? [] : decide(items, sweep);
+  const { decisions, refused } = decide(items, sweep);
+  const base = nullableJson(process.env.INPUTS_BASE) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
   const baseAttention = sweep?.base.attention ?? null;
@@ -290,7 +316,9 @@ function main(): void {
 
   // Every read and check happens before the first write, so a check that refuses writes nothing.
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
-  const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
+  const contradictions = [...refused, ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]))];
+  const silentRed = unraisedRedBase(sweep, base);
+  if (silentRed !== null) contradictions.push(silentRed);
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
   // the next sweep, and a red default branch is named in the failure instead.
   if (asked?.by === 'base' && contradictions.length > 0) {

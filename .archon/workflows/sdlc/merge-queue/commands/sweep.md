@@ -13,7 +13,7 @@ Every forge command names the repository with `--repo <host>/<path>`. Run the ga
 
 ## The default branch first
 
-Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: merge nothing this sweep, and say so in each pull request's `reason`. Find what each failing job points at. Red in code none of the pull requests merged since the branch was last green touches gets one rerun of its failed jobs (`gh run rerun <run-id> --failed`), unless the run's attempt number already shows a rerun; then the pull requests `wait`. Red after a rerun, or red in code a recent merge touched, is raised: `base.attention` names the failing checks, every pull request merged since the branch was last green, the one you suspect, and recommends a revert or a fix-forward; its one choice is `hold`. Otherwise `base.attention` is null. `base.summary` says what you found.
+Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: merge nothing this sweep, and say so in each pull request's `reason`. Find what each failing job points at. Red in code none of the pull requests merged since the branch was last green touches gets one rerun of its failed jobs (`gh run rerun <run-id> --failed`), unless the run's attempt number already shows a rerun; then the pull requests `wait`. Red after a rerun, or red in code a recent merge touched, is raised: `base.attention` names the failing checks, every pull request merged since the branch was last green, the one you suspect, and recommends a revert or a fix-forward; its one choice is `hold`. Otherwise `base.attention` is null. `base.reran` is true when you re-ran its failed jobs this sweep. `base.summary` says what you found. A red default branch you neither re-ran nor raised fails the record.
 
 ## Decide
 
@@ -32,7 +32,7 @@ Work through them one at a time, in that order. An `own_pr` pull request never g
 
 **An approval holds** when it is pinned to the head, or when the only change from the approved head to the head is merges of the default branch and the resolution of their conflicts, and the verdict is Ready at the head. Judge that from `git diff <approved>..<head>` against what the default branch brought in. Anything else in that diff, or any doubt, voids the approval: ask again.
 
-Every pull request gets exactly one decision. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
+Every pull request gets exactly one decision. A `return` always carries a `brief`, and an `ask` always carries its attention item: the record refuses either without it. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
 
 ## The attention items
 

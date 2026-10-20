@@ -18,7 +18,7 @@ facts:
 sweep:
   decisions:
     - { number: 42, action: return, class: clear, head: "1111111", reran: false, reason: "stub: it conflicts with dev in one file", brief: "stub: merge dev into PR 42 and resolve the conflict in src/a.ts", attention: null }
-  base: { summary: "stub: dev is green", attention: null }
+  base: { summary: "stub: dev is green", reran: false, attention: null }
   summary: "stub: sent PR 42 back for its conflict"
 record:
   merged: []
