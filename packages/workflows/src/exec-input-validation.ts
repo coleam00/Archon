@@ -34,6 +34,38 @@ interface EnvironmentRead {
   line: number;
 }
 
+/**
+ * The static environment-read spellings the load-time scanner recognises, one entry per
+ * spelling and runtime. `nameIndex` is the capture group that holds the variable name.
+ *
+ * Exported so that a reader of the shipped prose holds its promises to the same spellings
+ * the scanner knows, instead of keeping a second list of them.
+ */
+export const ENVIRONMENT_READ_PATTERNS: readonly {
+  runtime: ExecNode['runtime'];
+  pattern: RegExp;
+  nameIndex: number;
+}[] = [
+  {
+    runtime: 'uv',
+    pattern: /\bos\.environ\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g,
+    nameIndex: 2,
+  },
+  {
+    runtime: 'uv',
+    pattern: /\bos\.environ\.get\s*\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1(?=\s*(?:,|\)))/g,
+    nameIndex: 2,
+  },
+  { runtime: 'bun', pattern: /\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g, nameIndex: 1 },
+  {
+    runtime: 'bun',
+    pattern: /\bprocess\.env\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g,
+    nameIndex: 2,
+  },
+  { runtime: 'sh', pattern: /\$\{(INPUTS_[A-Z0-9_]+)\}/g, nameIndex: 1 },
+  { runtime: 'sh', pattern: /\$(INPUTS_[A-Z0-9_]+)\b/g, nameIndex: 1 },
+];
+
 export function collectExecInputValidationTargets(
   workflow: WorkflowDefinition
 ): readonly ExecInputValidationTarget[] {
@@ -142,22 +174,13 @@ function scanEnvironmentReads(
   runtime: ExecNode['runtime']
 ): readonly EnvironmentRead[] {
   const matches: { name: string; offset: number }[] = [];
-  const collect = (pattern: RegExp, nameIndex: number): void => {
+
+  for (const { pattern, nameIndex, runtime: patternRuntime } of ENVIRONMENT_READ_PATTERNS) {
+    if (patternRuntime !== runtime) continue;
     for (const match of source.matchAll(pattern)) {
       const name = match[nameIndex];
       if (name !== undefined) matches.push({ name, offset: match.index });
     }
-  };
-
-  if (runtime === 'uv') {
-    collect(/\bos\.environ\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g, 2);
-    collect(/\bos\.environ\.get\s*\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1(?=\s*(?:,|\)))/g, 2);
-  } else if (runtime === 'bun') {
-    collect(/\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g, 1);
-    collect(/\bprocess\.env\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g, 2);
-  } else {
-    collect(/\$\{(INPUTS_[A-Z0-9_]+)\}/g, 1);
-    collect(/\$(INPUTS_[A-Z0-9_]+)\b/g, 1);
   }
 
   matches.sort((left, right) => left.offset - right.offset || left.name.localeCompare(right.name));
