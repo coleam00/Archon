@@ -4,7 +4,8 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import {
-  TERMINAL_STATUS_TUPLE,
+  TERMINAL_RUN_EVENT_TYPES,
+  terminalRunStatusForEventType,
   type RunTerminalStatus,
   TERMINAL_RUN_EVENT_TYPE,
   nodeSkipReasonSchema,
@@ -216,7 +217,9 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 type RowWorkflowStatus = 'running' | RunTerminalStatus | 'paused';
 const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
   ...Object.fromEntries(
-    TERMINAL_STATUS_TUPLE.map(status => [TERMINAL_RUN_EVENT_TYPE[status], status] as const)
+    TERMINAL_RUN_EVENT_TYPES.map(
+      eventType => [eventType, terminalRunStatusForEventType(eventType)] as const
+    )
   ),
   workflow_started: 'running',
   run_attention_changed: 'running',
