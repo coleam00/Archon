@@ -323,6 +323,20 @@ export const TERMINAL_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = TERMINAL
 /** A finished run's status — the narrow half of `TERMINAL_WORKFLOW_STATUSES`. */
 export type RunTerminalStatus = (typeof TERMINAL_STATUS_TUPLE)[number];
 
+/** Persisted terminal event names; every terminal status must have one. */
+export const TERMINAL_RUN_EVENT_TYPE = {
+  completed: 'workflow_completed',
+  failed: 'workflow_failed',
+  cancelled: 'workflow_cancelled',
+} as const satisfies { [Status in RunTerminalStatus]: `workflow_${Status}` };
+
+export const TERMINAL_RUN_EVENT_TYPES: readonly (typeof TERMINAL_RUN_EVENT_TYPE)[RunTerminalStatus][] =
+  Object.values(TERMINAL_RUN_EVENT_TYPE);
+
+export function terminalRunStatusForEventType(eventType: string): RunTerminalStatus | undefined {
+  return TERMINAL_STATUS_TUPLE.find(status => TERMINAL_RUN_EVENT_TYPE[status] === eventType);
+}
+
 /** Narrowing membership test for `TERMINAL_WORKFLOW_STATUSES`. */
 export function isTerminalRunStatus(status: WorkflowRunStatus): status is RunTerminalStatus {
   return TERMINAL_STATUS_TUPLE.some(terminal => terminal === status);
