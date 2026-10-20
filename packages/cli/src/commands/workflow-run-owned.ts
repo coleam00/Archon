@@ -96,13 +96,12 @@ export async function workflowRunCommand(
     getLog().warn({ err: error, runId }, 'cli.detached_resume_receipt_failed');
   });
 
+  if (detachedProcessOwner) await claimDetachedRunProcessOwner();
+
   let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
     try {
-      // Inside the try so a refused owner claim still records the `pending` row
-      // the launcher handed over (#2872) instead of stranding it.
-      if (detachedProcessOwner) await claimDetachedRunProcessOwner();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource({
           host,
@@ -113,7 +112,16 @@ export async function workflowRunCommand(
         })
       );
     } catch (error) {
-      await recordDetachedChildStartupFailure(host, options.detachedRunId, error as Error);
+      await recordDetachedChildStartupFailure(
+        host,
+        {
+          detachedRunId: options.detachedRunId,
+          detachedProcessOwner,
+          workflowName,
+          discoveryCwd: options.discoveryCwd ?? cwd,
+        },
+        error as Error
+      );
       if (isResumeSuperseded(error)) {
         getLog().info(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },

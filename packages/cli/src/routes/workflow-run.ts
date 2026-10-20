@@ -1,6 +1,7 @@
 import { resolve } from 'path';
 import { stat } from 'fs/promises';
 import { rejectConfigOnContinue, RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { fail } from './context';
 import type { WorkflowRoute } from './workflow';
 
@@ -96,6 +97,8 @@ async function resolveRunProject({
   values,
   json,
   host,
+  positionals,
+  effectiveCwd,
 }: WorkflowRoute): Promise<string | undefined | 1> {
   const project = values.project as string | undefined;
   if (project === undefined) return undefined;
@@ -103,7 +106,15 @@ async function resolveRunProject({
     const { recordDetachedChildStartupFailure } = await import('../commands/workflow-detach');
     await recordDetachedChildStartupFailure(
       host,
-      values['internal-detached-run-id'] as string | undefined,
+      {
+        detachedRunId: values['internal-detached-run-id'] as string | undefined,
+        detachedProcessOwner: process.env[DETACHED_RUN_OWNER_ENV] === '1',
+        workflowName: positionals[2],
+        discoveryCwd:
+          typeof values['workflow-source'] === 'string'
+            ? resolve(values['workflow-source'])
+            : effectiveCwd,
+      },
       new Error(message)
     );
     return await fail(json, message);

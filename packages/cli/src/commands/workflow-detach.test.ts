@@ -1,6 +1,7 @@
 import {
   testHome,
   mockStartRunLiveOwner,
+  mockClaimDetachedRunProcessOwner,
   mockCreateWorkflowRun,
   spyOnJsonStdout,
   firstJsonPayload,
@@ -1053,6 +1054,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     // No project resolves, so the isolation gate throws after the row was handed over.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce('pending');
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
 
@@ -1081,7 +1083,10 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
     // The run got as far as executing — its lifecycle is not this handler's to mutate.
-    (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce('running');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...preCreatedRow,
+      status: 'running',
+    });
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
 
     await expect(
@@ -1140,6 +1145,43 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       })
     ).rejects.toThrow(/belongs to workflow 'something-else', not 'plan'/);
   });
+
+  it.each(['unowned', 'claim refused', 'different workflow', 'owned'] as const)(
+    'checks the handoff after a pre-admission error: %s',
+    async mode => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+      if (mode === 'owned') {
+        (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce(
+          'pending'
+        );
+      }
+      if (mode === 'unowned') delete process.env.ARCHON_DETACHED_RUN_OWNER;
+      if (mode === 'claim refused') {
+        mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error('claim refused'));
+      } else if (mode !== 'unowned') {
+        (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+          ...preCreatedRow,
+          workflow_name: mode === 'different workflow' ? 'other' : 'plan',
+        });
+      }
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+          detachedRunId: preCreatedRow.id,
+          modelAssignments: ['invalid-assignment'],
+        })
+      ).rejects.toThrow();
+      if (mode === 'owned') {
+        expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+          preCreatedRow.id,
+          expect.stringContaining('Detached run failed to start'),
+          { exitReason: 'launch_failed' }
+        );
+      } else {
+        expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   it('fails loudly when the row its launcher promised is gone', async () => {
     const workflowDb = await import('@archon/core/db/workflows');

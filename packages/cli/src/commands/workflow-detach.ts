@@ -25,7 +25,12 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
-import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import {
+  claimDetachedRunProcessOwner,
+  DETACHED_RUN_OWNER_ENV,
+} from '../utils/detached-run-control';
+import { resolveWorkflowName } from '@archon/workflows/router';
+import { loadWorkflows } from './workflow-list';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
@@ -308,20 +313,37 @@ export async function spawnDetachedWorkflowRun(
  * the row sits `pending` forever while the reason exists only in the child's log: the
  * same silent failure this issue closed at launch, moved one process later.
  *
- * `pending` is the whole guard, and it is what keeps this from guessing at a lifecycle
- * it does not own: the executor flips the row to `running` before any node executes, so
- * a row still `pending` here is one no execution ever claimed. Anything else belongs to
- * the run and is left alone — `failWorkflowRun`'s own status CAS closes the race.
+ * Ownership and workflow association must hold even when admission itself threw.
+ * Only pending rows belong to startup; running and terminal rows belong to the
+ * executor and are left alone.
  */
 export async function recordDetachedChildStartupFailure(
   host: WorkflowHost,
-  detachedRunId: string | undefined,
+  request: {
+    detachedRunId: string | undefined;
+    detachedProcessOwner: boolean;
+    workflowName: string;
+    discoveryCwd: string;
+  },
   error: Error
 ): Promise<void> {
-  if (detachedRunId === undefined) return;
+  const { detachedRunId, detachedProcessOwner, workflowName, discoveryCwd } = request;
+  if (detachedRunId === undefined || !detachedProcessOwner) return;
   try {
-    const status = await host.deps.store.getWorkflowRunStatus(detachedRunId);
-    if (status !== 'pending') return;
+    await claimDetachedRunProcessOwner();
+    const row = await host.deps.store.getWorkflowRun(detachedRunId);
+    if (row?.status !== 'pending') return;
+    if (row.workflow_name !== workflowName) {
+      // Shorthand needs the full discovery set: matching against this row alone
+      // could accept a selector that actually names a different workflow.
+      const { workflows } = await loadWorkflows(discoveryCwd);
+      const selected = resolveWorkflowName(
+        workflowName,
+        workflows.map(entry => entry.workflow)
+      );
+      if (selected?.name !== row.workflow_name) return;
+    }
+    if ((await host.deps.store.getWorkflowRunStatus(detachedRunId)) !== 'pending') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
