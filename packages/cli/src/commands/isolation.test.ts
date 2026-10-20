@@ -284,7 +284,9 @@ describe('isolationCompleteCommand', () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -299,7 +301,9 @@ describe('isolationCompleteCommand', () => {
     mockListActive.mockResolvedValueOnce([env]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
-    await isolationCompleteCommand(['dirty-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['dirty-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: dirty-branch');
@@ -315,7 +319,9 @@ describe('isolationCompleteCommand', () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-123');
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
@@ -329,7 +335,9 @@ describe('isolationCompleteCommand', () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -352,7 +360,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -415,7 +425,9 @@ describe('isolationCompleteCommand', () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -436,7 +448,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -499,7 +513,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -525,7 +541,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -548,7 +566,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -611,7 +631,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -639,7 +661,9 @@ describe('isolationCompleteCommand', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -706,7 +730,9 @@ describe('isolationCompleteCommand', () => {
     mockListActive.mockResolvedValueOnce([env]);
     mockRemoveEnvironment.mockRejectedValueOnce(new Error('git error: cannot remove worktree'));
 
-    await isolationCompleteCommand(['bad-branch'], { force: false, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['bad-branch'], { force: false, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: bad-branch — git error: cannot remove worktree'
@@ -727,10 +753,12 @@ describe('isolationCompleteCommand', () => {
       .mockResolvedValueOnce({ worktreeRemoved: true, branchDeleted: true, warnings: [] }) // branch-1 succeeds
       .mockRejectedValueOnce(new Error('some error')); // branch-3 fails
 
-    await isolationCompleteCommand(['branch-1', 'branch-2', 'branch-3'], {
-      force: false,
-      deleteRemote: true,
-    });
+    await expect(
+      isolationCompleteCommand(['branch-1', 'branch-2', 'branch-3'], {
+        force: false,
+        deleteRemote: true,
+      })
+    ).rejects.toThrow('Failed to complete');
 
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 1 not found');
   });
@@ -745,7 +773,9 @@ describe('isolationCompleteCommand', () => {
       warnings: [],
     });
 
-    await isolationCompleteCommand(['ghost-branch'], { force: true, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['ghost-branch'], { force: true, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Blocked: ghost-branch — has uncommitted changes'
@@ -765,7 +795,9 @@ describe('isolationCompleteCommand', () => {
       skippedReason: undefined,
     });
 
-    await isolationCompleteCommand(['partial-branch'], { force: true, deleteRemote: true });
+    await expect(
+      isolationCompleteCommand(['partial-branch'], { force: true, deleteRemote: true })
+    ).rejects.toThrow('Failed to complete');
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Partial: partial-branch — worktree was not removed from disk (branch deleted, DB updated)'

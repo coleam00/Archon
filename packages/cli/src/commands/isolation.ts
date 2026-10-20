@@ -560,4 +560,7 @@ export async function isolationCompleteCommand(
   console.log(
     `\nComplete: ${counts.completed} completed, ${counts.failed} failed, ${counts.notFound} not found`
   );
+  if (counts.failed > 0) {
+    throw new Error(`Failed to complete ${String(counts.failed)} branch(es)`);
+  }
 }
