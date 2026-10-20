@@ -6,15 +6,17 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 prefix="archon-slack-upgrade-$$-$(date +%s)"
 container="${prefix}-app"
 volume="${prefix}-data"
-fixture_image="${prefix}:fixture"
 tampered_image="${prefix}:tampered"
+service="${prefix}-slack"
+network="${prefix}-network"
 scratch=$(mktemp -d)
 cleanup() {
   result=$?
   if [ "$result" -ne 0 ]; then docker logs "$container" 2>&1 || true; fi
-  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker rm -f "$container" "$service" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$volume" >/dev/null 2>&1 || true
-  docker image rm "$fixture_image" "$tampered_image" >/dev/null 2>&1 || true
+  docker image rm "$tampered_image" >/dev/null 2>&1 || true
   rm -rf "$scratch"
   exit "$result"
 }
@@ -25,10 +27,11 @@ docker volume create "$volume" >/dev/null
 docker run --rm --network none --entrypoint bash -v "$volume:/.archon" "$image" -c \
   'mkdir -p /.archon/workspaces; echo upgrade-sentinel > /.archon/workspaces/upgrade-sentinel; echo SLACK_BOT_TOKEN=dummy > /.archon/.env'
 
+network_mode=none
 start() {
   local selected_image=$1
   shift
-  docker run -d --name "$container" --network none \
+  docker run -d --name "$container" --network "$network_mode" \
     -e ARCHON_DOCKER=true -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -e ARCHON_TELEMETRY_DISABLED=1 \
     -v "$volume:/.archon" -v "$root/scripts/fixtures:/app/scripts/fixtures:ro" \
     "$@" "$selected_image" >/dev/null
@@ -88,32 +91,68 @@ wait_health
 check real
 stop
 
-# A test-only conforming transport proves receipt -> real host -> live health composition.
-cat > "$scratch/Dockerfile" <<'DOCKERFILE'
-ARG BASE
-FROM ${BASE}
-COPY scripts/fixtures/ /app/scripts/fixtures/
-RUN bun scripts/fixtures/prepare-docker-slack-fixture.ts /opt/archon/image-plugins
-DOCKERFILE
-docker build --network none --build-arg "BASE=$image" -f "$scratch/Dockerfile" -t "$fixture_image" "$root"
-docker volume rm "$volume" >/dev/null
-docker volume create "$volume" >/dev/null
-docker run --rm --network none --entrypoint bash -v "$volume:/.archon" "$image" -c \
-  'mkdir -p /.archon/workspaces; echo upgrade-sentinel > /.archon/workspaces/upgrade-sentinel'
-start "$fixture_image" -e SLACK_BOT_TOKEN=dummy
-wait_health true
-check fixture
-test "$(docker exec "$container" cat /.archon/workspaces/upgrade-sentinel)" = upgrade-sentinel
-stop
+# Exercise the unmodified release against a controlled TLS Slack service.
+# The internal network has no route to Slack or release downloads.
+mkdir -p "$scratch/tls"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=slack.com \
+  -addext subjectAltName=DNS:slack.com -keyout "$scratch/tls/key.pem" \
+  -out "$scratch/tls/cert.pem" >/dev/null 2>&1
+chmod 644 "$scratch/tls/key.pem"
+docker network create --internal "$network" >/dev/null
+docker run -d --name "$service" --network "$network" --network-alias slack.com \
+  --entrypoint bun -v "$root/scripts/fixtures:/fixtures:ro" -v "$scratch/tls:/test-tls:ro" \
+  "$image" /fixtures/docker-slack-service.ts >/dev/null
+network_mode=$network
+for source in container home /app/.archon/.env /app/packages/server/.archon/.env /app/.env /app/.env.local /app/.env.development /app/.env.production; do
+  echo "Checking Slack configuration source: $source"
+  docker volume rm "$volume" >/dev/null
+  docker volume create "$volume" >/dev/null
+  docker run --rm --network none --entrypoint bash -v "$volume:/.archon" "$image" -c \
+    'mkdir -p /.archon/workspaces; echo upgrade-sentinel > /.archon/workspaces/upgrade-sentinel'
+  if [ "$source" = container ]; then
+    source_args=(-e SLACK_BOT_TOKEN=xoxb-upgrade-test -e SLACK_APP_TOKEN=xapp-upgrade-test)
+  else
+    target=$source
+    if [ "$source" = home ]; then target=/.archon/.env; fi
+    printf 'SLACK_BOT_TOKEN=xoxb-upgrade-test\nSLACK_APP_TOKEN=xapp-upgrade-test\n' > "$scratch/source.env"
+    if [ "$source" = home ]; then
+      docker run --rm --network none --entrypoint bash -v "$volume:/.archon" \
+        -v "$scratch/source.env:/source.env:ro" "$image" -c 'cp /source.env /.archon/.env'
+      source_args=(-e SLACK_BOT_TOKEN= -e SLACK_APP_TOKEN=)
+    else
+      source_args=(-v "$scratch/source.env:$target:ro")
+    fi
+    if [ "$source" = /app/.env.production ]; then source_args+=(-e NODE_ENV=production); fi
+    if [ "$source" = /app/.env.development ]; then source_args+=(-e NODE_ENV=development); fi
+  fi
+  start "$image" -v "$scratch/tls:/test-tls:ro" \
+    -e NODE_EXTRA_CA_CERTS=/test-tls/cert.pem "${source_args[@]}"
+  case "$source" in
+    /app/.archon/.env|/app/.env.local|/app/.env.development|/app/.env.production)
+      wait_health
+      check absent
+      stop
+      # These root files are not server configuration and must not strip container tokens.
+      start "$image" -v "$scratch/tls:/test-tls:ro" \
+        -e NODE_EXTRA_CA_CERTS=/test-tls/cert.pem "${source_args[@]}" \
+        -e SLACK_BOT_TOKEN=xoxb-upgrade-test -e SLACK_APP_TOKEN=xapp-upgrade-test
+      ;;
+  esac
+  wait_health true
+  check live
+  test "$(docker exec "$container" cat /.archon/workspaces/upgrade-sentinel)" = upgrade-sentinel
+  stop
+done
 
 cat > "$scratch/Dockerfile" <<'DOCKERFILE'
 ARG BASE
 FROM ${BASE}
 RUN echo tampered >> /opt/archon/image-plugins/archon-chat-slack
 DOCKERFILE
-docker build --network none --build-arg "BASE=$fixture_image" -f "$scratch/Dockerfile" -t "$tampered_image" "$root"
+docker build --network none --build-arg "BASE=$image" -f "$scratch/Dockerfile" -t "$tampered_image" "$root"
 docker volume rm "$volume" >/dev/null
 docker volume create "$volume" >/dev/null
+network_mode=none
 start "$tampered_image" -e SLACK_BOT_TOKEN=dummy
 for ((attempt=0; attempt<30; attempt++)); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$container")" = false ]; then break; fi
@@ -128,4 +167,4 @@ if docker logs "$container" 2>&1 | grep -F 'server_ready'; then
   exit 1
 fi
 stop
-echo 'Docker Slack upgrade, offline provisioning, retention, removal, live fixture and checksum refusal passed.'
+echo 'Docker Slack upgrade, offline provisioning, retention, removal, actual release delivery and checksum refusal passed.'

@@ -1,3 +1,4 @@
+import { SLACK_PLUGIN } from '@archon/adapters/retired-adapters';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,31 +13,31 @@ import { receiptPath, scanReceipts } from '@archon/plugin-manifest/store';
 import { installBinaryPlugin, parsePluginRef, type PluginEnvironment } from './plugin';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 
-export const IMAGE_SLACK_PLUGIN = 'coleam00/Archon/plugins/chat-slack';
+export const IMAGE_SLACK_PLUGIN = SLACK_PLUGIN.installSource;
 
 export async function provisionImageSlack(
   bundleDir: string,
   env: PluginEnvironment
 ): Promise<void> {
-  await withPluginMutationLock(env.pluginsDir, async () => {
-    const { receipts, broken } = await scanReceipts(env.pluginsDir);
-    if (broken.length) {
-      throw new Error(
-        `Cannot provision Slack until plugin receipts are repaired: ${broken.map(entry => `${entry.file}: ${entry.message}`).join('; ')}`
-      );
-    }
+  const retain = async (receipts: PluginReceipt[]): Promise<boolean> => {
     const installed = receipts
       .filter(isChatReceipt)
-      .filter(entry => entry.descriptor.id === 'slack');
+      .filter(entry => entry.descriptor.id === SLACK_PLUGIN.id);
     if (installed.length > 1) throw new Error('Multiple installed chat plugins claim Slack');
     const existing = installed[0];
-    if (existing) {
-      await verifyRetainedSlack(existing, receipts, env.pluginsDir);
-      console.log(
-        `[archon] Slack token configuration is present; retained ${existing.id}@${existing.tag} (commit ${existing.commit})`
-      );
-      return;
-    }
+    if (!existing) return false;
+    await verifyRetainedSlack(existing, receipts, env.pluginsDir);
+    console.log(
+      `[archon] Slack token configuration is present; retained ${existing.id}@${existing.tag} (commit ${existing.commit})`
+    );
+    return true;
+  };
+  if (await retain((await scanReceipts(env.pluginsDir)).receipts)) return;
+  await withPluginMutationLock(env.pluginsDir, async () => {
+    const { receipts, broken } = await scanReceipts(env.pluginsDir);
+    if (await retain(receipts)) return;
+    const brokenSlack = broken.find(entry => entry.id === IMAGE_SLACK_PLUGIN);
+    if (brokenSlack) throw new Error(`Cannot provision Slack: ${brokenSlack.message}`);
 
     const bundle = chatReceiptSchema.parse(
       JSON.parse(await readFile(receiptPath(bundleDir, IMAGE_SLACK_PLUGIN), 'utf8'))
@@ -44,7 +45,7 @@ export async function provisionImageSlack(
     const ref = parsePluginRef(`${bundle.id}@${bundle.tag}`);
     if (
       ref.id !== IMAGE_SLACK_PLUGIN ||
-      bundle.descriptor.id !== 'slack' ||
+      bundle.descriptor.id !== SLACK_PLUGIN.id ||
       bundle.manifest.executable !== 'archon-chat-slack'
     ) {
       throw new Error('Image bundle must describe the image-provided Slack plugin');

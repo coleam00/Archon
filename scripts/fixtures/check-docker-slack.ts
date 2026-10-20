@@ -49,9 +49,16 @@ if (mode === 'absent') {
     throw new Error('Runtime did not select installed Slack');
   if (!isDeepStrictEqual(await inspectChatPlugin(executable), receipt.descriptor))
     throw new Error('Installed binary descriptor does not match receipt');
-  if (mode === 'real') {
+  if (mode === 'real' || mode === 'live') {
     const child = Bun.spawn([executable], {
-      env: { ...process.env, SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '' },
+      env:
+        mode === 'live'
+          ? {
+              ...process.env,
+              SLACK_BOT_TOKEN: 'xoxb-upgrade-test',
+              SLACK_APP_TOKEN: 'xapp-upgrade-test',
+            }
+          : { ...process.env, SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '' },
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'ignore',
@@ -74,14 +81,22 @@ if (mode === 'absent') {
         receipt.descriptor
       );
       try {
-        let failure: unknown;
-        try {
+        if (mode === 'live') {
           await chat.start();
-        } catch (error) {
-          failure = error;
+          await chat.send({ conversationId: 'CTEST', text: 'Docker upgrade delivery' });
+          const response = await fetch('https://slack.com/delivered');
+          const result = await response.json();
+          if (!result.delivered) throw new Error('Actual Slack binary did not deliver the message');
+        } else {
+          let failure: unknown;
+          try {
+            await chat.start();
+          } catch (error) {
+            failure = error;
+          }
+          if (!(failure instanceof ChatStartError) || failure.retryable)
+            throw new Error('Real Slack must refuse missing tokens non-retryably');
         }
-        if (!(failure instanceof ChatStartError) || failure.retryable)
-          throw new Error('Real Slack must refuse missing tokens non-retryably');
       } finally {
         await chat.close();
       }

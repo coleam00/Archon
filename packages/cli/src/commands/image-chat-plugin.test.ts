@@ -219,15 +219,53 @@ dockerTest('competing file owner and unowned binary refuse fresh provisioning', 
   }
 });
 
-dockerTest('broken receipt and held mutation lock prevent installation', async () => {
+dockerTest('unrelated broken receipts do not prevent fresh or retained Slack', async () => {
   const data = await fixture();
   const broken = receiptPath(data.pluginsDir, 'operator/broken');
   await mkdir(dirname(broken), { recursive: true });
   await writeFile(broken, '{}');
-  await expect(data.install()).rejects.toThrow('receipts are repaired');
+  await data.install();
+  const selected = receiptPath(data.pluginsDir, IMAGE_SLACK_PLUGIN);
+  const before = await readFile(selected);
+  await data.install();
+  expect(await readFile(selected)).toEqual(before);
+});
+
+dockerTest('retained Slack does not require the mutation lock', async () => {
+  const data = await fixture();
+  await data.install();
+  const selected = receiptPath(data.pluginsDir, IMAGE_SLACK_PLUGIN);
+  const before = await readFile(selected);
+  await mkdir(join(data.pluginsDir, '.mutation-lock'));
+  await data.install();
+  expect(await readFile(selected)).toEqual(before);
+});
+
+dockerTest(
+  'an unrelated broken receipt cannot authorize replacing an unowned Slack executable',
+  async () => {
+    const data = await fixture();
+    const broken = receiptPath(data.pluginsDir, 'operator/broken');
+    await mkdir(dirname(broken), { recursive: true });
+    await writeFile(broken, '{}');
+    const target = join(data.pluginsDir, 'archon-chat-slack');
+    await writeFile(target, 'operator executable');
+    await expect(data.install()).rejects.toThrow(
+      'may belong to a plugin whose receipt cannot be read'
+    );
+    expect(await readFile(target, 'utf8')).toBe('operator executable');
+    expect(await Bun.file(data.marker).exists()).toBe(false);
+  }
+);
+
+dockerTest('broken Slack receipt and held lock refuse a required installation', async () => {
+  const data = await fixture();
+  const broken = receiptPath(data.pluginsDir, IMAGE_SLACK_PLUGIN);
+  await mkdir(dirname(broken), { recursive: true });
+  await writeFile(broken, '{}');
+  await expect(data.install()).rejects.toThrow('Cannot provision Slack');
   await rm(broken);
-  const lock = join(data.pluginsDir, '.mutation-lock');
-  await mkdir(lock);
+  await mkdir(join(data.pluginsDir, '.mutation-lock'));
   await expect(data.install()).rejects.toThrow('Plugin mutation locked');
   expect(await Bun.file(data.marker).exists()).toBe(false);
 });

@@ -30,7 +30,7 @@ async function fixture(uid = '1001') {
     mkdir: 'exit 0',
     find: 'exit 0',
     id: 'printf "%s\\n" "$TEST_UID"',
-    bun: 'if [ "$2" = "scripts/provision-docker-plugins.ts" ] && [ "$FAIL_PROVISION" = "1" ]; then exit 42; fi\nprintf "entrypoint-test: %s\\n" "$*"',
+    bun: 'if [ "$2" = "provision:docker" ] && [ "$FAIL_PROVISION" = "1" ]; then exit 42; fi\nprintf "entrypoint-test: %s\\n" "$*"',
     gosu: 'printf "%s:%s\\n" "$1" "$2" >> "$RUNNER_LOG"\nshift\nexec "$@"',
   })) {
     await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
@@ -84,7 +84,7 @@ async function fixture(uid = '1001') {
     const result = run(['bash', entrypoint], overrides);
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      'entrypoint-test: run scripts/provision-docker-plugins.ts\nentrypoint-test: run setup-auth\nentrypoint-test: run start\n'
+      'entrypoint-test: run provision:docker\nentrypoint-test: run setup-auth\nentrypoint-test: run start\n'
     );
     expect(result.stderr).toBe('');
     expect(result.stdout).not.toContain(patToken);

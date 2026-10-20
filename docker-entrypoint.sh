@@ -122,6 +122,6 @@ if [ -z "${CLAUDE_BIN_PATH:-}" ]; then
 fi
 
 # exec ensures bun is PID 1 and receives SIGTERM for graceful shutdown
-$RUNNER bun run scripts/provision-docker-plugins.ts
+$RUNNER bun run provision:docker
 $RUNNER bun run setup-auth
 exec $RUNNER bun run start
