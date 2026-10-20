@@ -65,11 +65,11 @@ export function parseWorkflow(
 /**
  * Parse one workflow YAML directly.
  *
- * These assertions are about what `parseWorkflow` PRODUCES. Routing them through
- * `discoverWorkflows` also ran include expansion, which since #1764 collapses a
- * workflow's node-affecting config onto its own nodes and removes the workflow-level
- * layer — so a `provider:`/`model:`/`effort:` assertion made on a discovered workflow
- * was testing the expander, not the parser it named.
+ * For assertions about what `parseWorkflow` PRODUCES. Discovery also runs include
+ * expansion, which since #1764 collapses a workflow's node-affecting config onto its
+ * own nodes and removes that workflow-level layer — so a `provider:`/`model:`/`effort:`
+ * assertion made on a discovered workflow tests the expander, not the parser. Fields
+ * that must survive expansion are asserted on discovery in loader.test.ts.
  */
 export function parseWorkflowYaml(
   yaml: string,

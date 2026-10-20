@@ -1455,6 +1455,48 @@ nodes:
   });
 });
 
+describe('discovery', () => {
+  const root = useTempWorkflowRoot();
+
+  // Expansion rebuilds every workflow and strips its node-affecting layer, so the
+  // run-owned fields core reads from a discovered workflow must be carried through.
+  it('keeps workflow-level run policy fields through expansion', async () => {
+    const result = await discoverFiles(root(), {
+      'policy.yaml': [
+        'name: policy',
+        'description: d',
+        'worktree:',
+        '  enabled: false',
+        'container:',
+        '  enabled: true',
+        '  write_back: auto',
+        'evidence_policy:',
+        '  required: true',
+        'tags: [GitLab, Review]',
+        'mutates_checkout: false',
+        'budget:',
+        '  max_work_units: 3',
+        'deprecated:',
+        '  message: Switch instead.',
+        'nodes:',
+        '  - id: n',
+        '    prompt: p',
+        '',
+      ].join('\n'),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.workflows[0].workflow).toMatchObject({
+      worktree: { enabled: false },
+      container: { enabled: true, write_back: 'auto' },
+      evidence_policy: { required: true },
+      tags: ['GitLab', 'Review'],
+      mutates_checkout: false,
+      budget: { max_work_units: 3 },
+      deprecated: { message: 'Switch instead.' },
+    });
+  });
+});
+
 describe('include nodes', () => {
   const root = useTempWorkflowRoot();
 
