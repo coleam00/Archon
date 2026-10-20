@@ -51,29 +51,30 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
-  it('surfaces the pause failure when the status read after it fails too', async () => {
+  it('preserves the unreadable lifecycle cause after a failed wait pause without failed work', async () => {
     const store = createMockStore();
+    const cause = new Error('status read failed');
     store.pauseWorkflowRunForWait = mock(async () => {
-      store.getWorkflowRunStatus.mockRejectedValueOnce(new Error('status read failed'));
+      store.getWorkflowRunStatus.mockRejectedValueOnce(cause);
       throw new Error('pause write failed');
     });
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        cwd: testDir,
-        workflow: {
-          name: 'wait-test',
-          nodes: [{ id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } }],
-        },
-        workflowRun: makeWorkflowRun(),
-      })
-    );
-    const failures = JSON.stringify([
-      ...store.failWorkflowRun.mock.calls,
-      ...persistedEvents(store).filter(e => e.event_type === 'node_failed'),
-    ]);
-    expect(failures).toContain('pause write failed');
-    expect(failures).not.toContain('status read failed');
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'wait-test',
+            nodes: [{ id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } }],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      )
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
   });
 
   for (const wait of [

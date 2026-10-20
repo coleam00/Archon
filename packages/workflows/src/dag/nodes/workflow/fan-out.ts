@@ -29,7 +29,7 @@ import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import {
-  childOutcomeFromRun,
+  childUsageFromRun,
   ChildWorkflowStatusReadError,
   type ChildWorkflowOutcome,
   type RunChildWorkflowFn,
@@ -406,7 +406,7 @@ export async function executeFanOutWorkflowNode(
   }
   const state = classifyExistingChildren(existingByIndex, continuing);
   const paidChildren = new Map<number, ChildWorkflowStatusReadError['usage']>(
-    [...existingByIndex].map(([index, child]) => [index, childOutcomeFromRun(child)])
+    [...existingByIndex].map(([index, child]) => [index, childUsageFromRun(child)])
   );
   try {
     if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {

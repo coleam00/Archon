@@ -116,6 +116,28 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
+  // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
+  // reading through readSubrunMetadata's summaryValue keeps them distinguishable
+  // from "not stamped".
+  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
+  return {
+    childRunId: run.id,
+    status: run.status,
+    output: typeof md.summary === 'string' ? md.summary : undefined,
+    ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
+    // The child's own field contract (#2453) — read from the row so the synchronous
+    // path and the parent re-entry/resume path stay one source, exactly like the
+    // summary and usage above.
+    ...(summaryDeclaredOutputPaths !== undefined
+      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
+      : {}),
+    ...childUsageFromRun(run),
+    error: typeof md.error === 'string' ? md.error : undefined,
+  };
+}
+
+export function childUsageFromRun(run: WorkflowRun): ChildWorkflowStatusReadError['usage'] {
+  const md: Record<string, unknown> = run.metadata ?? {};
   const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
   const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
   const cacheRead =
@@ -134,23 +156,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
           ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
         }
       : undefined;
-  // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
-  // reading through readSubrunMetadata's summaryValue keeps them distinguishable
-  // from "not stamped".
-  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
   return {
-    childRunId: run.id,
-    status: run.status,
-    output: typeof md.summary === 'string' ? md.summary : undefined,
-    ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
-    // The child's own field contract (#2453) — read from the row so the synchronous
-    // path and the parent re-entry/resume path stay one source, exactly like the
-    // summary and usage above.
-    ...(summaryDeclaredOutputPaths !== undefined
-      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
-      : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
-    error: typeof md.error === 'string' ? md.error : undefined,
   };
 }
