@@ -1,6 +1,6 @@
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -199,6 +199,93 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
     status: 'complete',
     intent: binding,
     requestStatus: 'admitted',
+  });
+});
+
+test('trigger withdraw removes queued recorded source and preserves admitted source', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-withdraw-')));
+  const host = hostForTest();
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'portable',
+    default_cwd: root,
+  });
+  const requests: PreparedWorkflowLaunch[] = [];
+  for (const name of ['admitted', 'queued']) {
+    const sourceRoot = join(root, name);
+    await mkdir(sourceRoot);
+    await writeFile(join(sourceRoot, 'workflow.yaml'), 'frozen source');
+    const prepared = launch(codebase.id);
+    prepared.run.metadata = {
+      workflow_source: {
+        version: 1,
+        root: sourceRoot,
+        origin: root,
+        captured_at: new Date().toISOString(),
+        digest: 'frozen',
+        file_count: 1,
+        byte_count: 13,
+      },
+    };
+    expect(
+      await store.admitResourceStart({
+        resource: 'one',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      })
+    ).toMatchObject({ status: name });
+    requests.push(prepared);
+  }
+  const [admitted, queued] = requests;
+  await expect(triggerCommand(host, 'withdraw', [admitted.run.id], {})).rejects.toThrow(
+    'Only untouched queued requests can be withdrawn.'
+  );
+  expect((await store.getResourceStartRequest(admitted.run.id))?.status).toBe('admitted');
+  expect(await readFile(join(root, 'admitted', 'workflow.yaml'), 'utf8')).toBe('frozen source');
+
+  await triggerCommand(host, 'withdraw', [queued.run.id], {});
+  expect((await store.getResourceStartRequest(queued.run.id))?.status).toBe('withdrawn');
+  await expect(stat(join(root, 'queued'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('trigger preparation recovery requires confirmation before releasing the recorded owner', async () => {
+  const host = hostForTest();
+  const store = host.deps.store;
+  const binding: ResourceStartBindingIntent = {
+    bindingId: 'binding',
+    bindingRevision: 'frozen',
+    hostId: 'host',
+    runAsUserId: randomUUID(),
+    resource: 'one',
+    capacity: 1,
+    overlap: 'queue',
+    launch: {
+      cwd: '/portable',
+      workflowName: 'portable',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    },
+  };
+  const receipt = acceptance(binding, 'recovery');
+  await store.acceptStartReceipt(receipt);
+  const owner = { receiptId: receipt.receipt.id, bindingId: binding.bindingId, ownerId: 'owner' };
+  expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+  const claimed = await store.getStartReceipt(owner.receiptId);
+  const args = [owner.receiptId, owner.bindingId];
+  await expect(
+    triggerCommand(host, 'recover-preparation', args, { owner: owner.ownerId })
+  ).rejects.toThrow('--yes');
+  expect(await store.getStartReceipt(owner.receiptId)).toEqual(claimed);
+  const nextOwner = { ...owner, ownerId: 'next-owner' };
+  expect(await store.claimStartBindingPreparation(nextOwner)).toBe(false);
+
+  await triggerCommand(host, 'recover-preparation', args, { owner: owner.ownerId, yes: true });
+  expect(await store.claimStartBindingPreparation(nextOwner)).toBe(true);
+  expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
+    status: 'preparing',
+    ownerId: nextOwner.ownerId,
   });
 });
 

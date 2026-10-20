@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { TERMINAL_RUN_EVENT_TYPE } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import {
   WORKFLOW_EVENT_TYPES,
@@ -93,6 +94,16 @@ const emittedIds = (t: FakeTransport): string[] =>
   t.emitted.map(({ event }) => (JSON.parse(event) as { runId: string }).runId);
 
 describe('mapWorkflowEventRow', () => {
+  test.each(Object.entries(TERMINAL_RUN_EVENT_TYPE))(
+    'polls and projects the terminal status %s',
+    (status, eventType) => {
+      expect(WORKFLOW_EVENT_TYPES).toContain(eventType);
+      expect(DASHBOARD_SOURCE_EVENT_TYPES).toContain(eventType);
+      const mapped = mapWorkflowEventRow(row({ event_type: eventType }));
+      expect(JSON.parse(mapped ?? '{}')).toMatchObject({ type: 'workflow_status', status });
+    }
+  );
+
   test.each([...WORKFLOW_EVENT_TYPES])(
     'source membership matches row mapping for %s',
     eventType => {
