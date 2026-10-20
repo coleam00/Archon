@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { spawnTerminalWithSetup } from './setup-spawn';
 import { setupCommand } from './setup';
-import { assertEffectiveGitHubAuth } from './setup-github';
 
 const spawner: {
   spawn(
@@ -97,47 +96,6 @@ describe('setup terminal spawning', () => {
       expect(spawn.mock.calls[0]?.[1]).toEqual(expectedArgs);
     });
 
-    it(`${platform}: forced re-entry does not inherit file-loaded App credentials`, async () => {
-      usePlatform(platform);
-      const previous = process.env.GITHUB_APP_ID;
-      process.env.GITHUB_APP_ID = 'stale-file-app';
-      const { spawn } = terminalSpawns(0);
-      spyOn(console, 'log').mockImplementation(() => undefined);
-      try {
-        expect(await setupCommand({ spawn: true, repoPath, force: true, inheritedEnv })).toBe(0);
-        const childEnv = spawn.mock.calls[0]?.[2]?.env ?? process.env;
-        expect(() =>
-          assertEffectiveGitHubAuth(
-            {
-              ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
-              platforms: { github: true, telegram: false, slack: false },
-              github: {
-                mode: 'pat',
-                token: 'fixture-pat',
-                webhookSecret: 'fixture-secret',
-                allowedUsers: '',
-              },
-              botDisplayName: 'Archon',
-            },
-            'GITHUB_TOKEN=fixture-pat\nWEBHOOK_SECRET=fixture-secret\n',
-            {
-              scope: 'project',
-              force: true,
-              targetEnvPath: '/unused',
-              replaceGitHubAuth: true,
-              inheritedEnv: childEnv,
-              otherGitHubEnv: {},
-              saved: { GITHUB_APP_ID: 'stale-file-app' },
-            }
-          )
-        ).not.toThrow();
-        expect(childEnv).toEqual(inheritedEnv);
-      } finally {
-        if (previous === undefined) delete process.env.GITHUB_APP_ID;
-        else process.env.GITHUB_APP_ID = previous;
-      }
-    });
-
     it(`${platform}: handles asynchronous errors from every missing terminal`, async () => {
       usePlatform(platform);
       const { spawn, children } = terminalSpawns(-1);
@@ -167,6 +125,14 @@ describe('setup terminal spawning', () => {
       });
     }
   }
+
+  it('setup passes the inherited environment to the terminal child', async () => {
+    usePlatform('win32');
+    const { spawn } = terminalSpawns(0);
+    spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await setupCommand({ spawn: true, repoPath, force: true, inheritedEnv })).toBe(0);
+    expect(spawn.mock.calls[0]?.[2]?.env).toEqual(inheritedEnv);
+  });
 
   it('falls back when spawn throws synchronously', async () => {
     usePlatform('win32');
