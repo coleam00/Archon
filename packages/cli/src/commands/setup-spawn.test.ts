@@ -129,6 +129,7 @@ describe('setup terminal spawning', () => {
 
   it.each([0, 1, -1])('setup reports the final launch outcome (%s)', async successAt => {
     usePlatform('win32');
+    const repoPath = 'D:\\repo with spaces';
     const { spawn } = terminalSpawns(successAt);
     const log = spyOn(console, 'log').mockImplementation(() => undefined);
     expect(
@@ -157,7 +158,7 @@ describe('setup terminal spawning', () => {
     const output = log.mock.calls.map(call => call.join(' ')).join('\n');
     if (successAt === -1) {
       expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
-      expect(output).toContain(`cd "${repoPath}" && ${command}`);
+      expect(output).toContain(`cd /d "${repoPath}" && ${command}`);
       expect(output).not.toContain('Setup wizard opened.');
     } else {
       expect(output).toContain('Setup wizard opened.');
@@ -196,7 +197,7 @@ describe('setup terminal spawning', () => {
       if (fallbackAvailable) {
         expect(output).toContain('Setup wizard opened.');
       } else {
-        expect(output).toContain('cd "/repo" && archon setup');
+        expect(output).toContain('cd /d "/repo" && archon setup');
         expect(output).not.toContain('Setup wizard opened.');
       }
     }
