@@ -234,7 +234,7 @@ describe('toRun — cost', () => {
     expect(toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' })).costUsd).toBeNull();
   });
 
-  test.each([undefined, 'free', null, -1, Number.NaN, Infinity, -Infinity])(
+  test.each([undefined, null, -1, Number.NaN, Infinity, -Infinity])(
     'cost is null for missing or invalid total_cost_usd %s',
     totalCost => {
       expect(

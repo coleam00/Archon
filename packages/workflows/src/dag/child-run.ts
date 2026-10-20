@@ -1,3 +1,4 @@
+import type { WorkflowRunUsage } from '../schemas/workflow-run-usage';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
@@ -104,13 +105,14 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
       `Sub-run ${run.id} is still '${run.status}' — cannot derive a node outcome from an unsettled run.`
     );
   }
-  const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
+  const md = run.metadata ?? {};
+  const usage: WorkflowRunUsage = md;
+  const input = typeof usage.total_tokens_in === 'number' ? usage.total_tokens_in : undefined;
+  const output = typeof usage.total_tokens_out === 'number' ? usage.total_tokens_out : undefined;
   const cacheRead =
-    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
+    typeof usage.total_cache_read_tokens === 'number' ? usage.total_cache_read_tokens : undefined;
   const cacheWrite =
-    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
+    typeof usage.total_cache_write_tokens === 'number' ? usage.total_cache_write_tokens : undefined;
   const tokens =
     input !== undefined || output !== undefined
       ? {
@@ -120,7 +122,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
           ...(cacheWrite !== undefined ? { cacheWrite } : {}),
           // Persisted by persistRunUsage; without it a child's floor would contribute to
           // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
+          ...(usage.total_cache_partial === true ? { cachePartial: true as const } : {}),
         }
       : undefined;
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
@@ -138,8 +140,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
+    costUsd: typeof usage.total_cost_usd === 'number' ? usage.total_cost_usd : undefined,
+    ...(usage.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
 }

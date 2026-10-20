@@ -8,6 +8,7 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRunUsage } from '@archon/workflows/schemas/workflow-run-usage';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
@@ -21,7 +22,8 @@ type ProjectedRunEvent =
 
 /** The run's recorded total cost, when it is a usable amount. */
 export function runTotalCostUsd(run: WorkflowRun): number | undefined {
-  const cost = run.metadata.total_cost_usd;
+  const usage: WorkflowRunUsage = run.metadata;
+  const cost = usage.total_cost_usd;
   return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
 }
 

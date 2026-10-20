@@ -1,3 +1,4 @@
+import { workflowRunUsageSchema } from '@archon/workflows/schemas/workflow-run-usage';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -156,10 +157,10 @@ export const runStopReasonSchema = engineRunStopReasonSchema.meta({ id: 'RunStop
 
 /**
  * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
- * engine-owned and typed.
+ * engine-owned and typed, as are usage totals.
  */
-export const workflowRunMetadataSchema = z
-  .object({
+export const workflowRunMetadataSchema = workflowRunUsageSchema
+  .extend({
     [TOOL_CALL_ATTENTION_METADATA_KEY]: toolCallAttentionArraySchema.optional(),
     approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),

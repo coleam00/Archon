@@ -214,7 +214,13 @@ async function readRunFactsPresenter(
     } else {
       console.log(fallbackLead);
     }
-    if (executionStatus !== 'paused') printRunUsage(presentedRun?.metadata);
+    if (executionStatus !== 'paused') {
+      if (runReadUnavailable) {
+        console.log('  Usage: unavailable — failed to read persisted run');
+      } else {
+        printRunUsage(presentedRun?.metadata);
+      }
+    }
   };
 }
 

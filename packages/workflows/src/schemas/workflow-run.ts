@@ -18,8 +18,8 @@ import {
   type AttentionOption,
 } from './dag-node';
 import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
-import { tokenUsageSchema } from '@archon/provider-contract';
-import { providerFailureSchema } from '@archon/provider-contract';
+import { tokenUsageSchema, providerFailureSchema } from '@archon/provider-contract';
+import { workflowRunUsageSchema } from './workflow-run-usage';
 import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
 import { recordSurfaceSchema } from './record-surface';
@@ -483,7 +483,7 @@ export const workflowRunSchema = z.object({
   status: workflowRunStatusSchema,
   outcome: workflowRunOutcomeSchema.nullable(),
   user_message: z.string(),
-  metadata: z.record(z.string(), z.unknown()),
+  metadata: workflowRunUsageSchema.catchall(z.unknown()),
   started_at: z.date(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),

@@ -232,29 +232,53 @@ describe('workflowRunCommand — progress rendering', () => {
     }
   );
 
-  it('reports unknown usage and logs a failed run lookup without masking completion', async () => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    const workflowDb = require('@archon/core/db/workflows');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-unavailable',
-    });
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('store unavailable')
-    );
+  it.each([
+    { lookup: 'rejected', success: true },
+    { lookup: 'missing', success: true },
+    { lookup: 'rejected', success: false },
+    { lookup: 'missing', success: false },
+  ] as const)(
+    'reports unavailable persisted usage for $lookup lookup after success=$success',
+    async ({ lookup, success }) => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      const workflowDb = require('@archon/core/db/workflows');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success,
+        workflowRunId: 'run-unavailable',
+        ...(!success ? { error: 'node failed' } : {}),
+      });
+      const getRun = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+      if (lookup === 'rejected') getRun.mockRejectedValueOnce(new Error('store unavailable'));
+      else getRun.mockResolvedValueOnce(null);
 
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      const completion = workflowRunCommand(
+        createTestWorkflowHost(),
+        '/test/path',
+        'plan',
+        'hello',
+        {}
+      );
+      if (success) await completion;
+      else await expect(completion).rejects.toThrow('node failed');
 
-    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
-    expect(consoleSpy).toHaveBeenCalledWith('  Cost: unknown');
-    expect(consoleSpy).toHaveBeenCalledWith('  Input tokens: unknown');
-    expect(consoleSpy).toHaveBeenCalledWith('  Output tokens: unknown');
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ workflowRunId: 'run-unavailable', err: expect.any(Error) }),
-      'cli.workflow_run_lookup_failed'
-    );
-  });
+      expect(consoleSpy).toHaveBeenCalledWith(
+        success ? '\nWorkflow completed successfully.' : '\nWorkflow finished.'
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '  Usage: unavailable — failed to read persisted run'
+      );
+      expect(consoleSpy).not.toHaveBeenCalledWith('  Cost: unknown');
+      expect(consoleSpy).not.toHaveBeenCalledWith('  Input tokens: unknown');
+      expect(consoleSpy).not.toHaveBeenCalledWith('  Output tokens: unknown');
+      if (lookup === 'rejected') {
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ workflowRunId: 'run-unavailable', err: expect.any(Error) }),
+          'cli.workflow_run_lookup_failed'
+        );
+      }
+    }
+  );
 
   const OWNED_RUN = 'test-run-id';
   const CHILD_RUN = 'child-run-id';

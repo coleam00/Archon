@@ -5503,6 +5503,13 @@ export interface components {
       owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
     };
     WorkflowRunMetadata: {
+      total_cost_usd?: number | null;
+      total_tokens_in?: number | null;
+      total_tokens_out?: number | null;
+      total_tokens_unknown?: boolean;
+      total_cache_read_tokens?: number | null;
+      total_cache_write_tokens?: number | null;
+      total_cache_partial?: boolean | null;
       tool_call_attention?: {
         streamId: string;
         nodeId: string;

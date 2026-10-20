@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import type { WorkflowRunUsage } from './schemas/workflow-run-usage';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { sourceReleaseNotice } from './deps';
@@ -323,34 +324,29 @@ export async function executeDagWorkflow(
   const persistRunUsage = async (): Promise<void> => {
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
-    const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
-      ...(runCtx.totalTokensUnknown
-        ? {
-            total_tokens_unknown: true,
-            total_tokens_in: null,
-            total_tokens_out: null,
-            total_cache_read_tokens: null,
-            total_cache_write_tokens: null,
-            total_cache_partial: null,
-          }
-        : {}),
-      ...(runCtx.totalTokens !== undefined
-        ? {
-            total_tokens_in: runCtx.totalTokens.input,
-            total_tokens_out: runCtx.totalTokens.output,
-            ...(runCtx.totalTokens.cacheRead !== undefined
-              ? { total_cache_read_tokens: runCtx.totalTokens.cacheRead }
-              : {}),
-            ...(runCtx.totalTokens.cacheWrite !== undefined
-              ? { total_cache_write_tokens: runCtx.totalTokens.cacheWrite }
-              : {}),
-            // Marks the two cache totals above as a floor rather than an exact figure.
-            ...(runCtx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
-          }
-        : {}),
-    };
+    const usage: WorkflowRunUsage = {};
+    // No usage stays absent: a bash-only workflow must not read as a free AI run.
+    if (runCtx.totalCostUsd !== undefined) usage.total_cost_usd = runCtx.totalCostUsd;
+    if (runCtx.totalTokensUnknown) {
+      usage.total_tokens_unknown = true;
+      usage.total_tokens_in = null;
+      usage.total_tokens_out = null;
+      usage.total_cache_read_tokens = null;
+      usage.total_cache_write_tokens = null;
+      usage.total_cache_partial = null;
+    }
+    if (runCtx.totalTokens !== undefined) {
+      usage.total_tokens_in = runCtx.totalTokens.input;
+      usage.total_tokens_out = runCtx.totalTokens.output;
+      if (runCtx.totalTokens.cacheRead !== undefined) {
+        usage.total_cache_read_tokens = runCtx.totalTokens.cacheRead;
+      }
+      if (runCtx.totalTokens.cacheWrite !== undefined) {
+        usage.total_cache_write_tokens = runCtx.totalTokens.cacheWrite;
+      }
+      // Marks the two cache totals above as a floor rather than an exact figure.
+      if (runCtx.totalTokens.cachePartial) usage.total_cache_partial = true;
+    }
     if (Object.keys(usage).length === 0) return;
     await deps.store
       .updateWorkflowRun(workflowRun.id, { metadata: usage })
