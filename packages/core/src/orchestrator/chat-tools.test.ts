@@ -57,6 +57,21 @@ describe('invoke_workflow', () => {
     expect(launches).toEqual([]);
   });
 
+  test('an unexpected project lookup failure reaches the provider failure channel', async () => {
+    const tool = buildInvokeWorkflowTool({
+      workflows,
+      listCodebases: async () => {
+        throw new Error('registry unavailable');
+      },
+      onLaunch: () => {
+        throw new Error('must not launch');
+      },
+    });
+    await expect(
+      tool.handler({ workflow: 'archon-ship', project: 'my-app', prompt: 'go' })
+    ).rejects.toThrow('registry unavailable');
+  });
+
   test('an empty prompt is refused', async () => {
     const { tool, launches } = build();
     const out = await tool.handler({ workflow: 'archon-ship', project: 'my-app', prompt: '  ' });
@@ -172,10 +187,8 @@ describe('register_project', () => {
     ]);
   });
 
-  test('a throwing registration becomes a text result', async () => {
+  test('an unexpected registration failure reaches the provider failure channel', async () => {
     const { tool } = build(() => Promise.reject(new Error('disk full')));
-    expect(await tool.handler({ name: 'app', path: '/srv/app' })).toBe(
-      'Could not register project: disk full'
-    );
+    await expect(tool.handler({ name: 'app', path: '/srv/app' })).rejects.toThrow('disk full');
   });
 });

@@ -324,7 +324,7 @@ describe('assistant command examples are ordinary text', () => {
         mockUpdateSession.mockClear();
         const chunks = [
           'Example:\n/invoke-work',
-          'flow assist --project my-project --prompt "Fix the \"login\" bug"\n',
+          String.raw`flow assist --project my-project --prompt "Fix the \"login\" bug"` + '\n',
           '/register-project --folder demo "/tmp/with spaces"\n',
           'Following answer.',
         ];

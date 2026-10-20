@@ -12,8 +12,12 @@ import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
 import { ActiveContainerEnvironmentsError } from '../db/codebase-delete-error';
-import { registerRepository, registerFolder } from '../handlers/sql-registration';
-import { detectProjectKind } from '../services/project-kind';
+import {
+  registerRepository,
+  registerFolder,
+  ProjectRegistrationError,
+} from '../handlers/sql-registration';
+import { detectProjectKind, ProjectKindDetectionError } from '../services/project-kind';
 import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import type { ProjectRegistration } from './chat-tools';
@@ -79,7 +83,12 @@ function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Code
 export async function handleRegisterProject(message: string): Promise<string> {
   const registration = parseProjectRegistration(message);
   if (!registration) return 'Usage: /register-project [--folder] <name> <path>';
-  return registerProject(registration);
+  try {
+    return await registerProject(registration);
+  } catch (error) {
+    if (error instanceof ProjectKindDetectionError) return error.message;
+    return `Could not register ${registration.folder ? 'folder project' : 'project'}: ${toError(error).message}`;
+  }
 }
 
 export async function registerProject({
@@ -104,25 +113,12 @@ export async function registerProject({
   const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
-  let kind: Codebase['kind'];
-  try {
-    kind = folder ? 'folder' : await detectProjectKind(canonicalPath);
-  } catch (err) {
-    getLog().warn(
-      { err: err as Error, projectPath: canonicalPath },
-      'project.register_repo_detect_failed'
-    );
-    return toError(err).message;
-  }
+  const kind = folder ? 'folder' : await detectProjectKind(canonicalPath);
   if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
-    try {
-      await codebaseDb.repairCodebaseRegistration(alreadyExists.id, {
-        default_cwd: canonicalPath,
-        kind,
-      });
-    } catch (error) {
-      return `Could not repair project: ${toError(error).message}`;
-    }
+    await codebaseDb.repairCodebaseRegistration(alreadyExists.id, {
+      default_cwd: canonicalPath,
+      kind,
+    });
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
@@ -134,7 +130,9 @@ export async function registerProject({
     const kindNote = kind === 'folder' ? '\nKind: folder project (runs in place)' : '';
     return `Project "${result.name}" ${result.alreadyExisted ? 'is already registered' : 'registered successfully!'}\nPath: ${result.defaultCwd}\nID: ${result.codebaseId}${kindNote}`;
   } catch (error) {
-    return `Could not register ${kind === 'folder' ? 'folder project' : 'project'}: ${toError(error).message}`;
+    if (error instanceof ProjectRegistrationError)
+      return `Could not register ${kind === 'folder' ? 'folder project' : 'project'}: ${error.message}`;
+    throw error;
   }
 }
 

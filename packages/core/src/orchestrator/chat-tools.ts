@@ -199,7 +199,7 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
       } catch (e: unknown) {
         const err = toError(e);
         getLog().error({ err }, 'chat_tools.invoke_workflow_failed');
-        return `invoke_workflow error: ${err.message}`;
+        throw err;
       }
     },
   };
@@ -244,7 +244,7 @@ export function buildRegisterProjectTool(ctx: {
       } catch (e: unknown) {
         const err = toError(e);
         getLog().error({ err, projectName }, 'chat_tools.register_project_failed');
-        return `Could not register project: ${err.message}`;
+        throw err;
       }
     },
   };

@@ -175,6 +175,76 @@ describe('run codebase resolution', () => {
     ).toMatchObject({ codebaseId: child.id });
   }
 
+  it.each([
+    { noWorktree: true },
+    { detach: true },
+    { noWorktree: true, codebaseId: child.id },
+    { detach: true, codebaseId: child.id },
+    { noWorktree: true, folder: true },
+  ])('refuses foreign chat launches before registration or execution (%j)', async options => {
+    process.env.ARCHON_WORKFLOW_CODEBASE_ID = parent.id;
+    (codebases.getCodebase as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
+      id === parent.id ? parent : child
+    );
+    (core.registerRepository as ReturnType<typeof mock>).mockClear();
+    (core.registerFolder as ReturnType<typeof mock>).mockClear();
+    try {
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', options)
+      ).rejects.toThrow('/setproject');
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(core.registerFolder).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+    }
+  });
+
+  it('allows a launch in the selected chat project', async () => {
+    process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+        noWorktree: true,
+      });
+      expectChildExecution();
+    } finally {
+      delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+    }
+  });
+
+  it.each([false, true])(
+    'refuses foreign name-based resume before reading its source (detach=%s)',
+    async detach => {
+      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'foreign-run',
+        codebase_id: parent.id,
+        workflow_name: 'probe',
+        status: 'paused',
+      });
+      const { mockResolveContinuationWorkflow } = await import(
+        '../test-support/workflow-command-harness'
+      );
+      mockResolveContinuationWorkflow.mockClear();
+      try {
+        await expect(
+          workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+            resume: true,
+            detach,
+          })
+        ).rejects.toThrow('/setproject');
+        expect(mockResolveContinuationWorkflow).not.toHaveBeenCalled();
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      }
+    }
+  );
+
   it('passes the registration choice while leaving this run base unset', async () => {
     await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
       noWorktree: true,

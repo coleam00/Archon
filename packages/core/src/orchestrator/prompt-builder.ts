@@ -440,7 +440,7 @@ ${projectName ? 'Launch only when the user clearly requests work and a listed wo
 ${promptRules('message argument')}
 - Pass declared workflow inputs with \`--input name=value\` for each value. Ask for missing required inputs before launching.
 - Quote every shell argument safely, including paths, task text and inputs. Preserve embedded quotes and apostrophes; never interpolate user text as shell code.
-- Use the selected project's listed directory. If the user explicitly chooses another project, change to that project's listed directory first.
+- Use the selected project's listed directory. To change projects, ask the user to submit /setproject <name> first.
 - Launch at most once per reply. For questions or unclear intent, answer directly without launching.
 - Detached launches are headless: they use CLI identity, have no originating-chat progress or result delivery, and return a run ID. Inspect that ID with the CLI; never claim the run has finished just because launch returned.
 

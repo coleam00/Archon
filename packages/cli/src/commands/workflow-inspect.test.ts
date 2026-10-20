@@ -758,35 +758,37 @@ describe('workflowStatusCommand', () => {
     expect(parsed.runs[0]?.nodes).toBeUndefined();
   });
 
-  it('degrades a verbose JSON event-query failure to an empty node payload', async () => {
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
-    mockListDashboardRuns.mockResolvedValueOnce(
-      statusRuns([
-        {
-          id: 'run-unavailable',
-          workflow_name: 'implement',
-          working_path: '/path/to/worktree',
-          status: 'running',
-          started_at: new Date(),
-          active_nodes: ['beta'],
-        },
-      ])
-    );
-    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('events unavailable')
-    );
+  it.each([false, true])(
+    'fails a verbose JSON event-query failure (rawEvents=%s)',
+    async rawEvents => {
+      const workflowEventsDb = await import('@archon/core/db/workflow-events');
+      mockListDashboardRuns.mockResolvedValueOnce(
+        statusRuns([
+          {
+            id: 'run-unavailable',
+            workflow_name: 'implement',
+            working_path: '/path/to/worktree',
+            status: 'running',
+            started_at: new Date(),
+            active_nodes: ['beta'],
+          },
+        ])
+      );
+      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+        new Error('events unavailable')
+      );
 
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
-      json: true,
-      verbose: true,
-      all: true,
-    });
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
-      runs: Array<{ nodes: unknown[] }>;
-    };
-    expect(parsed.runs[0]?.nodes).toEqual([]);
-  });
+      await expect(
+        workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
+          json: true,
+          verbose: true,
+          rawEvents,
+          all: true,
+        })
+      ).rejects.toThrow('Failed to fetch workflow events');
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('workflowGetCommand', () => {

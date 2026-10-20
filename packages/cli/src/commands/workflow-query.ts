@@ -267,6 +267,25 @@ export async function workflowListCommand(
   }
 }
 
+async function verboseStatusRuns(
+  host: WorkflowHost,
+  runs: DashboardWorkflowRun[],
+  rawEvents = false
+) {
+  const fetchedPerRun = await Promise.all(
+    runs.map(run => fetchVerboseEvents(host, run.id, rawEvents))
+  );
+  if (fetchedPerRun.some(result => result.failed)) {
+    throw new Error('Failed to fetch workflow events for verbose status.');
+  }
+  return runs.map((run, i) => {
+    const runEvents = fetchedPerRun[i]?.events ?? [];
+    return rawEvents
+      ? { ...run, attention: runAttention(run), events: runEvents }
+      : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
+  });
+}
+
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
@@ -308,15 +327,7 @@ export async function workflowStatusCommand(
       return;
     }
 
-    const fetchedPerRun = await Promise.all(
-      runs.map(run => fetchVerboseEvents(host, run.id, opts.rawEvents ?? false))
-    );
-    const runsOutput = runs.map((run, i) => {
-      const runEvents = fetchedPerRun[i]?.events ?? [];
-      return opts.rawEvents
-        ? { ...run, attention: runAttention(run), events: runEvents }
-        : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
-    });
+    const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
     await writeJsonLine({ runs: runsOutput, scopeFallback });
     return;
   }

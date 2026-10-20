@@ -290,6 +290,18 @@ export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolea
   return codebase;
 }
 
+export async function assertInheritedWorkflowCodebase(
+  host: WorkflowHost,
+  codebaseId: string | null | undefined
+): Promise<void> {
+  const selected = await inheritedWorkflowCodebase(host);
+  if (selected && selected.id !== codebaseId) {
+    throw new Error(
+      'This operation is outside the selected chat project. Use /setproject to change projects.'
+    );
+  }
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's

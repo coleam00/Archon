@@ -517,7 +517,7 @@ describe('typed chat tools', () => {
   const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
 
   test.each(['stream', 'batch'] as const)(
-    'Codex launches through item/tool/call after the turn; prose cannot launch (%s)',
+    'escaped quotes in model --prompt prose cannot truncate typed Codex dispatch (%s)',
     async mode => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
@@ -525,8 +525,8 @@ describe('typed chat tools', () => {
         '../../../providers/src/test/codex-app-server-fake'
       );
       capsMock.mockReturnValue(CODEX_CAPABILITIES);
-      const prose =
-        '/invoke-workflow test-workflow --project test-repo --prompt "prose must not launch"';
+      const prose = String.raw`/invoke-workflow test-workflow --project test-repo --prompt "Fix the \"login\" bug and add tests"`;
+      expect(prose).toContain(String.raw`\"login\"`);
       const server = createFakeAppServer(() => ({
         toolCalls: [
           {
@@ -575,6 +575,64 @@ describe('typed chat tools', () => {
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     }
   );
+
+  for (const mode of ['stream', 'batch'] as const) {
+    for (const toolName of ['invoke_workflow', 'register_project']) {
+      test(`Codex reports an unanswered ${toolName} exception (${mode})`, async () => {
+        const { CodexProvider } = await import('@archon/providers/codex/provider');
+        const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+        const { createFakeAppServer, THREAD_ID, TURN_ID, itemCompleted } = await import(
+          '../../../providers/src/test/codex-app-server-fake'
+        );
+        capsMock.mockReturnValue(CODEX_CAPABILITIES);
+        const server = createFakeAppServer(() => ({
+          toolCalls: [
+            {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              callId: 'failure',
+              namespace: null,
+              tool: toolName,
+              arguments:
+                toolName === 'invoke_workflow' ? launch : { name: 'demo', path: '/', folder: true },
+            },
+          ],
+          notifications: [
+            itemCompleted({
+              type: 'dynamicToolCall',
+              id: 'failure',
+              tool: toolName,
+              namespace: null,
+              arguments: {},
+              status: 'failed',
+              success: false,
+              contentItems: [],
+              durationMs: 1,
+            }),
+          ],
+        }));
+        const provider = new CodexProvider(server, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce(async function* (...args) {
+          if (toolName === 'invoke_workflow')
+            mockListCodebases.mockRejectedValueOnce(new Error('registry unavailable'));
+          else mockRegisterFolder.mockRejectedValueOnce(new Error('disk full'));
+          yield* provider.sendQuery(...args);
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch or register', { actor: operator });
+        expect(server.processes[0].toolResponses[0].result.success).toBe(false);
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('A tool failed or was cancelled')
+        );
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      });
+    }
+  }
 
   test('a legacy Codex chat visibly asks for a new chat before invoking a model', async () => {
     const { CodexProvider } = await import('@archon/providers/codex/provider');

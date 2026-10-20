@@ -320,7 +320,7 @@ This provider is deprecated and will be removed in the next minor release. It ke
 
 OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
 
-Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per query, and tears it down when that query ends. Connecting to an external OpenCode server (`baseUrl`) is not supported.
 
 ### Install
 
