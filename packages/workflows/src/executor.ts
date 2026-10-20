@@ -122,6 +122,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * auto-detection remains the last resort.
    */
   baseBranch?: string;
+  /** Already resolved checkout base, including unresolved empty; recorded resumes take priority. */
+  resolvedBaseBranch?: string;
   /**
    * Per-dispatch base-branch override (CLI `--base <branch>`), the top
    * precedence level for `$BASE_BRANCH` — above repo config and the codebase
@@ -497,6 +499,7 @@ export async function executeWorkflow(
             childArgs,
             resolvedModelOverrides,
             effectiveRunConfig,
+            baseBranch,
             resolveChildIsolation
           ),
         priorUsage,
