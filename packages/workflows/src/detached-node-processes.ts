@@ -4,7 +4,6 @@ import { confirmProcessGroupsGone, type ProcessGroupStop } from '@archon/paths/p
 interface RecordedCommand {
   reaped: boolean;
   child: ChildProcess;
-  stop?: ProcessGroupStop;
 }
 
 export interface PreparedNodeTermination {
@@ -50,12 +49,9 @@ export class DetachedNodeProcesses {
   signal(pgid: number, signal: NodeJS.Signals): ProcessGroupStop {
     const command = this.commands.get(pgid);
     if (!command) throw new Error('Detached node command is not recorded');
-    if (command.stop && command.reaped) return command.stop;
     const group: ProcessGroupStop = command.reaped
       ? { pgid, leaderReaped: true, signalAttempted: false }
       : { pgid, leaderReaped: false, signalAttempted: true };
-    command.stop = group;
-    // The fact describes ownership at the signal, retained through confirmation.
     if (!group.leaderReaped) {
       try {
         process.kill(-pgid, signal);
@@ -90,10 +86,6 @@ export class DetachedNodeProcesses {
       release: () => {
         if (this.preparation?.result !== result) return;
         this.preparation = undefined;
-        for (const command of this.commands.values()) {
-          if (command.stop && !command.stop.leaderReaped && command.stop.signalError)
-            command.stop = undefined;
-        }
         releaseHold();
       },
     };

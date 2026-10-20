@@ -380,7 +380,7 @@ posixOnly.each(['timeout', 'abort', 'maxBuffer'] as const)(
       await waitUntil(() => confirming && !alive(root));
       await Bun.sleep(50);
       const prepared = trees.prepareTermination();
-      expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: false, signalAttempted: true }]);
+      expect(prepared.groups).toEqual([{ pgid: root, leaderReaped: true, signalAttempted: false }]);
       confirm();
       prepared.release();
       await result;

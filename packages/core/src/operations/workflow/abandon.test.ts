@@ -10,6 +10,7 @@ import {
   operator,
   EMPTY_COUNTS,
   mockGetWorkflowRun,
+  mockPersistWorkflowEvent,
   mockListWorkflowRuns,
   mockLogger,
   mockCancelWorkflowRun,
@@ -953,9 +954,10 @@ describe('abandon owned worktrees', () => {
     expect(result.releasedWorktrees).toEqual([{ path: '/wt/run-a', branch: 'b-a' }]);
   });
 
-  test.each(['retry', 'descendant', 'reset'] as const)(
-    'preserves owner warnings on %s release',
+  test.each(['root', 'retry', 'descendant', 'shared-owner descendant', 'reset'] as const)(
+    'retains the checkout and reports owner warnings on %s abandonment',
     async mode => {
+      mockPersistWorkflowEvent.mockClear();
       mockRequestDetachedRunStop.mockResolvedValue({
         pid: 4242,
         stop: async () => ({ warnings: ['Output is still held; inspect checkout'] }),
@@ -963,20 +965,25 @@ describe('abandon owned worktrees', () => {
       });
       if (mode === 'retry')
         mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'cancelled' }));
-      if (mode === 'descendant') {
+      if (mode === 'descendant' || mode === 'shared-owner descendant') {
         const child = owned('child', {
           metadata: {
             owned_worktree: {
               envId: 'env-child',
               creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
             },
-            execution_owner: { host: hostname(), pid: 5252, uid: process.getuid?.() },
+            execution_owner: {
+              host: hostname(),
+              pid: mode === 'descendant' ? 5252 : 4242,
+              uid: process.getuid?.(),
+            },
           },
         });
         mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [child] : []));
-        mockRequestDetachedRunStop.mockRejectedValueOnce(
-          new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
-        );
+        if (mode === 'descendant')
+          mockRequestDetachedRunStop.mockRejectedValueOnce(
+            new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+          );
       }
       if (mode === 'reset') mockCancelResumableRunsForConversation.mockResolvedValueOnce([owned()]);
       const result =
@@ -984,7 +991,18 @@ describe('abandon owned worktrees', () => {
           ? await operations.abandonResumableRunsForConversation('conv-1', operator)
           : await operations.abandonWorkflow('run-1', operator);
       expect(result.cleanupWarnings).toContain('Output is still held; inspect checkout');
-      expect(reclaim).toHaveBeenCalled();
+      if (mode === 'descendant' || mode === 'shared-owner descendant' || mode === 'reset')
+        expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+          workflow_run_id: mode === 'reset' ? 'run-1' : 'child',
+          event_type: 'workflow_cleanup_warning',
+          data: { warnings: ['Output is still held; inspect checkout'] },
+        });
+      expect(reclaim).not.toHaveBeenCalled();
+      if (mode === 'root')
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', {
+          cancel_reason: 'operator',
+          reason: 'Output is still held; inspect checkout',
+        });
     }
   );
 

@@ -118,7 +118,11 @@ export const isolationStore: IIsolationStore = {
     throw new Error('Unexpected isolation count');
   },
 };
+export const mockPersistWorkflowEvent = mock<
+  WorkflowOperationsDeps['store']['persistWorkflowEvent']
+>(async () => undefined);
 export const store: WorkflowOperationsDeps['store'] = {
+  persistWorkflowEvent: mockPersistWorkflowEvent,
   signalWorkflowWait: mock(async () => ({ signaled: true })),
   deleteWorkflowRun: mock(async () => undefined),
   getWorkflowRun: mockGetWorkflowRun,

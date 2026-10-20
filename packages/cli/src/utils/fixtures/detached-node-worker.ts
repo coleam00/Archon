@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 const [dir, role] = process.argv.slice(2);
 if (!dir || !role) throw new Error('Expected fixture directory and role');
+if (role === 'stubborn') process.on('SIGTERM', () => undefined);
 const path = join(dir, role);
 writeFileSync(`${path}.tmp`, String(process.pid));
 renameSync(`${path}.tmp`, path);

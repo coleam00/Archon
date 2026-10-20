@@ -1220,7 +1220,10 @@ this host:
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
   (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
   The output-holder warning and `lsof` action described above apply here too; inspect
-  warnings before reusing or removing the checkout.
+  warnings before reusing or removing the checkout. Abandon retains owned checkouts
+  when owner-stop warnings report held output, including descendant checkouts and
+  their root. Warnings learned after cancellation during descendant cleanup or
+  conversation reset are appended to that run as `workflow_cleanup_warning` events.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:

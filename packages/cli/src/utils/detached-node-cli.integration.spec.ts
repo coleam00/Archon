@@ -34,7 +34,14 @@ function alive(pid: number): boolean {
 
 async function launch(
   kind: 'bash' | 'script',
-  mode: 'timeout' | 'live' | 'reaped' | 'escaped' | 'escaped-live'
+  mode:
+    | 'timeout'
+    | 'live'
+    | 'reaped'
+    | 'escaped'
+    | 'escaped-live'
+    | 'overlap-timeout'
+    | 'overlap-buffer'
 ) {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-cli-')));
   const home = join(dir, 'home');
@@ -43,10 +50,15 @@ async function launch(
   mkdirSync(join(project, '.archon/workflows'), { recursive: true });
   writeFileSync(join(home, 'config.yaml'), 'store: files\n');
   const rootFile = join(dir, 'root');
+  const overlap = mode === 'overlap-timeout' || mode === 'overlap-buffer';
   const role =
     mode === 'reaped' || mode === 'escaped' || mode === 'escaped-live' ? 'grandchild' : 'child';
-  const command = [process.execPath, worker, dir, role];
-  const script = `require('fs').writeFileSync(${JSON.stringify(rootFile)}, String(process.pid)); const c = Bun.spawn(${JSON.stringify(command)}, {detached: ${mode === 'escaped' || mode === 'escaped-live'}, stdio: ['ignore', 'inherit', 'inherit']}); ${mode === 'reaped' || mode === 'escaped' ? 'process.exit(0);' : 'await c.exited;'}`;
+  const command = [process.execPath, worker, dir, overlap ? 'stubborn' : role];
+  let afterSpawn = 'await c.exited;';
+  if (mode === 'reaped' || mode === 'escaped') afterSpawn = 'process.exit(0);';
+  if (mode === 'overlap-buffer')
+    afterSpawn = `while (!require('fs').existsSync(${JSON.stringify(join(dir, 'stubborn'))})) await Bun.sleep(10); process.stdout.write('x'.repeat(2 * 1024 * 1024)); await c.exited;`;
+  const script = `require('fs').writeFileSync(${JSON.stringify(rootFile)}, String(process.pid)); const c = Bun.spawn(${JSON.stringify(command)}, {detached: ${mode === 'escaped' || mode === 'escaped-live'}, stdio: ['ignore', 'inherit', 'inherit']}); ${afterSpawn}`;
   const shell = `echo $$ > '${rootFile}'; ${command.map(arg => `'${arg}'`).join(' ')} & ${mode === 'reaped' || mode === 'escaped' ? 'exit 0' : 'wait'}`;
   const body =
     kind === 'bash'
@@ -54,7 +66,7 @@ async function launch(
       : `runtime: bun\n    script: ${JSON.stringify(script)}`;
   writeFileSync(
     join(project, '.archon/workflows/test.yaml'),
-    `name: test\ndescription: detached command ownership fixture\nnodes:\n  - id: wrapped\n    ${body}\n${mode === 'timeout' ? '    timeout: 1200\n' : ''}`
+    `name: test\ndescription: detached command ownership fixture\nnodes:\n  - id: wrapped\n    ${body}\n${mode === 'timeout' || mode === 'overlap-timeout' ? '    timeout: 1200\n' : ''}`
   );
   const env = {
     ...process.env,
@@ -85,7 +97,7 @@ async function launch(
     const row = await store.getWorkflowRun(runId);
     if (row?.status === 'running')
       await invoke('workflow', 'cancel', runId, '--json').catch(() => undefined);
-    for (const role of ['root', 'child', 'grandchild']) {
+    for (const role of ['root', 'child', 'grandchild', 'stubborn']) {
       if (existsSync(join(dir, role))) {
         const value = pid(role);
         if (alive(value)) process.kill(value, 'SIGKILL');
@@ -203,6 +215,42 @@ posix(
       }
       await until(async () => (await run.store.getWorkflowRun(run.runId))?.status === 'failed');
       for (const role of ['root', 'child', 'grandchild']) expect(alive(run.pid(role))).toBe(false);
+    } finally {
+      await run.cleanup();
+    }
+  },
+  15000
+);
+
+posix.each(['overlap-timeout', 'overlap-buffer'] as const)(
+  'cancel during %s confirmation ends the run without signalling its reaped group',
+  async mode => {
+    const run = await launch('script', mode);
+    try {
+      await until(() => existsSync(join(run.dir, 'stubborn')) && !alive(run.pid('root')));
+      expect((await run.store.getWorkflowRun(run.runId))?.status).toBe('running');
+      expect(alive(run.pid('stubborn'))).toBe(true);
+      const result = await run.invoke('workflow', 'cancel', run.runId, '--json');
+      expect(result.ok).toBe(true);
+      expect((await run.store.getWorkflowRun(run.runId))?.status).toBe('cancelled');
+      expect(alive(run.pid('stubborn'))).toBe(true);
+      const warning = result.cleanupWarnings?.join('\n');
+      expect(warning).toContain('it was not signalled');
+      expect(
+        (await run.store.listWorkflowEvents(run.runId)).find(
+          event => event.event_type === 'workflow_cancelled'
+        )?.data?.reason
+      ).toBe(warning);
+      const signals: { pid: number; signal: string }[] = readFileSync(
+        join(run.dir, 'signals'),
+        'utf8'
+      )
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line));
+      expect(signals.filter(signal => signal.pid === -run.pid('root'))).toEqual([
+        { pid: -run.pid('root'), signal: 'SIGTERM' },
+      ]);
     } finally {
       await run.cleanup();
     }

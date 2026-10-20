@@ -203,13 +203,17 @@ async function checkWorktreeOwner(
         `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`,
       ],
     };
-  if (root?.id === row.id) return { safe: true, warnings: [] };
-  if (ranInStoppedRootOwner(recorded, root, rootOutcome)) return { safe: true, warnings: [] };
+  if (root?.id === row.id)
+    return {
+      safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
+      warnings: [],
+    };
+  let outcome: Awaited<ReturnType<typeof stopLiveOwner>>;
   try {
-    const outcome = await stopLiveOwner(ctx, row);
-    return outcome.kind === 'not_stopped'
-      ? { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] }
-      : { safe: true, warnings: outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [] };
+    outcome =
+      ranInStoppedRootOwner(recorded, root, rootOutcome) && rootOutcome
+        ? rootOutcome
+        : await stopLiveOwner(ctx, row);
   } catch (err) {
     getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_child_owner_check_failed');
     return {
@@ -219,6 +223,16 @@ async function checkWorktreeOwner(
       ],
     };
   }
+  if (outcome.kind === 'not_stopped')
+    return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
+  const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
+  if (warnings.length)
+    await ctx.store.persistWorkflowEvent({
+      workflow_run_id: row.id,
+      event_type: 'workflow_cleanup_warning',
+      data: { warnings },
+    });
+  return { safe: warnings.length === 0, warnings };
 }
 
 /** Why abandon cannot account for `row`'s execution owner from here, or undefined when it can. */
