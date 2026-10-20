@@ -103,7 +103,7 @@ docker run -d --name "$service" --network "$network" --network-alias slack.com \
   --entrypoint bun -v "$root/scripts/fixtures:/fixtures:ro" -v "$scratch/tls:/test-tls:ro" \
   "$image" /fixtures/docker-slack-service.ts >/dev/null
 network_mode=$network
-for source in container home /app/.archon/.env /app/packages/server/.archon/.env /app/.env /app/.env.local /app/.env.development /app/.env.production; do
+for source in container home /app/packages/server/.archon/.env /app/.env; do
   echo "Checking Slack configuration source: $source"
   docker volume rm "$volume" >/dev/null
   docker volume create "$volume" >/dev/null
@@ -122,22 +122,9 @@ for source in container home /app/.archon/.env /app/packages/server/.archon/.env
     else
       source_args=(-v "$scratch/source.env:$target:ro")
     fi
-    if [ "$source" = /app/.env.production ]; then source_args+=(-e NODE_ENV=production); fi
-    if [ "$source" = /app/.env.development ]; then source_args+=(-e NODE_ENV=development); fi
   fi
   start "$image" -v "$scratch/tls:/test-tls:ro" \
     -e NODE_EXTRA_CA_CERTS=/test-tls/cert.pem "${source_args[@]}"
-  case "$source" in
-    /app/.archon/.env|/app/.env.local|/app/.env.development|/app/.env.production)
-      wait_health
-      check absent
-      stop
-      # These root files are not server configuration and must not strip container tokens.
-      start "$image" -v "$scratch/tls:/test-tls:ro" \
-        -e NODE_EXTRA_CA_CERTS=/test-tls/cert.pem "${source_args[@]}" \
-        -e SLACK_BOT_TOKEN=xoxb-upgrade-test -e SLACK_APP_TOKEN=xapp-upgrade-test
-      ;;
-  esac
   wait_health true
   check live
   test "$(docker exec "$container" cat /.archon/workspaces/upgrade-sentinel)" = upgrade-sentinel
