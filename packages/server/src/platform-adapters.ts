@@ -319,7 +319,10 @@ function onDiscordMessage(discord: DiscordAdapter, lockManager: ConversationLock
   });
 }
 
-/** Starts Telegram unless a chat plugin supersedes it or no token is set. Never throws. */
+/**
+ * Starts Telegram unless a chat plugin supersedes it or no token is set. A failed
+ * `start()` is logged and returns null; construction errors propagate.
+ */
 export async function startTelegramAdapter(
   ctx: PlatformAdapterContext
 ): Promise<TelegramAdapter | null> {
