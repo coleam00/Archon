@@ -22,6 +22,7 @@ import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
+import { runCheckoutAssociationPredicate } from './workflow-run-checkout-predicate';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -437,10 +438,6 @@ export async function getLiveRunOwningEnv(
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
-  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
-  // UUID identifiers must compare as text so $1 has one type across metadata,
-  // conversation links, and environment associations.
-  const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
   // Placeholders follow the status lists' lengths so a new status extends an IN
   // list without a hand-edited parameter position.
   const params: unknown[] = [envId];
@@ -467,7 +464,6 @@ export async function getLiveRunOwningEnv(
     excludeRunId === undefined
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
-  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
   const result = await query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
@@ -475,9 +471,7 @@ export async function getLiveRunOwningEnv(
      WHERE (r.status NOT IN (${unclaimable}))
        ${releaseFilter}
        ${exclusion}
-       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
-         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
-           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
+       AND ${runCheckoutAssociationPredicate('$1')}
      ORDER BY r.started_at DESC
      LIMIT 1`,
     params

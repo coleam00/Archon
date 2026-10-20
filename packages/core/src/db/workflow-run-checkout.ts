@@ -1,5 +1,6 @@
 import type { IDatabase } from './adapters/types';
 import { getDatabaseType, getDialect } from './connection';
+import { runCheckoutAssociationPredicate } from './workflow-run-checkout-predicate';
 
 /** Lock registrations before the run row, matching cleanup and pending claims. */
 export async function lockRunCheckout(query: IDatabase['query'], id: string): Promise<void> {
@@ -14,12 +15,7 @@ export async function lockRunCheckout(query: IDatabase['query'], id: string): Pr
      WHERE e.provider = 'worktree' AND EXISTS (
        SELECT 1 FROM remote_agent_workflow_runs r
        LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
-       WHERE r.id = $1 AND (
-         (e.codebase_id = r.codebase_id AND e.working_path = r.working_path)
-         OR ${envId} = ${dialect.jsonText('r.metadata', 'isolation_env_id')}
-         OR ${envId} = ${dialect.jsonText('r.metadata', 'owned_worktree.envId')}
-         OR e.id = c.isolation_env_id
-       )
+       WHERE r.id = $1 AND ${runCheckoutAssociationPredicate(envId)}
      ) ORDER BY e.id${dialect.rowLock()}`,
     [id]
   );
