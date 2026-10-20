@@ -552,21 +552,31 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
+  const recordedContainer = { isolation: 'container', isolation_env_id: 'env' };
+  const contextRequired = 'Container backend requires a container execution context';
+  const backendRequired = 'Container execution requires a container backend context';
+  const identityMismatch = 'Execution context does not match the recorded run isolation';
   it.each([
-    [true, true, 'container'],
-    [false, true, 'container'],
-    [true, false, 'container'],
-    [true, true, 'host'],
-    [true, true, 'absent'],
-    [true, true, 'no-backend'],
-    [true, true, 'no-context'],
-    [true, true, 'wrong-env'],
-    [true, true, 'missing-env'],
-    [true, true, 'host-record'],
-    [true, true, 'missing-record'],
+    [true, true, 'container', recordedContainer, undefined],
+    [false, true, 'container', recordedContainer, undefined],
+    [true, false, 'container', recordedContainer, undefined],
+    [true, true, 'host', recordedContainer, contextRequired],
+    [true, true, 'absent', recordedContainer, contextRequired],
+    [true, true, 'no-backend', recordedContainer, backendRequired],
+    [true, true, 'no-context', recordedContainer, contextRequired],
+    [
+      true,
+      true,
+      'container',
+      { ...recordedContainer, isolation_env_id: 'other-env' },
+      identityMismatch,
+    ],
+    [true, true, 'container', { isolation: 'container' }, identityMismatch],
+    [true, true, 'container', { isolation: 'host' }, identityMismatch],
+    [true, true, 'container', {}, identityMismatch],
   ] as const)(
-    'container source release won=%s matching container=%s execution=%s',
-    async (released, matches, execution) => {
+    'container source release won=%s matching container=%s execution=%s metadata=%j',
+    async (released, matches, execution, metadata, expectedError) => {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
       const marker = join(testDir, 'never-ran');
@@ -615,17 +625,7 @@ describe('executeDagWorkflow -- script nodes', () => {
               nodes: [{ id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }],
             },
             workflowRun: makeWorkflowRun('unreadable-container', {
-              metadata:
-                execution === 'missing-record'
-                  ? {}
-                  : execution === 'host-record'
-                    ? { isolation: 'host' }
-                    : {
-                        isolation: 'container',
-                        ...(execution === 'missing-env'
-                          ? {}
-                          : { isolation_env_id: execution === 'wrong-env' ? 'other-env' : 'env' }),
-                      },
+              metadata,
             }),
             workflowSourceRoots: capturedSourceRoots(capture.anchor),
             execContext:
@@ -640,14 +640,8 @@ describe('executeDagWorkflow -- script nodes', () => {
                 : { envId: 'env', writeBack: 'approve', backend },
           })
         );
-        if (execution !== 'container') {
-          await expect(executing).rejects.toThrow(
-            execution === 'no-backend'
-              ? 'Container execution requires a container backend context'
-              : execution === 'host' || execution === 'absent' || execution === 'no-context'
-                ? 'Container backend requires a container execution context'
-                : 'Execution context does not match the recorded run isolation'
-          );
+        if (expectedError) {
+          await expect(executing).rejects.toThrow(expectedError);
           expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
           expect(backend.prepareSuspend).not.toHaveBeenCalled();
           expect(stop).not.toHaveBeenCalled();
