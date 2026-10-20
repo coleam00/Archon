@@ -576,7 +576,7 @@ an identifier and `node_suspended` keeps it active, while `node_completed`, `nod
 `node_skipped_prior_success` remove it. Retries re-add the node in their new start position. This
 is node lifecycle state, not evidence that a process owner is alive.
 
-Tool-call advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running`; every overdue tool shows its node, provider, sanitized command/title, and elapsed/no-progress duration. The default is 30 minutes without reported progress; see [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
+Tool-call and silent-turn advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running` or `paused`; stalled siblings appear beside a paused node's primary attention as `stalledCalls`. Every stalled entry shows its node, provider, sanitized command/title, and elapsed/no-progress duration. Reported work defaults to 30 minutes without progress; silent turns use `idle_timeout`. See [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 
 ### `workflow runs`
 
@@ -1024,9 +1024,10 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
-`item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
-item of the child that holds the pause, or to its own `unreadable` item when its sub-run
-tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
+`item` is null when there is no queue item. A parent blocked on sub-runs with its own
+stalled work returns its own `stalled_tool_calls` item, so recovery targets the parent run.
+Otherwise it resolves to the item of the child that holds the pause, or to its own
+`unreadable` item when its sub-run tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open

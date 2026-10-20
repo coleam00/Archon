@@ -199,7 +199,7 @@ function readToolCallAttention(raw: RawWorkflowRun): Run['toolCallAttention'] {
   if (attention?.kind === 'stalled_tool_calls') return attention.calls;
   if (attention && 'stalledCalls' in attention && attention.stalledCalls)
     return attention.stalledCalls;
-  return raw.metadata?.tool_call_attention ?? [];
+  return [];
 }
 
 export function toRun(raw: RawWorkflowRun): Run {

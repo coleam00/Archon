@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'bun:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ToolCallAttentionSection } from '../components/ToolCallAttentionSection';
 import { toRun, normalizeOrigin, runDetailPath, runMessageConversationId } from './run';
 import { detailFixture } from './run.test-fixtures';
 import { runStatusLabel } from '../lib/run-status';
@@ -627,7 +630,7 @@ describe('toRun — terminal record', () => {
   });
 });
 
-test('live advisories are normalized through API metadata and disappear for terminal rows', () => {
+test('live advisories use projected attention and disappear for terminal rows', () => {
   const call = {
     streamId: 's',
     nodeId: 'node',
@@ -640,13 +643,18 @@ test('live advisories are normalized through API metadata and disappear for term
     thresholdMs: 1800000,
   };
   const metadata = { tool_call_attention: [call] };
-  const live = toRun(raw({ id: 'live', workflow_name: 'work', status: 'running', metadata }));
-  expect(live.toolCallAttention).toEqual([call]);
-  expect(
-    toRun(raw({ id: 'paused', workflow_name: 'work', status: 'paused', metadata }))
-      .toolCallAttention
-  ).toEqual([call]);
   const sibling = { ...call, elapsedMs: 1800000, stalledForMs: 1800000 };
+  const projected = (status: 'running' | 'paused'): Raw =>
+    raw({
+      id: 'live',
+      workflow_name: 'work',
+      status,
+      metadata,
+      attention: { kind: 'stalled_tool_calls', runId: 'live', status, calls: [sibling] },
+    });
+  const live = toRun(projected('running'));
+  expect(live.toolCallAttention).toEqual([sibling]);
+  expect(toRun(projected('paused')).toolCallAttention).toEqual([sibling]);
   const composite = toRun(
     raw({
       id: 'paused',
@@ -675,3 +683,27 @@ test('live advisories are normalized through API metadata and disappear for term
       .toolCallAttention
   ).toEqual([]);
 });
+
+for (const status of ['running', 'paused'] as const) {
+  test.each([{ value: 'corrupt' }, { value: null }, { value: {} }, { value: [{}] }])(
+    `${status} unreadable attention never exposes malformed metadata to the shared renderer: %j`,
+    ({ value: malformed }) => {
+      const input: Raw = JSON.parse(
+        JSON.stringify({
+          ...raw({ id: 'unreadable', workflow_name: 'work', status }),
+          metadata: { tool_call_attention: malformed },
+          attention: {
+            kind: 'unreadable',
+            runId: 'unreadable',
+            reason: 'malformed_tool_call_attention',
+            detail: `${status} with unreadable tool-call attention`,
+          },
+        })
+      );
+      const run = toRun(input);
+      expect(run.attention).toEqual(input.attention ?? null);
+      expect(run.toolCallAttention).toEqual([]);
+      expect(renderToStaticMarkup(createElement(ToolCallAttentionSection, { run }))).toBe('');
+    }
+  );
+}

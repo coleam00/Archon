@@ -33,8 +33,11 @@ test('the detail header displays live tool attention', () => {
   const run = toRun({
     ...detailFixture.run,
     status: 'running',
-    metadata: {
-      tool_call_attention: [
+    attention: {
+      kind: 'stalled_tool_calls',
+      runId: detailFixture.run.id,
+      status: 'running',
+      calls: [
         {
           streamId: 's',
           nodeId: 'implement',
@@ -46,6 +49,8 @@ test('the detail header displays live tool attention', () => {
           lastProgressAt: new Date(Date.now() - 1800000).toISOString(),
           raisedAt: new Date().toISOString(),
           thresholdMs: 1800000,
+          elapsedMs: 1800000,
+          stalledForMs: 1800000,
         },
       ],
     },
