@@ -140,50 +140,59 @@ function atomText(atom: DryRunAtom): string {
   return `$${atom.ref.nodeId}.${path} ${atom.operator} '${atom.expected}'`;
 }
 
+/** The parsed flag as the engine records it: a dry run and a real run. */
+const DRY_RUN_OUTPUT = new Map<string, NodeOutput>([
+  ['parse-args', parseArgsOutput(runParseArgs('dry-run'))],
+]);
+const RELEASE_OUTPUT = new Map<string, NodeOutput>([
+  ['parse-args', parseArgsOutput(runParseArgs('minor'))],
+]);
+
+/** The gate a dry run ends at: it runs in both modes. */
+function assertApprovalGate(node: WorkflowNode): void {
+  if (node.wait?.form !== 'approval') {
+    throw new Error(`Node '${node.id}' runs in a dry run without being an approval gate`);
+  }
+}
+
+/** Every release-phase node carries a dry-run guard, and that guard switches with the flag. */
+function assertDryRunGuard(node: WorkflowNode): void {
+  const when = node.when;
+  if (typeof when !== 'string') {
+    throw new Error(`Node '${node.id}' runs in a dry run: it declares no when: guard`);
+  }
+  const clauses = parseWhenExpression(when);
+  if (clauses === null) {
+    throw new Error(`Node '${node.id}' has an unparseable when: ${when}`);
+  }
+  for (const clause of clauses) {
+    const guards = clause.filter(isDryRunAtom);
+    if (guards.length === 0) {
+      throw new Error(`Node '${node.id}' has a when: clause with no dry-run guard: ${when}`);
+    }
+    for (const guard of guards) assertGuardSwitchesWithTheFlag(node, guard, when);
+  }
+}
+
+/** The guard closes for a dry run and opens for a real one. */
+function assertGuardSwitchesWithTheFlag(node: WorkflowNode, guard: DryRunAtom, when: string): void {
+  const text = atomText(guard);
+  const dry = evaluateCondition(text, DRY_RUN_OUTPUT);
+  if (!dry.parsed || dry.result) {
+    throw new Error(`Node '${node.id}' is not gated off by the dry-run flag: ${when}`);
+  }
+  const release = evaluateCondition(text, RELEASE_OUTPUT);
+  if (!release.parsed || !release.result) {
+    throw new Error(`Node '${node.id}' never runs, dry run or not: ${when}`);
+  }
+}
+
 describe('archon-release dry-run gate', () => {
   test('every node in the release phase is gated off by the dry-run flag', () => {
-    const dryRunOutput = new Map<string, NodeOutput>([
-      ['parse-args', parseArgsOutput(runParseArgs('dry-run'))],
-    ]);
-    const releaseOutput = new Map<string, NodeOutput>([
-      ['parse-args', parseArgsOutput(runParseArgs('minor'))],
-    ]);
     const { gate, phase } = releasePhase();
     expect(gate.length).toBeGreaterThan(0);
     expect(phase.length).toBeGreaterThan(0);
-    for (const node of gate) {
-      // The gate is where a dry run ends, so it is the one node of the release tail
-      // that runs in both modes.
-      if (node.wait?.form !== 'approval') {
-        throw new Error(`Node '${node.id}' runs in a dry run without being an approval gate`);
-      }
-    }
-    for (const node of phase) {
-      const when = node.when;
-      if (typeof when !== 'string') {
-        throw new Error(`Node '${node.id}' runs in a dry run: it declares no when: guard`);
-      }
-      const clauses = parseWhenExpression(when);
-      if (clauses === null) {
-        throw new Error(`Node '${node.id}' has an unparseable when: ${when}`);
-      }
-      for (const clause of clauses) {
-        const guards = clause.filter(isDryRunAtom);
-        if (guards.length === 0) {
-          throw new Error(`Node '${node.id}' has a when: clause with no dry-run guard: ${when}`);
-        }
-        for (const guard of guards) {
-          const text = atomText(guard);
-          const dry = evaluateCondition(text, dryRunOutput);
-          if (!dry.parsed || dry.result) {
-            throw new Error(`Node '${node.id}' is not gated off by the dry-run flag: ${when}`);
-          }
-          const release = evaluateCondition(text, releaseOutput);
-          if (!release.parsed || !release.result) {
-            throw new Error(`Node '${node.id}' never runs, dry run or not: ${when}`);
-          }
-        }
-      }
-    }
+    for (const node of gate) assertApprovalGate(node);
+    for (const node of phase) assertDryRunGuard(node);
   });
 });
