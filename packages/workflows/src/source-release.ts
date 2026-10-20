@@ -21,7 +21,11 @@ export async function releaseUnreadableRunSource(
   let outcome: ContainerSuspendOutcome | undefined;
   try {
     // Three Docker calls at most must fit within the file store's 10s lock wait.
-    const suspend = await containerCtx.backend.prepareSuspend(containerCtx.envId, 2_000);
+    const suspend = await containerCtx.backend.prepareSuspend(
+      containerCtx.envId,
+      execContext.containerId,
+      2_000
+    );
     beforePublish = async () => {
       try {
         await suspend();

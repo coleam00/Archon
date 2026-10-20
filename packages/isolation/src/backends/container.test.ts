@@ -785,6 +785,17 @@ function seedContainerRow(
 }
 
 describe('ContainerBackend.suspend', () => {
+  test('refuses to prepare a stop for a different execution container', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.prepareSuspend('env-c', 'other-container', 2_000)).rejects.toThrow(
+      'does not own execution container'
+    );
+    expect(docker.calls).toEqual([]);
+  });
+
   test.each(['exec', 'stop', 'container'])(
     'bounds every Docker call when %s fails during a source release',
     async failing => {
@@ -802,7 +813,7 @@ describe('ContainerBackend.suspend', () => {
       };
       try {
         const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-        const stop = await backend.prepareSuspend('env-c', 2_000);
+        const stop = await backend.prepareSuspend('env-c', 'cid-orig', 2_000);
         await expect(stop()).rejects.toThrow('Failed to suspend');
         expect(calls.map(call => call.args[0])).toEqual(['exec', 'stop', 'container']);
         expect(calls.map(call => call.timeout)).toEqual([2_000, 2_000, 2_000]);
@@ -832,7 +843,7 @@ describe('ContainerBackend.suspend', () => {
     const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
     const read = spyOn(store, 'getById');
-    const stop = await backend.prepareSuspend('env-c');
+    const stop = await backend.prepareSuspend('env-c', 'cid-orig');
     expect(read).toHaveBeenCalledTimes(1);
     expect(docker.calls).toEqual([]);
     read.mockImplementation(async () => {

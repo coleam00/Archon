@@ -313,8 +313,17 @@ export class ContainerBackend implements IIsolationBackend {
   }
 
   /** Resolve store metadata before entering a workflow store transition. */
-  async prepareSuspend(envId: string, dockerTimeoutMs?: number): Promise<() => Promise<void>> {
+  async prepareSuspend(
+    envId: string,
+    expectedContainerId?: string,
+    dockerTimeoutMs?: number
+  ): Promise<() => Promise<void>> {
     const meta = await this.loadMetadata(envId);
+    if (expectedContainerId !== undefined && meta.containerId !== expectedContainerId) {
+      throw new Error(
+        `Environment '${envId}' does not own execution container '${expectedContainerId}'`
+      );
+    }
     return async () => {
       const handle = meta.containerName ?? meta.containerId;
       if (!handle) {

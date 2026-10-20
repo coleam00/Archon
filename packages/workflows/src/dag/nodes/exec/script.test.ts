@@ -552,9 +552,13 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
-  it.each([true, false])(
-    'container source release won=%s exits without generic pause cleanup',
-    async released => {
+  it.each([
+    [true, true],
+    [false, true],
+    [true, false],
+  ] as const)(
+    'container source release won=%s matching container=%s exits without generic pause cleanup',
+    async (released, matches) => {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
       const marker = join(testDir, 'never-ran');
@@ -573,7 +577,12 @@ describe('executeDagWorkflow -- script nodes', () => {
       );
       const stop = mock(async () => undefined);
       const backend = {
-        prepareSuspend: mock(async () => stop),
+        prepareSuspend: mock(async (_envId: string, containerId: string) => {
+          if (containerId !== (matches ? 'cid' : 'other-container')) {
+            throw new Error('Environment does not own execution container');
+          }
+          return stop;
+        }),
         suspend: mock(async () => undefined),
         finalize: mock(async () => ({ requiresApproval: false })),
         applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
@@ -604,7 +613,12 @@ describe('executeDagWorkflow -- script nodes', () => {
           })
         );
         expect(result).toEqual({ kind: 'source_release', released });
-        expect(stop).toHaveBeenCalledTimes(released ? 1 : 0);
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 'cid', 2_000);
+        expect(stop).toHaveBeenCalledTimes(released && matches ? 1 : 0);
+        const events = persistedEvents(mockDeps.store);
+        expect(events.some(event => event.event_type === 'container_stopped')).toBe(
+          released && matches
+        );
         expect(backend.suspend).not.toHaveBeenCalled();
         expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
         expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();

@@ -78,10 +78,15 @@ export interface ContainerWriteBackBackend {
   /** `docker stop` on pause; the upper volume persists for resume. */
   suspend(envId: string): Promise<void>;
   /**
-   * Prepare a repeatable stop action without store I/O. A Docker timeout bounds each
+   * Verify the environment owns the execution container, then prepare a repeatable
+   * stop action without store I/O. A Docker timeout bounds each
    * of at most three calls and uses a one-second stop grace for locked source release.
    */
-  prepareSuspend(envId: string, dockerTimeoutMs?: number): Promise<() => Promise<void>>;
+  prepareSuspend(
+    envId: string,
+    expectedContainerId: string,
+    dockerTimeoutMs?: number
+  ): Promise<() => Promise<void>>;
   /** Inspect the overlay diff → whether a write-back gate is warranted + summary. */
   finalize(envId: string): Promise<WriteBackFinalizeResult>;
   /** Apply the overlay diff to the live root (the ONE live-root write). */

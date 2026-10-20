@@ -96,7 +96,7 @@ describe('source release suspension', () => {
     const { deps, platform, stop, backend, run } = setup();
     deps.store.releaseRunForUnreadableSource.mockImplementation(
       async (_id, _release, beforePublish) => {
-        expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 2_000);
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 'cid', 2_000);
         expect(stop).not.toHaveBeenCalled();
         await beforePublish?.();
         expect(stop).toHaveBeenCalledTimes(1);

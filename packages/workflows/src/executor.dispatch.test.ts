@@ -12,6 +12,7 @@ import {
   mockExecuteDagWorkflow,
   mockGetDefaultBranch,
   repoCodebase,
+  recordedEvents,
   resetExecutorMocks,
   resumeOf,
   sentMessages,
@@ -163,54 +164,66 @@ describe('container resume guard', () => {
     expect(result.success).toBe(true);
   });
 
-  it('suspends an unreadable source before returning its retryable pause', async () => {
-    const fault = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
-      new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
-    );
-    const stop = mock(async () => undefined);
-    const backend = { ...containerBackend(), prepareSuspend: mock(async () => stop) };
-    const release = mock<import('./store').IWorkflowStore['releaseRunForUnreadableSource']>(
-      async (_id, _release, beforePublish) => {
-        await beforePublish?.();
-        return { released: true };
-      }
-    );
-    const store = makeStore({ releaseRunForUnreadableSource: release });
-    try {
-      const result = await startWorkflow({
-        store,
-        cwd: '/tmp/ops',
-        options: {
-          ...resumeOf(
-            containerRun('source-pause', {
-              metadata: {
-                workflow_source: {
-                  version: 1,
-                  root: '/capture',
-                  origin: '/source',
-                  captured_at: new Date().toISOString(),
-                  digest: 'unread',
-                  file_count: 0,
-                  byte_count: 0,
+  it.each([true, false])(
+    'unreadable source with matching container=%s preserves its retryable pause',
+    async matches => {
+      const fault = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
+        new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+      );
+      const stop = mock(async () => undefined);
+      const backend = {
+        ...containerBackend(),
+        prepareSuspend: mock(async (_envId: string, containerId: string) => {
+          if (containerId !== (matches ? 'cid' : 'other-container')) {
+            throw new Error('Environment does not own execution container');
+          }
+          return stop;
+        }),
+      };
+      const release = mock<import('./store').IWorkflowStore['releaseRunForUnreadableSource']>(
+        async (_id, _release, beforePublish) => {
+          await beforePublish?.();
+          return { released: true };
+        }
+      );
+      const store = makeStore({ releaseRunForUnreadableSource: release });
+      try {
+        const result = await startWorkflow({
+          store,
+          cwd: '/tmp/ops',
+          options: {
+            ...resumeOf(
+              containerRun('source-pause', {
+                metadata: {
+                  workflow_source: {
+                    version: 1,
+                    root: '/capture',
+                    origin: '/source',
+                    captured_at: new Date().toISOString(),
+                    digest: 'unread',
+                    file_count: 0,
+                    byte_count: 0,
+                  },
                 },
-              },
-            })
-          ),
-          ...inContainer(),
-          container: { envId: 'env-x', writeBack: 'approve', backend },
-        },
-      });
-      expect(result).toMatchObject({ success: true, paused: true });
-      expect(release).toHaveBeenCalledTimes(1);
-      expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
-      expect(stop).toHaveBeenCalledTimes(1);
-      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-      expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    } finally {
-      fault.mockRestore();
+              })
+            ),
+            ...inContainer(),
+            container: { envId: 'env-x', writeBack: 'approve', backend },
+          },
+        });
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env-x', 'cid', 2_000);
+        expect(stop).toHaveBeenCalledTimes(matches ? 1 : 0);
+        expect(recordedEvents(store, 'container_stopped')).toHaveLength(matches ? 1 : 0);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        fault.mockRestore();
+      }
     }
-  });
+  );
 
   describe.each([
     ['no adoption', undefined],
