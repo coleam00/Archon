@@ -25,7 +25,11 @@ for (const failedVersion of [undefined, 'baseline', 'current']) {
       const currentPath = join(testDir, 'registered-worktree.integration.test.ts');
       const body = (version: string, fails: boolean): string =>
         `import { test, expect } from 'bun:test';
-test('${version} evidence', () => { expect(${String(fails)}).toBe(false); });`;
+import { execFileSync } from 'node:child_process';
+test('${version} evidence', () => {
+  execFileSync('git', ['rev-parse', '--verify', 'HEAD']);
+  expect(${String(fails)}).toBe(false);
+});`;
       writeFileSync(currentPath, body('baseline', failedVersion === 'baseline'));
       const git = (...args: string[]): void => {
         execFileSync('git', args, { cwd: root, stdio: 'pipe' });
@@ -64,7 +68,16 @@ test('${version} evidence', () => { expect(${String(fails)}).toBe(false); });`;
         const log = readFileSync(join(output, `${label}.log`), 'utf8');
         expect(log).toContain(`${version} evidence`);
         expect(log).not.toContain(`${version === 'baseline' ? 'current' : 'baseline'} evidence`);
-        expect(existsSync(join(output, `${label}.git.jsonl`))).toBe(true);
+        const gitEvents: unknown[] = readFileSync(join(output, `${label}.git.jsonl`), 'utf8')
+          .trim()
+          .split('\n')
+          .map((line): unknown => JSON.parse(line));
+        expect(gitEvents).toContainEqual(
+          expect.objectContaining({
+            event: 'start',
+            argv: expect.arrayContaining(['rev-parse', '--verify', 'HEAD']),
+          })
+        );
         if (version !== failedVersion) {
           expect(readFileSync(join(output, `${label}.xml`), 'utf8')).toContain(
             `${version} evidence`
