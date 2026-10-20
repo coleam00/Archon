@@ -1,4 +1,3 @@
-import type { CachedLoopIteration } from './cached-iteration';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import type {
@@ -46,7 +45,6 @@ export interface LoopGroupResume {
   isEscalatedGateResume: boolean;
   isEscalatedWaitResume: boolean;
   isLoopResume: boolean;
-  enclosingPauseIteration: number | undefined;
   /** Named owner sessions of body nodes that resume a session context; undefined when none do. */
   bodySessionCursors: Map<string, SessionCursor> | undefined;
   bodySessionCursorAncestry: Map<string, Map<string, SessionCursor>>;
@@ -87,7 +85,6 @@ export interface LoopGroupRun {
   workflowTier: TierName | undefined;
   workflowPreset: ModelAliasPreset | undefined;
   resume: LoopGroupResume;
-  cachedIteration?: CachedLoopIteration;
 }
 
 /** What a loop group carries from one iteration to the next. */

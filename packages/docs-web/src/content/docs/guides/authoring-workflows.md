@@ -322,7 +322,7 @@ nodes:
 
 `synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source takes one of two forms:
 
-- **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume restores the interrupted iteration and eligible completed body nodes when execution lineage is available; it does not restore provider session cursors. Historical runs without lineage restart at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+- **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 - **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body wait moves on to the next iteration once answered. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
@@ -1134,7 +1134,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 **What happens on resume:**
 
 1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
-2. Eligible completed nodes are skipped. During [loop-body failure recovery](/guides/loop-nodes/#resume), named session sources re-run so their consumers can fork a live session; other failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
+2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
 > **Why opt-in?** Earlier versions silently auto-resumed on plain `archon workflow run`, which caused state from prior failed runs (e.g. cached node outputs with stale inputs) to bleed into new invocations of the same workflow at the same path. See #1392 for the bug; now resume is always a user-driven decision.
@@ -1149,13 +1149,13 @@ Once the row reaches a terminal status, you can resume it explicitly via the pat
 
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
-**Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed top-level nodes. [Loop-body failure recovery](/guides/loop-nodes/#resume) re-runs named session sources instead of restoring their handles. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
+**Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
 
 ### Opting Out of Resume Caching
 
-By default, resume skips eligible nodes that completed successfully in the prior run and feeds their cached output to downstream consumers. Caching works when a node's exit code captures the validity of its output (e.g. AI prompts, scripts that produce structured stdout). Named session sources re-run during [loop-body failure recovery](/guides/loop-nodes/#resume).
+By default, resume skips any node that completed successfully in the prior run and feeds its cached output to downstream consumers. That's the right behavior when a node's exit code captures the validity of its output (e.g. AI prompts, scripts that produce structured stdout).
 
 It's the wrong behavior when a node's success status doesn't capture output validity — typically a producer whose exit code reports the side effect (a file written, a service called) but whose downstream consumer parses the side effect's contents on every run. If the producer succeeded but wrote garbage, resume will replay the cached "success" forever without ever re-executing the producer.
 
@@ -1798,8 +1798,6 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   gates the **whole block**, including descendants. Cached nodes on resume are checked
   against the gate again. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the
   loop containing the include, even when a descendant runs inside a nested loop.
-  An interrupted iteration restores its completed nodes and preceding output snapshot
-  together, so a cached entry uses the same gate as the rest of its block.
   If both the include and an entry define `when:` and either condition contains `||`,
   loading fails because the grammar cannot
   group them without changing precedence; put the gate only on the include or inside the block.
@@ -1815,10 +1813,8 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   example, `$review.output` is the output of the block's `implement-fixes` node.
 - **Inside a `loop_group` body.** An include expands inside that sealed body at load time.
   Its nodes keep the usual `<includeId>__<nodeId>` names, then the loop runtime prefixes
-  persisted step names with the group id (for example `fix-loop.review__synthesize`). Each fresh
-  iteration re-runs the expanded nodes exactly like equivalent inline body nodes. Failure
-  resume can reuse completed nodes in the interrupted iteration; historical runs without
-  execution lineage replay from iteration 1. The group's
+  persisted step names with the group id (for example `fix-loop.review__synthesize`). Every
+  iteration re-runs the expanded nodes exactly like equivalent inline body nodes. The group's
   `until_bash` can read `$<includeId>.output` and expansion binds it to the block's declared
   `returns:` node. A `workflow:` node is different — it creates a child run at runtime and
   remains unsupported inside a loop-group body.

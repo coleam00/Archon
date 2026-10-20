@@ -133,7 +133,7 @@ function openPersistScope(
 }
 
 /** Nodes whose provider session a `context: { resume }` node reads, loop_group bodies included. */
-export function collectNamedResumeSources(nodes: readonly DagNode[]): Set<string> {
+function collectNamedResumeSources(nodes: readonly DagNode[]): Set<string> {
   const sources = new Set<string>();
   const collect = (level: readonly DagNode[]): void => {
     for (const node of level) {

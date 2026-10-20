@@ -548,10 +548,8 @@ Rate limits and capacity retain the shared AI-node exceptions: at least five ret
 ## Cross-Node Loops with `loop_group`
 
 A `loop` node iterates a **single prompt**. A `loop_group` node iterates a
-**multi-node sub-DAG** — a sealed body of nodes that runs in full for each fresh
-iteration until a completion condition is met. Failure resume can reuse completed
-nodes in the interrupted iteration; historical runs without execution lineage replay
-from iteration 1. Use it when "iterate until done"
+**multi-node sub-DAG** — a sealed body of nodes that re-runs in full each
+iteration until a completion condition is met. Use it when "iterate until done"
 needs a *pipeline* of steps (e.g. `implement → test → review`), not just one
 repeated step.
 
@@ -776,9 +774,9 @@ This is a condition reference, not text substitution. On iteration 1 it resolves
 `''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
 An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
-entire block, including cached entries on resume. A false gate skips the whole
-block; when true, each node still follows its own conditions and trigger rule. If the block contains a nested loop, the include's gate
-still reads the previous iteration of the loop containing that include.
+entire block. A false gate skips the whole block; when true, each node still follows
+its own conditions and trigger rule. If the block contains a nested loop, the include's
+gate still reads the previous iteration of the loop containing that include.
 
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
 same text semantics as every other body surface: the previous iteration's output is
@@ -906,21 +904,9 @@ Suspension and failure have different recovery rules:
 - **Same-iteration sessions after a nested pause**: a nested group's pause between a
   same-body source and its consumer resumes within the paused iteration, which re-runs
   the source. The consumer forks the re-run, matching the `$source.output` it reads.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): existing
-  execution records identify the interrupted iteration and its enclosing loop lineage.
-  That iteration restores completed body nodes separately from the preceding
-  iteration's `$LOOP_PREV` snapshot. Cached includes must still pass their owning
-  loop's gate; `always_run` and changed dependencies retain their ordinary cache
-  invalidation rules. Later iterations start with an empty cache. This does not
-  restore provider session cursors from failures. Body nodes named as session sources
-  re-run so their consumers fork a live session matching the source's output.
-  New output spills have unique paths.
-  For historical shared spill paths, if a later
-  recorded execution overwrote a preceding iteration's spill, or an execution has no
-  matching durable terminal event and may have replaced it, resume fails rather
-  than using the spill or its preview. Recorded command failures and timeout skips
-  do not replace spills and do not prevent recovery. Historical runs without execution
-  lineage restart from iteration 1 and replay the whole body.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
+  no persisted iteration cursor — the loop_group node restarts from
+  **iteration 1**. Per-body-node resume granularity is not supported in v1.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -931,6 +917,7 @@ Suspension and failure have different recovery rules:
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
   cursor governed by `fresh_context`, or explicit named owner cursors described above.
+- Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
 

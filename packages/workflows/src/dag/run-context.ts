@@ -202,7 +202,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
    * deletion still stop between layers, and unclaimed instances still cannot start.
    */
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
-  /** Resume cache keyed by ids local to this subgraph; loop bodies scope it to one iteration. */
+  /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
   /**
    * Failures a run continued after a pause had already moved past (top-level only):

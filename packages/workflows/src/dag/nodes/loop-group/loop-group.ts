@@ -20,7 +20,6 @@ import {
   restoreLoopPrevOutputs,
   resumeTerminalWait,
 } from './resume';
-import { readCachedLoopIteration } from './cached-iteration';
 import { runLoopGroupIteration } from './iteration';
 
 /**
@@ -208,10 +207,8 @@ async function executeLoopGroupBody(
   const resumedCompletion = await completeEscalatedResume(run, loopPrevOutputs);
   if (resumedCompletion !== undefined) return resumedCompletion;
 
-  run.cachedIteration = await readCachedLoopIteration(run);
-  const state = initialLoopGroupState(run, run.cachedIteration?.previousOutputs ?? loopPrevOutputs);
-  const startIteration = run.cachedIteration?.iteration ?? resume.startIteration;
-  const { iterationLimit } = resume;
+  const state = initialLoopGroupState(run, loopPrevOutputs);
+  const { startIteration, iterationLimit } = resume;
   for (let i = startIteration; i <= iterationLimit; i++) {
     const result = await runLoopGroupIteration(run, state, i);
     if (result !== undefined) return result;
