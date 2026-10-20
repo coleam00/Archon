@@ -603,7 +603,9 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
   else can post a verdict. The trusted report is written under the run's
   `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
-  review.
+  review. A failed PR read waits once; a second consecutive failure parks the item
+  with the read error recorded until the build queue readies it again. A successful
+  read resets that sequence even if later work fails.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   A Ready pull request with green CI that the forge reports merges cleanly into the
   default branch merges directly, even when it is behind; the default branch's CI

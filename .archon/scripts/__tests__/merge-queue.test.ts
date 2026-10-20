@@ -267,6 +267,7 @@ interface FakePr {
   readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
+  readonly baseUnreadable?: boolean;
 }
 
 /**
@@ -317,6 +318,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('defaultBranchRef { name target')) {
     answered();
+    if (forgePr.baseUnreadable) return out(1, '', 'HTTP 502 reading base');
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev', target: { oid: ${JSON.stringify(OLD)}, statusCheckRollup: rollup } } } } }));
   }
   return harness(argv, settings);
@@ -573,8 +575,35 @@ describe('the merge queue scripts', () => {
     failAndRecord();
     const doc = stored(at).value as WorkItem;
     expect(doc.claim).toBeNull();
-    expect(doc.facts.merge?.decisions).toHaveLength(3);
+    expect(doc.facts.merge?.decisions).toHaveLength(4);
     expect(mergeWaits(doc)).toBe(true);
+  }, 60_000);
+
+  test.each(['failed', 'cancelled', 'base read failed'] as const)('a successful PR read resets unreadability when later work %s', failure => {
+    const at = install();
+    seed(at, item());
+    const first = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
+    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(first.settled), INPUTS_SWEEP: 'null' }));
+    const before = stored(at).value as WorkItem;
+    const readable = run(at, 'facts', { WORKFLOW_ID: 'readable-run' }, { pr: { baseUnreadable: failure === 'base read failed' } });
+    if (failure === 'base read failed') {
+      expect(readable.code).not.toBe(0);
+      expect(readable.stderr).toContain('HTTP 502 reading base');
+    } else {
+      expect(ok(readable)).toMatchObject({ path: 'sweep', settled: [] });
+    }
+    const reset = stored(at).value as WorkItem;
+    expect(reset).toMatchObject({ claim: { run_id: 'readable-run' }, facts: { merge: { status: 'waiting' } } });
+    expect(reset.facts.merge?.decisions.at(-1)).toMatchObject({ decision: 'readable', head: HEAD });
+    expect(reset.facts.merge?.decisions[0]).toEqual(before.facts.merge?.decisions[0]);
+    const next = ok(run(at, 'facts', {
+      WORKFLOW_ID: 'next-run',
+      INTAKE_RUN_STATUSES: JSON.stringify({ 'readable-run': failure === 'cancelled' ? 'cancelled' : 'failed' }),
+    }, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
+    expect(next.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
+    const after = stored(at).value as WorkItem;
+    expect(after.facts.merge?.decisions[0]).toEqual(before.facts.merge?.decisions[0]);
+    expect(after.claim?.run_id).toBe('next-run');
   }, 60_000);
 
   test('a claimed merge the forge does not show fails the record after every other decision is written', () => {

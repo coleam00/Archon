@@ -9,7 +9,8 @@
  * reviewed beside it, so a delta review can continue from it. An item whose pull
  * request is already merged or closed, or that names none, is settled without the
  * sweep. An unreadable pull request waits once, then parks on a consecutive failed
- * read with the reason, without stopping the rest of the batch. It writes only the claims.
+ * read with the reason, without stopping the rest of the batch. Successful reads reset
+ * that sequence durably before the sweep, keeping the claim until record settles it.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -29,11 +30,12 @@ import {
   readPr,
   requireGh,
   UNREADABLE,
+  withMerge,
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
-import { claimNext, parseOrder, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, parseOrder, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   /** The issue whose work item the queue claimed. */
@@ -102,6 +104,19 @@ function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): 
   return { item: doc.subject, pr, status, decision: UNREADABLE, reason };
 }
 
+function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem {
+  if (doc.facts.merge?.decisions.at(-1)?.decision !== UNREADABLE) return doc;
+  const at = new Date().toISOString();
+  return updateClaimed(doc.subject, runId, current => withMerge(current, {
+    at,
+    run_id: runId,
+    entry: { at, run_id: runId, decision: 'readable', reason: 'its pull request was read successfully', links: [], head: facts.head_revision, reran: false },
+    status: 'waiting',
+    pr: facts.pr,
+    release: false,
+  }));
+}
+
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -132,6 +147,7 @@ function main(): void {
       continue;
     }
     const { facts, report } = read;
+    const current = recordReadable(doc, facts, runId);
     if (facts.state !== 'open') {
       const status = facts.state === 'merged' ? 'merged' : 'parked';
       settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
@@ -142,7 +158,7 @@ function main(): void {
       pr,
       url: facts.url,
       facts,
-      record: doc.facts.merge ?? null,
+      record: current.facts.merge ?? null,
       prior_report: report === null || facts.verdict.reviewed === null ? '' : writePrior(pr, facts.verdict.reviewed, report),
       own_pr: isOwnPr(doc),
     });
