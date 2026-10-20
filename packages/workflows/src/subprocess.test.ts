@@ -311,6 +311,44 @@ test('aborting an unrecorded node ends the wrapper and its grandchild', async ()
   expect(leaked).toBe(false);
 }, 15_000);
 
+posixOnly('an abortable unrecorded tree ends when its detached owner dies', async () => {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-owner-death-')));
+  const pidFile = join(dir, 'pid');
+  const owner = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `
+    import { runSubprocess } from ${JSON.stringify(join(import.meta.dir, 'subprocess.ts'))};
+    await runSubprocess({ kind: 'host' }, '/bin/sh', ['-c', 'echo $$ > pid; exec sleep 30'], {
+      cwd: ${JSON.stringify(dir)}, env: {}, retention: { standalone: true },
+      abortSignal: new AbortController().signal,
+    });
+  `,
+    ],
+    { detached: true, stdout: 'ignore', stderr: 'pipe' }
+  );
+  let nodePid: number | undefined;
+  try {
+    await waitUntil(
+      'the owned node to start',
+      () => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== ''
+    );
+    nodePid = Number(readFileSync(pidFile, 'utf8'));
+    expect(processExists(nodePid)).toBe(true);
+    owner.kill('SIGKILL');
+    await owner.exited;
+    await waitUntil(
+      'the node owner-death watcher',
+      () => nodePid !== undefined && !processExists(nodePid)
+    );
+  } finally {
+    owner.kill('SIGKILL');
+    await owner.exited;
+    if (nodePid !== undefined && processExists(nodePid)) process.kill(nodePid, 'SIGKILL');
+  }
+});
+
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {
   const error = Object.assign(new Error('deadline'), { timedOut: true, code: 7 });
   expect(isSubprocessTimeout(error)).toBe(true);
