@@ -765,6 +765,12 @@ A body node can also gate on the previous iteration's typed output with `when:`:
 This is a condition reference, not text substitution. On iteration 1 it resolves to
 `''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
+An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
+entire block, including cached entries and descendants on resume. A false gate
+skips the whole block; when true, each node still follows its own conditions and
+trigger rule. If the block contains a nested loop, the include's gate
+still reads the previous iteration of the loop containing that include.
+
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
 same text semantics as every other body surface: the previous iteration's output is
 substituted into the value each pass (so `with: { prev: $LOOP_PREV.test.output }`
@@ -857,7 +863,9 @@ Suspension and failure have different recovery rules:
   changed dependencies invalidate cached results. Include gates are checked before
   reusing a cached entry or descendant. `$LOOP_PREV.*` reads the preceding iteration,
   and named owner sessions retain their private cursors. Legacy outputs without
-  invocation records still restart the group at iteration 1.
+  invocation records still restart the group at iteration 1. Older records whose
+  preceding iteration used mutable output spills also restart: those files cannot
+  recover a reliable historical value.
 
 ### What is NOT supported on loop_group nodes (v1)
 

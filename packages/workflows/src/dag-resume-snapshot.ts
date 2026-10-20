@@ -379,15 +379,8 @@ export async function foldDagResumeSnapshot(
       // spill retains the preview and its incompleteness rather than failing resume.
       // Prior-success replay must preserve that provenance for later terminal records.
       //
-      // The spill file is addressed by a stable, node-scoped filename that a later
-      // execution of the SAME node overwrites in place (by design — see
-      // `formatPersistedNodeOutput`'s doc comment). The spill precedes its awaited
-      // lifecycle insert, so a process crash between the file overwrite and that insert
-      // can still leave an older, durable row pointing at
-      // a NEWER execution's content. Guard against that by validating the file's actual
-      // byte length against this row's own recorded `node_output_original_bytes` before
-      // trusting it — a mismatch means the file no longer describes this row, so fall
-      // back to the bounded preview exactly like a missing spill would.
+      // Older writers reused spill paths. Keep the length check for those records
+      // and for damaged files; new writers give every spill its own immutable path.
       let output = data.node_output;
       let outputTruncation: PersistedNodeOutput['outputTruncation'] =
         data.node_output_truncated === true || typeof data.node_output_spill_path === 'string'

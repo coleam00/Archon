@@ -1786,9 +1786,13 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   included command cannot start a fresh execution because its references cannot be proven safe.
   Command nodes fail composition immediately; loop commands retain a private compilation error
   so a paused loop can still resume from its persisted, validated prompt snapshot.
-  The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
-  **entry** nodes (those with no upstream inside the block). If both the include and an entry
-  define `when:` and either condition contains `||`, loading fails because the grammar cannot
+  The include node's `depends_on` and default `trigger_rule` wire the block's
+  **entry** nodes (those with no upstream inside the block). The include's `when:`
+  gates the **whole block**, including descendants and cached nodes on resume.
+  Inside a `loop_group`, that gate reads `$LOOP_PREV` from the loop containing the
+  include, even when a descendant runs inside a nested loop.
+  If both the include and an entry define `when:` and either condition contains `||`,
+  loading fails because the grammar cannot
   group them without changing precedence; put the gate only on the include or inside the block.
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every

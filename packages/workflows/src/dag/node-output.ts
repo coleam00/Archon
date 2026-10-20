@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { buildTruncationMarker } from '../utils/output-truncation';
@@ -23,20 +24,9 @@ export function utf8SequenceLength(leadByte: number): number {
  * ALSO spill the full, untruncated bytes under the run's artifacts directory so a
  * resumed run can rehydrate the complete value instead of the preview (#2726).
  *
- * `spillKey` should be the row's own `step_name` (`stepNamePrefix + node.id`), matching
- * exactly what `getDagResumeSnapshot` keys `completedNodeOutputs` by. A loop_group body
- * node's `step_name` is the SAME across every iteration (only `data.iteration` differs
- * per row), and `completedNodeOutputs` is already last-write-wins per `step_name` — so
- * the spill file being overwritten each iteration is correct: it always holds exactly
- * what the next resume's snapshot will resolve to for that key, never a stale iteration.
- *
- * A spill write failure never fails the node — it degrades to preview-only persistence,
- * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
- *
- * Because the spill filename is reused, `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
- * checks its byte length against the row's `originalBytes`. A later execution can
- * overwrite the file before its event commits; a length mismatch exposes that stale
- * pairing. The check cannot distinguish different contents of the same length.
+ * Each write has its own filename: historical iteration rows must retain their own
+ * full output even after the same node executes again or a cache audit is written.
+ * A spill write failure logs the error and retains only the bounded preview.
  */
 export function formatPersistedNodeOutput(
   output: string,
@@ -75,7 +65,7 @@ export function formatPersistedNodeOutput(
     'node-output-spills',
     'persisted'
   );
-  const spillPath = writeSpillFile(spillDir, `${spillKey}.nodeoutput`, output);
+  const spillPath = writeSpillFile(spillDir, `${randomUUID()}.${spillKey}.nodeoutput`, output);
 
   return {
     nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,

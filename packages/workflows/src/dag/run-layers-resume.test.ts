@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
   createMockStore,
@@ -295,9 +295,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(Buffer.byteLength(data.node_output, 'utf8')).toBeLessThanOrEqual(32_768);
     expect(data.node_output_truncated).toBe(true);
     expect(data.node_output_original_bytes).toBe(40_000);
-    expect(data.node_output_spill_path).toBe(
-      join(artifactsDir, '.archon', 'node-output-spills', 'persisted', 'step1.nodeoutput')
+    expect(dirname(data.node_output_spill_path)).toBe(
+      join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
+    expect(data.node_output_spill_path).toEndWith('.step1.nodeoutput');
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 
@@ -749,9 +750,10 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(Buffer.byteLength(data.prior_output, 'utf8')).toBeLessThanOrEqual(32_768);
     expect(data.prior_output_truncated).toBe(true);
     expect(data.prior_output_original_bytes).toBe(40_000);
-    expect(data.prior_output_spill_path).toBe(
-      join(artifactsDir, '.archon', 'node-output-spills', 'persisted', 'producer.nodeoutput')
+    expect(dirname(data.prior_output_spill_path)).toBe(
+      join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
+    expect(data.prior_output_spill_path).toEndWith('.producer.nodeoutput');
     expect(await readFile(data.prior_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 
@@ -1192,9 +1194,10 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
     expect(Buffer.byteLength(data.prior_output, 'utf8')).toBeLessThanOrEqual(32_768);
     expect(data.prior_output_truncated).toBe(true);
     expect(data.prior_output_original_bytes).toBe(40_000);
-    expect(data.prior_output_spill_path).toBe(
-      join(artifactsDir, '.archon', 'node-output-spills', 'persisted', 'consumer.nodeoutput')
+    expect(dirname(data.prior_output_spill_path)).toBe(
+      join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
     );
+    expect(data.prior_output_spill_path).toEndWith('.consumer.nodeoutput');
     expect(await readFile(data.prior_output_spill_path, 'utf8')).toBe(largeOutput);
   });
 

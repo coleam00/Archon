@@ -660,6 +660,255 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
+  for (const runtime of ['bash', 'script', 'legacy'] as const) {
+    it(`restores historical ${runtime} spills after an equal-length later output`, async () => {
+      const counter = join(testDir, 'counter');
+      const retry = join(testDir, 'retry');
+      const emit =
+        runtime !== 'script'
+          ? {
+              bash: `if [ -f '${counter}' ]; then printf '%40000s' '' | tr ' ' B; else touch '${counter}'; printf '%40000s' '' | tr ' ' A; fi`,
+            }
+          : {
+              script: `import { existsSync, writeFileSync } from 'node:fs'; const seen = existsSync('${counter}'); writeFileSync('${counter}', '1'); process.stdout.write((seen ? 'B' : 'A').repeat(40000));`,
+              runtime: 'bun',
+            };
+      const workflow = resolveTestWorkflow(
+        buildWf('historical-spill', [
+          {
+            id: 'cycle',
+            loop_group: {
+              max_iterations: 2,
+              until: 'DONE',
+              nodes: [
+                { id: 'emit', ...emit },
+                {
+                  id: 'inspect',
+                  bash: 'printf %.1s $LOOP_PREV.emit.output',
+                  depends_on: ['emit'],
+                  always_run: true,
+                  when: "$LOOP_PREV.emit.output != ''",
+                },
+                {
+                  id: 'tail',
+                  bash: `if [ ! -f '${retry}' ]; then touch '${retry}'; exit 1; fi; echo DONE`,
+                  depends_on: ['inspect'],
+                },
+              ],
+            },
+          },
+        ])
+      );
+      const deps = createMockDeps();
+      const workflowRun = makeWorkflowRun(`historical-${runtime}`);
+      const options = dagOptions({ deps, cwd: testDir, workflow, workflowRun });
+      await executeDagWorkflow(options);
+      const rows = persistedEvents(deps.store);
+      expect(rows.some(e => e.event_type === 'node_failed' && e.step_name === 'cycle.tail')).toBe(
+        true
+      );
+      if (runtime === 'legacy') {
+        const spillPath = join(testDir, 'cycle.emit.nodeoutput');
+        await writeFile(spillPath, 'B'.repeat(40000));
+        for (const row of rows) {
+          if (row.data?.node_output_spill_path) row.data.node_output_spill_path = spillPath;
+        }
+      }
+      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        rows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      const before = rows.length;
+      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
+      const resumed = persistedEvents(deps.store).slice(before);
+      expect(
+        resumed.find(e => e.event_type === 'node_completed' && e.step_name === 'cycle.inspect')
+          ?.data?.node_output
+      ).toBe(runtime === 'legacy' ? 'B' : 'A');
+      expect(
+        resumed.some(
+          e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'cycle.emit'
+        )
+      ).toBe(runtime !== 'legacy');
+    });
+  }
+
+  for (const nested of [false, true]) {
+    it(`invalidates the body cache after an enclosing dependency changes (nested=${String(nested)})`, async () => {
+      const changed = join(testDir, 'changed');
+      const retry = join(testDir, 'retry');
+      const nodes = [
+        {
+          id: 'source',
+          always_run: true,
+          bash: `if [ -f '${changed}' ]; then echo B; else echo A; fi`,
+        },
+        {
+          id: 'cycle',
+          depends_on: ['source'],
+          loop_group: {
+            max_iterations: 1,
+            until: 'DONE',
+            nodes: [
+              { id: 'entry', bash: 'echo $source.output' },
+              {
+                id: 'tail',
+                bash: `if [ ! -f '${retry}' ]; then touch '${retry}'; exit 1; fi; echo DONE`,
+                depends_on: ['entry'],
+              },
+            ],
+          },
+        },
+      ];
+      const workflow = resolveTestWorkflow(
+        buildWf(
+          'changed-group-input',
+          nested
+            ? [{ id: 'outer', loop_group: { max_iterations: 1, until: 'DONE', nodes } }]
+            : nodes
+        )
+      );
+      const deps = createMockDeps();
+      const workflowRun = makeWorkflowRun(`changed-group-${String(nested)}`);
+      const options = dagOptions({ deps, cwd: testDir, workflow, workflowRun });
+      await executeDagWorkflow(options);
+      const rows = persistedEvents(deps.store);
+      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        rows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      await writeFile(changed, '1');
+      const before = rows.length;
+      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
+      const resumed = persistedEvents(deps.store).slice(before);
+      const prefix = nested ? 'outer.' : '';
+      expect(
+        resumed.find(e => e.event_type === 'node_completed' && e.step_name === `${prefix}source`)
+          ?.data?.node_output
+      ).toBe('B');
+      expect(
+        resumed.find(
+          e => e.event_type === 'node_completed' && e.step_name === `${prefix}cycle.entry`
+        )?.data?.node_output
+      ).toBe('B');
+      expect(
+        resumed.some(
+          e =>
+            e.event_type === 'node_skipped_prior_success' && e.step_name === `${prefix}cycle.entry`
+        )
+      ).toBe(false);
+    });
+  }
+
+  for (const { skippedParallel, trailingSession } of [
+    { skippedParallel: false, trailingSession: false },
+    { skippedParallel: true, trailingSession: false },
+    { skippedParallel: false, trailingSession: true },
+  ]) {
+    it(`restores layer session transitions on resume (skipped=${String(skippedParallel)}, trailingSession=${String(trailingSession)})`, async () => {
+      mockSendQueryDag.mockClear();
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+        yield { type: 'agent_message_chunk', text: 'lead output' };
+        yield { type: 'result', sessionId: prompt.toUpperCase() };
+      });
+      const retry = join(testDir, 'retry');
+      const workflow = resolveTestWorkflow(
+        buildWf('parallel-cursor', [
+          {
+            id: 'cycle',
+            loop_group: {
+              fresh_context: false,
+              max_iterations: 2,
+              until: 'DONE',
+              nodes: [
+                {
+                  id: 'lead',
+                  prompt: 'lead',
+                  always_run: true,
+                  depends_on: [],
+                  trigger_rule: 'all_done',
+                },
+                ...['left', 'right'].map(id => ({
+                  id,
+                  bash: 'echo parallel',
+                  depends_on: ['lead'],
+                  ...(skippedParallel ? { when: 'false' } : {}),
+                })),
+                ...(trailingSession
+                  ? [
+                      {
+                        id: 'follow',
+                        prompt: 'follow',
+                        depends_on: ['left', 'right'],
+                        trigger_rule: 'all_done',
+                        when: "$LOOP_PREV.lead.output == ''",
+                      },
+                    ]
+                  : []),
+                {
+                  id: 'tail',
+                  bash: `if [ ! -f '${retry}' ]; then touch '${retry}'; exit 1; fi; echo DONE`,
+                  depends_on: trailingSession ? ['follow'] : ['left', 'right'],
+                  trigger_rule: 'all_done',
+                  when: "$LOOP_PREV.lead.output != ''",
+                },
+              ],
+            },
+          },
+        ])
+      );
+      const deps = createMockDeps();
+      const workflowRun = makeWorkflowRun('parallel-cursor');
+      const options = dagOptions({ deps, cwd: testDir, workflow, workflowRun });
+      await executeDagWorkflow(options);
+      expect(mockSendQueryDag.mock.calls.filter(c => c[0] === 'lead').map(c => c[2])).toEqual([
+        undefined,
+        trailingSession ? 'FOLLOW' : undefined,
+      ]);
+      const rows = persistedEvents(deps.store);
+      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        rows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
+      expect(mockSendQueryDag.mock.calls.filter(c => c[0] === 'lead').map(c => c[2])).toEqual([
+        undefined,
+        trailingSession ? 'FOLLOW' : undefined,
+        trailingSession ? 'FOLLOW' : undefined,
+      ]);
+    });
+  }
+
   it('rejects a loop reference in an include boundary without loop context', () => {
     const when = "$LOOP_PREV.work.output == 'go'";
     const workflow = loopGatedWorkflow(when);
