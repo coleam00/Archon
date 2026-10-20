@@ -18,20 +18,20 @@ export async function resolvePushDestinations(repoPath: string, remote: string):
     });
   const urls = configuredUrls(settings, `remote.${remote}.url`);
   const pushUrls = configuredUrls(settings, `remote.${remote}.pushurl`);
+  if (!urls.length) urls.push(remote);
   const insteadOf = configuredRewrites(settings, '.insteadof');
   const pushInsteadOf = configuredRewrites(settings, '.pushinsteadof');
   // Git applies insteadOf to explicit pushurls, but pushInsteadOf to original fallback URLs.
   // Both resolution and newline validation must use this same NUL-delimited snapshot.
   const pushed = urls.flatMap(url => {
     const rewritten = rewriteUrl(url, pushInsteadOf);
-    return rewritten === undefined ? [] : [rewritten];
+    return rewritten ? [rewritten] : [];
   });
   const destinations = pushUrls.length
     ? pushUrls.map(url => rewriteUrl(url, insteadOf) ?? url)
     : pushed.length
       ? pushed
       : urls.map(url => rewriteUrl(url, insteadOf) ?? url);
-  if (!destinations.length) throw new Error('No push destination');
   return destinations;
 }
 

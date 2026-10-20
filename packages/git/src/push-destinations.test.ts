@@ -18,6 +18,44 @@ beforeEach(async () => {
 
 type Setting = readonly [string, string];
 const cases: { name: string; settings: Setting[] }[] = [
+  ...(['insteadOf', 'pushInsteadOf'] as const).map(kind => ({
+    name: `remote-name alias through ${kind}`,
+    settings: [
+      ['remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+      [`url.destination:.${kind}`, 'origin'],
+    ] satisfies Setting[],
+  })),
+  {
+    name: 'remote-name fallback after URL reset',
+    settings: [
+      ['remote.origin.url', 'old'],
+      ['remote.origin.url', ''],
+      ['url.destination:.pushInsteadOf', 'origin'],
+    ],
+  },
+  {
+    name: 'empty generated push URL falls back to original URL',
+    settings: [
+      ['remote.origin.url', 'source:'],
+      ['url..pushInsteadOf', 'source:'],
+    ],
+  },
+  {
+    name: 'empty generated push URL does not join nonempty destinations',
+    settings: [
+      ['remote.origin.url', 'source:'],
+      ['remote.origin.url', 'other:'],
+      ['url..pushInsteadOf', 'source:'],
+      ['url.destination:.pushInsteadOf', 'other:'],
+    ],
+  },
+  {
+    name: 'empty rewrite base preserves a nonempty suffix',
+    settings: [
+      ['remote.origin.url', 'source:path'],
+      ['url..pushInsteadOf', 'source:'],
+    ],
+  },
   {
     name: 'multiple fallback URLs',
     settings: [

@@ -566,7 +566,16 @@ describe('WorktreeProvider against real git', () => {
 
   test.each(
     [false, true].flatMap(force =>
-      ['whitespace', 'equals', 'pushInsteadOf', 'insteadOf'].map(kind => ({ force, kind }))
+      [
+        'whitespace',
+        'equals',
+        'pushInsteadOf',
+        'insteadOf',
+        'alias-insteadOf',
+        'alias-pushInsteadOf',
+        'empty',
+        'mixed',
+      ].map(kind => ({ force, kind }))
     )
   )(
     'remote destruction preserves endpoint identity (force=$force, kind=$kind)',
@@ -595,6 +604,16 @@ describe('WorktreeProvider against real git', () => {
       const published = await git(root, 'ls-remote', intended, ref);
       if (kind === 'whitespace' || kind === 'equals') {
         await git(repoPath, 'remote', 'set-url', '--push', 'origin', intended);
+      } else if (kind.startsWith('alias-')) {
+        await git(repoPath, 'config', '--unset-all', 'remote.origin.url');
+        await git(repoPath, 'config', `url.${intended}.${kind.slice('alias-'.length)}`, 'origin');
+      } else if (kind === 'empty' || kind === 'mixed') {
+        await git(repoPath, 'remote', 'set-url', 'origin', intended);
+        await git(repoPath, 'config', 'url..pushInsteadOf', intended);
+        if (kind === 'mixed') {
+          await git(repoPath, 'config', '--add', 'remote.origin.url', 'cleanup-source:');
+          await git(repoPath, 'config', `url.${intended}.pushInsteadOf`, 'cleanup-source:');
+        }
       } else {
         await git(repoPath, 'remote', 'set-url', 'origin', 'cleanup-source:');
         await git(repoPath, 'config', `url.${intended}.${kind}`, 'cleanup-source:');

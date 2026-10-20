@@ -698,6 +698,31 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
 
+  test.each(['alias-insteadOf', 'alias-pushInsteadOf', 'empty', 'mixed'] as const)(
+    'completion releases a clean checkout with Git-compatible destinations (%s)',
+    async kind => {
+      const destination = join(root, 'remote.git');
+      if (kind.startsWith('alias-')) {
+        await git(repo, 'config', '--unset-all', 'remote.upstream.url');
+        await git(repo, 'config', `url.${destination}.${kind.slice('alias-'.length)}`, 'upstream');
+      } else {
+        await git(repo, 'config', 'url..pushInsteadOf', destination);
+        if (kind === 'mixed') {
+          await git(repo, 'config', '--add', 'remote.upstream.url', 'completion-source:');
+          await git(repo, 'config', `url.${destination}.pushInsteadOf`, 'completion-source:');
+        }
+      }
+      expect(await git(repo, 'remote', 'get-url', '--push', '--all', 'upstream')).toBe(destination);
+      expect(await git(repo, 'ls-remote', destination, 'refs/heads/main')).toContain(
+        'refs/heads/main'
+      );
+      expect(await assess()).toEqual({ disposition: 'release' });
+      await releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
+      expect(existsSync(env.working_path)).toBe(false);
+      expect(await status()).toBe('destroyed');
+    }
+  );
+
   test.each(['published', 'unavailable'] as const)(
     'completion inspects every push destination: %s',
     async outcome => {
