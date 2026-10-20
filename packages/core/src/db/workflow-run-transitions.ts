@@ -475,7 +475,8 @@ export async function cancelFanOutRun(
 /** Release a running run whose source this host could not read (see `IWorkflowStore`). */
 export async function releaseRunForUnreadableSource(
   id: string,
-  release: SourceReleaseWrite
+  release: SourceReleaseWrite,
+  beforePublish?: () => Promise<void>
 ): Promise<{ released: boolean }> {
   const dialect = getDialect();
   try {
@@ -493,6 +494,7 @@ export async function releaseRunForUnreadableSource(
         ]
       );
       if ((result.rowCount ?? 0) === 0) return { released: false };
+      await beforePublish?.();
       await insertWorkflowEvent(query, sourceReleasedEvent(id, release));
       return { released: true };
     });

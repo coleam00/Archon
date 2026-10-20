@@ -170,7 +170,7 @@ Results: 1 valid, 0 with errors
 Validation loads the workflow the way a run would. It reports a misspelt key, a `when:` that references a field the producer never declares, a command file that does not exist, and a key that the node's type cannot use. For example, `timeout:` on a prompt node fails:
 
 ```text
-ERROR [validation_error] DAG node validation failed: Node 'plan': 'timeout' 'timeout' is only supported on bash, loop, loop_group or script nodes, not on prompt node 'plan'.
+ERROR [validation_error] DAG node validation failed: Node 'plan': 'timeout' is only supported on bash, loop, loop_group or script nodes, not on prompt nodes.
 ```
 
 ## Dry-run it with stubs

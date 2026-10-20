@@ -14,7 +14,9 @@ import {
  */
 function formatNodeIssue(id: string, issue: z.ZodIssue): string {
   const pathStr = issue.path.length > 0 ? `'${issue.path.join('.')}' ` : '';
-  return `Node '${id}': ${pathStr}${issue.message}`;
+  const ownerId = issue.code === 'custom' ? issue.params?.nodeId : undefined;
+  const nodeId = typeof ownerId === 'string' && ownerId ? ownerId : id;
+  return `Node '${nodeId}': ${pathStr}${issue.message}`;
 }
 
 /**

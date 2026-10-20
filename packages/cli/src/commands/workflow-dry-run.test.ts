@@ -51,6 +51,9 @@ describe('workflowRunCommand — dry-run', () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const dryRun = await import('@archon/workflows/dry-run');
 
+    const stubs = { plan: { approved: false }, implement: 'scaffold output' };
+    (dryRun.loadDryRunStubs as ReturnType<typeof mock>).mockResolvedValueOnce(stubs);
+
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
       dryRun: true,
       stubsPath: 'fixtures.yaml',
@@ -65,6 +68,7 @@ describe('workflowRunCommand — dry-run', () => {
       expect.objectContaining({
         userMessage: 'hello',
         cwd: '/test/path',
+        stubs,
         defaultStubs: true,
         execCode: true,
         pauseAtGates: true,

@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { executionClaim } from '@archon/workflows/store';
 import {
   describeWorkflowStoreConformance,
   CONFORMANCE_CONVERSATION_ID,
@@ -42,6 +43,68 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test.each([false, true])(
+    'source suspension excludes a resume on another connection (resumed=%s)',
+    async resumed => {
+      const harness = await makeHarness();
+      const { store, db } = harness;
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let releasing: Promise<unknown> | undefined;
+      let resuming: Promise<unknown> | undefined;
+      try {
+        let run = await store.createWorkflowRun({ workflow_name: 'source-lock', user_message: '' });
+        await store.claimPendingWorkflowRun(run.id);
+        if (resumed) {
+          await store.pauseWorkflowRun(run.id, {
+            nodeId: 'gate',
+            type: 'approval',
+            message: 'Review',
+          });
+          run = await store.resumeWorkflowRun(run.id);
+        }
+        const order: string[] = [];
+        releasing = store.releaseRunForUnreadableSource(
+          run.id,
+          {
+            claimId: executionClaim(run.metadata),
+            nodeId: 'source',
+            error: 'EACCES',
+            retryAt: new Date().toISOString(),
+          },
+          async () => {
+            entered.resolve();
+            await finish.promise;
+            order.push('stopped');
+          }
+        );
+        await entered.promise;
+        resuming = store.resumeWorkflowRun(run.id).then(next => {
+          order.push('resumed');
+          return next;
+        });
+        // Observe the real row-lock waiter before allowing Docker to finish.
+        let blocked = false;
+        for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+          const result = await db.query<{ blocked: boolean }>(
+            `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+          );
+          blocked = result.rows[0]?.blocked ?? false;
+        }
+        expect(blocked).toBe(true);
+        expect(order).toEqual([]);
+        finish.resolve();
+        expect(await releasing).toEqual({ released: true });
+        expect(await resuming).toMatchObject({ status: 'running' });
+        expect(order).toEqual(['stopped', 'resumed']);
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([releasing, resuming]);
+        await harness.close();
+      }
+    }
+  );
   test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
     const harness = await makeHarness();
     try {

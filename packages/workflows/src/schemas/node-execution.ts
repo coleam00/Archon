@@ -235,6 +235,13 @@ export const nodeExecutionMetadataSchema = z.object({
 });
 export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
 
+/** Run identity comes from the event envelope; lifecycle is reconstructed from its type. */
+export const nodeExecutionMetadataPayloadSchema = nodeExecutionMetadataSchema.omit({
+  runId: true,
+  path: true,
+  lifecycle: true,
+});
+
 /** What a node row's `cost_usd` measures: the node's own spend, or a total restating spend other rows carry. */
 export const nodeCostScopeSchema = z.enum(['own', 'total']);
 export type NodeCostScope = z.infer<typeof nodeCostScopeSchema>;

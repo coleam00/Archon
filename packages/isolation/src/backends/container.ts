@@ -42,6 +42,7 @@ import {
   dockerPreflight,
   extractDockerError,
   type DockerRunner,
+  type DockerExecOptions,
 } from '../container/docker-exec';
 import { summarizeOverlayChanges, applyOverlayChanges } from '../container/overlay';
 import {
@@ -307,32 +308,56 @@ export class ContainerBackend implements IIsolationBackend {
    * container we couldn't stop is still consuming resources and the caller must know.
    */
   async suspend(envId: string): Promise<void> {
+    const suspend = await this.prepareSuspend(envId);
+    await suspend();
+  }
+
+  /** Resolve store metadata before entering a workflow store transition. */
+  async prepareSuspend(
+    envId: string,
+    expectedContainerId?: string,
+    dockerTimeoutMs?: number
+  ): Promise<() => Promise<void>> {
     const meta = await this.loadMetadata(envId);
-    const handle = meta.containerName ?? meta.containerId;
-    if (!handle) {
-      log.warn({ envId }, 'isolation.container_suspend_no_handle');
-      return;
-    }
-    if (meta.artifactsMount !== undefined) {
-      await this.restoreHostOwnership(envId, handle, meta.artifactsMount);
-    }
-    try {
-      await this.docker(['stop', handle]);
-      log.info({ envId, handle }, 'isolation.container_suspended');
-    } catch (err) {
-      const detail = extractDockerError(err);
-      const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
-      if (state === 'missing' || state === 'stopped') {
-        log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
-        return;
-      }
-      log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
-      throw new IsolationFailure(
-        'unclassified',
-        `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
-        err
+    if (expectedContainerId !== undefined && meta.containerId !== expectedContainerId) {
+      throw new Error(
+        `Environment '${envId}' does not own execution container '${expectedContainerId}'`
       );
     }
+    return async () => {
+      const handle = expectedContainerId ?? meta.containerName ?? meta.containerId;
+      if (!handle) {
+        log.warn({ envId }, 'isolation.container_suspend_no_handle');
+        return;
+      }
+      if (meta.artifactsMount !== undefined) {
+        await this.restoreHostOwnership(envId, handle, meta.artifactsMount, {
+          timeout: dockerTimeoutMs,
+        });
+      }
+      try {
+        await this.docker(
+          ['stop', ...(dockerTimeoutMs === undefined ? [] : ['--time', '1']), handle],
+          { timeout: dockerTimeoutMs }
+        );
+        log.info({ envId, handle }, 'isolation.container_suspended');
+      } catch (err) {
+        const detail = extractDockerError(err);
+        const state = await this.describeContainer(handle, { timeout: dockerTimeoutMs }).catch(
+          () => 'unknown' as const
+        );
+        if (state === 'missing' || state === 'stopped') {
+          log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
+          return;
+        }
+        log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
+        throw new IsolationFailure(
+          'unclassified',
+          `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
+          err
+        );
+      }
+    };
   }
 
   /**
@@ -546,13 +571,14 @@ export class ContainerBackend implements IIsolationBackend {
   private async restoreHostOwnership(
     envId: string,
     handle: string,
-    artifactsMount: string
+    artifactsMount: string,
+    options?: DockerExecOptions
   ): Promise<void> {
     const identity = currentHostIdentity();
     if (identity === undefined || identity.uid === 0) return;
     const owner = `${String(identity.uid)}:${String(identity.gid)}`;
     try {
-      await this.docker(['exec', handle, 'chown', '-R', owner, artifactsMount]);
+      await this.docker(['exec', handle, 'chown', '-R', owner, artifactsMount], options);
       log.debug({ envId, handle, artifactsMount, owner }, 'isolation.container_artifacts_owned');
     } catch (err) {
       const detail = extractDockerError(err);
@@ -594,16 +620,13 @@ export class ContainerBackend implements IIsolationBackend {
    * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
    */
   private async describeContainer(
-    nameOrId: string
+    nameOrId: string,
+    options?: DockerExecOptions
   ): Promise<'running' | 'paused' | 'restarting' | 'stopped' | 'missing'> {
-    const { stdout } = await this.docker([
-      'container',
-      'ls',
-      '--all',
-      '--no-trunc',
-      '--format',
-      '{{.ID}}\t{{.Names}}\t{{.State}}',
-    ]);
+    const { stdout } = await this.docker(
+      ['container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}\t{{.Names}}\t{{.State}}'],
+      options
+    );
     const match = stdout
       .trim()
       .split('\n')

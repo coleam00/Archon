@@ -730,7 +730,7 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 - `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. When the producer declares `output_format`, the loader also checks that the field is an array of `{ id, label? }`.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
-- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/guides/attention-queue/) by them.
+- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
@@ -825,7 +825,7 @@ A `quota_exhausted` failure is never retried in the same window, but when the pr
 
 `misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable checkout or provider MCP config file, or a declared MCP server that cannot connect. Fix the configuration and run again. A host-local read failure in captured home MCP config pauses the existing run for continuation on a host that can read it; see [MCP servers](/guides/mcp-servers/).
 
-Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule, including a loop policy with zero delay. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter; once a rate limit occurs, that larger budget remains for the rest of the iteration or node attempt sequence. A rate limit that still refuses the node after those retries does not fail the run: the run pauses on the provider-limit wait (attention queue kind [`usage_limit`](/guides/attention-queue/)) and continues from that node by itself.
+Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule, including a loop policy with zero delay. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter; once a rate limit occurs, that larger budget remains for the rest of the iteration or node attempt sequence. A rate limit that still refuses the node after those retries does not fail the run: the run pauses on the provider-limit wait (attention queue kind [`usage_limit`](/getting-started/operate/)) and continues from that node by itself.
 
 Each retry wait is logged and recorded as `node_retry_scheduled`, with the node path, class, one-based retry attempt, effective budget and delay; loop retries also record the iteration. Exhaustion preserves the provider failure and message. These are retry delays, not a deadline that ends a run.
 
@@ -2413,7 +2413,7 @@ nodes:
       required: [key, decision]
 ```
 
-List all children through the [attention queue](/guides/attention-queue/#several-items-from-one-workflow).
+List all children through the [attention queue](/getting-started/operate/#several-items-from-one-workflow).
 Read and answer each child's `runId` and `occurrence`; a parent read returns only its first
 actionable descendant. Answering the second child first leaves the first question open.
 Completed child results and unanswered occurrences survive restart and resume.
@@ -2875,8 +2875,8 @@ WARNING [parse_warning] Node 'plan': unknown key 'contxt' will be ignored.
 A key that belongs to a different node type is a load error naming the node, the key and the node types that support it, because the node would silently not do what the key says. That covers `runtime:` and `deps:` off a `script:` node; `timeout:` off `bash:`, `script:`, `loop:` and `loop_group:`; `on_timeout:` off `bash:` and `script:`; `with:` off `command:`, `script:`, `include:` and `workflow:`; `input:` and `isolation:` off `workflow:`; and `fan_out:` off `workflow:` and `include:`. A loop setting such as `until_bash:`, `max_iterations:` or `interactive:` at the top level of a node, instead of inside `loop:` or `loop_group:`, is a load error too. A node-level `interactive: true` reads like a pause and is not one:
 
 ```text
-Node 'plan': 'interactive' 'interactive' is only honoured inside 'loop:' or 'loop_group:';
-  at the top level of node 'plan' nothing reads it. Nothing on this node pauses. To ask
+Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
+  at the top level nothing reads it. Nothing on this node pauses. To ask
   for an answer, add a 'wait: { attention: <message> }' node; to ask on each iteration
   of a loop, use a 'loop_group' whose body ends in one.
 ```

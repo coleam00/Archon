@@ -1579,6 +1579,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
   it('lets an exact-run cancel controller own the lifecycle transition', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     process.env.ARCHON_DETACHED_RUN_OWNER = '1';
+    process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
     // A detached child learns its run from the row its launcher handed over (#2872) —
     // the only shape the CLI produces for a fresh detached run.
     (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1586,7 +1587,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       workflow_name: 'plan',
       status: 'pending',
       working_path: null,
-      metadata: {},
+      metadata: { cli_detached_launch_token: 'launch-token' },
     });
 
     const sigtermBefore = process.listeners('SIGTERM');
@@ -1625,26 +1626,36 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
   it.each([
     'does not own process group',
     'Windows run job broker did not become ready within 10000 ms',
-  ])('records a failed detached owner claim: %s', async message => {
-    process.env.ARCHON_DETACHED_RUN_OWNER = '1';
-    const workflowsDb = require('@archon/core/db/workflows');
-    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('pending');
-    mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
+  ])(
+    'records a verified launch failure after a refused detached owner claim: %s',
+    async message => {
+      process.env.ARCHON_DETACHED_RUN_OWNER = '1';
+      process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
+      const workflowsDb = require('@archon/core/db/workflows');
+      (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('pending');
+      (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'pending-child',
+        status: 'pending',
+        workflow_name: 'plan',
+        metadata: { cli_detached_launch_token: 'launch-token' },
+      });
+      mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
 
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
-        detachedRunId: 'pending-child',
-      })
-    ).rejects.toThrow(message);
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+          detachedRunId: 'pending-child',
+        })
+      ).rejects.toThrow(message);
 
-    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-      'pending-child',
-      `Detached run failed to start: ${message}`,
-      { exitReason: 'launch_failed' }
-    );
-    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
-    expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
-  });
+      expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+        'pending-child',
+        expect.stringContaining(message),
+        { exitReason: 'launch_failed' }
+      );
+      expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+      expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
+    }
+  );
 
   it('uses the source-reserved run id before workflow_started is emitted', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
@@ -2077,6 +2088,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: 'run-detached-child',
+        metadata: { cli_detached_launch_token: 'launch-token' },
         workflow_name: 'assist',
         status: 'pending',
       });
@@ -2088,6 +2100,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       const ownerEnvVar = 'ARCHON_DETACHED_RUN_OWNER';
       const previousOwnerEnv = process.env[ownerEnvVar];
       process.env[ownerEnvVar] = '1';
+      process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
       try {
         prepareMock
           .mockImplementationOnce((_deps: unknown, opts: { sourceRoot: string; runId?: string }) =>

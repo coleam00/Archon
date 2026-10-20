@@ -44,8 +44,9 @@ import {
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
+const OWN_PR_PARK = 'Stops queue work until a later sweep observes a different head from the head asked about.';
 const OWN_PR_OTHER =
-  'Do what the answer text says. The text is recorded as the ruling on this pull request, and the queue stops working it until a new push; nothing goes to the build queue.';
+  `Do what the answer text says. The text is recorded as the ruling on this pull request. ${OWN_PR_PARK} Nothing goes to the build queue.`;
 
 /**
  * `other` hands the item back to the build queue with the person's text as the ruling.
@@ -54,7 +55,9 @@ const OWN_PR_OTHER =
  */
 function withQueueOther(attention: MergeAttention, item: Item): MergeAttention {
   if (item.own_pr !== true) return withOther(attention, 'return');
-  const choices = attention.choices.filter(choice => choice.effect !== 'return');
+  const choices = attention.choices
+    .filter(choice => choice.effect !== 'return')
+    .map(choice => choice.effect === 'park' ? { ...choice, does: OWN_PR_PARK } : choice);
   return withOther({ ...attention, choices }, 'park', OWN_PR_OTHER);
 }
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';

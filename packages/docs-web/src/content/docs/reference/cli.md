@@ -329,6 +329,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--from <branch>`, `--from-branch <branch>` | Start-point for the new worktree only -- unlike `--base`, it does not change the PR target |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, resume/adoption/supersedes, and dry runs. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default -- see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
+| `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--folder` | Register the current directory (with or without git) as a folder project (first use) and run in place -- no worktree. Rejects `--branch`/`--from`/`--base`. |
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
@@ -387,11 +388,11 @@ Every run freezes its workflow source when it starts, whether or not you pass th
 - **A run does not change shape while it is running.** Edit, move, or delete the source checkout after a run starts and a resume still executes what the run began with. Start a new run to pick up the edits.
 - **Resume needs no source path.** Every continuation -- `archon workflow resume <run-id>`, `archon workflow run <name> --resume`, `approve`, and `reject` -- loads the run's own captured source, which is why `--workflow-source` is refused alongside `--resume`.
 
-The captured source lives beside that run's artifacts, at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, and stays as long as the run's other output does. It is deliberately not inside `$ARTIFACTS_DIR`: that directory is the run's output channel, handed to every node and listed for inspection, and the frozen source is neither. Its manifest records a content digest and source-resolution settings, which the run row also stores. Archon checks those pinned values during initial discovery, on resume, and immediately before every later filesystem-backed command, named script, or composed-source read, hashing the full capture each time. If the capture is changed or replaced, the read and any container dispatch are refused. Start a fresh run to execute the current workflow. If a read fails after the run started because this host cannot read the capture, or the capture is missing here, the run pauses instead of failing and is continued by a host that can read it (see `workflow wake`).
+The captured source lives beside that run's artifacts, at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, and stays as long as the run's other output does. It is deliberately not inside `$ARTIFACTS_DIR`: that directory is the run's output channel, handed to every node and listed for inspection, and the frozen source is neither. Its manifest records a content digest and source-resolution settings, which the run row also stores. Archon checks those pinned values during initial discovery, on resume, and immediately before every later filesystem-backed command, named script, or composed-source read, hashing the full capture each time. If the capture is changed or replaced, the read and any container dispatch are refused. Start a fresh run to execute the current workflow. If a read fails after the run started because this host cannot read the capture, or the capture is missing here, a successful source release pauses the run for continuation by a host that can read it (see `workflow wake`). If the release write rejects after admission, the executor attempts to record the run as failed. If that failure write succeeds, the caller receives a failure result with the original error. If it also rejects, the caller receives both errors and the row may still be `running`; inspect the store state and run ownership before recovery.
 
 These checks detect a mismatch present when Archon checks; they do not seal the directory or turn workflow execution into a security sandbox. Another process running as the Archon user can still change a file after a check, and already-started parallel nodes are not cancelled. Inline node bodies and command bodies compiled into an included graph are already in memory. A runtime `workflow:` child deliberately captures the live authoring source when that child starts, then receives its own pinned capture. If the parent's recorded authoring directory has moved or been deleted, Archon refuses to start the child instead of capturing a same-named workflow from the target checkout.
 
-The one exception is a run that started before Archon captured source at all. It has nothing recorded to honor, so it resumes against the current source on disk with a warning. A run whose recorded capture is missing or unreadable never falls back to live source. After admission, it pauses for continuation on a host that can read the capture; before admission, execution is refused until the capture is readable. Source-integrity failures, such as a changed or replaced capture, still fail or refuse execution.
+The one exception is a run that started before Archon captured source at all. It has nothing recorded to honor, so it resumes against the current source on disk with a warning. A run whose recorded capture is missing or unreadable never falls back to live source. After admission, a successful source release pauses it for continuation on a host that can read the capture. A rejected release write fails the run when the subsequent failure write succeeds. If that write also rejects, the caller receives both errors and the row may still be `running`; inspect the store state and run ownership before recovery. Before admission, execution is refused until the capture is readable. Source-integrity failures, such as a changed or replaced capture, still fail or refuse execution.
 
 An older captured run may have a digest in its run row but no out-of-band copy of its source-resolution settings. Archon still verifies its tree against that digest, reads the settings from the manifest, and on the first resume records them on the run row beside the digest, with a warning. Nothing can prove those settings are the ones the run started with, since the manifest is outside the digest; pinning them closes the window, so a later edit to the manifest is refused like any other change.
 
@@ -580,7 +581,7 @@ Tool-call advisories appear in nonverbose text and in the JSON `attention` field
 
 ### `workflow runs`
 
-List recent runs of **every** status (completed, failed, cancelled, running, paused) for the current project. The project is resolved from `cwd` the same way `workflow run` does. Complements `workflow status` (which is active-only).
+List recent runs of **every** execution status for the current project. The project is resolved from `cwd` by its registered checkout path or linked-worktree identity. A separate clone does not resolve to that project, even after a launch with `workflow run --project`. Complements `workflow status` (which is active-only).
 
 ```bash
 archon workflow runs
@@ -592,6 +593,8 @@ archon workflow runs --all             # list across all projects (ignore cwd sc
 ```
 
 If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
+
+After a separate-clone launch, use `archon workflow get <full-run-id>` to inspect the run directly, or run `archon workflow runs` from the registered checkout for a project-scoped list. The global list defaults to 20 rows and may omit the run.
 
 The run-list JSON uses the same `active_nodes` contract as `workflow status`. The retained singular
 fields are compatibility fields: `current_step_name` and `current_step_status` are populated only
@@ -877,7 +880,7 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`, request recovery with [`workflow end-turn`](#workflow-end-turn), or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
 ```bash
 archon workflow wait <run-id>
@@ -948,7 +951,7 @@ shows "Running · owner unknown". Neither is shown as live progress.
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
   It also reports `reason: source_release_not_continued` for a container paused by a
   host-local captured-source read failure. Resume that container by hand on a host
-  that can read its source; see [Attention queue](/guides/attention-queue/).
+  that can read its source; see [Operate runs](/getting-started/operate/).
 
 Two pauses deliberately do **not** wake a waiter, because neither is owed a response: a
 gate or attention wait that has already been answered and is awaiting continuation, and a
@@ -979,7 +982,7 @@ inspect the run normally with `workflow get <run-id>`.
 
 ### `workflow attention`
 
-List, count, stream or read the [attention queue](/guides/attention-queue/): every paused
+List, count, stream or read the [attention queue](/getting-started/operate/): every paused
 run that needs an answer or inspection, plus observable provider usage- and rate-limit waits.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. Read-only.
@@ -1012,7 +1015,7 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 `item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
-exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
+exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
 item in scope, then `ready`, then follows changes any process commits, as
@@ -1030,7 +1033,7 @@ snapshot, replays readable feed events strictly after it. Multiple lines can sha
 event cursor; resuming after it excludes all of them. For a partially handled event,
 replay from an earlier checkpoint as described in the guide. A `degraded` warning means replay may have
 gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
-the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
+the [Operate page](/getting-started/operate/#stream-the-queue). Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is
@@ -1257,6 +1260,45 @@ strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+
+### `workflow end-turn`
+
+Record a request to end the stalled tools or reported background work named by a
+running run's `stalled_tool_calls.calls` advisory.
+
+```bash
+archon workflow end-turn <run-id>
+archon workflow end-turn <run-id> --json
+archon workflow wait <run-id> --json
+```
+
+Open tools and reported background work remain running when silent. After
+`workflows.toolCallAttentionMs` without progress (30 minutes by default), attention
+shows their node, provider, sanitized description and idle duration. A silent turn
+with no open tool or reported background work still fails after its node's
+`idle_timeout` and follows its existing retry policy.
+
+The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.
+A live owner checks about every ten seconds and aborts only one of its own current
+stalls that matches all three fields by equality. The attempt fails as `timeout`;
+its retry policy decides whether to start a fresh attempt. Progress clears an
+occurrence, and a later stall gets a new `raisedAt`. The requester's clock is not
+used to decide whether a request applies.
+
+Exit `0` means the request was recorded, not that an owner accepted it or the run
+progressed. The owner might exit or the run might finish before it reads the request.
+Use `workflow wait <run-id>` to inspect attention or the terminal result; it can
+return the same advisory while recovery is pending. An `owner_lost` result requires
+operator recovery of the run's ownership. The CLI itself kills nothing and does not
+cancel the run or answer a gate.
+
+Exit `1` refuses an unknown run, any run outside `running` (including paused runs),
+no stalled work, or unreadable attention. `--json` prints
+`{ ok: true, runId, action: "end_turn", requestRecorded: true, nodes }`, or
+`{ ok: false, runId, action: "end_turn", error }` with `error` one of `not_found`,
+`not_running`, `nothing_stalled`, and `unreadable_attention`. Thrown failures use the
+same failure envelope with the error message; `runId` is the resolved id, or the
+supplied argument if resolution failed.
 
 ### `workflow respond`
 
@@ -1719,7 +1761,7 @@ archon version
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `artifacts`, `wait`, `attention`, `project list`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
-| `--after <cursor>` | For `workflow attention --watch`: replay readable feed events strictly after this cursor, excluding all lines at that cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/guides/attention-queue/#stream-the-queue). |
+| `--after <cursor>` | For `workflow attention --watch`: replay readable feed events strictly after this cursor, excluding all lines at that cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/getting-started/operate/#stream-the-queue). |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
@@ -1753,7 +1795,16 @@ The CLI determines where to run based on:
 
 Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves to the nearest git repository root (e.g., `/repo`). A nested repository resolves as its own codebase and registers on first workflow use. Linked worktrees resolve to their registered source codebase. Ordinary subdirectories of registered folder projects continue to resolve to the registered folder. An exact folder registration wins over git detection. `--folder` retains the supplied directory rather than selecting a surrounding git root. Linked Git worktrees do not inherit a folder registration from the primary checkout. Listing commands do not register projects.
 
-When project registration fails, the command fails with the registration error, even with `--no-worktree`. Registering a second clone of an already-registered remote is refused with the registered project's path; use worktrees (`--branch`) for parallel checkouts. A new project whose name or storage folder is already taken by a different path registers under the first free suffixed name, such as `_local/api-2` or `my-app-2` for a folder project. This also applies to `/register-project` and URL cloning. Existing project names and storage stay unchanged, so projects that an older version registered into one storage folder keep sharing it.
+When project registration fails, the command fails with the registration error, even with `--no-worktree`. Registering a second clone of an already-registered remote is refused with the registered project's path; use worktrees (`--branch`) for parallel checkouts. To bind a separate clone to the existing project, use its registered ID or exact name:
+
+```bash
+archon project list
+archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree "Investigate the failing build"
+```
+
+`--project` selects the run's registered identity, managed project environment variables, artifacts and logs. For an ordinary fresh run, `--cwd` supplies workflow source, launch configuration and in-place execution. Adoption retains its existing lane, source and configuration rules. `--workflow-source` can still override the authoring directory. With isolation enabled, execution and worktree creation use the registered checkout, including its remote/ref operations and worktree configuration; branches that exist only in the separate clone are not available there. Use `--no-worktree` to execute in the launch clone. This selector applies only to fresh `workflow run` invocations, requires a registered repository, and does not register a second clone. Unknown, ambiguous, or deleted selections fail before launch.
+
+A new project whose name or storage folder is already taken by a different path registers under the first free suffixed name, such as `_local/api-2` or `my-app-2` for a folder project. This also applies to `/register-project` and URL cloning. Existing project names and storage stay unchanged, so projects that an older version registered into one storage folder keep sharing it.
 
 When using `--branch`, workflows run inside the worktree directory.
 
