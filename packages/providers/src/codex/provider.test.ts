@@ -2190,6 +2190,24 @@ test('a declared MCP server that fails to connect names the server and blocks tu
   expect(resultOf(chunks).failure?.evidence).toContain('spawn ENOENT');
 });
 
+test('a declared MCP server whose status this Codex version does not list blocks turn/start', async () => {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-unknown-')));
+  const mcp = join(dir, 'mcp.json');
+  await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+  const { provider, server } = providerWith({
+    mcpStatusPages: [
+      [{ name: 'declared', pluginId: null, runtimeStatus: 'suspended' as 'connected' }],
+    ],
+  });
+  const chunks = await run(provider, { nodeConfig: { nodeId: 'test', mcp } });
+  expect(paramsOf(server, 'turn/start')).toBeUndefined();
+  expect(resultOf(chunks).failure).toEqual({
+    class: 'misconfigured',
+    evidence:
+      'Cannot establish connection readiness for MCP server "declared": unknown runtime status',
+  });
+});
+
 for (const continuation of ['fresh', 'resume', 'fork'] as const) {
   test(`required MCP connects before a ${continuation} turn, across status pages`, async () => {
     const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-connected-')));

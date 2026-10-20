@@ -4086,6 +4086,42 @@ describe('typed failures (#1797, #3524)', () => {
     }
   });
 
+  test('a CLI that never initializes its MCP servers hits the same first-event timeout', async () => {
+    const root = backgroundTempRoots(mkdtempSync(join(tmpdir(), 'claude-mcp-silent-')));
+    const mcp = join(root, 'mcp.json');
+    writeFileSync(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    let statusReads = 0;
+    mockQuery.mockImplementation(() =>
+      Object.assign(
+        (async function* () {
+          await new Promise(() => {});
+        })(),
+        {
+          initializationResult: () => new Promise(() => {}),
+          mcpServerStatus: async () => {
+            statusReads++;
+            return [];
+          },
+          close: () => {},
+        }
+      )
+    );
+    const original = process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
+    process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS = '50';
+    try {
+      const result = onlyResult(
+        await collect(client.sendQuery('test', root, undefined, { nodeConfig: { mcp } }))
+      );
+      const failure = result.failure as { class: string; evidence: string };
+      expect(failure.class).toBe('transient');
+      expect(failure.evidence).toContain('produced no output within 50ms');
+      expect(statusReads).toBe(0);
+    } finally {
+      if (original !== undefined) process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS = original;
+      else delete process.env.ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS;
+    }
+  });
+
   test('a caller abort still throws Query aborted rather than reporting a failure', async () => {
     const abortController = new AbortController();
     mockQuery.mockImplementation(async function* () {

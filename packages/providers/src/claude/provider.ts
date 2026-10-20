@@ -179,20 +179,19 @@ function buildFirstEventHangDiagnostics(
 class FirstEventTimeoutError extends Error {}
 
 /**
- * Wraps an async generator so that the first call to .next() must resolve
- * within `timeoutMs`. If it doesn't, aborts the controller and throws.
+ * Resolves `pending` only if it settles within `timeoutMs`. Otherwise aborts the
+ * controller and throws a ClaudeFirstEventTimeoutError: the CLI produced nothing.
  */
-export async function* withFirstMessageTimeout<T>(
-  gen: AsyncGenerator<T>,
+async function withinFirstEventDeadline<T>(
+  pending: Promise<T>,
   controller: AbortController,
   timeoutMs: number,
   diagnostics: Record<string, unknown>
-): AsyncGenerator<T> {
+): Promise<T> {
   let timerId: ReturnType<typeof setTimeout> | undefined;
-  let firstValue: IteratorResult<T>;
   try {
-    firstValue = await Promise.race([
-      gen.next(),
+    return await Promise.race([
+      pending,
       new Promise<never>((_, reject) => {
         timerId = setTimeout(() => {
           reject(new FirstEventTimeoutError());
@@ -215,7 +214,19 @@ export async function* withFirstMessageTimeout<T>(
   } finally {
     clearTimeout(timerId);
   }
+}
 
+/**
+ * Wraps an async generator so that the first call to .next() must resolve
+ * within `timeoutMs`. If it doesn't, aborts the controller and throws.
+ */
+export async function* withFirstMessageTimeout<T>(
+  gen: AsyncGenerator<T>,
+  controller: AbortController,
+  timeoutMs: number,
+  diagnostics: Record<string, unknown>
+): AsyncGenerator<T> {
+  const firstValue = await withinFirstEventDeadline(gen.next(), controller, timeoutMs, diagnostics);
   if (firstValue.done) return;
   yield firstValue.value;
   yield* gen;
@@ -688,9 +699,22 @@ export class ClaudeProvider implements IAgentProvider {
       });
       controller.signal.throwIfAborted();
       const rawEvents = query({ prompt: input.messages, options });
+      const diagnostics = buildFirstEventHangDiagnostics(
+        options.env as Record<string, string>,
+        options.model
+      );
+      const firstEventTimeoutMs = getFirstEventTimeoutMs();
       if (mcpNames.length > 0) {
         preparedQuery = rawEvents;
-        await rawEvents.initializationResult();
+        // A silent CLI never initializes, so initialization is held to the first-event
+        // deadline. Server readiness is not: a slow server stays pending until the CLI's
+        // own MCP connect timeout resolves it.
+        await withinFirstEventDeadline(
+          rawEvents.initializationResult(),
+          controller,
+          firstEventTimeoutMs,
+          diagnostics
+        );
         yield* requireMcpConnections(
           mcpNames,
           async () =>
@@ -705,17 +729,13 @@ export class ClaudeProvider implements IAgentProvider {
         controller.signal.throwIfAborted();
       }
       input.admit();
-      const diagnostics = buildFirstEventHangDiagnostics(
-        options.env as Record<string, string>,
-        options.model
-      );
       const nodeConfig = requestOptions?.nodeConfig;
       const events = withFirstMessageTimeout(
         isWorkflowNode(nodeConfig)
           ? withPluginScopeCheck(rawEvents, nodeConfig.plugins ?? [])
           : rawEvents,
         controller,
-        getFirstEventTimeoutMs(),
+        firstEventTimeoutMs,
         diagnostics
       );
 
