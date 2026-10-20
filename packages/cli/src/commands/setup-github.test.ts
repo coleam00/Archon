@@ -66,6 +66,7 @@ describe('GitHub setup wizard', () => {
   let output: string[];
   let restore: (() => void)[];
   let initialAuthMode: unknown;
+  let passwordMessages: string[];
   const cancelled = Symbol('cancelled');
   const nativeIsCancel = prompts.isCancel;
 
@@ -93,6 +94,7 @@ describe('GitHub setup wizard', () => {
     scope = 'project';
     output = [];
     initialAuthMode = undefined;
+    passwordMessages = [];
     const cancellation = spyOn(prompts, 'isCancel').mockImplementation(
       (value): value is symbol => value === cancelled || nativeIsCancel(value)
     );
@@ -137,6 +139,7 @@ describe('GitHub setup wizard', () => {
       return '';
     });
     const secret = spyOn(prompts, 'password').mockImplementation(async options => {
+      passwordMessages.push(options.message);
       if (options.message === 'Enter your Telegram Bot Token:') return '123456:new-telegram';
       if (options.message === 'Enter your Slack Bot Token (xoxb-...):') return 'xoxb-new-slack';
       if (options.message === 'Enter your Slack App Token (xapp-...):') return 'xapp-new-slack';
@@ -199,29 +202,47 @@ describe('GitHub setup wizard', () => {
   const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
 
-  it('Add combines an existing Telegram connection with a newly selected Slack connection', async () => {
-    setupMode = 'add';
-    writeFileSync(target, 'TELEGRAM_BOT_TOKEN=123456:old-telegram\n');
-    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue(['slack']);
-    try {
-      expect(await run()).toBe(0);
-      expect(read()).toMatchObject({
-        TELEGRAM_BOT_TOKEN: '123456:old-telegram',
-        SLACK_BOT_TOKEN: 'xoxb-new-slack',
-        SLACK_APP_TOKEN: 'xapp-new-slack',
-      });
-      expect(read().GITHUB_APP_ID).toBeUndefined();
-      expect(read().GITHUB_TOKEN).toBeUndefined();
-      expect(output.find(message => message.startsWith('Claude:'))).toContain(
-        'Platforms: Telegram'
+  it.each(['telegram', 'slack'] as const)(
+    'Add keeps existing %s credentials and prompts only for the newly selected connection',
+    async existingPlatform => {
+      setupMode = 'add';
+      const existingTelegram = existingPlatform === 'telegram';
+      writeFileSync(
+        target,
+        serializeEnv(
+          existingTelegram
+            ? { TELEGRAM_BOT_TOKEN: '123456:old-telegram' }
+            : { SLACK_BOT_TOKEN: 'xoxb-old-slack', SLACK_APP_TOKEN: 'xapp-old-slack' }
+        )
       );
-      expect(output.find(message => message.startsWith('AI:'))).toContain(
-        'Platforms: Telegram, Slack'
-      );
-    } finally {
-      platforms.mockRestore();
+      const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([
+        existingTelegram ? 'slack' : 'telegram',
+      ]);
+      try {
+        expect(await run()).toBe(0);
+        expect(passwordMessages).toEqual(
+          existingTelegram
+            ? ['Enter your Slack Bot Token (xoxb-...):', 'Enter your Slack App Token (xapp-...):']
+            : ['Enter your Telegram Bot Token:']
+        );
+        expect(read()).toMatchObject({
+          TELEGRAM_BOT_TOKEN: existingTelegram ? '123456:old-telegram' : '123456:new-telegram',
+          SLACK_BOT_TOKEN: existingTelegram ? 'xoxb-new-slack' : 'xoxb-old-slack',
+          SLACK_APP_TOKEN: existingTelegram ? 'xapp-new-slack' : 'xapp-old-slack',
+        });
+        expect(read().GITHUB_APP_ID).toBeUndefined();
+        expect(read().GITHUB_TOKEN).toBeUndefined();
+        expect(output.find(message => message.startsWith('Claude:'))).toContain(
+          `Platforms: ${existingTelegram ? 'Telegram' : 'Slack'}`
+        );
+        expect(output.find(message => message.startsWith('AI:'))).toContain(
+          'Platforms: Telegram, Slack'
+        );
+      } finally {
+        platforms.mockRestore();
+      }
     }
-  });
+  );
 
   it.each([
     ['home', 'app', true],
@@ -260,6 +281,13 @@ describe('GitHub setup wizard', () => {
       const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
       try {
         expect(await run(force)).toBe(0);
+        for (const message of [
+          'Enter your Telegram Bot Token:',
+          'Enter your Slack Bot Token (xoxb-...):',
+          'Enter your Slack App Token (xapp-...):',
+        ]) {
+          expect(passwordMessages.filter(prompt => prompt === message)).toHaveLength(force ? 1 : 0);
+        }
         const env = read();
         expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
         if (selectedMode === 'app') {
@@ -1163,6 +1191,7 @@ describe('GitHub setup wizard', () => {
           writeFileSync(target, original);
           expect(checkExistingConfig(target)?.platforms.github).toBe(false);
           initialAuthMode = undefined;
+          passwordMessages = [];
           expect(await run()).toBe(0);
           expect(initialAuthMode).toBe('pat');
           expect(selectGitHubAuthMode(read())).toEqual({ kind: authMode });
