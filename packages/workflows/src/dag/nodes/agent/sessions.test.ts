@@ -1636,7 +1636,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       const group = nodes[0];
       if (group?.kind !== 'loop_group') throw new Error('missing group');
       const [source, consumer] = group.loop_group.nodes;
-      if (!source || !consumer) throw new Error('missing body nodes');
+      if (!source || consumer?.kind !== 'agent') throw new Error('missing body agents');
       if (missingSource === 'skipped') source.when = '$LOOP_PREV.b.output.skip != true';
       consumer.trigger_rule = 'all_done';
       consumer.output_format = {
