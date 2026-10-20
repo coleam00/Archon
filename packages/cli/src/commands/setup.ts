@@ -65,7 +65,11 @@ import {
   collectTelegramConfig,
 } from './setup-platforms';
 import { setupLaunchCommand, spawnTerminalWithSetup } from './setup-spawn';
-import { createPlatformSelection, platformNames } from './setup-platform-selection';
+import {
+  createPlatformSelection,
+  platformNames,
+  SETUP_PLATFORMS,
+} from './setup-platform-selection';
 
 // =============================================================================
 // File Generation and Writing
@@ -304,9 +308,21 @@ async function collectPlatformCredentials(
   config: SetupConfig,
   platforms: SetupConfig['platforms']
 ): Promise<void> {
-  if (platforms.github) config.github = await collectGitHubConfig();
-  if (platforms.telegram) config.telegram = await collectTelegramConfig();
-  if (platforms.slack) config.slack = await collectSlackConfig();
+  const collectors = {
+    github: async () => {
+      config.github = await collectGitHubConfig();
+    },
+    telegram: async () => {
+      config.telegram = await collectTelegramConfig();
+    },
+    slack: async () => {
+      config.slack = await collectSlackConfig();
+    },
+  } satisfies Record<keyof SetupConfig['platforms'], () => Promise<void>>;
+
+  for (const { value } of SETUP_PLATFORMS) {
+    if (platforms[value]) await collectors[value]();
+  }
 }
 
 async function writeConfiguration(

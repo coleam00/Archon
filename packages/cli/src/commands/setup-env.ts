@@ -22,6 +22,7 @@ import {
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
 } from '@archon/paths';
 import type { SetupConfig } from './setup-shared';
+import { SETUP_PLATFORMS } from './setup-platform-selection';
 import { PI_BACKENDS } from './setup-provider-auth';
 
 export const GITHUB_APP_KEYS = [
@@ -159,55 +160,59 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push(['DEFAULT_AI_ASSISTANT', config.ai.defaultAssistant]);
   lines.push('');
 
-  // GitHub
-  if (config.platforms.github && config.github) {
-    lines.push('# GitHub');
-    if (config.github.mode === 'pat') {
-      for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
-    } else {
-      const app = config.github;
-      lines.push(
-        ['GITHUB_APP_ID', app.appId],
-        [
-          app.privateKey.source === 'path'
-            ? 'GITHUB_APP_PRIVATE_KEY_PATH'
-            : 'GITHUB_APP_PRIVATE_KEY',
-          app.privateKey.value,
-        ]
-      );
-      if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
-    }
-    lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
-    if (config.github.allowedUsers) {
-      lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
-    }
-    if (config.github.botMention) {
-      lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
-    }
-    lines.push('');
-  }
+  const platformWriters = {
+    github: () => {
+      if (!config.github) return;
+      lines.push('# GitHub');
+      if (config.github.mode === 'pat') {
+        for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
+      } else {
+        const app = config.github;
+        lines.push(
+          ['GITHUB_APP_ID', app.appId],
+          [
+            app.privateKey.source === 'path'
+              ? 'GITHUB_APP_PRIVATE_KEY_PATH'
+              : 'GITHUB_APP_PRIVATE_KEY',
+            app.privateKey.value,
+          ]
+        );
+        if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
+      }
+      lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
+      if (config.github.allowedUsers) {
+        lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
+      }
+      if (config.github.botMention) {
+        lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
+      }
+      lines.push('');
+    },
+    telegram: () => {
+      if (!config.telegram) return;
+      lines.push('# Telegram');
+      lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
+      if (config.telegram.allowedUserIds) {
+        lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
+      }
+      lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
+      lines.push('');
+    },
+    slack: () => {
+      if (!config.slack) return;
+      lines.push('# Slack');
+      lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
+      lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
+      if (config.slack.allowedUserIds) {
+        lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
+      }
+      lines.push(['SLACK_STREAMING_MODE', 'batch']);
+      lines.push('');
+    },
+  } satisfies Record<keyof SetupConfig['platforms'], () => void>;
 
-  // Telegram
-  if (config.platforms.telegram && config.telegram) {
-    lines.push('# Telegram');
-    lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
-    if (config.telegram.allowedUserIds) {
-      lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
-    }
-    lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
-    lines.push('');
-  }
-
-  // Slack
-  if (config.platforms.slack && config.slack) {
-    lines.push('# Slack');
-    lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
-    lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
-    if (config.slack.allowedUserIds) {
-      lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
-    }
-    lines.push(['SLACK_STREAMING_MODE', 'batch']);
-    lines.push('');
+  for (const { value } of SETUP_PLATFORMS) {
+    if (config.platforms[value]) platformWriters[value]();
   }
 
   // Bot Display Name
