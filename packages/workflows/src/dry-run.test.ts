@@ -1800,12 +1800,74 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
-  for (const suspension of [
-    { approval: { message: 'Please decide' } },
-    { wait: { attention: 'Please decide' } },
-  ]) {
-    for (const failed of [true, false]) {
-      test(`loop-group ${'wait' in suspension ? 'wait' : 'gate'} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
+  for (const [name, suspension] of [
+    ['gate', { approval: { message: 'Please decide' } }],
+    ['wait', { wait: { attention: 'Please decide' } }],
+    ...(
+      [
+        ['gate', { approval: { message: 'Please decide' } }],
+        [
+          'interactive group',
+          {
+            loop_group: {
+              max_iterations: 1,
+              until_bash: 'exit 1',
+              interactive: true,
+              gate_message: 'Please decide',
+              nodes: [{ id: 'check', bash: 'echo done' }],
+            },
+          },
+        ],
+        [
+          'interactive loop',
+          {
+            loop: {
+              max_iterations: 1,
+              until: 'DONE',
+              interactive: true,
+              gate_message: 'Please decide',
+              prompt: 'Work',
+            },
+          },
+        ],
+      ] as const
+    ).flatMap(
+      ([name, sink]) =>
+        [
+          [
+            `nested ${name}`,
+            {
+              loop_group: {
+                max_iterations: 1,
+                until_bash: 'exit 1',
+                nodes: [{ id: 'check', ...sink }],
+              },
+            },
+          ],
+          [
+            `recursive ${name}`,
+            {
+              loop_group: {
+                max_iterations: 1,
+                until_bash: 'exit 1',
+                nodes: [
+                  {
+                    id: 'nested',
+                    loop_group: {
+                      max_iterations: 1,
+                      until_bash: 'exit 1',
+                      nodes: [{ id: 'check', ...sink }],
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        ] as const
+    ),
+  ] as const) {
+    for (const failed of 'loop_group' in suspension ? [true] : [true, false]) {
+      test(`loop-group ${name} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
         const workflow = makeTestWorkflow({
           name: 'failure-before-suspension',
           nodes: [

@@ -461,7 +461,7 @@ nodes:
 | `all_success` | Run only if all upstream deps completed successfully (default) |
 | `one_success` | Run if at least one upstream dep completed successfully |
 | `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
-| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
+| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped), except a loop body's terminal interaction after a body failure (see [loop failure behavior](/guides/loop-nodes/#how-it-works)) |
 
 `none_failed_min_one_success` blocks failure-cascade skips by default, including
 across dependency chains and includes. The skipped join retains the original failed

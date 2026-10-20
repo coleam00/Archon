@@ -128,6 +128,7 @@ export {
   definedOutputPaths,
   loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
+  isInteractiveSink,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,

@@ -10,7 +10,12 @@ import type {
   WaitNode,
   WorkflowWaitContext,
 } from '../../../schemas';
-import { isGateNode, loopGroupOutputNodes, loopGroupSoleTerminalSink } from '../../../schemas';
+import {
+  isGateNode,
+  isInteractiveSink,
+  loopGroupOutputNodes,
+  loopGroupSoleTerminalSink,
+} from '../../../schemas';
 import type { ModelAliasPreset, TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
@@ -116,6 +121,13 @@ export function findLoopGroupTerminalSuspendNode(
 ): GateNode | WaitNode | undefined {
   const sink = loopGroupSoleTerminalSink(bodyNodes);
   return sink !== undefined && (isGateNode(sink) || sink.kind === 'wait') ? sink : undefined;
+}
+
+export function findLoopGroupTerminalInteraction(
+  bodyNodes: readonly DagNode[]
+): DagNode | undefined {
+  const sink = loopGroupSoleTerminalSink(bodyNodes);
+  return sink !== undefined && (sink.kind === 'wait' || isInteractiveSink(sink)) ? sink : undefined;
 }
 
 /** An iteration's output: the first completed, non-empty one among its output nodes. */

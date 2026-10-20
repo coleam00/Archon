@@ -7,7 +7,8 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '../../../file-store/store';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { listAttentionQueue } from '../../../attention-queue';
-import { dagNodeSchema } from '../../../schemas';
+import { dagNodeSchema, workflowDefinitionSchema } from '../../../schemas';
+import { expandWorkflowIncludes } from '../../../include-expander';
 import { createMockDeps, createMockPlatform, dagOptions, mockSendQueryDag } from '../../test-utils';
 
 for (const [name, suspension] of [
@@ -16,8 +17,92 @@ for (const [name, suspension] of [
   ['until', { wait: { until: '2099-01-01T00:00:00.000Z' } }],
   ['event', { wait: { event: 'ready', deadline_ms: 60_000 } }],
   ['gate', { approval: { message: 'Please decide' } }],
+  [
+    'nested gate',
+    {
+      loop_group: {
+        max_iterations: 1,
+        until_bash: 'exit 1',
+        nodes: [{ id: 'check', approval: { message: 'Please decide' } }],
+      },
+    },
+  ],
+  [
+    'interactive group',
+    {
+      loop_group: {
+        max_iterations: 1,
+        until_bash: 'exit 1',
+        interactive: true,
+        gate_message: 'Please decide',
+        nodes: [{ id: 'check', bash: 'echo done' }],
+      },
+    },
+  ],
+  [
+    'interactive loop',
+    {
+      loop: {
+        max_iterations: 1,
+        until: 'DONE',
+        interactive: true,
+        gate_message: 'Please decide',
+        prompt: 'Work',
+      },
+    },
+  ],
+  ...(
+    [
+      ['gate', { approval: { message: 'Please decide' } }],
+      [
+        'interactive group',
+        {
+          loop_group: {
+            max_iterations: 1,
+            until_bash: 'exit 1',
+            interactive: true,
+            gate_message: 'Please decide',
+            nodes: [{ id: 'check', bash: 'echo done' }],
+          },
+        },
+      ],
+      [
+        'interactive loop',
+        {
+          loop: {
+            max_iterations: 1,
+            until: 'DONE',
+            interactive: true,
+            gate_message: 'Please decide',
+            prompt: 'Work',
+          },
+        },
+      ],
+    ] as const
+  ).map(
+    ([name, sink]) =>
+      [
+        `recursive ${name}`,
+        {
+          loop_group: {
+            max_iterations: 1,
+            until_bash: 'exit 1',
+            nodes: [
+              {
+                id: 'nested',
+                loop_group: {
+                  max_iterations: 1,
+                  until_bash: 'exit 1',
+                  nodes: [{ id: 'check', ...sink }],
+                },
+              },
+            ],
+          },
+        },
+      ] as const
+  ),
 ] as const) {
-  for (const failed of [true, false]) {
+  for (const failed of 'wait' in suspension || name === 'gate' ? [true, false] : [true]) {
     test(`${name}: ${failed ? 'body failure prevents suspension' : 'clean body still pauses'} without losing cleanup or usage`, async () => {
       const root = await mkdtemp(join(tmpdir(), 'archon-loop-failure-pause-'));
       try {
@@ -43,8 +128,11 @@ for (const [name, suspension] of [
             workflow: {
               name: 'failed-pause',
               nodes: [
+                dagNodeSchema.parse({ id: 'pause', bash: 'exit 8' }),
                 dagNodeSchema.parse({
                   id: 'cycle',
+                  depends_on: ['pause'],
+                  trigger_rule: 'all_done',
                   loop_group: {
                     max_iterations: 2,
                     until_bash: 'exit 1',
@@ -100,7 +188,7 @@ for (const [name, suspension] of [
           expect(bodyError).toBeUndefined();
           expect(groupFailure).toBeUndefined();
           expect(persisted?.status).toBe('paused');
-          if (name === 'gate') {
+          if (!('wait' in suspension)) {
             expect(pauseGate).toHaveBeenCalledTimes(1);
           } else {
             expect(pauseWait).toHaveBeenCalledTimes(1);
@@ -167,6 +255,87 @@ test('an outer failure sharing the terminal wait id does not suppress a clean bo
     expect(
       events.some(event => event.event_type === 'node_failed' && event.step_name === 'cycle')
     ).toBe(false);
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
+test('included cleanup failure fails the run and group before included attention can start', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archon-loop-include-failure-'));
+  try {
+    const stage = workflowDefinitionSchema.parse({
+      name: 'review-block',
+      description: 'Review with cleanup',
+      returns: 'result',
+      nodes: [
+        { id: 'review', bash: 'echo reviewed' },
+        { id: 'result', bash: 'echo ready', depends_on: ['review'] },
+        { id: 'prune-scratch', bash: 'exit 7', depends_on: ['review'], trigger_rule: 'all_done' },
+      ],
+    });
+    const attention = workflowDefinitionSchema.parse({
+      name: 'attention-block',
+      description: 'Terminal attention',
+      nodes: [{ id: 'ask', wait: { attention: 'Please decide' } }],
+    });
+    const entry = workflowDefinitionSchema.parse({
+      name: 'included-review',
+      description: 'Included stage then attention',
+      nodes: [
+        {
+          id: 'cycle',
+          loop_group: {
+            max_iterations: 1,
+            until_bash: 'exit 1',
+            nodes: [
+              { id: 'stage', include: stage.name },
+              {
+                id: 'attend',
+                include: attention.name,
+                depends_on: ['stage'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [stage.name, stage],
+        [attention.name, attention],
+        [entry.name, entry],
+      ])
+    );
+    expect(errors).toEqual([]);
+    const workflow = workflows.get(entry.name);
+    if (!workflow) throw new Error('Include expansion failed');
+    const store = await createFileWorkflowStore({ root });
+    const created = await store.createWorkflowRun({ workflow_name: entry.name, user_message: '' });
+    const run = await store.claimPendingWorkflowRun(created.id, root);
+    if (!run) throw new Error('Claim failed');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: root,
+        workflowRun: run,
+        workflow,
+      })
+    );
+    const persisted = await store.getWorkflowRun(run.id);
+    const events = await store.listWorkflowEvents(run.id);
+    expect(persisted?.status).toBe('failed');
+    expect(persisted?.metadata.wait).toBeUndefined();
+    expect(await listAttentionQueue({ store, branchOf: async () => null })).toEqual([]);
+    expect(
+      events.find(event => event.event_type === 'node_failed' && event.step_name === 'cycle')?.data
+        .error
+    ).toBe(
+      "Loop-group node 'cycle' failed at iteration 1: 'stage__prune-scratch': Bash node 'stage__prune-scratch' failed [exit 7]: no diagnostic output"
+    );
+    expect(events.some(event => event.step_name === 'cycle.attend__ask')).toBe(false);
+    expect(events.some(event => event.event_type === 'workflow_failed')).toBe(true);
   } finally {
     await removeTempTree(root);
   }

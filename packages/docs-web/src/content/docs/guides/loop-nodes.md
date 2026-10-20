@@ -603,7 +603,8 @@ warning.
 - A body node that **fails** fails the whole group immediately with that node's
   error (no further iterations run) — same semantics as a failed node in a
   top-level DAG. Earlier `all_done` cleanup layers still run, but the body's terminal
-  gate or wait does not start after a body failure, even with `trigger_rule: all_done`.
+  gate, wait, or nested interactive loop/group does not start after a body failure,
+  even with `trigger_rule: all_done`.
   The run fails without creating an attention item for that terminal node.
 - `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
   output**: the first completed, non-empty output among the body's terminal nodes,

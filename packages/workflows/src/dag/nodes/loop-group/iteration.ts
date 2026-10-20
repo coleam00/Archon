@@ -31,6 +31,7 @@ import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
+  findLoopGroupTerminalInteraction,
   logGroupIterationEventError,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
@@ -221,6 +222,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const scopedNodeOutputs = new Map<string, NodeOutput>(ctx.nodeOutputs);
 
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
+  const terminalInteraction = findLoopGroupTerminalInteraction(bodyNodes);
   const iterCtx: RunLayersContext = {
     toolAttention: ctx.toolAttention,
     bodyGateOwner:
@@ -275,15 +277,21 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
-    // A terminal suspension commits the pause itself, before failedBody can settle
-    // the group. Earlier all_done cleanup must still run after a body failure.
-    // All other body nodes have settled here; the sink's own output is still inherited.
-    stopBeforeLayer: layer =>
-      terminalSuspendNode !== undefined &&
-      layer.some(n => n.id === terminalSuspendNode.id) &&
-      bodyNodes.some(
-        n => n.id !== terminalSuspendNode.id && scopedNodeOutputs.get(n.id)?.state === 'failed'
-      ),
+    // A terminal interaction commits its pause before failedBody can settle the group.
+    // Earlier all_done cleanup must still run after a body failure.
+    stopBeforeLayer: layer => {
+      if (
+        terminalInteraction === undefined ||
+        !layer.some(n => n.id === terminalInteraction.id) ||
+        !bodyNodes.some(
+          n => n.id !== terminalInteraction.id && scopedNodeOutputs.get(n.id)?.state === 'failed'
+        )
+      )
+        return false;
+      // The skipped sink never ran; an inherited outer output is not its result.
+      scopedNodeOutputs.delete(terminalInteraction.id);
+      return true;
+    },
     nodeOutputs: scopedNodeOutputs,
     priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,

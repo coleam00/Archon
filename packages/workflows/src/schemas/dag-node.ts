@@ -2142,6 +2142,16 @@ export function loopGroupSoleTerminalSink<T extends { id: string; depends_on?: r
   return sinks.length === 1 ? sinks[0] : undefined;
 }
 
+export function isInteractiveSink(node: DagNode | IncludeDirective): boolean {
+  if (isIncludeDirective(node)) return false;
+  if (isGateNode(node)) return true;
+  if (isLoopNode(node)) return node.loop.interactive === true;
+  if (!isLoopGroupNode(node)) return false;
+  if (node.loop_group.interactive === true) return true;
+  const sink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+  return sink !== undefined && isInteractiveSink(sink);
+}
+
 /**
  * The body entries an iteration's output is read from, in body order: the terminal
  * sinks, with a sink that asks a human (an approval gate or an attention wait) read
