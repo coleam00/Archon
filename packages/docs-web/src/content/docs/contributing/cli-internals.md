@@ -330,8 +330,8 @@ archon isolation cleanup [days] (default: 7)
 
 Completion and merged cleanup retain remote branches, including with force,
 because registration ownership cannot be proved after retirement. Retention is
-logged as a warning; completion displays it, while the merged-cleanup report does
-not include it. Enable GitHub's **Automatically delete head branches** setting for
+logged as a warning and displayed in both completion and merged-cleanup reports.
+Enable GitHub's **Automatically delete head branches** setting for
 merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 Signals are evaluated in order — the first positive match short-circuits to avoid

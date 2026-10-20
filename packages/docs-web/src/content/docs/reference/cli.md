@@ -1576,7 +1576,23 @@ If the ref belongs to a replacement registration or ownership is uncertain, leav
 it alone. To remove a ref manually, first ensure no one is reusing or publishing
 that branch. From the surviving primary checkout, verify that the branch still
 belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`)
-and the branch reported by cleanup. Inspect the push destinations:
+and the branch reported by cleanup. First check for service overrides:
+
+```bash
+remote='<remote>'
+git config --get-all "remote.$remote.uploadpack"
+git config --get-all "remote.$remote.receivepack"
+```
+
+Either override can redirect Git to a repository other than the URL, independently
+of the other service. Cleanup refuses automatic inspection in this case. Before
+manual cleanup, verify the actual receiving repository with the service owner.
+Use an endpoint whose upload and receive services you have verified target that
+repository; do not infer absence from the configured URL or upload service.
+The URL procedure below applies only when neither override is configured and the
+endpoint is known to match the receiver.
+
+Inspect the push destinations:
 
 ```bash
 git remote get-url --push --all <remote>

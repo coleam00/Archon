@@ -3,8 +3,6 @@ import { execFileAsync } from './exec';
 
 export interface PushDestination {
   url: string;
-  uploadPack?: string;
-  receivePack?: string;
 }
 
 export async function resolvePushDestinations(
@@ -43,27 +41,19 @@ export async function resolvePushDestinations(
   const effectiveUrls = destinations.length
     ? destinations
     : fallbackUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
-  const uploadPack = configuredService(settings, `remote.${remote}.uploadpack`);
-  const receivePack = configuredService(settings, `remote.${remote}.receivepack`);
-  // ls-remote uses upload-pack, so its advertisement cannot establish absence
-  // at a separately configured receive-only service.
-  if (receivePack !== undefined && uploadPack === undefined) {
-    throw new Error('Cannot inspect a remote receivepack override without an uploadpack service');
+  // Service commands can redirect independently of the URL and each other.
+  // An upload advertisement then cannot prove absence at the receiver.
+  if (
+    settings.some(
+      ({ key }) => key === `remote.${remote}.uploadpack` || key === `remote.${remote}.receivepack`
+    )
+  ) {
+    throw new Error('Cannot verify receiving endpoints with remote service overrides');
   }
-  return effectiveUrls.map(url => ({ url, uploadPack, receivePack }));
+  return effectiveUrls.map(url => ({ url }));
 }
 
 type GitSetting = { key: string; value: string | undefined };
-
-function configuredService(settings: GitSetting[], key: string): string | undefined {
-  let command: string | undefined;
-  for (const setting of settings) {
-    if (setting.key !== key) continue;
-    if (setting.value === undefined) throw new Error('Remote service requires a command value');
-    command = setting.value;
-  }
-  return command;
-}
 
 function configuredUrls(settings: GitSetting[], key: string): string[] {
   const urls: string[] = [];
@@ -107,7 +97,7 @@ function rewriteUrl(url: string, rewrites: Map<string, string[]>): string | unde
 }
 
 /**
- * A named remote preserves service overrides; its alias receives one URL rewrite,
+ * The named remote's alias receives one URL rewrite,
  * so Git does not rewrite the already resolved destination a second time.
  */
 export function pinGitDestination(destination: PushDestination): {
@@ -123,12 +113,6 @@ export function pinGitDestination(destination: PushDestination): {
     [`url.${destination.url}.insteadOf`, alias],
     [`url.${destination.url}.pushInsteadOf`, alias],
     [`remote.${endpoint}.url`, alias],
-    ...(destination.uploadPack === undefined
-      ? []
-      : [[`remote.${endpoint}.uploadpack`, destination.uploadPack]]),
-    ...(destination.receivePack === undefined
-      ? []
-      : [[`remote.${endpoint}.receivepack`, destination.receivePack]]),
   ];
   for (const [offset, [key, value]] of settings.entries()) {
     env[`GIT_CONFIG_KEY_${String(count + offset)}`] = key;

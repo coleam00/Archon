@@ -565,7 +565,7 @@ describe('WorktreeProvider against real git', () => {
   );
 
   test.each([false, true])(
-    'remote destruction preserves named services (force=%s)',
+    'remote destruction refuses unverifiable paired services (force=%s)',
     async force => {
       const intended = join(root, 'service.git');
       const unrelated = join(root, 'url.git');
@@ -617,17 +617,23 @@ describe('WorktreeProvider against real git', () => {
         force,
         deleteRemoteBranch: true,
       });
-      expect(result.remoteBranchDeleted).toBe(true);
-      expect(result.warnings).toEqual([]);
-      expect(await git(root, 'ls-remote', intended, ref)).toBe('');
+      expect(result.remoteBranchDeleted).toBe(false);
+      expect(result.warnings).toEqual([
+        `Failed to delete remote branch '${created.branchName}': could not resolve push destinations`,
+      ]);
+      expect(await git(root, 'ls-remote', intended, ref)).toBe(published);
       expect(await git(root, 'ls-remote', unrelated, ref)).toBe(published);
       expect(await git(root, 'ls-remote', secondUrl, ref)).toBe(published);
     }
   );
 
-  test.each([false, true])(
-    'remote destruction refuses a receive-only service (force=%s)',
-    async force => {
+  test.each(
+    [false, true].flatMap(force =>
+      ['receive-only', 'paired-divergent', 'upload-only'].map(kind => ({ force, kind }))
+    )
+  )(
+    'remote destruction refuses unverified service endpoints (force=$force, kind=$kind)',
+    async ({ force, kind }) => {
       const intended = join(root, 'service.git');
       const unrelated = join(root, 'url.git');
       for (const destination of [intended, unrelated])
@@ -645,12 +651,24 @@ describe('WorktreeProvider against real git', () => {
       if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
       await git(repoPath, 'remote', 'set-url', 'origin', unrelated);
       const servicePath = intended.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
-      await git(
-        repoPath,
-        'config',
-        'remote.origin.receivepack',
-        `git-receive-pack '${servicePath}' #`
-      );
+      if (kind !== 'upload-only')
+        await git(
+          repoPath,
+          'config',
+          'remote.origin.receivepack',
+          `git-receive-pack '${servicePath}' #`
+        );
+      else await git(repoPath, 'remote', 'set-url', 'origin', intended);
+      if (kind !== 'receive-only') {
+        const upload = join(root, 'upload.git');
+        await git(root, 'init', '--bare', '-q', upload);
+        await git(
+          repoPath,
+          'config',
+          'remote.origin.uploadpack',
+          `git-upload-pack '${upload.replaceAll('\\', '/').replaceAll("'", "'\"'\"'")}' #`
+        );
+      }
       await git(repoPath, 'push', '-q', 'origin', created.branchName);
       const ref = `refs/heads/${created.branchName}`;
       const published = await git(root, 'ls-remote', intended, ref);

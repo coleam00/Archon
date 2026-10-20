@@ -716,26 +716,46 @@ describe('completed run worktree release', () => {
     }
   );
 
-  test('completion refuses an uninspectable receive-only service', async () => {
-    const published = join(root, 'service.git');
-    await git(root, 'init', '--bare', '-q', published);
-    const servicePath = published.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
-    await git(repo, 'config', 'remote.upstream.receivepack', `git-receive-pack '${servicePath}' #`);
-    const ref = `refs/heads/${env.branch_name}`;
-    await git(env.working_path, 'push', '-q', 'upstream', `HEAD:${ref}`);
-    const advertisement = await git(root, 'ls-remote', published, ref);
-    expect(advertisement).toContain(ref);
-    expect(await git(repo, 'ls-remote', 'upstream', ref)).toBe('');
-    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
-    await expect(
-      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
-    ).rejects.toThrow('receivepack');
-    expect(existsSync(env.working_path)).toBe(true);
-    expect(await status()).toBe('active');
-    expect(await git(root, 'ls-remote', published, ref)).toBe(advertisement);
-  });
+  test.each(['receive-only', 'paired-divergent', 'upload-only'] as const)(
+    'completion refuses unverified service endpoints (%s)',
+    async kind => {
+      const published = join(root, 'service.git');
+      await git(root, 'init', '--bare', '-q', published);
+      const servicePath = published.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
+      if (kind !== 'upload-only')
+        await git(
+          repo,
+          'config',
+          'remote.upstream.receivepack',
+          `git-receive-pack '${servicePath}' #`
+        );
+      else await git(repo, 'remote', 'set-url', 'upstream', published);
+      if (kind !== 'receive-only') {
+        const upload = join(root, 'upload.git');
+        await git(root, 'init', '--bare', '-q', upload);
+        await git(
+          repo,
+          'config',
+          'remote.upstream.uploadpack',
+          `git-upload-pack '${upload.replaceAll('\\', '/').replaceAll("'", "'\"'\"'")}' #`
+        );
+      }
+      const ref = `refs/heads/${env.branch_name}`;
+      await git(env.working_path, 'push', '-q', 'upstream', `HEAD:${ref}`);
+      const advertisement = await git(root, 'ls-remote', published, ref);
+      expect(advertisement).toContain(ref);
+      expect(await git(repo, 'ls-remote', 'upstream', ref)).toBe('');
+      expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow('service overrides');
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+      expect(await git(root, 'ls-remote', published, ref)).toBe(advertisement);
+    }
+  );
 
-  test('completion preserves the named remote upload service', async () => {
+  test('completion refuses an unverifiable named remote upload service', async () => {
     const published = join(root, 'service.git');
     await git(root, 'init', '--bare', '-q', published);
     const ref = `refs/heads/${env.branch_name}`;
@@ -748,7 +768,7 @@ describe('completed run worktree release', () => {
     );
     expect(await git(repo, 'ls-remote', 'upstream', ref)).toContain(ref);
     expect(await git(repo, 'ls-remote', join(root, 'remote.git'), ref)).toBe('');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
     await expect(
       releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
     ).rejects.toThrow();
