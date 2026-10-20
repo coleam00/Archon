@@ -4341,6 +4341,27 @@ nodes:
       expect(node && 'fan_out' in node && node.fan_out?.max_parallel).toBe(parallelism);
     });
 
+    it('reports a field error for an invalid fan-out with a padded include target', async () => {
+      const result = await loadOne(
+        'compose-invalid',
+        `
+name: compose-invalid
+description: invalid composed join
+nodes:
+  - id: work
+    include: '  child-block  '
+    fan_out:
+      items: '[]'
+      as: item
+      join: first_success
+`
+      );
+      const error = result.errors.find(e => e.filename === 'compose-invalid.yaml')?.error;
+      expect(error).toContain("'fan_out.join'");
+      expect(error).toContain('first_success');
+      expect(error).not.toContain('YAML parse error');
+    });
+
     it('rejects max_parallel: all on composed fan-out', async () => {
       const result = await loadOne(
         'compose-all',

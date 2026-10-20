@@ -2431,6 +2431,51 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     }
   );
 
+  test.each([
+    ['blank target', { include: '   ' }, '', 'must have either'],
+    [
+      'join',
+      { fan_out: { items: '$list.output', as: 'item', join: 'first_success' } },
+      'fan_out.join',
+      'first_success',
+    ],
+    [
+      'binding name',
+      { fan_out: { items: '$list.output', as: '1bad' } },
+      'fan_out.as',
+      'invalid fan-out input name',
+    ],
+    [
+      'binding collision',
+      { fan_out: { items: '$list.output', as: 'item' }, with: { item: 'static' } },
+      'fan_out.as',
+      'collides',
+    ],
+    ['ID', { id: 'INPUTS' }, 'id', 'reserved'],
+    ['with shape', { with: [] }, 'with', 'must be an object'],
+    ['competing mode', { prompt: 'work' }, '', 'mutually exclusive'],
+    ['misplaced input', { input: 'work' }, 'input', 'not supported'],
+    [
+      'workflow-only parallelism',
+      { fan_out: { items: '$list.output', as: 'item', max_parallel: 'all' } },
+      '',
+      '',
+    ],
+  ])(
+    'returns validation issues for a padded include with invalid %s',
+    (_name, extra, path, message) => {
+      const result = dagNodeSchema.safeParse({ id: 'review', include: '  block  ', ...extra });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some(
+            issue => issue.path.join('.') === path && issue.message.includes(message)
+          )
+        ).toBe(true);
+      }
+    }
+  );
+
   // #2512: `fan_out:` on an include node is now the composed fan-out surface — it parses
   // to a deferred ComposeFanOutNode instead of being rejected as launch-only.
   test('include + fan_out parses to a deferred compose_fan_out node', () => {

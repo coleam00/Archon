@@ -1964,32 +1964,24 @@ const dagNodeVariantSchema = z
       return { ...base, ...shared, kind: 'halt', reason: data.cancel.trim() } as HaltNode;
     }
     if (data.include !== undefined && data.include.trim().length > 0) {
-      // `include:` + `fan_out:` (#2512) is the runtime-width composed fan-out: the item
-      // list resolves at run time, so this node is NOT expanded away — it survives as a
-      // ComposeFanOutNode and the executor expands one instance per item through the
-      // same expander. Carries only structural fields + include target + with map + the
-      // fan-out config, like the static directive below it.
+      // Runtime-width composition survives expansion so the executor can resolve its items.
       if (data.fan_out !== undefined) {
         return {
           ...structuralBase,
           kind: 'compose_fan_out',
-          include: data.include.trim(),
+          include: data.include,
           ...(data.with !== undefined
             ? { with: composeFanOutNodeSchema.shape.with.unwrap().parse(data.with) }
             : {}),
           fan_out: data.fan_out,
         } as ComposeFanOutNode;
       }
-      // An include is a load-time directive, not an executable node. It carries the
-      // structural graph fields, target name, and optional load-time input mapping. The
-      // expander reads those fields to attach and parameterize the sub-DAG (description just
-      // rides along). aiOnly / shared (retry) and the exec-only base fields (always_run /
-      // output_type / idle_timeout) are intentionally dropped; the loader warns about them
-      // via INCLUDE_NODE_IGNORED_FIELDS.
+      // Static includes carry only graph fields and load-time bindings. The loader warns
+      // about ignored executable fields through INCLUDE_NODE_IGNORED_FIELDS.
       return {
         ...structuralBase,
         kind: 'include',
-        include: data.include.trim(),
+        include: data.include,
         ...(data.with !== undefined
           ? { with: includeDirectiveSchema.shape.with.unwrap().parse(data.with) }
           : {}),
@@ -2054,15 +2046,22 @@ export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
   .preprocess(rejectMisplacedKeys, dagNodeVariantSchema)
   // Refinements do not reach OpenAPI; retain the include-specific fan-out contract
   // structurally so generated authoring types cannot offer workflow-only concurrency.
+  // Both branches retain the authored target until validation succeeds; normalizing
+  // either side earlier can make invalid input throw when the intersection merges.
   .and(
     z.union([
       // The OpenAPI converter cannot emit ZodNever; an empty enum admits no value.
       z.object({ include: z.never().meta({ type: 'string', enum: [] }).optional() }),
       z.object({
-        include: NODE_MODE_SHAPES.include.include.trim(),
+        include: NODE_MODE_SHAPES.include.include,
         fan_out: composeFanOutConfigSchema.optional(),
       }),
     ])
+  )
+  .transform(node =>
+    node.kind === 'include' || node.kind === 'compose_fan_out'
+      ? { ...node, include: node.include.trim() }
+      : node
   )
   .meta({ id: 'DagNode' });
 
