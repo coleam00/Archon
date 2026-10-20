@@ -952,29 +952,44 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
-  it('skips PR check with warning when gh CLI is not available', async () => {
-    mockRemoveEnvironment.mockResolvedValueOnce({
-      worktreeRemoved: true,
-      branchDeleted: true,
-      warnings: [],
-    });
-    mockExecFileAsync.mockImplementation((cmd: string) => {
-      if (cmd === 'gh') {
-        const err = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
-        return Promise.reject(err);
-      }
-      return Promise.resolve({ stdout: '', stderr: '' });
-    });
+  it.each(['unavailable', 'malformed', 'failed'])(
+    'refuses a %s PR check and continues later branches',
+    async failure => {
+      const later = makeEnvironment({ id: 'env-later', branch_name: 'later' });
+      mockListActive
+        .mockResolvedValueOnce([makeEnvironment(), later])
+        .mockResolvedValueOnce([later]);
+      mockRemoveEnvironment.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        branchDeleted: true,
+        warnings: [],
+      });
+      let checks = 0;
+      mockExecFileAsync.mockImplementation((cmd: string) => {
+        if (cmd === 'gh' && checks++ === 0) {
+          if (failure === 'malformed') return Promise.resolve({ stdout: '{', stderr: '' });
+          return Promise.reject(
+            new Error(failure === 'unavailable' ? 'spawn gh ENOENT' : 'authentication failed')
+          );
+        }
+        return Promise.resolve({ stdout: cmd === 'gh' ? '[]' : '', stderr: '' });
+      });
 
-    await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
+      await expect(
+        isolationCompleteCommand(['feature-branch', 'later'], { force: false, deleteRemote: true })
+      ).rejects.toThrow('Failed to complete');
 
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      '  Warning: gh CLI not available — skipping open PR check'
-    );
-    // Should still complete since gh check is non-fatal
-    expect(mockRemoveEnvironment).toHaveBeenCalled();
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
-  });
+      expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
+      expect(mockRemoveEnvironment).toHaveBeenCalledWith(later, {
+        force: false,
+        deleteRemoteBranch: true,
+      });
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('could not check for open PRs')
+      );
+      expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: later');
+    }
+  );
 
   it('proceeds despite all checks when --force is set', async () => {
     const env = makeEnvironment({ branch_name: 'dirty-branch' });
@@ -1193,6 +1208,22 @@ describe('isolationCleanupCommand', () => {
       expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(0);
     }
   );
+
+  it('refuses a run claimed after the age precheck', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    const read = mock(async (_release?: Isolation.FailedRunRelease) => ({
+      id: 'late-run',
+      status: 'running',
+    }));
+    mockWithWorktreeRegistration.mockImplementationOnce(async (_env, remove) =>
+      remove(async () => {}, read)
+    );
+    await isolationCleanupCommand(7);
+    expect(read).toHaveBeenCalledWith({ kind: 'stale', staleDays: 7 });
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('late-run'));
+  });
 
   it('refuses a changed stale registration before destruction', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);

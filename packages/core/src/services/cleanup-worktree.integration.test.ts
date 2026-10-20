@@ -788,6 +788,68 @@ test('ordinary cleanup removes a proven checkout and its branch', async () => {
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
 });
 
+test.each([
+  undefined,
+  { kind: 'merged' as const },
+  { kind: 'pr-closed' as const },
+  { kind: 'stale' as const, staleDays: 14 },
+])(
+  'ordinary cleanup refuses a workflow claim that wins before exclusion (%j)',
+  async settlement => {
+    const acquire = isolationDb.withWorktreeRegistration;
+    let claimedId = '';
+    const race = spyOn(isolationDb, 'withWorktreeRegistration').mockImplementation(
+      async (observed, remove) => {
+        claimedId = await seedRunAt(null, 'pending');
+        expect(await claimPendingWorkflowRun(claimedId, env.working_path)).not.toBeNull();
+        return acquire(observed, remove);
+      }
+    );
+    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    try {
+      await expect(removeEnvironment(env, { settlement })).rejects.toThrow('Worktree kept');
+      expect(destroy).not.toHaveBeenCalled();
+      expect(await status()).toBe('active');
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
+      const row = await db.query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [claimedId]
+      );
+      expect(row.rows[0]?.status).toBe('running');
+    } finally {
+      race.mockRestore();
+      destroy.mockRestore();
+    }
+  }
+);
+
+test.each([
+  { settlement: { kind: 'merged' as const }, age: 0, removed: true },
+  { settlement: { kind: 'pr-closed' as const }, age: 0, removed: true },
+  { settlement: { kind: 'stale' as const, staleDays: 14 }, age: 30, removed: true },
+  { settlement: { kind: 'stale' as const, staleDays: 14 }, age: 0, removed: false },
+])(
+  'ordinary cleanup preserves failed-run settlement at exclusion (%j)',
+  async ({ settlement, age, removed }) => {
+    const id = await seedRunAt(env.working_path, 'failed');
+    await db.query(
+      "UPDATE remote_agent_workflow_runs SET completed_at = datetime('now', $2) WHERE id = $1",
+      [id, `-${age} days`]
+    );
+    if (removed) expect((await removeEnvironment(env, { settlement })).worktreeRemoved).toBe(true);
+    else await expect(removeEnvironment(env, { settlement })).rejects.toThrow('Worktree kept');
+    expect(existsSync(env.working_path)).toBe(!removed);
+    expect(await status()).toBe(removed ? 'destroyed' : 'active');
+  }
+);
+
+test('explicit force retains its live-run override inside cleanup exclusion', async () => {
+  await seedRunAt(env.working_path, 'running');
+  expect((await removeEnvironment(env, { force: true })).worktreeRemoved).toBe(true);
+  expect(await status()).toBe('destroyed');
+});
+
 test('ordinary cleanup accepts an unchanged legacy registration with joined codebase fields', async () => {
   const { worktree_registration_id, ...metadata } = env.metadata;
   await db.query('UPDATE remote_agent_isolation_environments SET metadata = $1 WHERE id = $2', [

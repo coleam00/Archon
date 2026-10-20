@@ -1,3 +1,4 @@
+import type { FailedRunRelease } from '@archon/isolation';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -75,19 +76,27 @@ function findLiveRunOwningEnv(
   id: string,
   env: IsolationEnvironmentRow | null,
   runs: WorkflowRun[],
-  excludeRunId?: string
+  excludeRunId?: string,
+  release?: FailedRunRelease
 ) {
   return (
     runs
       .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-      .find(
-        row =>
-          row.id !== excludeRunId &&
-          (!isTerminalRunStatus(row.status) || RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-          (row.metadata.isolation_env_id === id ||
-            worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-            (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
-      ) ?? null
+      .find(row => {
+        const terminal = isTerminalRunStatus(row.status);
+        const resumable = RESUMABLE_WORKFLOW_STATUSES.includes(row.status);
+        if (row.id === excludeRunId || (terminal && !resumable)) return false;
+        if (release && terminal) {
+          if (release.kind === 'settled') return false;
+          const lastActive = row.completed_at ?? row.last_activity_at ?? row.started_at;
+          if (lastActive.getTime() < Date.now() - release.staleDays * 86400000) return false;
+        }
+        return (
+          row.metadata.isolation_env_id === id ||
+          worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
+          (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path)
+        );
+      }) ?? null
   );
 }
 export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
@@ -324,7 +333,8 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
             async () => {
               row.status = 'destroyed';
             },
-            async () => findLiveRunOwningEnv(row.id, row, [...runs.values()])
+            async release =>
+              findLiveRunOwningEnv(row.id, row, [...runs.values()], undefined, release)
           );
           return { result, changes: { documents: { 'host/isolation.json': rows } } };
         }),
@@ -359,10 +369,10 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   });
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
-    getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
+    getLiveRunOwningEnv: async (id, release, excludeRunId) => {
       const env = await records.isolation.getById(id);
       const runs = await listRuns(root);
-      return findLiveRunOwningEnv(id, env, runs, excludeRunId);
+      return findLiveRunOwningEnv(id, env, runs, excludeRunId, release);
     },
   };
   const deps: ReturnType<typeof createWorkflowDeps> = {

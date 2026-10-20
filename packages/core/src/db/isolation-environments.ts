@@ -1,6 +1,7 @@
 /**
  * Database operations for isolation environments
  */
+import type { FailedRunRelease } from '@archon/isolation';
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
@@ -344,7 +345,7 @@ export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
       return remove(
         () => markWorktreeDestroyed(observed, query),
-        () => getLiveRunOwningEnv(observed.id, undefined, undefined, query)
+        release => getLiveRunOwningEnv(observed.id, release, undefined, query)
       );
     },
     { retryOnBusy: false }
@@ -410,12 +411,7 @@ export function isSettleableRunStatus(status: string): boolean {
   return (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 }
 
-/**
- * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled (the branch merged or its PR closed), or once the run has been inactive
- * longer than the sweep's stale window. The run row itself is never touched.
- */
-export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
+export type { FailedRunRelease } from '@archon/isolation';
 
 /**
  * Find a workflow run that still owns an environment — the one signal that pins an

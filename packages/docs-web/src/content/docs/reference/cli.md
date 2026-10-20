@@ -1616,7 +1616,8 @@ Without `--force`, completion refuses an environment a workflow run can still cl
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
 failed run that can still be resumed. Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
-refuses rather than skipping the check.
+refuses rather than skipping the check. Completion also refuses when it cannot check
+for open PRs, including when `gh` is unavailable or returns invalid JSON.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

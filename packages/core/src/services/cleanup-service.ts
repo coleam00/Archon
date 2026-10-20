@@ -385,6 +385,7 @@ export async function onConversationClosed(
 export interface RemoveEnvironmentOptions {
   force?: boolean;
   deleteRemoteBranch?: boolean;
+  settlement?: CleanupSettlement;
 }
 
 const NON_WORKTREE_CLEANUP_REASON =
@@ -464,9 +465,16 @@ export async function removeEnvironment(
       }
     }
 
-    return await isolationEnvDb.withWorktreeRegistration(env, markDestroyed =>
-      destroyEnvironment(env, options, canonicalRepoPath, remote, markDestroyed)
-    );
+    return await isolationEnvDb.withWorktreeRegistration(env, async (markDestroyed, getLiveRun) => {
+      if (!options?.force) {
+        const settlement = options?.settlement;
+        const liveRun = await getLiveRun(
+          settlement ? (settlement.kind === 'stale' ? settlement : { kind: 'settled' }) : undefined
+        );
+        if (liveRun) throw new Error(`Worktree kept: ${toLiveRunBlocker(liveRun).display}`);
+      }
+      return destroyEnvironment(env, options, canonicalRepoPath, remote, markDestroyed);
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, envId }, 'env_remove_failed');
@@ -871,6 +879,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           const mergedResult = await removeEnvironment(env, {
             force: false,
             deleteRemoteBranch: true,
+            settlement: { kind: verdict },
           });
           if (mergedResult.skippedReason) {
             report.skipped.push({ id: env.id, reason: mergedResult.skippedReason });
@@ -927,7 +936,10 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             continue;
           }
 
-          const staleResult = await removeEnvironment(env, { force: false });
+          const staleResult = await removeEnvironment(env, {
+            force: false,
+            settlement: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS },
+          });
           if (staleResult.skippedReason) {
             report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
           } else {
@@ -1128,7 +1140,9 @@ export async function cleanupStaleWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env);
+      const removeResult = await removeEnvironment(env, {
+        settlement: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS },
+      });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
@@ -1213,7 +1227,10 @@ export async function cleanupMergedWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env, { deleteRemoteBranch: true });
+      const removeResult = await removeEnvironment(env, {
+        deleteRemoteBranch: true,
+        settlement: { kind: verdict },
+      });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {

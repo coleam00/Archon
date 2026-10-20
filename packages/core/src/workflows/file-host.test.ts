@@ -587,3 +587,36 @@ for (const persistent of [false, true]) {
     expect((await fs.stat(checkout)).isDirectory()).toBe(true);
   });
 }
+
+test('file cleanup live-run reader applies settlement while holding exclusion', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-owner-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const env = await host.records.isolation.create({
+    codebase_id: 'cb',
+    workflow_type: 'task',
+    workflow_id: 'task',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  });
+  const run = await host.deps.store.createWorkflowRun({
+    workflow_name: 'test',
+    user_message: '',
+    codebase_id: 'cb',
+    working_path: home,
+  });
+  await host.deps.store.claimPendingWorkflowRun(run.id);
+  await host.records.isolation.withWorktreeRegistration(env, async (_mark, getLiveRun) => {
+    expect(await getLiveRun({ kind: 'settled' })).toMatchObject({ id: run.id, status: 'running' });
+  });
+  await host.deps.store.failWorkflowRun(run.id, 'test failure');
+  await host.records.isolation.withWorktreeRegistration(env, async (_mark, getLiveRun) => {
+    expect(await getLiveRun()).toMatchObject({ id: run.id, status: 'failed' });
+    expect(await getLiveRun({ kind: 'stale', staleDays: 14 })).toMatchObject({ id: run.id });
+    expect(await getLiveRun({ kind: 'settled' })).toBeNull();
+    expect(await getLiveRun({ kind: 'stale', staleDays: 0 })).toBeNull();
+  });
+  expect((await host.records.isolation.getById(env.id))?.status).toBe('active');
+});
