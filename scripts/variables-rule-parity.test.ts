@@ -122,6 +122,21 @@ function promisedEnvironment(item: string): string[] {
   return [...names].filter(name => !name.startsWith('INPUTS_'));
 }
 
+/** A promise of a diagnostic in a sentence, and the variables the sentence speaks about. */
+function promisedDiagnostic(
+  sentence: string,
+  variables: ReadonlySet<string>
+): { word: string; subject: string } | undefined {
+  const named = [...variables].filter(variable => sentence.includes(`$${variable}`));
+  if (named.length === 0 && !ABOUT_USER_CONTROLLED.test(sentence)) return undefined;
+  for (const match of sentence.matchAll(DIAGNOSTIC)) {
+    if (NEGATED.test(sentence.slice(0, match.index))) continue;
+    const subject = named.length > 0 ? named.join(', ') : 'a user-controlled variable';
+    return { word: match[0], subject };
+  }
+  return undefined;
+}
+
 describe('the user-controlled variable rule', () => {
   const copies = COPIES.map(copy => ({
     ...copy,
@@ -227,16 +242,11 @@ describe('the user-controlled variable rule', () => {
         // A code example reads whatever it likes; a promise of the removed warning is prose.
         if (item.startsWith('```')) continue;
         for (const sentence of sentences(item)) {
-          const named = [...variables].filter(variable => sentence.includes(`$${variable}`));
-          if (named.length === 0 && !ABOUT_USER_CONTROLLED.test(sentence)) continue;
-          for (const match of sentence.matchAll(DIAGNOSTIC)) {
-            if (NEGATED.test(sentence.slice(0, match.index))) continue;
-            throw new Error(
-              `${copy.file} promises ${match[0]} for ${
-                named.length > 0 ? named.join(', ') : 'a user-controlled variable'
-              }: ${sentence}`
-            );
-          }
+          const promise = promisedDiagnostic(sentence, variables);
+          if (promise === undefined) continue;
+          throw new Error(
+            `${copy.file} promises ${promise.word} for ${promise.subject}: ${sentence}`
+          );
         }
       }
     }
