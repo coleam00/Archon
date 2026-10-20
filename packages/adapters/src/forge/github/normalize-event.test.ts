@@ -17,6 +17,65 @@ describe('GitHub inbound normalization', () => {
     expect(verifyGitHubSourceConformance()).toEqual([]);
   });
 
+  test.each(['head_updated', 'ready', 'drafted', 'merged'])(
+    'preserves the accepted pull-request action %s',
+    action => {
+      expect(
+        normalizeGitHubWebhook(
+          {
+            action,
+            repository: { full_name: 'org/repo' },
+            pull_request: { number: 3, state: 'open' },
+          },
+          context
+        )
+      ).toMatchObject({ status: 'normalized', envelope: { event: { action } } });
+    }
+  );
+
+  test('rejects an unsupported pull-request action after payload validation', () => {
+    const payload = {
+      action: 'assigned',
+      repository: { full_name: 'org/repo' },
+      pull_request: { number: 3, state: 'open' },
+    };
+    expect(normalizeGitHubWebhook(payload, context)).toEqual({
+      status: 'unsupported',
+      reason: 'Unsupported GitHub pull_request action: assigned',
+    });
+    expect(normalizeGitHubWebhook({ ...payload, pull_request: null }, context).status).toBe(
+      'malformed'
+    );
+  });
+
+  test.each([
+    [undefined, null],
+    [null, null],
+    [{ sha: 'opaque' }, { objectId: 'opaque', branch: null }],
+    [
+      { sha: 'opaque', ref: null },
+      { objectId: 'opaque', branch: null },
+    ],
+    [
+      { sha: 'opaque', ref: 'feature' },
+      { objectId: 'opaque', branch: 'feature' },
+    ],
+  ])('normalizes optional pull-request revisions %j', (revision, expected) => {
+    expect(
+      normalizeGitHubWebhook(
+        {
+          action: 'opened',
+          repository: { full_name: 'org/repo' },
+          pull_request: { number: 3, state: 'open', head: revision, base: revision },
+        },
+        context
+      )
+    ).toMatchObject({
+      status: 'normalized',
+      envelope: { event: { head: expected, base: expected } },
+    });
+  });
+
   test('a label event names who changed the label', () => {
     for (const [eventName, item] of [
       ['issues', { issue: { number: 3, state: 'open' } }],
