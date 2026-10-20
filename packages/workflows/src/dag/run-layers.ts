@@ -8,12 +8,7 @@ import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SkipCause } from '../schemas';
-import {
-  nodeUsesPersistedScope,
-  readSubrunMetadata,
-  isNodeContextResume,
-  ownsBodySessionCursor,
-} from '../schemas';
+import { nodeUsesPersistedScope, readSubrunMetadata, isNodeContextResume } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
@@ -23,7 +18,12 @@ import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
-import { beginExecution, type LayerNodeResult, type RunLayersContext } from './run-context';
+import {
+  beginExecution,
+  ownsBodySessionCursor,
+  type LayerNodeResult,
+  type RunLayersContext,
+} from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
 import { isCheckoutGuarded } from './checkout-guard';

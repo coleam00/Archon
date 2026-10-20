@@ -86,18 +86,6 @@ export function isNodeContextResume(
   return typeof context === 'object' && context !== null && 'resume' in context;
 }
 
-/**
- * A loop_group body node that resumes a source outside its own body owns a private
- * session cursor continued across iterations. A same-body source is forked afresh in
- * every iteration, so its consumer never owns a cursor.
- */
-export function ownsBodySessionCursor(
-  node: { context?: NodeContext },
-  bodyNodeIds: ReadonlySet<string>
-): boolean {
-  return isNodeContextResume(node.context) && !bodyNodeIds.has(node.context.resume);
-}
-
 function trimNodeMcp(mcp: NodeMcp): NodeMcp {
   return typeof mcp === 'string' ? mcp.trim() : { ...mcp, path: mcp.path.trim() };
 }

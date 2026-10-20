@@ -21,13 +21,16 @@ import {
   isWorkflowWaitContext,
   isApprovalContext,
   isNodeContextResume,
-  ownsBodySessionCursor,
 } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
-import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
+import {
+  ownsBodySessionCursor,
+  type RunLayersContext,
+  type SequentialSessionCursor,
+} from '../../run-context';
 import { nodeTemplateReferences } from '../../references';
 import {
   findLoopGroupTerminalSuspendNode,
