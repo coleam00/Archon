@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { foldDagResumeSnapshot, type DagResumeEvent } from '../dag-resume-snapshot';
 import { formatPersistedNodeOutput } from './node-output';
@@ -19,9 +19,12 @@ describe('persisted output event association', () => {
     await removeTempTree(artifactsDir);
   });
 
-  function completion(output: ReturnType<typeof formatPersistedNodeOutput>): DagResumeEvent {
+  function completion(
+    output: ReturnType<typeof formatPersistedNodeOutput>,
+    stepName = 'group.emit'
+  ): DagResumeEvent {
     return {
-      step_name: 'group.emit',
+      step_name: stepName,
       event_type: 'node_completed',
       data: {
         node_output: output.nodeOutput,
@@ -32,14 +35,25 @@ describe('persisted output event association', () => {
     };
   }
 
-  it('restores the durable output after an equal-length spill without a completion event', async () => {
-    const first = formatPersistedNodeOutput(outputA, artifactsDir, 'group.emit');
-    const durableEvents = [completion(first)];
-    formatPersistedNodeOutput(outputB, artifactsDir, 'group.emit');
+  it.each(['group.emit', 'folder/../emit', 'folder/../../escaped', 'folder\\..\\emit'])(
+    'restores the durable output for %s after an equal-length uncommitted spill',
+    async stepName => {
+      const first = formatPersistedNodeOutput(outputA, artifactsDir, stepName);
+      const durableEvents = [completion(first, stepName)];
+      const second = formatPersistedNodeOutput(outputB, artifactsDir, stepName);
 
-    const snapshot = await foldDagResumeSnapshot(durableEvents, 'run');
-    expect(snapshot.completedNodeOutputs.get('group.emit')).toEqual({ output: outputA });
-  });
+      const snapshot = await foldDagResumeSnapshot(durableEvents, 'run');
+      expect(snapshot.completedNodeOutputs.get(stepName)).toEqual({ output: outputA });
+      expect(first.spillPath).toBeDefined();
+      expect(second.spillPath).toBeDefined();
+      expect(first.spillPath).not.toBe(second.spillPath);
+      for (const spill of [first, second]) {
+        expect(dirname(spill.spillPath!)).toBe(
+          join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
+        );
+      }
+    }
+  );
 
   it('selects the full output by durable event order rather than spill write order', async () => {
     const first = completion(formatPersistedNodeOutput(outputA, artifactsDir, 'group.emit'));

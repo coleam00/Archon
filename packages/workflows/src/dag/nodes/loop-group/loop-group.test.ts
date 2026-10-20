@@ -178,67 +178,77 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toContain('all tests green now');
   });
 
-  it("preserves each iteration's persisted output at a separate spill path", async () => {
-    const counterFile = join(testDir, 'lg-spill-counter');
-    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
-    const artifactsDir = join(testDir, 'artifacts');
+  it.each(['sh', 'bun'] as const)(
+    "preserves each iteration's persisted output at a separate spill path for %s",
+    async runtime => {
+      const counterFile = join(testDir, 'lg-spill-counter');
+      const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+      const artifactsDir = join(testDir, 'artifacts');
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('lg-spill-identity');
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('lg-spill-identity');
 
-    const nodes: DagNode[] = [
-      {
-        id: 'group',
-        kind: 'loop_group',
-        loop_group: {
-          until_bash: `test "$(cat ${counterRef})" -ge 2`,
-          max_iterations: 5,
-          fresh_context: false,
-          nodes: [
-            {
-              id: 'emit',
-              kind: 'exec',
-              runtime: 'sh',
-              script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counterRef}; if [ "$n" = "1" ]; then printf '%40000s' '' | tr ' ' a; else printf '%40000s' '' | tr ' ' b; fi`,
-              depends_on: [],
-            },
-          ],
+      const nodes: DagNode[] = [
+        {
+          id: 'group',
+          kind: 'loop_group',
+          loop_group: {
+            until_bash: `test "$(cat ${counterRef})" -ge 2`,
+            max_iterations: 5,
+            fresh_context: false,
+            nodes: [
+              {
+                id: 'emit',
+                kind: 'exec',
+                runtime,
+                script:
+                  runtime === 'bun'
+                    ? `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+const counterFile = ${JSON.stringify(counterFile)};
+const n = (existsSync(counterFile) ? Number(readFileSync(counterFile, 'utf8')) : 0) + 1;
+writeFileSync(counterFile, String(n));
+process.stdout.write((n === 1 ? 'a' : 'b').repeat(40000));`
+                    : `n=$(cat ${counterRef} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counterRef}; if [ "$n" = "1" ]; then printf '%40000s' '' | tr ' ' a; else printf '%40000s' '' | tr ' ' b; fi`,
+                depends_on: [],
+              },
+            ],
+          },
+          depends_on: [],
         },
-        depends_on: [],
-      },
-    ];
+      ];
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-lg-spill',
-        cwd: testDir,
-        workflow: { name: 'lg-spill-identity', nodes },
-        workflowRun,
-        artifactsDir,
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-lg-spill',
+          cwd: testDir,
+          workflow: { name: 'lg-spill-identity', nodes },
+          workflowRun,
+          artifactsDir,
+        })
+      );
 
-    expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
+      expect((await readFile(counterFile, 'utf8')).trim()).toBe('2');
 
-    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const emitEvents = eventCalls.filter(
-      (call: unknown[]) =>
-        (call[0] as { event_type: string }).event_type === 'node_completed' &&
-        (call[0] as { step_name: string }).step_name === 'group.emit'
-    );
-    expect(emitEvents).toHaveLength(2);
-    const [iter1, iter2] = emitEvents.map(
-      call => (call[0] as { data: { node_output: string; node_output_spill_path: string } }).data
-    );
-    expect(iter1.node_output.startsWith('a')).toBe(true);
-    expect(iter2.node_output.startsWith('b')).toBe(true);
-    expect(iter1.node_output_spill_path).not.toBe(iter2.node_output_spill_path);
-    expect(await readFile(iter1.node_output_spill_path, 'utf8')).toBe('a'.repeat(40_000));
-    expect(await readFile(iter2.node_output_spill_path, 'utf8')).toBe('b'.repeat(40_000));
-  });
+      const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const emitEvents = eventCalls.filter(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_completed' &&
+          (call[0] as { step_name: string }).step_name === 'group.emit'
+      );
+      expect(emitEvents).toHaveLength(2);
+      const [iter1, iter2] = emitEvents.map(
+        call => (call[0] as { data: { node_output: string; node_output_spill_path: string } }).data
+      );
+      expect(iter1.node_output.startsWith('a')).toBe(true);
+      expect(iter2.node_output.startsWith('b')).toBe(true);
+      expect(iter1.node_output_spill_path).not.toBe(iter2.node_output_spill_path);
+      expect(await readFile(iter1.node_output_spill_path, 'utf8')).toBe('a'.repeat(40_000));
+      expect(await readFile(iter2.node_output_spill_path, 'utf8')).toBe('b'.repeat(40_000));
+    }
+  );
 
   it("until_bash observes the typed artifacts its own iteration's body published", async () => {
     const counterFile = join(testDir, 'lg-typed-counter');

@@ -26,7 +26,7 @@ export function utf8SequenceLength(leadByte: number): number {
  *
  * Each write gets its own identity: a later execution may spill before its
  * completion event commits, so it must not replace bytes an older event names.
- * `spillKey` is the row's step_name, retained in the filename for diagnostics.
+ * `spillKey` is the row's step_name, with path separators encoded for diagnostics.
  *
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
@@ -68,7 +68,8 @@ export function formatPersistedNodeOutput(
     'node-output-spills',
     'persisted'
   );
-  const spillPath = writeSpillFile(spillDir, `${randomUUID()}.${spillKey}.nodeoutput`, output);
+  const filenameKey = spillKey.replaceAll('/', '%2F').replaceAll('\\', '%5C');
+  const spillPath = writeSpillFile(spillDir, `${randomUUID()}.${filenameKey}.nodeoutput`, output);
 
   return {
     nodeOutput: outputBytes.subarray(0, headEnd).toString('utf8') + marker,
