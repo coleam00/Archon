@@ -1488,6 +1488,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     expect(runUsageWrites(mockDeps.store)).toEqual([
       {
+        total_cost_usd: null,
         total_tokens_in: 60,
         total_tokens_out: 6,
         total_cache_read_tokens: 14,
@@ -1626,7 +1627,14 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       })
     );
 
-    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.01 }]);
+    const completed = persistedEvents(store).find(
+      row => row.event_type === 'node_completed' && row.step_name === 'classify'
+    );
+    expect(completed?.data?.cost_usd).toBe(0.01);
+    expect(completed?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.01, partial: true },
+    });
+    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: null }]);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'dag_node.usage_cost_non_finite_ignored'

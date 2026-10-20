@@ -1418,16 +1418,16 @@ nodes:
     expect(tracker.max).toBe(2);
   });
 
-  function makeAccountingDeps(store: IWorkflowStore): WorkflowDeps {
+  function makeAccountingDeps(store: IWorkflowStore, reportsCheckCost: boolean): WorkflowDeps {
     const paidProvider = makeProvider();
     const provider = {
       ...paidProvider,
       sendQuery: mock(function* (prompt: string) {
         if (prompt.includes('CHECK_SPEND')) {
+          if (reportsCheckCost) yield { type: 'result', sessionId: 'check', cost: 0 };
           if (prompt.includes('doomed')) throw new Error('failed after paid work');
-          // The check adds no usage to the preceding paid node's accounting.
           yield { type: 'agent_message_chunk', text: 'check passed' };
-          yield { type: 'result', sessionId: 'check' };
+          if (!reportsCheckCost) yield { type: 'result', sessionId: 'check' };
           return;
         }
         yield* paidProvider.sendQuery();
@@ -1493,10 +1493,12 @@ nodes:
   // carried a failed child's usage since #2224; the single-child one dropped it, so a
   // parent with one ordinary `workflow:` node still reported zero for a child that
   // burned tokens and then failed. That is the more common shape of the two.
-  it("rolls up a failed 1:1 child's spend into the parent (no fan_out)", async () => {
-    await writeWorkflow(
-      'solo-child-doomed',
-      `
+  it.each([true, false])(
+    "rolls up a failed 1:1 child's spend (check cost reported: %j)",
+    async reportsCheckCost => {
+      await writeWorkflow(
+        'solo-child-doomed',
+        `
 name: solo-child-doomed
 description: one AI turn (canned cost 0.01 / 7 in / 3 out), then fails
 mutates_checkout: false
@@ -1507,10 +1509,10 @@ nodes:
     depends_on: [think]
     prompt: "CHECK_SPEND doomed"
 `
-    );
-    await writeWorkflow(
-      'solo-parent',
-      `
+      );
+      await writeWorkflow(
+        'solo-parent',
+        `
 name: solo-parent
 description: a single non-fan-out sub-run node whose child fails after spending
 nodes:
@@ -1518,41 +1520,56 @@ nodes:
     workflow: solo-child-doomed
     input: "the task"
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeAccountingDeps(store);
-    const parent = await discover('solo-parent');
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
-      conversationId: 'conv-db',
-    });
+      const store = new InMemoryStore();
+      const deps = makeAccountingDeps(store, reportsCheckCost);
+      const parent = await discover('solo-parent');
+      await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
 
-    const child = [...store.runs.values()].find(r => r.workflow_name === 'solo-child-doomed');
-    expect(child?.status).toBe('failed');
-    // The child's own row records the spend (the run-tail write).
-    expect((child?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.01, 5);
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'solo-child-doomed');
+      expect(child?.status).toBe('failed');
+      // An unreported check cost makes the total unknown; the paid node retains its spend.
+      expect((child?.metadata as Record<string, unknown>).total_cost_usd).toBe(
+        reportsCheckCost ? 0.01 : null
+      );
+      expect(
+        store.events.find(
+          event =>
+            event.workflow_run_id === child?.id &&
+            event.event_type === 'node_completed' &&
+            event.step_name === 'think'
+        )?.data?.cost_usd
+      ).toBe(0.01);
 
-    // ...and so does the parent's, via the node result the failed branch now carries.
-    // The node failed, so the parent run failed too — which is exactly the case that
-    // used to report nothing at all.
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'solo-parent');
-    expect(parentRun?.status).toBe('failed');
-    expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.01, 5);
-    expect((parentRun?.metadata as Record<string, unknown>).total_tokens_in).toBe(7);
-    expect((parentRun?.metadata as Record<string, unknown>).total_cache_read_tokens).toBe(5);
-    expect((parentRun?.metadata as Record<string, unknown>).total_cache_write_tokens).toBe(0);
-    expect((parentRun?.metadata as Record<string, unknown>).total_tokens_out).toBe(3);
-  });
+      // ...and so does the parent's, via the node result the failed branch now carries.
+      // The node failed, so the parent run failed too — which is exactly the case that
+      // used to report nothing at all.
+      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'solo-parent');
+      expect(parentRun?.status).toBe('failed');
+      expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBe(
+        reportsCheckCost ? 0.01 : null
+      );
+      expect((parentRun?.metadata as Record<string, unknown>).total_tokens_in).toBe(7);
+      expect((parentRun?.metadata as Record<string, unknown>).total_cache_read_tokens).toBe(5);
+      expect((parentRun?.metadata as Record<string, unknown>).total_cache_write_tokens).toBe(0);
+      expect((parentRun?.metadata as Record<string, unknown>).total_tokens_out).toBe(3);
+    }
+  );
 
   // #2469 — the regression proof. `all_done` is the DEFAULT join and a failing child
   // explicitly must not discard its siblings, so partial failure is a designed, routine
   // outcome. Before this fix a child that burned tokens and then failed recorded no
   // spend at all, and the fan-out reported Σ of *completed* children: plausible, lower
   // than reality, and with no warning to prompt investigation.
-  it('rolls up the spend of EVERY child, including ones that failed after burning tokens', async () => {
-    await writeWorkflow(
-      'fan-child-partial',
-      `
+  it.each([true, false])(
+    "rolls up every child's spend, including failed children (check cost reported: %j)",
+    async reportsCheckCost => {
+      await writeWorkflow(
+        'fan-child-partial',
+        `
 name: fan-child-partial
 description: one AI turn (canned cost 0.01 / 7 in / 3 out), then the "doomed" item fails
 mutates_checkout: false
@@ -1563,10 +1580,10 @@ nodes:
     depends_on: [think]
     prompt: "CHECK_SPEND $ARGUMENTS"
 `
-    );
-    await writeWorkflow(
-      'fan-partial',
-      `
+      );
+      await writeWorkflow(
+        'fan-partial',
+        `
 name: fan-partial
 description: three children, one fails AFTER its AI node already spent tokens
 nodes:
@@ -1575,47 +1592,64 @@ nodes:
     fan_out:
       items: '["a","doomed","c"]'
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeAccountingDeps(store);
-    const parent = await discover('fan-partial');
-    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
-      conversationId: 'conv-db',
-    });
+      const store = new InMemoryStore();
+      const deps = makeAccountingDeps(store, reportsCheckCost);
+      const parent = await discover('fan-partial');
+      const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
 
-    // all_done: the failed child is represented in the aggregate, not fatal to the node.
-    expect(result.success).toBe(true);
-    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-partial');
-    expect(children).toHaveLength(3);
-    const failedChild = children.find(r => r.status === 'failed');
-    expect(failedChild).toBeDefined();
-    expect(children.filter(child => child.status === 'completed')).toHaveLength(2);
-    expect(children.filter(child => child.status === 'failed')).toHaveLength(1);
-    expect(
-      store.events.filter(
-        event =>
-          event.workflow_run_id === failedChild?.id &&
-          event.event_type === 'node_completed' &&
-          event.step_name === 'think'
-      )
-    ).toHaveLength(1);
+      // all_done: the failed child is represented in the aggregate, not fatal to the node.
+      expect(result.success).toBe(true);
+      const children = [...store.runs.values()].filter(
+        r => r.workflow_name === 'fan-child-partial'
+      );
+      expect(children).toHaveLength(3);
+      const failedChild = children.find(r => r.status === 'failed');
+      expect(failedChild).toBeDefined();
+      expect(children.filter(child => child.status === 'completed')).toHaveLength(2);
+      expect(children.filter(child => child.status === 'failed')).toHaveLength(1);
+      expect(
+        store.events.filter(
+          event =>
+            event.workflow_run_id === failedChild?.id &&
+            event.event_type === 'node_completed' &&
+            event.step_name === 'think'
+        )
+      ).toHaveLength(1);
 
-    // The failed child's OWN row carries what it spent. This is the assertion that
-    // fails on the pre-fix engine: failWorkflowRun wrote only { error }.
-    const failedMeta = failedChild?.metadata as Record<string, unknown>;
-    expect(failedMeta.total_cost_usd).toBeCloseTo(0.01, 5);
-    expect(failedMeta.total_tokens_in).toBe(7);
-    expect(failedMeta.total_tokens_out).toBe(3);
+      // Failure still persists usage, including an explicit unknown cost.
+      const failedMeta = failedChild?.metadata as Record<string, unknown>;
+      expect(failedMeta.total_cost_usd).toBe(reportsCheckCost ? 0.01 : null);
+      expect(
+        store.events.find(
+          event =>
+            event.workflow_run_id === failedChild?.id &&
+            event.event_type === 'node_completed' &&
+            event.step_name === 'think'
+        )?.data?.cost_usd
+      ).toBe(0.01);
+      expect(failedMeta.total_tokens_in).toBe(7);
+      expect(failedMeta.total_tokens_out).toBe(3);
 
-    // 3 children × 0.01 = 0.03 — Σ of ALL three, not the 0.02 of the two that completed.
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-partial');
-    expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.03, 5);
-    expect((parentRun?.metadata as Record<string, unknown>).total_tokens_in).toBe(21);
-    expect((parentRun?.metadata as Record<string, unknown>).total_cache_read_tokens).toBe(15);
-    expect((parentRun?.metadata as Record<string, unknown>).total_cache_write_tokens).toBe(0);
-    expect((parentRun?.metadata as Record<string, unknown>).total_tokens_out).toBe(9);
-  });
+      // All three paid nodes contribute; unpriced checks make the total unknown.
+      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-partial');
+      if (reportsCheckCost) {
+        expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(
+          0.03,
+          5
+        );
+      } else {
+        expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeNull();
+      }
+      expect((parentRun?.metadata as Record<string, unknown>).total_tokens_in).toBe(21);
+      expect((parentRun?.metadata as Record<string, unknown>).total_cache_read_tokens).toBe(15);
+      expect((parentRun?.metadata as Record<string, unknown>).total_cache_write_tokens).toBe(0);
+      expect((parentRun?.metadata as Record<string, unknown>).total_tokens_out).toBe(9);
+    }
+  );
 
   it('parent resume re-drives only the failed instance, skipping completed ones (1:N re-entry)', async () => {
     await writeWorkflow(
