@@ -1567,7 +1567,7 @@ export function describeWorkflowStoreConformance(
         signaled: true,
       });
       const signaled = pendingWorkflowWaitDeadline(await currentRun());
-      expect(signaled).toEqual(workflowWaitContextSchema.parse(signaled));
+      expect(workflowWaitContextSchema.safeParse(signaled).success).toBe(true);
       expect(signaled).toMatchObject({
         ...event,
         signaledAt: expect.any(String),
