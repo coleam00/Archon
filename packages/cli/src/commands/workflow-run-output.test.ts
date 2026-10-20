@@ -202,6 +202,12 @@ describe('workflowRunCommand — progress rendering', () => {
     [{ total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 }, '$0', '0', '0'],
     [{}, 'unknown', 'unknown', 'unknown'],
     [
+      { total_cost_usd: 'free', total_tokens_in: 'unknown', total_tokens_out: 3 },
+      'unknown',
+      'unknown',
+      '3',
+    ],
+    [
       { total_tokens_unknown: true, total_tokens_in: null, total_tokens_out: null },
       'unknown',
       'unknown',

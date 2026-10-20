@@ -1,6 +1,6 @@
-import type { WorkflowRunUsage } from '@archon/workflows/schemas/workflow-run-usage';
+import type { WorkflowRunUsageRead } from '@archon/workflows/schemas/workflow-run-usage';
 
-export function printRunUsage(metadata: WorkflowRunUsage | undefined): void {
+export function printRunUsage(metadata: WorkflowRunUsageRead | undefined): void {
   const cost = metadata?.total_cost_usd;
   const input = metadata?.total_tokens_unknown === true ? undefined : metadata?.total_tokens_in;
   const output = metadata?.total_tokens_unknown === true ? undefined : metadata?.total_tokens_out;

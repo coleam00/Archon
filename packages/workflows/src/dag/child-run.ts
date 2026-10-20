@@ -1,4 +1,4 @@
-import type { WorkflowRunUsage } from '../schemas/workflow-run-usage';
+import type { WorkflowRunUsageRead } from '../schemas/workflow-run-usage';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
@@ -106,7 +106,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md = run.metadata ?? {};
-  const usage: WorkflowRunUsage = md;
+  const usage: WorkflowRunUsageRead = md;
   const input = typeof usage.total_tokens_in === 'number' ? usage.total_tokens_in : undefined;
   const output = typeof usage.total_tokens_out === 'number' ? usage.total_tokens_out : undefined;
   const cacheRead =

@@ -16,5 +16,7 @@ test('persisted usage stays optional and preserves zero, unknown, and unrelated 
     total_cache_partial: null,
   };
   expect(metadata.parse(unknown)).toEqual(unknown);
+  const legacy = { total_cost_usd: 'free', total_tokens_in: 'unknown' };
+  expect(metadata.parse(legacy)).toEqual(legacy);
   expect(workflowRunUsageSchema.safeParse({ total_cost_usd: 'free' }).success).toBe(false);
 });

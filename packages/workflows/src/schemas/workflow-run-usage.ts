@@ -11,3 +11,6 @@ export const workflowRunUsageSchema = z.object({
 });
 
 export type WorkflowRunUsage = z.infer<typeof workflowRunUsageSchema>;
+
+// Persisted metadata predates typed usage; readers must narrow historical values.
+export type WorkflowRunUsageRead = { [Key in keyof WorkflowRunUsage]?: unknown };
