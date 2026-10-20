@@ -191,9 +191,10 @@ jobs:
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          git fetch --no-tags origin eb44039df38af173ba89debbd7aacb392caf62fc
+          $rollbackBaseline = 'eb44039df38af173ba89debbd7aacb392caf62fc'
+          git fetch --no-tags origin $rollbackBaseline
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          bun scripts/measure-rollback-adoption.ts "${{ runner.temp }}/rollback-comparison"
+          bun scripts/measure-rollback-adoption.ts $rollbackBaseline "${{ runner.temp }}/rollback-comparison"
 
       - name: Upload rollback comparison
         if: always() && github.event.pull_request.number == 4797 && runner.os == 'Windows' && matrix.check == 'core-tests' && matrix.part == '2/2'

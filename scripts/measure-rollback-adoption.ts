@@ -2,15 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-const output = process.argv[2];
-if (!output) throw new Error('Pass an output directory for the rollback measurements');
+const [baselineRevision, output] = process.argv.slice(2);
+if (!baselineRevision || !output)
+  throw new Error('Pass a baseline revision and an output directory for the rollback measurements');
 const outputDir = resolve(output);
 await mkdir(outputDir, { recursive: true });
 
 const testDir = 'packages/core/src/workflows';
 const baselinePath = `${testDir}/registered-worktree.before.integration.test.ts`;
-// This is the pre-diagnostics version on #4797, not a moving dev baseline.
-const baselineRevision = 'eb44039df38af173ba89debbd7aacb392caf62fc';
 const baseline = execFileSync('git', [
   'show',
   `${baselineRevision}:${testDir}/registered-worktree.integration.test.ts`,
@@ -22,6 +21,7 @@ try {
     const label = `${String(index + 1)}-${version}`;
     const tracePath = join(outputDir, `${label}.git.jsonl`);
     const junitPath = join(outputDir, `${label}.xml`);
+    await writeFile(tracePath, '');
     const selector = `src/workflows/registered-worktree${version === 'before' ? '.before' : ''}.integration.test.ts`;
     console.log(`Rollback comparison ${label}; baseline ${baselineRevision}`);
     const child = Bun.spawn(
