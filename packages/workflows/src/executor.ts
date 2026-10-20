@@ -252,40 +252,6 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   capturedSourceOwner?: CapturedSourceOwner;
 };
 
-async function recordUnhandledRunFailure(
-  deps: WorkflowDeps,
-  run: WorkflowRun,
-  workflowName: string,
-  err: Error
-): Promise<void> {
-  const emitter = getWorkflowEventEmitter();
-  try {
-    const { failed } = await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(run.id, err.message, { exitReason: 'unhandled_error' }),
-      {
-        workflowRunId: run.id,
-        site: 'db_record_failure_failed',
-      }
-    );
-    // A run another writer already finished keeps that writer's outcome and announcement.
-    if (failed) {
-      emitter.emit({
-        type: 'workflow_failed',
-        runId: run.id,
-        workflowName,
-        error: err.message,
-      });
-    }
-  } catch (writeError) {
-    if (writeError instanceof TerminalStatusWriteError) {
-      writeError.message += ` (while recording workflow failure: ${err.message})`;
-    }
-    throw writeError;
-  } finally {
-    emitter.unregisterRun(run.id);
-  }
-}
-
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -697,11 +663,32 @@ export async function executeWorkflow(
     // reporting a completed process for a row that still says running. Record that it
     // failed so the finally-block backstop below does not fire a second write over a
     // write channel that just proved unreliable — that write would mask this error.
+    const emitter = getWorkflowEventEmitter();
     try {
-      await recordUnhandledRunFailure(deps, workflowRun, workflow.name, err);
+      const { failed } = await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(workflowRun.id, err.message, { exitReason: 'unhandled_error' }),
+        {
+          workflowRunId: workflowRun.id,
+          site: 'db_record_failure_failed',
+        }
+      );
+      // A run another writer already finished keeps that writer's outcome and announcement.
+      if (failed) {
+        emitter.emit({
+          type: 'workflow_failed',
+          runId: workflowRun.id,
+          workflowName: workflow.name,
+          error: err.message,
+        });
+      }
     } catch (writeError) {
       terminalStatusWriteFailed = true;
+      if (writeError instanceof TerminalStatusWriteError) {
+        writeError.message += ` (while recording workflow failure: ${err.message})`;
+      }
       throw writeError;
+    } finally {
+      emitter.unregisterRun(workflowRun.id);
     }
 
     // Return failure result instead of re-throwing
