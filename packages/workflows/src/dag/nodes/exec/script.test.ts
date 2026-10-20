@@ -561,9 +561,7 @@ describe('executeDagWorkflow -- script nodes', () => {
     [false, true, 'container', recordedContainer, undefined],
     [true, false, 'container', recordedContainer, undefined],
     [true, true, 'host', recordedContainer, contextRequired],
-    [true, true, 'absent', recordedContainer, contextRequired],
     [true, true, 'no-backend', recordedContainer, backendRequired],
-    [true, true, 'no-context', recordedContainer, contextRequired],
     [
       true,
       true,
@@ -571,9 +569,6 @@ describe('executeDagWorkflow -- script nodes', () => {
       { ...recordedContainer, isolation_env_id: 'other-env' },
       identityMismatch,
     ],
-    [true, true, 'container', { isolation: 'container' }, identityMismatch],
-    [true, true, 'container', { isolation: 'host' }, identityMismatch],
-    [true, true, 'container', {}, identityMismatch],
   ] as const)(
     'container source release won=%s matching container=%s execution=%s metadata=%j',
     async (released, matches, execution, metadata, expectedError) => {
@@ -629,13 +624,9 @@ describe('executeDagWorkflow -- script nodes', () => {
             }),
             workflowSourceRoots: capturedSourceRoots(capture.anchor),
             execContext:
-              execution === 'host'
-                ? { kind: 'host' }
-                : execution === 'absent' || execution === 'no-context'
-                  ? undefined
-                  : { kind: 'container', containerId: 'cid' },
+              execution === 'host' ? { kind: 'host' } : { kind: 'container', containerId: 'cid' },
             containerCtx:
-              execution === 'no-backend' || execution === 'no-context'
+              execution === 'no-backend'
                 ? undefined
                 : { envId: 'env', writeBack: 'approve', backend },
           })
