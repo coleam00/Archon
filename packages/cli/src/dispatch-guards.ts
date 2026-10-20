@@ -9,6 +9,8 @@
  * undefined when the invocation is allowed.
  */
 
+export const RUN_PROJECT_CONFLICT_FLAGS = ['folder', 'base-branch', 'resume', 'dry-run'] as const;
+
 /** Workflow subcommands that continue an existing run. */
 const CONTINUE_SUBCOMMANDS: readonly string[] = [
   'resume',

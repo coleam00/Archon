@@ -73,6 +73,23 @@ function merge(status: MergeRecord['status'], at = LATER): MergeRecord {
   return { status, pr: PR, approval: null, decisions: [], at };
 }
 
+function parkedOwn() {
+  return {
+    ...newWorkItem(PR, AT),
+    facts: {
+      own_pr: { url: PR_URL, at: AT },
+      merge: {
+        ...merge('parked'),
+        approval: { head: HEAD, at: AT },
+        decisions: [{
+          at: LATER, run_id: 'old-run', decision: 'answered: park', reason: 'hold', links: [], head: HEAD, reran: false,
+          answer: { choice: 'park', text: 'repair it', at: LATER },
+        }],
+      },
+    },
+  } satisfies WorkItem;
+}
+
 const FACTS: PrFacts = {
   pr: PR,
   url: PR_URL,
@@ -103,8 +120,10 @@ describe('the merge record and the gate', () => {
     for (const status of ['merged', 'returned', 'parked'] as const) {
       expect(mergeWaits(item(BUILT, merge(status)))).toBe(false);
     }
-    // The build queue readied it again after the merge queue parked or returned it.
-    expect(mergeWaits(item({ ...BUILT, at: '2026-10-16T02:00:00.000Z' }, merge('parked')))).toBe(true);
+    // Later build readiness also remains possible after an earlier merge.
+    for (const status of ['parked', 'returned', 'merged'] as const) {
+      expect(mergeWaits(item({ ...BUILT, at: '2026-10-16T02:00:00.000Z' }, merge(status)))).toBe(true);
+    }
   });
 
   test('the gate passes only a Ready verdict and green CI at a pinned head that contains the default branch or merges into it cleanly, on a default branch that is not red', () => {
@@ -303,6 +322,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('pullRequest(number')) {
     answered();
+    appendFileSync('{ARTIFACTS}/forge-gh.log', 'snapshot\\n');
     const number = Number(String(argv.find(part => String(part).startsWith('number=')) ?? 'number=42').slice('number='.length));
     if (forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(number)) return out(1, '', 'HTTP 502');
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev' }, pullRequest: {
@@ -569,6 +589,163 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(picked.stderr).toContain('own-PR enrollment stopped');
     expect(stored(at, 52).value).toBeNull();
   }, 60_000);
+
+  for (const choice of ['park', 'other']) {
+    test(`an own PR answered ${choice} waits again only after its head changes`, () => {
+      const at = install();
+      const own = { ...newWorkItem(PR, AT), ...CLAIMED, facts: { own_pr: { url: PR_URL, at: AT } } };
+      seed(at, own);
+      const askAt = (head: string) => {
+        const inputs = recordInputs([decision({ action: 'ask', head, attention: ATTENTION })]);
+        const recorded = ok(run(at, 'record', {
+          ...inputs,
+          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
+        }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
+        const choices = recorded.asked.attention.choices;
+        expect(choices.find(entry => entry.id === choice)?.does).toContain('different head');
+        const ruled = run(at, 'ruling', { INPUTS_ASKED: JSON.stringify(recorded.asked), INPUTS_CHOICE: choice, INPUTS_TEXT: 'repair it' });
+        expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
+        expect(ruled.bodies).toEqual([]);
+      };
+      askAt(HEAD);
+      const parked = stored(at, PR.number);
+      expect(parked.value?.facts.merge?.decisions.at(-1)).toMatchObject({ decision: 'answered: park', head: HEAD, answer: { choice, text: 'repair it' } });
+      expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'idle' });
+      expect(stored(at, PR.number)).toEqual(parked);
+      const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD } });
+      expect(ok(picked)).toMatchObject({ path: 'sweep', items: [{ item: PR, own_pr: true, facts: { head_revision: OLD } }] });
+      expect(forgeCalls(picked).filter(call => call.includes('snapshot'))).toHaveLength(1);
+      askAt(OLD);
+      const parkedAgain = stored(at, PR.number);
+      expect(ok(run(at, 'facts', {}, { pr: { headRefOid: OLD } }))).toMatchObject({ path: 'idle' });
+      expect(stored(at, PR.number)).toEqual(parkedAgain);
+      expect(parkedAgain.value?.facts.build).toBeUndefined();
+    }, 60_000);
+  }
+
+  test('only a latest answered own-PR park can recover; other settlements need no head read', () => {
+    const at = install();
+    const parked = parkedOwn();
+    const prior = parked.facts.merge;
+    const last = prior.decisions[0];
+    const cases: MergeRecord[] = [
+      { ...prior, status: 'merged' },
+      { ...prior, status: 'returned' },
+      ...[
+        { ...last, decision: UNREADABLE },
+        { ...last, decision: 'parked' },
+        { ...last, decision: 'superseded', head: null, answer: undefined },
+        { ...last, head: null },
+        { ...last, answer: undefined },
+      ].map(entry => ({ ...prior, decisions: [...prior.decisions, entry] })),
+    ];
+    for (const [index, record] of cases.entries()) {
+      const number = 50 + index;
+      seed(at, { ...parked, subject: { ...PR, number }, facts: { own_pr: { url: PR_URL.replace(/42$/, String(number)), at: AT }, merge: record } });
+    }
+    const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD } });
+    expect(ok(picked)).toMatchObject({ path: 'idle' });
+    expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(0);
+  }, 60_000);
+
+  for (const failure of ['read', 'invalid URL']) {
+    test(`a failed recovery ${failure} leaves the parked item untouched while other work proceeds`, () => {
+      const at = install();
+      const parked = parkedOwn();
+      const url = failure === 'read' ? PR_URL : 'invalid';
+      seed(at, { ...parked, facts: { ...parked.facts, own_pr: { url, at: AT } } });
+      seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER });
+      const before = stored(at, PR.number);
+      const picked = run(at, 'facts', {}, { pr: { unreadable: [PR.number] } });
+      expect(picked.code).toBe(0);
+      expect(picked.stderr).toContain(url);
+      expect(picked.stderr.match(/cannot reconsider/g)).toHaveLength(1);
+      expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'sweep', items: [{ item: OTHER }], settled: [] });
+      expect(stored(at, PR.number)).toEqual(before);
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(failure === 'read' ? 2 : 1);
+    }, 60_000);
+  }
+
+  test('recovery preserves pinned approval and limits claims in configured order', () => {
+    const at = install();
+    seed(at, parkedOwn());
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER, created_at: LATER });
+    const sameHead = parkedOwn();
+    seed(at, {
+      ...sameHead,
+      created_at: '2026-10-15T00:00:00.000Z',
+      subject: { ...PR, number: 1 },
+      facts: {
+        own_pr: { url: PR_URL.replace(/42$/, '1'), at: AT },
+        merge: { ...sameHead.facts.merge, decisions: [{ ...sameHead.facts.merge.decisions[0], head: OLD }] },
+      },
+    });
+    const picked = run(at, 'facts', { INPUTS_LIMIT: '1', INPUTS_ORDER: '["created asc"]' }, { pr: { headRefOid: OLD } });
+    expect(ok(picked)).toMatchObject({ items: [{ item: PR, record: { approval: { head: HEAD, at: AT } }, facts: { head_revision: OLD } }] });
+    expect(stored(at, OTHER.number).value?.claim).toBeNull();
+    expect(stored(at, 1).value?.claim).toBeNull();
+    expect(stored(at, PR.number).value?.claim?.run_id).toBe('run-1');
+    expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(2);
+  }, 60_000);
+
+  for (const status of ['running', 'unknown', 'failed']) {
+    test(`recovery respects a ${status} claim owner`, () => {
+      const at = install();
+      seed(at, { ...parkedOwn(), claim: { run_id: 'owner', at: AT, requests: [] } });
+      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify(status === 'unknown' ? {} : { owner: status }) }, { pr: { headRefOid: OLD } });
+      expect(picked.code).toBe(0);
+      if (status === 'unknown') expect(picked.stderr).toContain('the engine reports no status');
+      else expect(picked.stderr).toBe('');
+      expect(JSON.parse(picked.stdout)).toMatchObject({ path: status === 'failed' ? 'sweep' : 'idle' });
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'failed' ? 1 : 0);
+      expect(stored(at, PR.number).value?.claim?.run_id).toBe(status === 'failed' ? 'run-1' : 'owner');
+    }, 60_000);
+  }
+
+  for (const concurrent of ['edit', 'answered', 'merged', 'superseded', 'claimed', 'build', 'pr']) {
+    test(`recovery rechecks a concurrent ${concurrent} before retrying a conditional claim`, () => {
+      const at = install();
+      const parked = parkedOwn();
+      seed(at, parked);
+      const prior = parked.facts.merge;
+      const last = prior.decisions[0];
+      const changed: WorkItem = {
+        ...parked,
+        trust: 'maintainer',
+        ...(concurrent === 'claimed' ? { claim: { run_id: 'other-owner', at: AT, requests: [] } } : {}),
+        facts: { ...parked.facts,
+          ...(concurrent === 'pr' ? { own_pr: { url: OTHER_URL, at: AT } } : {}),
+          ...(concurrent === 'build' ? { build: { ...BUILT, status: 'next' as const } } : {}),
+          merge: { ...prior,
+            status: concurrent === 'merged' ? 'merged' : 'parked',
+            decisions: [...prior.decisions, ...(concurrent === 'answered' ? [{ ...last, head: OLD }] : concurrent === 'superseded' ? [{ ...last, decision: 'superseded', head: null, answer: undefined }] : [])],
+          },
+        },
+      };
+      const preload = `
+const beforeClaim = Bun.spawnSync.bind(Bun);
+let raced = false;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (!raced && state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/42') {
+    raced = true;
+    const result = beforeClaim(argv, { ...settings, stdin: Buffer.from(${JSON.stringify(JSON.stringify(changed))}) });
+    if (result.exitCode !== 0) throw new Error('concurrent write failed: ' + result.stderr.toString());
+  }
+  return beforeClaim(argv, settings);
+} });`;
+      const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD }, preload });
+      const recovers = concurrent === 'edit' || concurrent === 'pr';
+      const output = ok(picked);
+      expect(output).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
+      if (concurrent === 'pr') expect(output).toMatchObject({ items: [{ pr: OTHER_PR, facts: { pr: OTHER_PR } }] });
+      const after = stored(at, PR.number).value!;
+      expect(after.trust).toBe('maintainer');
+      expect(after.facts).toEqual(changed.facts);
+      expect(after.claim?.run_id ?? null).toBe(recovers ? 'run-1' : concurrent === 'claimed' ? 'other-owner' : null);
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(concurrent === 'pr' ? 2 : 1);
+    }, 60_000);
+  }
 
   test('a failed own-PR listing is noted and the sweep still takes the existing work', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');

@@ -5,7 +5,8 @@
  * never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
- * sweep wrote; `park` stops working it until the build queue readies it again. A
+ * sweep wrote; `park` stops working it until renewed build readiness or, for an
+ * answered own-PR park, a different head observed by a later sweep. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
  * them as the contract; an enrolled own pull request has no issue body, so its ruling
@@ -24,7 +25,7 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { launchDetached } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
+import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -90,7 +91,7 @@ function main(): void {
   const entry: MergeDecisionEntry = {
     at,
     run_id: runId,
-    decision: `answered: ${choice.effect}`,
+    decision: answeredMergeDecision(choice.effect),
     reason: choice.label,
     links: asked.attention.links,
     answer: { choice: choice.id, text: words, at },

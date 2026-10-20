@@ -272,12 +272,10 @@ new pack prompt that writes or judges code follows the same rule.
 A project's policy for a decision the pack makes, such as what triage accepts, is
 one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
 a default for each policy document a prompt names, in
-[`.shared/policy/`](.shared/policy). A project's own file replaces its default
-whole, except `merge.md`, which layers: the merge queue reads the default and then the
-project's file, whose lines add to it and win where they conflict. With no project
-file, the default applies. To change one, copy the default
-to `.archon/sdlc/policy/` and reword it; for `merge.md`, write only the lines to add or
-override. A policy document may be only a pointer to
+[`.shared/policy/`](.shared/policy). A node reads the default first and then
+the project's own file, whose lines add to the default and win where the two conflict;
+with no project file, the default applies. To change one, write only the lines to add
+or override in `.archon/sdlc/policy/<topic>.md`. A policy document may be only a pointer to
 documents the project already has, and the agent reads what it points to. A prompt
 names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
@@ -295,10 +293,9 @@ captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
 from its own location and the node binds that directory into the prompt with `with:`. The script hands over
-the directory only; the agent chooses between the project's file and the default,
-and no script opens either. The default is a file rather than text in the prompt
-because a prompt carrying the default would hold it even after a project replaced
-it.
+the directory only; the agent reads the default and the project's file, and no
+script opens either. The default is a file rather than text in the prompt, so a node
+whose decision names no policy carries none of it.
 
 ## A stage pauses where nothing takes it forward
 
@@ -476,7 +473,7 @@ The predicate only saves runs; intake ignores any other label. A binding install
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
-which a project replaces with its own `.archon/sdlc/policy/build.md`.
+which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order (the `order`
   input). An item waits for the build queue when its work item's stage is a READY
@@ -613,12 +610,15 @@ then the project's file, whose lines win where the two conflict.
   build item's rounds come to name a pull request that already has an own-PR item, the
   run settles the own-PR item as superseded before claiming, recording the build
   item's number, so the sweep never sees it. A claim whose run ended is released
-  first; one a live run still holds waits for that run to end. No build round owns an own-PR pull
-  request, so where another would go back to the build queue (no verdict, a stale one,
-  a conflict, a holding thread, red CI the change caused) the sweep asks instead,
-  naming what is wrong and the command a maintainer can launch, and its question
-  offers no `return`. The record never hands one to the build queue.
-  The queue never starts that run itself.
+  first; one a live run still holds waits for that run to end. No build round owns an
+  own-PR pull request, so where another would go back to the build queue (no verdict,
+  a stale one, a conflict, a holding thread, red CI the change caused) the sweep asks
+  instead, naming what is wrong and the command a maintainer can launch, and its
+  question offers no `return`. The record never hands one to the build queue.
+  The queue never starts that run itself. An own-PR item answered `park` or `other`
+  waits again only when its current head differs from its latest merge decision's
+  head. At the same head it stays parked. Merged own-PR items and other kinds of
+  settlement, including unreadable and superseded parks, do not recover this way.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -626,7 +626,10 @@ then the project's file, whose lines win where the two conflict.
   else can post a verdict. A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
-  read resets that sequence even if later work fails.
+  read resets that sequence even if later work fails. An unreadable own-PR park stays
+  parked; it is not an answered park. To reconsider an answered own-PR park, facts
+  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
+  read leaves that unclaimed item unchanged and reports the error.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default
@@ -685,14 +688,19 @@ then the project's file, whose lines win where the two conflict.
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. Every pull-request item also offers `other`, which returns the pull request to
-  the build queue with the answer's text as the ruling. A red default branch is only
+  links. Every pull-request item also offers `other`; for a build item, it returns
+  the pull request to the build queue with the answer's text as the ruling. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue, whose next round starts at once; `park` stops working it until the build queue readies it
-  again. Any other ask waits for a later sweep, which decides it again.
+  again. For an own PR, both `park` and `other` stop queue work until a later sweep
+  observes a different head from the one asked about. The `other` answer stays on
+  the work item as its ruling; it writes no issue body and starts no build round.
+  New CI or review results at the same head do not unpark it. Approval remains pinned
+  to its approved head, subject to the existing conflict-only carry rule. Any other
+  ask waits for a later sweep, which decides it again.
 
 The pack installs no binding. A schedule sweeps the queue. A run never changes its
 checkout, and the claim keeps two runs off the same item:

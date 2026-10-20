@@ -17,7 +17,8 @@ export async function projectCommand(args: string[], json?: boolean): Promise<nu
 
 /**
  * `archon project list`: every registered project, install-wide. `key` is the
- * value `--project` and `archon state --project` accept.
+ * value `workflow attention --project` and `archon state --project` accept.
+ * `workflow run --project` accepts ID or NAME.
  */
 export async function projectListCommand(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebases'>,

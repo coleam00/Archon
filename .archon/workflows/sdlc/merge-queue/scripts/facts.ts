@@ -3,7 +3,8 @@
  *
  * Enrolls listed maintainers' own open pull requests that opted in (`maintainers.ts`), then
  * live claims, in intake's order, every item the build queue finished, up to `limit`,
- * and reads each one's pull request in one snapshot: its head, the trusted review
+ * including answered own-PR parks whose head changed, and reads each pull request
+ * in one snapshot: its head, the trusted review
  * verdict, CI and review threads at that head, and whether it merges cleanly. An item
  * whose pull request is already merged or closed, or that names none, is settled without
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
@@ -16,7 +17,9 @@ import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
+  answeredOwnPrParkHead,
   itemPr,
+  mergeWaits,
   MERGE_METHODS,
   MERGE_PICKUP,
   type MergeMethod,
@@ -32,7 +35,7 @@ import {
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr, supersedeOwnPrs } from '../../.shared/own-prs.ts';
-import { claimNext, parseOrder, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, parseOrder, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   /** The issue whose work item the queue claimed. */
@@ -62,15 +65,58 @@ function quoted(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: string): WorkItem[] {
+function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: string, pickup: Pickup): WorkItem[] {
   const claimed: WorkItem[] = [];
   const at = new Date().toISOString();
   while (claimed.length < limit) {
-    const doc = claimNext(order, at, runId, MERGE_PICKUP);
+    const doc = claimNext(order, at, runId, pickup);
     if (doc === null) break;
     claimed.push(doc);
   }
   return claimed;
+}
+
+type Snapshot = { readonly ok: true; readonly facts: PrFacts } | { readonly ok: false; readonly error: unknown };
+
+function snapshotReader(maintainers: ReadonlySet<string>): (pr: QualifiedPr) => PrFacts {
+  const snapshots = new Map<string, Snapshot>();
+  return pr => {
+    const key = JSON.stringify([pr.repo.host, pr.repo.path, pr.number]);
+    let result = snapshots.get(key);
+    if (result === undefined) {
+      try {
+        result = { ok: true, facts: readPr(pr, maintainers) };
+      } catch (error) {
+        result = { ok: false, error };
+      }
+      snapshots.set(key, result);
+    }
+    if (!result.ok) throw result.error;
+    return result.facts;
+  };
+}
+
+function recoveryPickup(snapshot: (pr: QualifiedPr) => PrFacts): Pickup {
+  const reported = new Set<string>();
+  return {
+    ...MERGE_PICKUP,
+    waits: doc => {
+      if (mergeWaits(doc)) return true;
+      if (answeredOwnPrParkHead(doc) === null) return false;
+      const url = doc.facts.own_pr?.url ?? '';
+      try {
+        const pr = itemPr(doc);
+        if (pr === null) throw new Error('the work item names no pull request');
+        return mergeWaits(doc, snapshot(pr).head_revision);
+      } catch (error) {
+        if (!reported.has(url)) {
+          note(`merge-queue facts: cannot reconsider ${url}: ${error instanceof Error ? error.message : String(error)}`);
+          reported.add(url);
+        }
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -120,9 +166,11 @@ function main(): void {
   const maintainers = list.logins;
   supersedeOwnPrs(new Date().toISOString(), runId);
   enrollOrNote(repo, list.ownPrs);
+  const snapshot = snapshotReader(maintainers);
+  const pickup = recoveryPickup(snapshot);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
-  for (const doc of claimAll(limit, order, runId)) {
+  for (const doc of claimAll(limit, order, runId, pickup)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
     try {
@@ -131,7 +179,7 @@ function main(): void {
         settled.push({ item: doc.subject, pr: null, status: 'parked', decision: 'parked', reason: 'the build record names no pull request' });
         continue;
       }
-      facts = readPr(pr, maintainers);
+      facts = snapshot(pr);
     } catch (error) {
       settled.push(unreadableItem(doc, pr, error));
       continue;

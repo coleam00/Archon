@@ -17,6 +17,7 @@
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
 import { attachmentCommands } from './attachment-commands';
+import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 
 interface FlagOwner {
   command: string;
@@ -315,6 +316,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'abandon',
     spec: 'workflow abandon <run-id>',
     description: 'Mark a run cancelled, stopping a live owner first',
+  },
+  {
+    command: 'workflow',
+    subcommand: 'end-turn',
+    spec: 'workflow end-turn <run-id>',
+    description: 'Record a request to end stalled tools or reported work',
   },
   {
     command: 'workflow',
@@ -754,6 +761,11 @@ const orderedFlags: FlagHelp[] = [
     spec: '--cwd <path>',
     description: 'Override working directory (default: current directory)',
     owners: [],
+  },
+  {
+    spec: '--project <id|name>',
+    description: `Bind to a registered repository (see project list). Source/config come from --cwd;\nisolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.\nCannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.`,
+    owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--branch, -b <name>',

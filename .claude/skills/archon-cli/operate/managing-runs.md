@@ -82,8 +82,10 @@ unclear, risky, or outside what they have told you.
 2. Choose one of the declared choices. When none fits and the item offers `other`,
    choose it and say what to do instead.
 3. Give a reason in the text. Workflows record the answer's text with the decision,
-   and some write it down as a ruling: the SDLC queues add it to the issue body as a
-   dated "Current scope" section that later rounds work from. A bare choice teaches
+   and some write it down as a ruling: the SDLC build queue and merge items owned by
+   a build add it to the issue body as a dated "Current scope" section that later
+   rounds work from. Enrolled own PRs keep the answer on the work item's merge
+   decision entry and write no issue section. A bare choice teaches
    the next round nothing.
 4. Answer detached, so the continuation does not run in your shell:
 

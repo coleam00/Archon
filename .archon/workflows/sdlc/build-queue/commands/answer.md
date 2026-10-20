@@ -10,7 +10,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 - The earlier rounds, oldest first, each with its own `artifacts` directory: `$INPUTS.rounds`.
 - The item's work item: `$INPUTS.record`. Under `facts.build` is every decision the queue made on it, with any maintainer's answer. Null means no queue has recorded it.
 
-Read the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. Read the project's steering documents, direction, `engineering.md` or `architecture.md`, only when a stop's question turns on what they rule.
+Read the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. Read the project's steering documents, direction, `engineering.md` or `architecture.md`, only when a stop's question turns on what they rule.
 
 ## Decide
 

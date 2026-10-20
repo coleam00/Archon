@@ -33,6 +33,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
     return {
       suspend: mock(async () => undefined),
+      prepareSuspend: mock(async () => mock(async () => undefined)),
       finalize: mock(async () => ({ requiresApproval: false as boolean })),
       applyChanges: mock(async () => ({
         filesApplied: 0,
