@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
@@ -52,15 +53,21 @@ describe('workflow run reads', () => {
   });
 
   describe('getWorkflowRunStatus', () => {
-    test('returns status for existing workflow run', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
+    test.each(workflowRunStatusSchema.options)('returns persisted %s status', async status => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status }]));
 
-      const result = await getWorkflowRunStatus('workflow-run-123');
-
-      expect(result).toBe('running');
+      expect(await getWorkflowRunStatus('workflow-run-123')).toBe(status);
       expect(mockQuery).toHaveBeenCalledWith(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
         ['workflow-run-123']
+      );
+    });
+
+    test.each(['unsupported-status', ''])('rejects unsupported status %j', async status => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status }]));
+
+      await expect(getWorkflowRunStatus('workflow-run-123')).rejects.toThrow(
+        `Unsupported workflow run status for run workflow-run-123: ${JSON.stringify(status)}`
       );
     });
 

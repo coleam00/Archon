@@ -7,6 +7,7 @@ import {
   CONFORMANCE_CONVERSATION_ID,
   CONFORMANCE_CODEBASE_ID,
 } from '@archon/workflows/store-conformance';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
@@ -42,6 +43,39 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('validates persisted workflow statuses without changing lifecycle state', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store, db } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
+      expect(await store.getWorkflowRunStatus(crypto.randomUUID())).toBeNull();
+      for (const status of workflowRunStatusSchema.options) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+      }
+      const events = await store.listWorkflowEvents(run.id);
+      for (const status of ['unsupported-status', '']) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        await expect(store.getWorkflowRunStatus(run.id)).rejects.toThrow(
+          `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
+        );
+        expect(
+          (await db.query('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
+            .rows
+        ).toEqual([{ status }]);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+        expect(harness.terminalReports()).toEqual([]);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
   test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
     const harness = await makeHarness();
     try {

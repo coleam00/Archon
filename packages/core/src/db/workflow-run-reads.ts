@@ -2,8 +2,9 @@
  * Point reads of workflow runs: lookups by id, conversation, path, parent and
  * worker platform id. Re-exported from the `./workflows` entry.
  */
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
+  workflowRunStatusSchema,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -78,13 +79,21 @@ export async function findWorkflowRunsByIdPrefix(
   }
 }
 
-export async function getWorkflowRunStatus(id: string): Promise<string | null> {
+export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null> {
   try {
-    const result = await pool.query<{ status: string }>(
+    const result = await pool.query<{ status: unknown }>(
       'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
-    return result.rows[0]?.status ?? null;
+    const row = result.rows[0];
+    if (!row) return null;
+    const status = workflowRunStatusSchema.safeParse(row.status);
+    if (!status.success) {
+      throw new Error(
+        `Unsupported workflow run status for run ${id}: ${JSON.stringify(row.status)}`
+      );
+    }
+    return status.data;
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_status_failed');
