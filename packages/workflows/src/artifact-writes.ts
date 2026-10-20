@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -42,6 +42,27 @@ function containedParent(path: string): ContainedParent | undefined {
   return { root, parts: rel.split(sep).filter(Boolean) };
 }
 
+function errorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException).code;
+}
+
+function makeDirectory(path: string): void {
+  try {
+    mkdirSync(path);
+  } catch (error) {
+    if (errorCode(error) !== 'EEXIST') throw error;
+  }
+}
+
+function lstatIfPresent(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 /**
  * Walk `path`'s parents under the scoped root, refusing any that is not a real
  * directory. Creates missing ones when `create`; otherwise returns false at the first
@@ -51,20 +72,9 @@ function checkParents({ root, parts }: ContainedParent, create: boolean): boolea
   let current = root;
   for (const part of parts) {
     current = join(current, part);
-    if (create) {
-      try {
-        mkdirSync(current);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      }
-    }
-    let entry;
-    try {
-      entry = lstatSync(current);
-    } catch (error) {
-      if (!create && (error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw error;
-    }
+    if (create) makeDirectory(current);
+    const entry = lstatIfPresent(current);
+    if (entry === undefined) return false;
     if (!entry.isDirectory()) {
       throw new ArtifactWriteError(`Refusing artifact write: '${current}' is not a real directory`);
     }
