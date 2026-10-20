@@ -76,6 +76,114 @@ describe('GitHub inbound normalization', () => {
     });
   });
 
+  describe('occurrence timestamps', () => {
+    const updated = '2026-09-22T10:00:00Z';
+    const closed = '2026-09-22T11:00:00Z';
+    const merged = '2026-09-22T12:00:00Z';
+
+    test.each([updated, null, undefined])('issues use updated_at %j', updatedAt => {
+      expect(
+        normalizeGitHubWebhook(
+          {
+            action: 'edited',
+            repository: { full_name: 'org/repo' },
+            issue: { number: 3, state: 'open', updated_at: updatedAt },
+          },
+          { ...context, eventName: 'issues' }
+        )
+      ).toMatchObject({ status: 'normalized', envelope: { occurredAt: updatedAt ?? null } });
+    });
+
+    test.each([
+      [merged, closed, updated, merged],
+      [null, closed, updated, closed],
+      [undefined, undefined, updated, updated],
+      [null, null, null, null],
+      [undefined, undefined, undefined, null],
+    ])(
+      'pull requests prefer merged_at %j, closed_at %j, then updated_at %j',
+      (mergedAt, closedAt, updatedAt, expected) => {
+        expect(
+          normalizeGitHubWebhook(
+            {
+              action: 'closed',
+              repository: { full_name: 'org/repo' },
+              pull_request: {
+                number: 3,
+                state: 'closed',
+                merged_at: mergedAt,
+                closed_at: closedAt,
+                updated_at: updatedAt,
+              },
+            },
+            context
+          )
+        ).toMatchObject({ status: 'normalized', envelope: { occurredAt: expected } });
+      }
+    );
+
+    test.each([updated, null, undefined])('comments use created_at %j', createdAt => {
+      expect(
+        normalizeGitHubWebhook(
+          {
+            action: 'created',
+            repository: { full_name: 'org/repo' },
+            issue: { number: 3 },
+            comment: { id: 77, user: null, created_at: createdAt },
+          },
+          { ...context, eventName: 'issue_comment' }
+        )
+      ).toMatchObject({ status: 'normalized', envelope: { occurredAt: createdAt ?? null } });
+    });
+
+    test.each([
+      [closed, updated, closed],
+      [null, updated, updated],
+      [null, null, null],
+      [undefined, undefined, null],
+    ])('checks prefer completed_at %j over started_at %j', (completedAt, startedAt, expected) => {
+      expect(
+        normalizeGitHubWebhook(
+          {
+            action: 'completed',
+            repository: { full_name: 'org/repo' },
+            check_run: {
+              id: 1,
+              name: 'build',
+              head_sha: 'revision',
+              status: 'completed',
+              pull_requests: [],
+              completed_at: completedAt,
+              started_at: startedAt,
+            },
+          },
+          { ...context, eventName: 'check_run' }
+        )
+      ).toMatchObject({ status: 'normalized', envelope: { occurredAt: expected } });
+    });
+
+    test.each([
+      [closed, updated, closed],
+      [null, updated, updated],
+      [null, null, null],
+      [undefined, undefined, null],
+    ])('statuses prefer updated_at %j over created_at %j', (updatedAt, createdAt, expected) => {
+      expect(
+        normalizeGitHubWebhook(
+          {
+            id: 1,
+            sha: 'revision',
+            state: 'success',
+            repository: { full_name: 'org/repo' },
+            updated_at: updatedAt,
+            created_at: createdAt,
+          },
+          { ...context, eventName: 'status' }
+        )
+      ).toMatchObject({ status: 'normalized', envelope: { occurredAt: expected } });
+    });
+  });
+
   test('a label event names who changed the label', () => {
     for (const [eventName, item] of [
       ['issues', { issue: { number: 3, state: 'open' } }],
