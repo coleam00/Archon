@@ -1,22 +1,19 @@
 // @archon-test-isolated
 import {
+  containerBackend,
   cwdPath,
-  makeDeps,
-  makePlatform,
-  makeStore,
-  makeWorkflow,
   mockExecuteDagWorkflow,
   resetExecutorMocks,
+  startWorkflow,
 } from './executor/test-utils';
 import * as checkout from './checkout-observation';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'path';
 import { ArtifactWriteError } from './artifact-writes';
 import { writeNodeArtifact } from './artifacts-index';
-import { executeWorkflow } from './executor';
 import { CHECKOUT_MANIFEST_VERSION } from './schemas/checkout-observation';
 
 beforeEach(resetExecutorMocks);
@@ -46,28 +43,17 @@ describe('artifact writes under executor isolation', () => {
         await write;
         return undefined;
       });
-      const backend = {
-        suspend: mock(async () => {}),
-        finalize: mock(async () => ({ requiresApproval: false })),
-        applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
-        discardChanges: mock(async () => {}),
-      };
       try {
-        await executeWorkflow(
-          makeDeps(makeStore()),
-          makePlatform(),
-          'conv-1',
-          '/tmp/ops',
-          makeWorkflow(),
-          'msg',
-          { conversationId: 'db-conv-1' },
-          isolation === 'container'
-            ? {
-                execContext: { kind: 'container', containerId: 'cid' },
-                container: { envId: 'env-x', writeBack: 'approve', backend },
-              }
-            : {}
-        );
+        await startWorkflow({
+          cwd: '/tmp/ops',
+          options:
+            isolation === 'container'
+              ? {
+                  execContext: { kind: 'container', containerId: 'cid' },
+                  container: { envId: 'env-x', writeBack: 'approve', backend: containerBackend() },
+                }
+              : {},
+        });
         if (isolation === 'container') {
           expect(await write).toBeInstanceOf(ArtifactWriteError);
           expect(await readdir(outside)).toEqual([]);
@@ -109,26 +95,14 @@ describe('artifact writes under executor isolation', () => {
         untracked: 0,
       },
     });
-    const backend = {
-      suspend: mock(async () => {}),
-      finalize: mock(async () => ({ requiresApproval: false })),
-      applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
-      discardChanges: mock(async () => {}),
-    };
     try {
-      const result = await executeWorkflow(
-        makeDeps(makeStore()),
-        makePlatform(),
-        'conv-1',
+      const result = await startWorkflow({
         cwd,
-        makeWorkflow(),
-        'msg',
-        { conversationId: 'db-conv-1' },
-        {
+        options: {
           execContext: { kind: 'container', containerId: 'cid' },
-          container: { envId: 'env-x', writeBack: 'approve', backend },
-        }
-      );
+          container: { envId: 'env-x', writeBack: 'approve', backend: containerBackend() },
+        },
+      });
       expect(result.success).toBe(false);
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
       expect(await readdir(outside)).toEqual(['auth.json']);

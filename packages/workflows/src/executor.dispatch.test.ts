@@ -348,7 +348,8 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
   // guess as the run's original attribution.
   it('a continuation whose record holds no source keeps it absent instead of adopting a live one (#2454)', async () => {
     await inWorktree({ ...resumeOf(recorded('release-2026')), source: 'bundled' });
-    expect(mockCaptureWorkflowInvoked.mock.calls.at(-1)?.[0].workflowSource).toBeUndefined();
+    expect(mockCaptureWorkflowInvoked).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowInvoked.mock.calls[0]?.[0].workflowSource).toBeUndefined();
   });
 
   // A run started before the record existed re-resolves, but silently doing so is what let

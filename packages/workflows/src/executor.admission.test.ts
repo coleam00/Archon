@@ -502,7 +502,10 @@ describe('run row stamps', () => {
         }),
       },
     });
-    expect(updateRun.mock.calls[0]?.[1]).not.toHaveProperty('working_path');
+    expect(updateRun).toHaveBeenCalled();
+    for (const [, update] of updateRun.mock.calls) {
+      expect(update).not.toHaveProperty('working_path');
+    }
   });
 
   // Without this stamp a resume of a detached container run (#2872) would silently restart

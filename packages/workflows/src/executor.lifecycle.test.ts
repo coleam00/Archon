@@ -1,7 +1,6 @@
 // @archon-test-isolated
 import {
   dagCall,
-  logged,
   makeDeps,
   makeRun,
   makeStore,
@@ -375,31 +374,36 @@ describe('finally backstop', () => {
           throw readError;
         }),
       });
-      const result = await startWorkflow({ store });
-      expect(result).toMatchObject({
-        success: !executionFailed,
-        workflowRunId: 'run-123',
-        ...(executionFailed ? { error: executionError.message } : {}),
-      });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        {
+      const originalWarn = mockLogger.warn;
+      const warn = mock((_data?: { err: unknown }, _event?: string) => undefined);
+      mockLogger.warn = warn;
+      try {
+        const result = await startWorkflow({ store });
+        expect(result).toMatchObject({
+          success: !executionFailed,
           workflowRunId: 'run-123',
-          operation: 'getWorkflowRunStatus',
-          err: readError,
-          recovery: expect.stringContaining('archon workflow get <run-id>'),
-        },
-        'executor.backstop_status_read_failed'
-      );
-      expect((logged('executor.backstop_status_read_failed')[0] as { err: unknown }).err).toBe(
-        readError
-      );
-      expect(store.failWorkflowRun).toHaveBeenCalledTimes(executionFailed ? 1 : 0);
-      if (executionFailed) {
-        expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', executionError.message, {
-          exitReason: 'unhandled_error',
+          ...(executionFailed ? { error: executionError.message } : {}),
         });
+        expect(warn).toHaveBeenCalledWith(
+          {
+            workflowRunId: 'run-123',
+            operation: 'getWorkflowRunStatus',
+            err: readError,
+            recovery: expect.stringContaining('archon workflow get <run-id>'),
+          },
+          'executor.backstop_status_read_failed'
+        );
+        expect(warn.mock.calls[0]?.[0]?.err).toBe(readError);
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(executionFailed ? 1 : 0);
+        if (executionFailed) {
+          expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', executionError.message, {
+            exitReason: 'unhandled_error',
+          });
+        }
+        expect(keepAwake.activeCount()).toBe(0);
+      } finally {
+        mockLogger.warn = originalWarn;
       }
-      expect(keepAwake.activeCount()).toBe(0);
     }
   );
 
