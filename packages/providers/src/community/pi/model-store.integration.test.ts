@@ -13,8 +13,8 @@
  * `new ModelRegistry(await ModelRuntime.create(...))` followed by
  * `registry.find(provider, modelId)`.
  *
- * Mock-isolation note: `provider.test.ts` mocks
- * `@earendil-works/pi-coding-agent` at module scope, and Bun's
+ * Mock isolation: `provider-test-fixture.ts` mocks the Pi SDK at module
+ * scope for the provider unit tests, and Bun's
  * `mock.module()` is process-global, irreversible, and matches subpath
  * imports of the mocked package too. This file therefore loads the SDK by
  * filesystem deep path and probes the result; when the mock is in effect
@@ -52,7 +52,7 @@ async function loadRealSdk(): Promise<RealPiSdk> {
   return { ModelRuntime, ModelRegistry };
 }
 
-/** True iff the deep-path load yields the real SDK (vs provider.test.ts's mock). */
+/** True iff the deep-path load yields the real SDK (vs provider-test-fixture.ts's mock). */
 async function probeRealSdkAvailable(): Promise<boolean> {
   // Isolate the probe from the host's real ~/.pi/agent: module load runs
   // before beforeEach, so without this the create() below would read the
@@ -65,8 +65,7 @@ async function probeRealSdkAvailable(): Promise<boolean> {
     if (typeof ModelRuntime.create !== 'function' || typeof ModelRegistry !== 'function') {
       return false;
     }
-    // provider.test.ts's mock factory satisfies both typeof checks above (it
-    // ships `ModelRuntime.create` as a mock fn and `ModelRegistry` as a mock
+    // The shared mock factory satisfies both typeof checks above (it ships `ModelRuntime.create` as a mock fn and `ModelRegistry` as a mock
     // constructor), and its registry `find` fabricates a model for whatever
     // ref is asked — the test would pass vacuously against it. Only a real
     // ModelRuntime instance carries getModel (the mock stubs only

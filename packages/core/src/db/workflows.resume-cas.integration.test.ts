@@ -889,7 +889,9 @@ describe('durable wait continuation races — real SQLite', () => {
       repo: { host: 'github.com', path: 'example/repo' },
       number: 42,
     };
-    await seed('event-candidate', 'paused', "datetime('now')", { wait: waitA });
+    await seed('event-candidate', 'paused', "datetime('now')", {
+      wait: { ...waitA, futureField: true },
+    });
     await seed('other-event-candidate', 'paused', "datetime('now')", {
       wait: { ...waitA, event: 'deploy.complete' },
     });

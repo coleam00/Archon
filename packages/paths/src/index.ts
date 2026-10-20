@@ -141,6 +141,7 @@ export {
   captureApprovalResolved,
   captureCodebaseRegistered,
   captureWorkflowTerminal,
+  WORKFLOW_TERMINAL_EVENT_TYPE,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
   shutdownTelemetry,
