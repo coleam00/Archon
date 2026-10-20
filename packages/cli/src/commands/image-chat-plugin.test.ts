@@ -1,6 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -241,3 +242,46 @@ dockerTest('removal allows the image plugin to be provisioned again', async () =
     IMAGE_SLACK_PLUGIN,
   ]);
 });
+
+dockerTest(
+  'failed receipt publication rolls back the local binary and releases the mutation lock',
+  async () => {
+    const data = await fixture();
+    const selected = receiptPath(data.pluginsDir, IMAGE_SLACK_PLUGIN);
+    const realRename = fs.rename;
+    let refused = false;
+    spyOn(fs, 'rename').mockImplementation(async (source, target) => {
+      if (target === selected) {
+        refused = true;
+        throw new Error('injected publication failure');
+      }
+      return realRename(source, target);
+    });
+    await expect(data.install()).rejects.toThrow('previous install restored');
+    expect(refused).toBe(true);
+    expect(await readReceipts(data.pluginsDir)).toEqual([]);
+    expect(await Bun.file(join(data.pluginsDir, 'archon-chat-slack')).exists()).toBe(false);
+    expect(
+      (await readdir(data.pluginsDir)).filter(
+        path => path === '.mutation-lock' || path.includes('.partial')
+      )
+    ).toEqual([]);
+  }
+);
+
+dockerTest(
+  'an installed image id claiming a different platform cannot be overwritten',
+  async () => {
+    const data = await fixture();
+    const selected = receiptPath(data.pluginsDir, IMAGE_SLACK_PLUGIN);
+    await mkdir(dirname(selected), { recursive: true });
+    await writeFile(
+      selected,
+      JSON.stringify({ ...data.receipt, descriptor: { ...descriptor, id: 'other' } })
+    );
+    const before = await readFile(selected);
+    await expect(data.install()).rejects.toThrow('different kind or platform');
+    expect(await readFile(selected)).toEqual(before);
+    expect(await Bun.file(data.marker).exists()).toBe(false);
+  }
+);
