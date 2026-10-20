@@ -206,7 +206,10 @@ describe('isolationCompleteCommand', () => {
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     mockListActive.mockReset().mockResolvedValue([mockEnv]);
-    mockFindActiveByBranchName.mockReset();
+    mockFindActiveByBranchName.mockReset().mockImplementation(async branch => ({
+      ...mockEnv,
+      branch_name: branch,
+    }));
     mockRemoveEnvironment.mockReset();
     mockWorktreeExists.mockReset().mockResolvedValue(true);
     mockHasUncommittedChanges.mockReset();
