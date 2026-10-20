@@ -598,8 +598,7 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 :::danger[You cannot compare a whole AI output to a literal]
 A `when:` that compares the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
 `output_format`, or of any `loop_group:` node, against a literal is
-**rejected at load time**. The same rule applies to previous-iteration references
-such as `$LOOP_PREV.analyze.output` in a loop body or include gate:
+**rejected at load time**:
 
 ```yaml
 # REJECTED — $analyze is an AI node with no output_format

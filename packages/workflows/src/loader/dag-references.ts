@@ -479,35 +479,23 @@ function wholeOutputComparisonError(
   scope: DagScope
 ): string | null {
   for (const atom of expression.flat()) {
-    const error = wholeOutputAtomComparisonError(nodeId, atom, scope);
-    if (error !== null) return error;
+    if (atom.ref.kind !== 'node' || atom.ref.field !== undefined) continue;
+    const producerId = atom.ref.nodeId;
+    const producer = scope.nodesById.get(producerId) ?? scope.enclosingNodes?.get(producerId);
+    if (!producer || isIncludeDirective(producer)) continue;
+    const kind = freeFormAiProducerKind(producer);
+    if (kind === null) continue;
+    const problem = `Node '${nodeId}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${nodeId}' is skipped.`;
+    if (kind === 'schema-capable') {
+      return `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "$${producerId}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`;
+    }
+    if (kind === 'loop-group') {
+      return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;
+    }
+    // Exhaustive: a new producer kind must state its own reason rather than inherit
+    // whichever branch happened to be last. Silently handing an author the wrong
+    // remedy is the same class of failure this whole check exists to remove.
+    return kind satisfies never;
   }
   return null;
-}
-
-function wholeOutputAtomComparisonError(
-  nodeId: string,
-  atom: WhenAtom,
-  scope: DagScope
-): string | null {
-  if (atom.ref.kind === 'input' || atom.ref.field !== undefined) return null;
-  const producerId = atom.ref.nodeId;
-  const producer =
-    scope.nodesById.get(producerId) ??
-    (atom.ref.kind === 'node' ? scope.enclosingNodes?.get(producerId) : undefined);
-  if (!producer || isIncludeDirective(producer)) return null;
-  const kind = freeFormAiProducerKind(producer);
-  if (kind === null) return null;
-  const problem = `Node '${nodeId}' field 'when' compares the whole output of AI node '${producerId}' to a literal ('${atom.expected}'). That output is free-form prose, so the comparison silently fails and '${nodeId}' is skipped.`;
-  if (kind === 'schema-capable') {
-    const reference = atom.ref.kind === 'loop_prev' ? `$LOOP_PREV.${producerId}` : `$${producerId}`;
-    return `${problem} Declare 'output_format' on '${producerId}' and compare a field (e.g. "${reference}.output.status ${atom.operator} '${atom.expected}'"), or produce the value from a 'bash:'/'script:' node`;
-  }
-  if (kind === 'loop-group') {
-    return `${problem} A 'loop_group:' node's output is the last iteration's raw text — unlike a 'prompt:' node, declaring 'output_format' does not replace it with the JSON document — so ${GATE_ON_A_SHELL_NODE}`;
-  }
-  // Exhaustive: a new producer kind must state its own reason rather than inherit
-  // whichever branch happened to be last. Silently handing an author the wrong
-  // remedy is the same class of failure this whole check exists to remove.
-  return kind satisfies never;
 }
