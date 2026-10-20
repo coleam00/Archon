@@ -29,6 +29,7 @@ import {
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
+import { validateDagStructure } from '../loader/dag-structure';
 import { checkComposedBlockBoundaries } from './trigger-rule';
 import { resolvedBodyNodes } from '../graph-plan';
 import { dryRunWorkflow } from '../dry-run';
@@ -541,7 +542,89 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
-  for (const source of ['inline', 'command', 'loop'] as const) {
+  for (const nestedConsumer of [false, true]) {
+    it(`preserves a cached sibling completion when a disjoint source reuses its ID (nested consumer=${nestedConsumer})`, async () => {
+      mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, session) {
+        yield { type: 'agent_message_chunk', text: 'DONE' };
+        yield {
+          type: 'result',
+          sessionId: session ? 'consumer-session' : 'sibling-session',
+          ...(session ? { resumed: true } : {}),
+        };
+      });
+      const consumer = { id: 'b', prompt: 'consumer', context: { resume: 'a' } };
+      const workflow = buildWf('sibling-sources', [
+        {
+          id: 'first',
+          loop_group: {
+            max_iterations: 1,
+            until: 'DONE',
+            nodes: [
+              { id: 'a', bash: 'echo effect >> effects; echo DONE' },
+              { id: 'blocker', bash: 'test -f allow-completion && echo DONE', depends_on: ['a'] },
+            ],
+          },
+        },
+        {
+          id: 'second',
+          depends_on: ['first'],
+          loop_group: {
+            max_iterations: 1,
+            until: 'DONE',
+            nodes: [
+              { id: 'a', prompt: 'source' },
+              nestedConsumer
+                ? {
+                    id: 'inner',
+                    depends_on: ['a'],
+                    loop_group: { max_iterations: 1, until: 'DONE', nodes: [consumer] },
+                  }
+                : { ...consumer, depends_on: ['a'] },
+            ],
+          },
+        },
+      ]);
+      expect(validateDagStructure(workflow.nodes)).toBeNull();
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const runId = `sibling-source-${nestedConsumer}`;
+      const run = (priorCompletedNodes?: Map<string, PersistedNodeOutput>) =>
+        executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd: testDir,
+            workflow,
+            workflowRun: makeWorkflowRun(runId),
+            priorCompletedNodes,
+          })
+        );
+      await run();
+      expect(
+        eventList(deps).filter(
+          e => e.step_name === 'first.blocker' && e.event_type === 'node_failed'
+        )
+      ).toHaveLength(1);
+      expect(await readFile(join(testDir, 'effects'), 'utf8')).toBe('effect\n');
+      const snapshot = await foldDagResumeSnapshot(eventList(deps), runId);
+      restorePersistedHistory(store, deps, runId);
+      await writeFile(join(testDir, 'allow-completion'), '');
+      const before = eventList(deps).length;
+      await run(snapshot.completedNodeOutputs);
+      const resumed = eventList(deps).slice(before);
+      expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      expect(await readFile(join(testDir, 'effects'), 'utf8')).toBe('effect\n');
+      expect(
+        resumed.filter(
+          e => e.step_name === 'first.a' && e.event_type === 'node_skipped_prior_success'
+        )
+      ).toHaveLength(1);
+      expect(
+        resumed.filter(e => e.step_name === 'second' && e.event_type === 'node_completed')
+      ).toHaveLength(1);
+    });
+  }
+
+  for (const source of ['inline', 'command', 'loop', 'nested-consumer'] as const) {
     it(`reruns a cached same-body ${source} session source after failure`, async () => {
       await mkdir(join(testDir, '.archon', 'commands'), { recursive: true });
       await writeFile(join(testDir, '.archon', 'commands', 'source.md'), 'source');
@@ -563,7 +646,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
             loop_group: {
               max_iterations: 1,
               fresh_context: true,
-              until_bash: 'test $b.output = DONE',
+              until_bash: source === 'nested-consumer' ? 'true' : 'test $b.output = DONE',
               nodes: [
                 {
                   id: 'a',
@@ -574,12 +657,32 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
                       : { prompt: 'source' }),
                 },
                 { id: 'blocker', bash: 'test -f allow-completion', depends_on: ['a'] },
-                { id: 'b', prompt: 'consumer', context: { resume: 'a' }, depends_on: ['blocker'] },
+                ...(source === 'nested-consumer'
+                  ? [
+                      {
+                        id: 'inner',
+                        depends_on: ['blocker'],
+                        loop_group: {
+                          max_iterations: 1,
+                          until: 'DONE',
+                          nodes: [{ id: 'b', prompt: 'consumer', context: { resume: 'a' } }],
+                        },
+                      },
+                    ]
+                  : [
+                      {
+                        id: 'b',
+                        prompt: 'consumer',
+                        context: { resume: 'a' },
+                        depends_on: ['blocker'],
+                      },
+                    ]),
               ],
             },
           }),
         ],
       };
+      expect(validateDagStructure(workflow.nodes)).toBeNull();
       const run = (priorCompletedNodes?: Map<string, PersistedNodeOutput>) =>
         executeDagWorkflow(
           dagOptions({
@@ -617,7 +720,11 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
       expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
       expect(sourceRuns).toBe(2);
       expect(
-        resumed.filter(e => e.step_name === 'group.b' && e.event_type === 'node_completed')
+        resumed.filter(
+          e =>
+            e.step_name === (source === 'nested-consumer' ? 'group.inner.b' : 'group.b') &&
+            e.event_type === 'node_completed'
+        )
       ).toHaveLength(1);
       const consumers = mockSendQueryDag.mock.calls.filter(c => c[0] === 'consumer');
       expect(consumers).toHaveLength(1);

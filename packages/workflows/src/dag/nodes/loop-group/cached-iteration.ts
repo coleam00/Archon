@@ -3,6 +3,7 @@ import { foldDagResumeSnapshot, type DagResumeEvent } from '../../../dag-resume-
 import { nodeInvocationKey, readNodeRecordEvent } from '../../../node-record-reader';
 import { definedOutputPaths, type NodeOutput } from '../../../schemas';
 import { getStaleCachedDependencies } from '../../stale-dependencies';
+import { collectNamedResumeSources } from '../../resume-state';
 import { recordNodeState } from '../../../node-event-write';
 import { describeExecutionNode } from '../../../node-execution';
 import { NODE_STATE_EVENT_TYPES, type PersistedNodeOutput } from '../../../store';
@@ -84,7 +85,7 @@ export async function readCachedLoopIteration(
   const completedNodes = localCompletions(current.completedNodeOutputs);
   // Failure recovery has no iteration-scoped provider handles. Named sources in
   // this body must dispatch again so remaining consumers can fork a live session.
-  for (const id of ctx.namedResumeSourceIds ?? []) completedNodes.delete(id);
+  for (const id of collectNamedResumeSources(run.bodyNodes)) completedNodes.delete(id);
   return {
     iteration,
     completedNodes,
