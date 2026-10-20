@@ -2544,11 +2544,14 @@ describe('executeDagWorkflow -- cost tracking', () => {
       )
     ).toBe(true);
 
-    // Transcript costs are exact-only, including the loop's roll-up row.
     const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
     const terminal = rows.find(row => row.type === 'node_complete' && row.step === 'my-loop');
     expect(terminal).toBeDefined();
-    expect(terminal).not.toHaveProperty('cost_usd');
+    expect(terminal?.cost_usd).toBe(0.004);
+    expect(terminal?.execution).toMatchObject({
+      spend: { costUsd: { source: 'provider', value: 0.004, partial: true } },
+    });
+    expect(rows.find(row => row.type === 'workflow_complete')).not.toHaveProperty('cost_usd');
     const iterationRows = rows.filter(
       row =>
         row.type === 'node_complete' &&
