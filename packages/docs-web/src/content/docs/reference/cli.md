@@ -721,7 +721,11 @@ JSON; it does not masquerade as a missing historical record.
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
 was clean, fully on a remote, and its branch was absent from every push destination of
-the configured remote. The engine removes it after the completion write, keeping the branch. The record is written before the removal, so a
+the configured remote. If either `remote.<name>.uploadpack` or
+`remote.<name>.receivepack` is configured for that remote, the engine cannot verify
+receiving endpoints: it retains the checkout with `check_failed` before inspecting
+destinations. Without these overrides, it checks every push destination.
+The engine removes a releasable checkout after the completion write, keeping the branch. The record is written before the removal, so a
 removal that is refused because work appeared in the meantime, or that fails, leaves the
 checkout and is logged. Otherwise it is
 `{ "disposition": "retained", "reason": ... }` with an optional `detail`:
@@ -1557,8 +1561,12 @@ the branch Archon created for it holds such a commit.
 
 A completed run removes the worktree it created when it completes, if the checkout is
 clean, every commit on its HEAD and branch is on a remote, and none of the configured
-remote's push destinations advertises the branch. The publication check reads every
-push destination, which can differ from the fetch URL. The removal keeps the branch, so
+remote's push destinations advertises the branch. If either
+`remote.<name>.uploadpack` or `remote.<name>.receivepack` is configured for that
+remote, receiving endpoints cannot be verified: the checkout stays with
+`check_failed` before destination inspection. Without these overrides, the
+publication check reads every push destination, which can differ from the fetch URL.
+The removal keeps the branch, so
 the run can still be adopted. A branch advertised by a push destination waits for
 `--merged`, which removes its local branch. When any push destination cannot be read,
 the worktree stays and the record says `check_failed`. The

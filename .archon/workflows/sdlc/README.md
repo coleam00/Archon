@@ -782,8 +782,12 @@ and creates no worktree of its own.
 
 A worktree that never opened a pull request is not its concern. A completed run removes
 its own worktree when the checkout is clean, every commit is on a remote, and no push
-destination of the configured remote advertises the branch. The publication check reads every push destination,
-which can differ from the fetch URL. If any destination advertises the branch or cannot be
+destination of the configured remote advertises the branch. If either
+`remote.<name>.uploadpack` or `remote.<name>.receivepack` is configured for that
+remote, receiving endpoints cannot be verified: the checkout stays with
+`check_failed` before destination inspection. Without these overrides, the
+publication check reads every push destination, which can differ from the fetch URL.
+If any destination advertises the branch or cannot be
 read, the checkout stays; the run's terminal record says why.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
