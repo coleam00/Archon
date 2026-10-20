@@ -803,6 +803,40 @@ describe('workflowGetCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  it.each([
+    [
+      { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      '$0.024',
+      '8420',
+      '2180',
+    ],
+    [{ total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 }, '$0', '0', '0'],
+    [{}, 'unknown', 'unknown', 'unknown'],
+    [
+      { total_tokens_unknown: true, total_tokens_in: 12, total_tokens_out: 3 },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [{ total_tokens_in: 12, total_tokens_out: null }, 'unknown', '12', 'unknown'],
+  ])('prints persisted usage truthfully for %j', async (metadata, cost, input, output) => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-usage',
+      checkout_baseline: null,
+      workflow_name: 'plan',
+      status: 'completed',
+      started_at: new Date(),
+      metadata,
+    });
+
+    await workflowGetCommand(createTestWorkflowHost(), 'run-usage');
+
+    expect(consoleSpy).toHaveBeenCalledWith(`  Cost: ${cost}`);
+    expect(consoleSpy).toHaveBeenCalledWith(`  Input tokens: ${input}`);
+    expect(consoleSpy).toHaveBeenCalledWith(`  Output tokens: ${output}`);
+  });
+
   it('prints not-found (human) and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
@@ -1218,7 +1252,7 @@ describe('workflowGetCommand', () => {
       status: 'completed',
       working_path: '/tmp/wt',
       started_at: new Date(),
-      metadata: {},
+      metadata: { total_cost_usd: 0, total_tokens_unknown: true, total_tokens_in: null },
     });
 
     const code = await workflowGetCommand(createTestWorkflowHost(), 'run-json', true);
@@ -1227,9 +1261,16 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       id: string;
       status: string;
+      metadata: Record<string, unknown>;
     };
     expect(parsed.id).toBe('run-json');
     expect(parsed.status).toBe('completed');
+    expect(parsed.metadata).toEqual({
+      total_cost_usd: 0,
+      total_tokens_unknown: true,
+      total_tokens_in: null,
+    });
+    expect(consoleSpy).not.toHaveBeenCalled();
     expect(code).toBe(0);
   });
 

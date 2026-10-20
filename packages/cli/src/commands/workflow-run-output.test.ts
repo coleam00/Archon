@@ -81,7 +81,8 @@ describe('workflowRunCommand — progress rendering', () => {
   async function runOutcomeFixture(
     execution: OutcomeExecutionResult,
     status: 'completed' | 'failed' | 'paused',
-    outcome: 'succeeded' | 'failed' | null
+    outcome: 'succeeded' | 'failed' | null,
+    metadata: Record<string, unknown> = {}
   ): Promise<unknown> {
     setupWorkflowMocks(true);
     const { executeWorkflow } = require('@archon/workflows/executor');
@@ -91,6 +92,7 @@ describe('workflowRunCommand — progress rendering', () => {
       id: execution.workflowRunId,
       status,
       outcome,
+      metadata,
     });
 
     try {
@@ -140,10 +142,14 @@ describe('workflowRunCommand — progress rendering', () => {
     const thrown = await runOutcomeFixture(
       { success: false, workflowRunId: 'run-1', error: 'later node failed' },
       'failed',
-      'succeeded'
+      'succeeded',
+      { total_cost_usd: 0.05, total_tokens_in: 100, total_tokens_out: 20 }
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
+    expect(consoleSpy).toHaveBeenCalledWith('  Cost: $0.05');
+    expect(consoleSpy).toHaveBeenCalledWith('  Input tokens: 100');
+    expect(consoleSpy).toHaveBeenCalledWith('  Output tokens: 20');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: failed\n  Authored outcome: succeeded'
     );
@@ -183,6 +189,70 @@ describe('workflowRunCommand — progress rendering', () => {
 
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run'
+    );
+  });
+
+  it.each([
+    [
+      { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      '$0.024',
+      '8420',
+      '2180',
+    ],
+    [{ total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 }, '$0', '0', '0'],
+    [{}, 'unknown', 'unknown', 'unknown'],
+    [
+      { total_tokens_unknown: true, total_tokens_in: null, total_tokens_out: null },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+  ])(
+    'prints persisted completion usage without a declared outcome for %j',
+    async (metadata, cost, input, output) => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      const workflowDb = require('@archon/core/db/workflows');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-usage',
+      });
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-usage',
+        status: 'completed',
+        outcome: null,
+        metadata,
+      });
+
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+
+      expect(consoleSpy).toHaveBeenCalledWith(`  Cost: ${cost}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`  Input tokens: ${input}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`  Output tokens: ${output}`);
+    }
+  );
+
+  it('reports unknown usage and logs a failed run lookup without masking completion', async () => {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-unavailable',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('store unavailable')
+    );
+
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+
+    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
+    expect(consoleSpy).toHaveBeenCalledWith('  Cost: unknown');
+    expect(consoleSpy).toHaveBeenCalledWith('  Input tokens: unknown');
+    expect(consoleSpy).toHaveBeenCalledWith('  Output tokens: unknown');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowRunId: 'run-unavailable', err: expect.any(Error) }),
+      'cli.workflow_run_lookup_failed'
     );
   });
 

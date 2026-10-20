@@ -64,9 +64,12 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
           };
           wait.resumeAt = new Date(Date.now() + 20).toISOString();
           let reads = 0;
-          host.deps.store.getWorkflowRun = mock(async () => {
+          host.deps.store.getWorkflowRun = mock(async (): Promise<WorkflowRun> => {
             reads += 1;
             if (reads === 1 && replacement !== 'first-read') return run;
+            if (reads > 3 && replacement === 'none') {
+              return { ...run, status: 'completed', metadata: { total_cost_usd: 0.25 } };
+            }
             if (reads > 1)
               clock.mockReturnValue(
                 Date.parse(wait.resumeAt) -
@@ -109,9 +112,10 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
               quiet: true,
             });
             expect(submit).toHaveBeenCalledTimes(1);
-            expect(reads).toBe(replacement === 'first-read' ? 1 : replacement === 'poll' ? 2 : 3);
+            expect(reads).toBe(replacement === 'first-read' ? 1 : replacement === 'poll' ? 2 : 4);
             if (replacement !== 'none') expect(resume).not.toHaveBeenCalled();
-            else
+            else {
+              expect(output).toHaveBeenCalledWith('  Cost: $0.25');
               expect(resume).toHaveBeenCalledWith(
                 expect.objectContaining({
                   cursor: {
@@ -122,6 +126,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
                   },
                 })
               );
+            }
           } finally {
             submit.mockRestore();
             resume.mockRestore();

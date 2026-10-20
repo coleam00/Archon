@@ -10,6 +10,7 @@ import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflow
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { CLIAdapter } from '../adapters/cli-adapter';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
+import { printRunUsage } from './workflow-usage';
 import { formatSkipCause } from './workflow-node-summaries';
 import { getLog, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
@@ -158,9 +159,7 @@ export async function presentRunResult(
     if (result.waitCursor !== undefined) {
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
-    if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
-      console.log('\nWorkflow paused — waiting for approval.');
-    }
+    presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused');
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
     // Paused workflows are handled in the branch above and intentionally do not get a result card.
@@ -173,9 +172,7 @@ export async function presentRunResult(
         result.summary
       );
     }
-    if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
-      console.log('\nWorkflow completed successfully.');
-    }
+    presentRunFacts('\nWorkflow finished.', 'completed', '\nWorkflow completed successfully.');
   } else {
     presentRunFacts('\nWorkflow finished.', 'failed');
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
@@ -183,41 +180,41 @@ export async function presentRunResult(
   return undefined;
 }
 
-/**
- * Read the persisted run when the workflow authors an outcome, and return the printer
- * for its status and outcome. The printer returns false when it printed nothing.
- */
 async function readRunFactsPresenter(
   host: WorkflowHost,
   workflow: ResolvedWorkflow,
   result: WorkflowExecutionResult
-): Promise<(lead: string, executionStatus: WorkflowRunStatus) => boolean> {
+): Promise<(lead: string, executionStatus: WorkflowRunStatus, fallbackLead?: string) => void> {
   let presentedRun: WorkflowRun | null = null;
-  let outcomeReadUnavailable = false;
-  if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
+  let runReadUnavailable = false;
+  if (
+    result.workflowRunId !== undefined &&
+    (workflow.outcome_field !== undefined || !('paused' in result && result.paused))
+  ) {
     try {
       presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      outcomeReadUnavailable = presentedRun === null;
+      runReadUnavailable = presentedRun === null;
     } catch (error) {
-      outcomeReadUnavailable = true;
+      runReadUnavailable = true;
       getLog().warn(
         { err: error as Error, workflowRunId: result.workflowRunId },
-        'cli.workflow_outcome_lookup_failed'
+        'cli.workflow_run_lookup_failed'
       );
     }
   }
-  return (lead: string, executionStatus: WorkflowRunStatus): boolean => {
-    if (outcomeReadUnavailable) {
+  return (lead, executionStatus, fallbackLead = lead): void => {
+    if (workflow.outcome_field !== undefined && runReadUnavailable) {
       console.log(
         `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
       );
-      return true;
+    } else if (presentedRun?.outcome != null) {
+      console.log(
+        `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
+      );
+    } else {
+      console.log(fallbackLead);
     }
-    if (presentedRun?.outcome == null) return false;
-    console.log(
-      `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
-    );
-    return true;
+    if (executionStatus !== 'paused') printRunUsage(presentedRun?.metadata);
   };
 }
 

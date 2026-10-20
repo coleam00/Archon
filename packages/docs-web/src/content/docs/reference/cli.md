@@ -630,6 +630,11 @@ archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
 
+Human-readable output includes persisted cost in USD and input/output token totals.
+Foreground completion output reports the same totals, including when execution fails.
+Unreported cost or tokens appear as `unknown`; reported zero remains zero. JSON keeps
+the original usage fields in `metadata`.
+
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
 for each choice. JSON exposes these choices in `metadata.approval.decisions`.
