@@ -169,11 +169,11 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 curl http://localhost:3090/api/codebases
 ```
 
-Returns codebases sorted by name. Repository registrations that resolve to the same remote use registration's remote equality rules, including GitHub HTTPS/SSH, trailing-slash, `.git` and case variants, and equivalent local paths. Only the most recently updated row for each resolved remote is returned. Folder registrations and rows without a repository URL remain separate.
+Returns codebases sorted by name. Repository registrations that resolve to the same remote use registration's remote equality rules, including GitHub HTTPS/SSH spellings, trailing slashes, `.git` suffixes, GitHub repository-path case variants, and equivalent local paths. Repository paths on other hosts remain case-sensitive. Only the most recently updated row for each resolved remote is returned. Folder registrations and rows without a repository URL remain separate.
 
 If a stored checkout path is invalid or a remote identity cannot be resolved, the affected row is returned unchanged and separately. Each failure logs a warning with the codebase ID, name and original error; healthy rows remain available. Database query failures still return HTTP 500.
 
-For a complete inventory of stored registrations, use [`archon project list --json`](/reference/cli/#projects). The API list summarizes duplicate remotes; it does not remove stored rows.
+When all stored checkout paths validate, [`archon project list --json`](/reference/cli/#projects) returns a complete inventory of registrations without collapsing duplicate remotes. An invalid stored checkout path makes that command fail and must be repaired before it can return the inventory. The API list summarizes duplicate remotes; it does not remove stored rows.
 
 ### Register a Codebase
 
