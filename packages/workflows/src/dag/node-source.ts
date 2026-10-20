@@ -8,6 +8,7 @@ import {
 import { loadCommandPrompt } from '../load-command-prompt';
 import { NodeEventWriteError } from '../node-event-write';
 import { RunBudgetRefusedError } from '../run-budget';
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
@@ -104,6 +105,7 @@ export function settledValuesOrThrow<T>(
   }
   const selected =
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
+    failures.find(result => result.reason instanceof WorkflowStatusReadError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
     failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
     failures.find(result => result.reason instanceof RunSourceUnreadableError) ??

@@ -338,7 +338,7 @@ export async function listConversationDetachBlockers(
   query: TransactionQuery,
   conversationId: string
 ): Promise<readonly Pick<WorkflowRun, 'id' | 'status'>[]> {
-  const result = await query<Pick<WorkflowRun, 'id' | 'status'>>(
+  const result = await query<{ id: string; status: unknown }>(
     `SELECT id, status FROM remote_agent_workflow_runs
      WHERE (conversation_id = $1 OR parent_conversation_id = $1)
        AND (status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})
@@ -346,5 +346,5 @@ export async function listConversationDetachBlockers(
      ORDER BY id`,
     [conversationId]
   );
-  return result.rows;
+  return result.rows.map(row => ({ id: row.id, status: readWorkflowRunStatus(row) }));
 }

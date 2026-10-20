@@ -26,12 +26,9 @@ import {
  * - `attempt`: one provider attempt, released by its owner when the provider stream
  *   has closed, or here when its owner process is provably gone (`@archon/paths/process-owner`).
  */
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  type WorkflowRunStatus,
-} from '@archon/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
-import { parseJsonObject } from './workflow-run-normalization';
+import { parseJsonObject, readWorkflowRunStatus } from './workflow-run-normalization';
 import {
   isOwnerProvablyGone,
   parseProcessOwner,
@@ -216,7 +213,7 @@ export async function resourceStartOccupancy(
   const holding = new Set(holders.map(holder => holder.id));
   const live = await query<{
     id: string;
-    status: WorkflowRunStatus;
+    status: unknown;
     metadata: unknown;
     working_path: string | null;
     launch: unknown;
@@ -235,7 +232,7 @@ export async function resourceStartOccupancy(
   );
   const liveRuns = live.rows.map(row => ({
     id: String(row.id),
-    status: row.status,
+    status: readWorkflowRunStatus(row),
     metadata: parseJsonObject(row.metadata) ?? {},
     working_path: row.working_path,
     launch: parseLaunch(row.launch),

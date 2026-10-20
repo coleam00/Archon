@@ -66,6 +66,7 @@ import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
 import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
@@ -363,7 +364,7 @@ export async function executeWorkflow(
   if (sourced.stopped) return sourced.result;
   const { workflowSourceRoots } = sourced.value;
 
-  // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
+  // Execution failures record a failed run; unreadable state and rejected writes propagate.
   //
   // Hold a Windows keep-awake request for the executing window (see
   // utils/keep-awake.ts for the Modern Standby / mid-run-death rationale and
@@ -371,11 +372,9 @@ export async function executeWorkflow(
   // early-return validation paths above never leak an unpaired acquire; the
   // matching release is the first statement of this try's finally.
   keepAwake.acquire();
-  // Set by every path that observes a rejected terminal status write — one arriving
-  // from the DAG or a sub-run (the catch below), and the catch's own recovery write.
-  // The finally-block backstop reads it: a second write over a channel that just
-  // failed would either fail again or mask the real error.
-  let terminalStatusWriteFailed = false;
+  // A failed state read cannot authorize a terminal write. A rejected terminal write
+  // cannot be repaired by retrying over the same channel in the finally backstop.
+  let finalizationBlocked = false;
   let sourceExecutionStopped = false;
   try {
     const adoptedRunDir = sourced.value.adoptedRunDir();
@@ -616,9 +615,12 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
-    if (sourceExecutionStopped) throw error;
-    if (error instanceof TerminalStatusWriteError) {
-      terminalStatusWriteFailed = true;
+    if (
+      sourceExecutionStopped ||
+      error instanceof WorkflowStatusReadError ||
+      error instanceof TerminalStatusWriteError
+    ) {
+      finalizationBlocked = true;
       throw error;
     }
 
@@ -680,7 +682,7 @@ export async function executeWorkflow(
         });
       }
     } catch (writeError) {
-      terminalStatusWriteFailed = true;
+      finalizationBlocked = true;
       throw writeError;
     } finally {
       emitter.unregisterRun(workflowRun.id);
@@ -699,7 +701,7 @@ export async function executeWorkflow(
     // calling failWorkflowRun (e.g. a generator cleanup that exits without
     // throwing). Only fires when the process stays alive long enough to run
     // this finally — see #1561 for the originating zombie-state incident.
-    if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
+    if (workflowRun && !finalizationBlocked && !sourceExecutionStopped) {
       const runId = workflowRun.id;
       const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
         // A failed lookup leaves status unknown, not missing or finalized. Preserve the

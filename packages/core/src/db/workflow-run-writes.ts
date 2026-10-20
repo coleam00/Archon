@@ -18,6 +18,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
+import { readWorkflowRunStatus } from './workflow-run-normalization';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
@@ -268,16 +269,17 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
     await getDatabase().withTransaction(async query => {
       // Guard: verify run exists and is terminal before deleting
-      const check = await query<{ status: string }>(
+      const check = await query<{ status: unknown }>(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
       );
       if (check.rows.length === 0) {
         throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
       }
-      if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
+      const status = readWorkflowRunStatus({ id, status: check.rows[0].status });
+      if (!TERMINAL_WORKFLOW_STATUSES.includes(status)) {
         throw new WorkflowRunGuardError(
-          `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+          `Cannot delete workflow run in '${status}' status — cancel it first`
         );
       }
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);

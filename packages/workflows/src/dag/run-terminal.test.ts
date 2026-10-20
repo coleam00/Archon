@@ -23,6 +23,9 @@ import {
   makeWorkflowRun,
   readTranscript,
 } from './test-utils';
+import { WorkflowStatusReadError } from '../workflow-status-read';
+import { NodeEventWriteError } from '../node-event-write';
+import { settledValuesOrThrow } from './node-source';
 import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from '../dag-executor';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../event-emitter';
 import type { DagNode, ExecNode, WorkflowRun } from '../schemas';
@@ -61,43 +64,125 @@ describe('executeDagWorkflow -- final status derivation', () => {
     await removeTempTree(testDir);
   });
 
-  it('propagates a between-layer status error without starting the next layer or concluding lifecycle', async () => {
-    const store = createMockStore();
-    const error = new Error(
-      'Unsupported workflow run status for run corrupt: "unsupported-status"'
-    );
-    store.getWorkflowRunStatus.mockRejectedValue(error);
-    await expect(
-      executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          cwd: testDir,
-          workflowRun: makeWorkflowRun('corrupt'),
-          workflow: {
-            name: 'status-read-error',
-            nodes: [
-              { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'First.' } },
-              {
-                id: 'second',
-                kind: 'agent',
-                source: { kind: 'inline', prompt: 'Second.' },
-                depends_on: ['first'],
-              },
-            ],
-          },
-        })
-      )
-    ).rejects.toBe(error);
-    const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
-    expect(events).toContainEqual(
-      expect.objectContaining({ event_type: 'node_completed', step_name: 'first' })
-    );
-    expect(events.some(event => event.step_name === 'second')).toBe(false);
-    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
+  it.each(['direct', 'loop-group', 'compose'] as const)(
+    'propagates a between-layer status error through %s without reporting failed work',
+    async kind => {
+      const store = createMockStore();
+      const error = new Error(
+        'Unsupported workflow run status for run corrupt: "unsupported-status"'
+      );
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (persistedEvents(store).some(event => event.event_type === 'node_completed'))
+          throw error;
+        return 'running';
+      });
+      const body: DagNode[] = [
+        { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'First.' } },
+        {
+          id: 'second',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Second.' },
+          depends_on: ['first'],
+        },
+      ];
+      if (kind === 'compose') {
+        await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+        await writeFile(
+          join(testDir, '.archon', 'workflows', 'status-body.yaml'),
+          'name: status-body\ndescription: Status read test\nnodes:\n  - id: first\n    prompt: First.\n  - id: second\n    prompt: Second.\n    depends_on: [first]\n'
+        );
+      }
+      const nodes: DagNode[] =
+        kind === 'direct'
+          ? body
+          : kind === 'loop-group'
+            ? [
+                {
+                  id: 'group',
+                  kind: 'loop_group',
+                  loop_group: {
+                    nodes: body,
+                    until: 'DONE',
+                    max_iterations: 2,
+                    fresh_context: false,
+                  },
+                },
+              ]
+            : [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'status-body',
+                  fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ];
+      const platform = createMockPlatform();
+      const emitted: string[] = [];
+      const listener = (event: WorkflowEmitterEvent) => {
+        emitted.push(event.type);
+      };
+      const unsubscribe = getWorkflowEventEmitter().subscribe(listener);
+      try {
+        await expect(
+          executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(store),
+              platform,
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('corrupt'),
+              workflow: { name: 'status-read-error', nodes },
+            })
+          )
+        ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause: error });
+      } finally {
+        unsubscribe();
+      }
+      const events = persistedEvents(store);
+      expect(
+        events.some(
+          event => event.event_type === 'node_completed' && event.step_name?.endsWith('first')
+        )
+      ).toBe(true);
+      expect(events.some(event => event.step_name?.endsWith('second'))).toBe(false);
+      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(emitted).not.toContain('node_failed');
+      expect(emitted).not.toContain('workflow_failed');
+      expect(
+        platform.sendMessage.mock.calls.some(([, message]) => message.includes('failed'))
+      ).toBe(false);
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([false, true])(
+    'preserves unreadable status when a sibling write also rejects (status first: %s)',
+    statusFirst => {
+      const statusError = new WorkflowStatusReadError('corrupt', new Error('unreadable status'));
+      const writeError = new NodeEventWriteError(
+        {
+          workflow_run_id: 'corrupt',
+          step_name: 'sibling',
+          event_type: 'node_started',
+          data: {},
+        },
+        new Error('write rejected')
+      );
+      const failures = statusFirst ? [statusError, writeError] : [writeError, statusError];
+      expect(() =>
+        settledValuesOrThrow(
+          failures.map(reason => ({ status: 'rejected', reason })),
+          'corrupt'
+        )
+      ).toThrow(statusError);
+      expect(mockLogFn).toHaveBeenCalledWith(
+        { err: writeError, workflowRunId: 'corrupt' },
+        'dag.join_secondary_failure'
+      );
+    }
+  );
 
   it('a failed-only DAG delegates its terminal event to failWorkflowRun', async () => {
     const mockStore = createMockStore();

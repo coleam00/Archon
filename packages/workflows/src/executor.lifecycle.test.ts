@@ -2,6 +2,8 @@
 import {
   dagCall,
   makeDeps,
+  makePlatform,
+  sentMessages,
   makeRun,
   makeStore,
   makeWorkflow,
@@ -19,6 +21,7 @@ import { hydrateResumableRun } from './run-resume';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
 
 /** How executeWorkflow drives the DAG and records how the run ended. */
@@ -490,6 +493,24 @@ describe('terminal failure writes', () => {
       expect.stringContaining('storage unavailable; original node failure: build exited 3'),
       { exitReason: 'unhandled_error' }
     );
+  });
+
+  it('propagates unreadable status without failure notice, terminal write or backstop', async () => {
+    const cause = new Error('Unsupported persisted status');
+    const error = new WorkflowStatusReadError('run-123', cause);
+    mockExecuteDagWorkflow.mockRejectedValueOnce(error);
+    const store = makeStore({ getWorkflowRunStatus: mock(async () => 'running' as const) });
+    const platform = makePlatform();
+    await expect(startWorkflow({ store, platform })).rejects.toBe(error);
+    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(sentMessages(platform).some(message => message.includes('failed'))).toBe(false);
+    expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
+      false
+    );
+    expect(keepAwake.activeCount()).toBe(0);
   });
 
   it('does not recover a rejected DAG terminal write with a second failure write', async () => {

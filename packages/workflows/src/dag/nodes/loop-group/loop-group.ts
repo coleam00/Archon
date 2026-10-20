@@ -6,6 +6,7 @@ import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { LoopGroupNode } from '../../../schemas';
 import { resolvedBodyNodes } from '../../../graph-plan';
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
@@ -77,11 +78,11 @@ export async function executeLoopGroupNode(
       workflowPreset
     );
   } catch (error) {
-    // Durable-write rejection and an unreadable source belong to run recovery, not a
-    // failed node outcome.
+    // Unreadable run state/source and durable-write rejection belong to run recovery.
     if (
       error instanceof TerminalStatusWriteError ||
       error instanceof NodeEventWriteError ||
+      error instanceof WorkflowStatusReadError ||
       error instanceof RunSourceUnreadableError
     )
       throw error;
