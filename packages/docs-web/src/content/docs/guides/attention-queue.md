@@ -108,10 +108,42 @@ they cannot disagree about what a run needs.
   root.
 - **`fanOut`** is `{ parentRunId, nodeId, index }` for a child of a `fan_out:` node, and
   null otherwise. A parent blocked on its children is never an item; reading it returns
-  the item of the child that holds the pause.
+  the first actionable descendant item, not the complete set of questions.
 - **`pausedAt`** is when the pause opened. Gates do not record it, so it is null for them,
   and they sort after timed items.
 - **`context`** holds pointers, never pasted content. Read what you need.
+
+## Several items from one workflow
+
+A workflow can [fan out one child per question](/guides/authoring-workflows/#several-independent-questions)
+with `max_parallel: all`. Every child pauses at an ordinary attention wait, with its own
+question, declared choices and occurrence. A recommendation belongs in the message,
+for example `Accept the first proposal? Recommended accept.`
+
+List the queue and select items whose `fanOut.parentRunId` matches the parent run. The
+`fanOut.nodeId` identifies the fan-out node and `fanOut.index` retains the original item
+position. A parent read returns only its first actionable descendant; use the list to
+find every question.
+
+```bash
+archon workflow attention --json --all
+archon workflow attention <child-run-id> --json
+archon workflow answer <child-run-id> --occurrence <occurrence> --choose accept
+```
+
+HTTP uses the same identity: `GET /api/runs/attention` lists the children,
+`GET /api/runs/<child-run-id>/attention` reads one, and
+`POST /api/workflows/runs/<child-run-id>/answer` accepts
+`{"occurrence":"<occurrence>","choose":["accept"]}`.
+
+Answers can arrive in any order. Each child's post-wait work applies its own answer
+without waiting for siblings; the parent remains paused until all children finish, then
+reads their ordered aggregate. Answering one child leaves the others' occurrences and
+choices intact. Existing single-item `respond <run-id> <choice>` commands keep working.
+
+The stream sends an `attention` item for each child, keyed by that child's `runId`, and a
+`resolved` line with that child's `runId` and `occurrence` when answered. Remove only that
+child from your open set. Preserve the other children until their own resolution arrives.
 
 ## Labels
 

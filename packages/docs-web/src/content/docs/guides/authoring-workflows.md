@@ -858,7 +858,7 @@ A satisfied time or event wait produces the fixed structured output `{ status, w
 
 ### Attention waits
 
-An attention wait pauses until someone answers it, in the form it declares. Archon does not route the question or care who answers: a person in the console, an agent through the CLI, or a handler workflow all use the same answer channel.
+An attention wait pauses until someone answers it, in the form it declares. For several independent questions in one pass, [fan out one child per question](#several-independent-questions). Archon does not route the question or care who answers: a person in the console, an agent through the CLI, or a handler workflow all use the same answer channel.
 
 ```yaml
   - id: ask
@@ -2524,7 +2524,7 @@ can line results up against the input list positionally.
 |-------|---------|--------------|
 | `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else — an object, a bare string, malformed JSON, a dangling ref — fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
 | `as` | — | Names the current item as `$INPUTS.<as>` in each child. It must not collide with a `with:` key. The item also reaches the child as `$ARGUMENTS`. |
-| `max_parallel` | `5` | How many children may be **in flight at once**. |
+| `max_parallel` | `5` | Positive integer limiting unfinished children, or `all` to open every resolved item together. `all` is supported on `workflow:` nodes only. |
 | `join` | `all_done` | How N child outcomes reduce to one node outcome (below). |
 
 The `items` producer must be an upstream dependency — the loader rejects a reference to a
@@ -2533,7 +2533,7 @@ written.
 
 #### `max_parallel` bounds concurrency, not count
 
-`max_parallel` is a sliding window, not a limit on how many children exist. `items` is
+`max_parallel` is a sliding window, not a limit on how many children exist. On a `workflow:` node, `max_parallel: all` sets that window to the resolved item count. `items` is
 **unbounded**: a 400-element array produces 400 child runs regardless of the window.
 Consequences worth planning for:
 
@@ -2541,7 +2541,7 @@ Consequences worth planning for:
   node, not here.
 - A child that pauses keeps its slot until it finishes, so unanswered children can hold
   the whole window and later items wait. Paused children use no process or provider, so
-  raising `max_parallel` costs nothing while they wait.
+  a wider window starts more children before they pause and can run their post-answer work concurrently.
 - Abandoning the parent expands at most 500 parents (`MAX_CASCADE_RUNS`), considering
   every discovered child for cancellation even in a wide fan-out. One final aggregate
   lookup checks beneath the remaining queue, excluding completed and cancelled leaves. Deeper subtrees may remain
@@ -2712,6 +2712,88 @@ pausing. Its siblings keep running to their own terminal states.
 
 Pauses around the node work as usual: a `wait: attention` node before the fan-out is an
 ordinary parent pause, and one after it reads `$<id>.output` holding the full aggregate.
+
+#### Several independent questions
+
+Use one child run per question and `max_parallel: all` to expose the full list together.
+A numeric window can leave later questions unstarted while earlier children are paused.
+Each child applies its answer immediately; put that work inside the child after its wait.
+The parent stays paused while questions remain and receives the aggregate, in original
+item order, only after every child finishes.
+
+Save these two workflows in `.archon/workflows/`. The producer can compute any
+runtime-sized question list; this example supplies two:
+
+```yaml
+# questions.yaml
+name: questions
+description: Ask independent questions together
+nodes:
+  - id: list
+    bash: >-
+      printf '%s' '[{"key":"first","message":"Accept the first proposal? Recommended accept."},{"key":"second","message":"Accept the second proposal? Recommended defer."}]'
+  - id: answers
+    depends_on: [list]
+    workflow: question
+    fan_out:
+      items: "$list.output"
+      as: question
+      max_parallel: all
+```
+
+```yaml
+# question.yaml
+name: question
+description: Apply one independent answer
+inputs:
+  question: { required: true }
+returns: apply
+nodes:
+  - id: question
+    bash: printf '%s' "$INPUTS_QUESTION"
+    output_format:
+      type: object
+      properties:
+        key: { type: string }
+        message: { type: string }
+      required: [key, message]
+  - id: ask
+    depends_on: [question]
+    wait:
+      attention: "$question.output.message"
+      form: select
+      options: [{ id: accept }, { id: defer }]
+  - id: apply
+    depends_on: [ask]
+    runtime: bun
+    with:
+      question: $question.output
+      answer: $ask.output
+    script: |
+      const question = JSON.parse(process.env.INPUTS_QUESTION);
+      const answer = JSON.parse(process.env.INPUTS_ANSWER);
+      // Apply this question's decision here, before returning its result.
+      console.log(JSON.stringify({ key: question.key, decision: answer.decision }));
+    output_format:
+      type: object
+      properties:
+        key: { type: string }
+        decision: { type: string }
+      required: [key, decision]
+```
+
+List all children through the [attention queue](/guides/attention-queue/#several-items-from-one-workflow).
+Read and answer each child's `runId` and `occurrence`; a parent read returns only its first
+actionable descendant. Answering the second child first leaves the first question open.
+Completed child results and unanswered occurrences survive restart and resume.
+
+`all` opts into concurrency across the entire list, including work before the wait and
+after each answer. Keep question children small, bound the producer's list when needed,
+and coordinate shared-checkout writes or choose child isolation. The default remains 5;
+composed `include:` fan-out accepts positive integers only. There is no new wait or
+persisted run shape. Older runs with numeric windows keep their behavior. A binary that
+predates `all` cannot load a captured workflow using it: finish those runs before
+downgrading, or restore a supporting binary to resume them.
 
 #### Resume, and what `child_index` keys
 

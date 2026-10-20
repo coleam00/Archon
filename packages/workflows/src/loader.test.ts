@@ -1389,6 +1389,65 @@ nodes:
     expect(work && 'isolation' in work ? work.isolation : undefined).toBe('worktree');
   });
 
+  it.each([2, 'all'])('accepts explicit workflow fan-out parallelism %s', parallelism => {
+    const node = loadedNode(
+      `
+name: fan-window
+description: explicit child window
+nodes:
+  - id: list
+    bash: echo '[]'
+  - id: questions
+    workflow: child-wf
+    depends_on: [list]
+    fan_out:
+      items: "$list.output"
+      max_parallel: ${parallelism}
+`,
+      'questions'
+    );
+    expect(node && 'fan_out' in node && node.fan_out?.max_parallel).toBe(parallelism);
+  });
+
+  it('reports a field error for an invalid fan-out with a padded include target', () => {
+    const error = parseError(
+      `
+name: compose-invalid
+description: invalid composed join
+nodes:
+  - id: work
+    include: '  child-block  '
+    fan_out:
+      items: '[]'
+      as: item
+      join: first_success
+`
+    );
+    expect(error).toContain("'fan_out.join'");
+    expect(error).toContain('first_success');
+    expect(error).not.toContain('YAML parse error');
+  });
+
+  it('rejects max_parallel: all on composed fan-out', () => {
+    const error = parseError(
+      `
+name: compose-all
+description: composed fan-out keeps numeric parallelism
+nodes:
+  - id: list
+    bash: echo '[]'
+  - id: work
+    include: child-block
+    depends_on: [list]
+    fan_out:
+      items: "$list.output"
+      as: item
+      max_parallel: all
+`
+    );
+    expect(error).toContain('max_parallel');
+  });
+
   it('does NOT infer isolation from fan_out — an omitted isolation stays omitted', () => {
     const work = loadedNode(
       `
