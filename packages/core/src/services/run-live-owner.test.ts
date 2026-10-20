@@ -497,15 +497,26 @@ describe('detached owner preparation', () => {
     }
   });
 
-  test('rejects malformed and oversized preparation frames instead of acknowledging a stop', async () => {
-    for (const [frame, expectedError] of [
-      ['{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}', 'Invalid input'],
-      ['x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
-    ]) {
+  test.each([
+    [
+      'malformed',
+      '{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}',
+      'Invalid input',
+    ],
+    ['oversized', 'x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
+    [
+      'mixed',
+      '{"warning":"held output","group":{"pgid":1,"leaderReaped":false,"signalAttempted":true}}',
+      'Invalid input',
+    ],
+  ])(
+    'rejects %s preparation frames instead of acknowledging a stop',
+    async (_kind, frame, expectedError) => {
       const runId = `invalid-preparation-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const sockets = new Set<Socket>();
       const socketErrors: Error[] = [];
+      const requests: string[] = [];
       const server = createServer(socket => {
         sockets.add(socket);
         socket.once('close', () => sockets.delete(socket));
@@ -514,15 +525,26 @@ describe('detached owner preparation', () => {
           socketErrors.push(error);
           socket.destroy();
         });
-        socket.once('data', () => {
-          socket.write('{"kind":"detached","pid":12345}\n');
-          socket.once('data', () => socket.write(`preparing\n${frame}\nready\n`));
+        socket.setEncoding('utf8');
+        let pending = '';
+        socket.on('data', chunk => {
+          pending += chunk;
+          let newline = pending.indexOf('\n');
+          while (newline !== -1) {
+            const request = pending.slice(0, newline);
+            pending = pending.slice(newline + 1);
+            requests.push(request);
+            if (request === 'stop') socket.write('{"kind":"detached","pid":12345}\n');
+            if (request === 'terminate') socket.write(`preparing\n${frame}\nready\n`);
+            newline = pending.indexOf('\n');
+          }
         });
       });
       await listen(server, path);
       const lease = await requestRunLiveOwnerStop(runId);
       try {
         await expect(lease.commit()).rejects.toThrow(expectedError);
+        expect(requests).toEqual(['stop', 'terminate']);
       } finally {
         lease.release();
         for (const socket of sockets) socket.destroy();
@@ -532,7 +554,7 @@ describe('detached owner preparation', () => {
         expect(error).toMatchObject({ code: expect.stringMatching(/^(EPIPE|ECONNRESET)$/) });
       }
     }
-  });
+  );
 });
 
 test('lease group frames conform to the process owner facts', () => {
