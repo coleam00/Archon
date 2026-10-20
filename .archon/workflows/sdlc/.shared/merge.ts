@@ -23,6 +23,7 @@ import type { Pickup, WorkItem } from './workitem.ts';
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
+
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
 export const BASE_EFFECTS = ['hold'] as const;
 export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
@@ -83,11 +84,15 @@ export interface MergeRecord {
 const KEPT_DECISIONS = 20;
 const KEPT_TEXT = 1500;
 
+export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEffect}` {
+  return `answered: ${effect}`;
+}
+
 /** The head of the latest answered own-PR park, when changed-head recovery applies. */
 export function answeredOwnPrParkHead(doc: WorkItem): string | null {
   if (!isOwnPr(doc) || doc.facts.merge?.status !== 'parked') return null;
   const last = doc.facts.merge.decisions.at(-1);
-  return last?.decision === 'answered: park' && last.answer !== undefined ? last.head : null;
+  return last?.decision === answeredMergeDecision('park') && last.answer !== undefined ? last.head : null;
 }
 
 /**

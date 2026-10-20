@@ -25,7 +25,7 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { launchDetached } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
+import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -91,7 +91,7 @@ function main(): void {
   const entry: MergeDecisionEntry = {
     at,
     run_id: runId,
-    decision: `answered: ${choice.effect}`,
+    decision: answeredMergeDecision(choice.effect),
     reason: choice.label,
     links: asked.attention.links,
     answer: { choice: choice.id, text: words, at },
