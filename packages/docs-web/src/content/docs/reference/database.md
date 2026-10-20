@@ -129,15 +129,15 @@ clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every
 seconds. A repeating warning points at a process that is holding the lock. Other SQLite
 errors still fail right away.
 
-Worktree cleanup transactions do not retry automatically: they include filesystem deletion,
-which cannot safely be replayed. If cleanup fails with `SQLITE_BUSY`, resolve the contention
-and explicitly retry cleanup.
+Worktree cleanup retries its initial registration claim while SQLite is busy. Once
+that claim succeeds, it does not replay the transaction: filesystem deletion cannot
+safely be repeated. A later failure rolls back registration retirement and is reported
+to the caller.
 
-Cleanup holds registration exclusion through checkout and branch removal. Remote branch
-deletion and its follow-up existence check each use a ten-second subprocess timeout so
-best-effort network cleanup does not use the five-minute worktree-operation timeout while
-holding the database writer. A failed remote cleanup is reported as a warning; local
-removal and registration retirement can still complete.
+Cleanup holds registration exclusion through local checkout and branch removal.
+Remote branch deletion runs after the claim commits, so network operations do not
+hold the SQLite writer. A failed remote cleanup is logged as a warning; local removal
+and registration retirement can still complete.
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

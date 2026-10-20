@@ -167,9 +167,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         continue;
       }
 
-      await isolationDb.withWorktreeRegistration(env, async (markDestroyed, getLiveRun) => {
-        const liveRun = await getLiveRun({ kind: 'stale', staleDays: daysStale });
-        if (liveRun) throw new Error(`Worktree kept: run ${liveRun.id} is ${liveRun.status}`);
+      await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
         const result = await provider.destroy(env.working_path, {
           // A stale environment's branch is deleted only when the environment created it;
           // an existing branch it checked out may hold commits that exist nowhere else.
@@ -339,7 +337,7 @@ async function checkCompletionPullRequests(
     }
   } catch (error) {
     const err = error as Error;
-    blockers.push(`could not check for open PRs (${err.message})`);
+    console.warn(`  Warning: gh error: ${err.message} — skipping open PR check`);
     getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
   }
 }

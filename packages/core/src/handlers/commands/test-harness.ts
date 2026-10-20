@@ -366,12 +366,7 @@ export const mockMarkWorktreeDestroyed = mock<typeof IsolationEnvironmentDb.mark
 
 export const mockWithWorktreeRegistration = mock<
   typeof IsolationEnvironmentDb.withWorktreeRegistration
->(async (observed, remove) =>
-  remove(
-    () => mockMarkWorktreeDestroyed(observed),
-    async () => null
-  )
-);
+>(async (observed, remove) => remove(() => mockMarkWorktreeDestroyed(observed)));
 export const mockCountActiveByCodebase = mock<typeof IsolationEnvironmentDb.countActiveByCodebase>(
   () => Promise.resolve(0)
 );

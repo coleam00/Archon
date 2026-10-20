@@ -1,7 +1,6 @@
 /**
  * Database operations for isolation environments
  */
-import type { FailedRunRelease } from '@archon/isolation';
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
@@ -22,7 +21,6 @@ import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
-import { runCheckoutAssociationPredicate } from './workflow-run-checkout-predicate';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -329,7 +327,7 @@ export async function markWorktreeDestroyed(
 /**
  * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
  * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
- * The callback must use the supplied retirement and live-run readers, not the pooled connection.
+ * The callback must use the supplied retirement callback, not the pooled connection.
  */
 export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
   observed,
@@ -344,12 +342,9 @@ export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration
         [observed.id, ...predicate.params]
       );
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
-      return remove(
-        () => markWorktreeDestroyed(observed, query),
-        release => getLiveRunOwningEnv(observed.id, release, undefined, query)
-      );
+      return remove(() => markWorktreeDestroyed(observed, query));
     },
-    { retryOnBusy: false }
+    { retryOnBusy: 'first-statement' }
   );
 };
 
@@ -412,7 +407,12 @@ export function isSettleableRunStatus(status: string): boolean {
   return (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 }
 
-export type { FailedRunRelease } from '@archon/isolation';
+/**
+ * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
+ * settled (the branch merged or its PR closed), or once the run has been inactive
+ * longer than the sweep's stale window. The run row itself is never touched.
+ */
+export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
 
 /**
  * Find a workflow run that still owns an environment — the one signal that pins an
@@ -433,11 +433,14 @@ export type { FailedRunRelease } from '@archon/isolation';
 export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
-  excludeRunId?: string,
-  query: typeof pool.query = pool.query.bind(pool)
+  excludeRunId?: string
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
+  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
+  // UUID identifiers must compare as text so $1 has one type across metadata,
+  // conversation links, and environment associations.
+  const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
   // Placeholders follow the status lists' lengths so a new status extends an IN
   // list without a hand-edited parameter position.
   const params: unknown[] = [envId];
@@ -464,14 +467,17 @@ export async function getLiveRunOwningEnv(
     excludeRunId === undefined
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
-  const result = await query<{ id: string; status: string }>(
+  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
+  const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
      WHERE (r.status NOT IN (${unclaimable}))
        ${releaseFilter}
        ${exclusion}
-       AND ${runCheckoutAssociationPredicate('$1')}
+       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
+         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
+           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
      ORDER BY r.started_at DESC
      LIMIT 1`,
     params

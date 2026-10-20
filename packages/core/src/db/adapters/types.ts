@@ -10,7 +10,7 @@ export interface QueryResult<T> {
   readonly rowCount: number;
 }
 
-export type TransactionOptions = { retryOnBusy: false };
+export type TransactionOptions = { retryOnBusy: 'first-statement' };
 
 /**
  * Minimal database interface that both PostgreSQL and SQLite implement
@@ -29,7 +29,8 @@ export interface IDatabase {
    * All queries using the provided function are atomic -
    * they either all commit or all roll back on error.
    *
-   * Disable busy retries when the callback has external side effects that cannot be replayed.
+   * Retry only the first statement when the callback has external side effects that cannot be replayed.
+   * That statement must acquire the write reservation before any reads or external effects.
    * @param fn - Callback receiving a transaction-scoped query function
    * @returns The callback's return value
    */

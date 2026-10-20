@@ -324,11 +324,11 @@ archon isolation cleanup [days] (default: 7)
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
 │ provider.destroy() → remove worktree and local branch           │
-│ → attempt remote deletion; failure/timeout warns                │
+│ → commit registration retirement, then attempt remote deletion │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-A remote deletion failure or timeout can leave the remote branch behind even after
+A remote deletion failure can leave the remote branch behind even after
 local removal and registration retirement complete. The failure is logged, but the
 merged-cleanup report does not include the warning.
 

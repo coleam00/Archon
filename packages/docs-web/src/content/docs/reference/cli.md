@@ -1485,7 +1485,7 @@ records that lack branch-creation tracking. Merged cleanup (`--merged`, includin
 `--include-closed`) and `archon complete` can delete those local branches after
 their checks. Completion with `--force` bypasses commit-safety checks, so it can
 delete a branch with unmerged commits. Merged cleanup and completion also attempt
-remote branch deletion. A remote deletion failure or timeout produces a warning;
+remote branch deletion. A remote deletion failure produces a warning;
 local removal and registration retirement can still complete while the remote
 branch remains.
 
@@ -1603,7 +1603,7 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 ### `complete <branch> [branch2 ...]`
 
 Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
-Also attempt remote branch deletion. If that fails or times out, completion warns and
+Also attempt remote branch deletion. If that fails, completion warns and
 can still finish local removal, leaving the remote branch behind.
 
 ```bash
@@ -1621,8 +1621,8 @@ Without `--force`, completion refuses an environment a workflow run can still cl
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
 failed run that can still be resumed. Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
-refuses rather than skipping the check. Completion also refuses when it cannot check
-for open PRs, including when `gh` is unavailable or returns invalid JSON.
+refuses rather than skipping the check. A failed open-PR query warns and skips that
+check; it does not bypass the other safety checks.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

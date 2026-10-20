@@ -767,7 +767,7 @@ back:
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
 removes each worktree whose pull request merged, with its local branch. It also attempts
-remote branch deletion. If it fails or times out, cleanup warns and can still finish local
+remote branch deletion. If it fails, cleanup warns and can still finish local
 removal, leaving the remote branch behind. A worktree with uncommitted changes, a run
 that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place

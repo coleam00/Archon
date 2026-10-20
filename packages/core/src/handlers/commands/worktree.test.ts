@@ -388,29 +388,6 @@ describe('CommandHandler', () => {
         });
 
         test.each([false, true])(
-          'refuses a run claimed after the precheck (force=%s)',
-          async force => {
-            mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-            mockWithWorktreeRegistration.mockImplementationOnce(async (_env, remove) =>
-              remove(
-                async () => {},
-                async () => ({ id: 'late-run', status: 'running' })
-              )
-            );
-            const result = await handleCommand(
-              makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
-              `/worktree remove${force ? ' --force' : ''}`,
-              operator
-            );
-            expect(result.success).toBe(false);
-            expect(result.message).toContain('late-run');
-            expect(mockIsolationDestroy).not.toHaveBeenCalled();
-            expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
-            expect(mockUpdateConversation).not.toHaveBeenCalled();
-          }
-        );
-
-        test.each([false, true])(
           'refuses a changed registration before destruction (force=%s)',
           async force => {
             mockIsolationEnvDbGet.mockResolvedValue(featXEnv);

@@ -301,13 +301,13 @@ for (const persistence of ['sql', 'file'] as const) {
       reclaimRunWorktree(run, {
         ...target,
         withWorktreeRegistration: (observed, remove) =>
-          target.withWorktreeRegistration(observed, mark =>
-            remove(mark, async () => {
-              throw new Error('claimant lookup failed');
+          target.withWorktreeRegistration(observed, () =>
+            remove(async () => {
+              throw new Error('retirement write failed');
             })
           ),
       })
-    ).rejects.toThrow('claimant lookup failed');
+    ).rejects.toThrow('retirement write failed');
     expect((await target.getById(env.id))?.status).toBe('active');
     expect(existsSync(env.working_path)).toBe(true);
   });
@@ -630,7 +630,32 @@ describe('completed run worktree release', () => {
       expect(await assessCompletedRunWorktree(completed, target, readers())).toEqual({
         disposition: 'release',
       });
-      await releaseCompletedRunWorktree(completed, target, readers());
+      let inClaim = false;
+      const registrationStore: IIsolationStore = {
+        ...target,
+        withWorktreeRegistration: async (observed, remove) => {
+          inClaim = true;
+          try {
+            return await target.withWorktreeRegistration(observed, remove);
+          } finally {
+            inClaim = false;
+          }
+        },
+      };
+      const networkClaims: boolean[] = [];
+      const originalExec = gitModule.execFileAsync;
+      const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (file, args, options) => {
+          if (args.includes('ls-remote')) networkClaims.push(inClaim);
+          return originalExec(file, args, options);
+        }
+      );
+      try {
+        await releaseCompletedRunWorktree(completed, registrationStore, readers());
+        expect(networkClaims).toEqual([false]);
+      } finally {
+        exec.mockRestore();
+      }
 
       expect(existsSync(env.working_path)).toBe(false);
       expect((await target.getById(env.id))?.status).toBe('destroyed');
@@ -788,67 +813,74 @@ test('ordinary cleanup removes a proven checkout and its branch', async () => {
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
 });
 
-test.each([
-  undefined,
-  { kind: 'merged' as const },
-  { kind: 'pr-closed' as const },
-  { kind: 'stale' as const, staleDays: 14 },
-])(
-  'ordinary cleanup refuses a workflow claim that wins before exclusion (%j)',
-  async settlement => {
+test('remote deletion keeps a durable Git anchor when the codebase path is removed', async () => {
+  await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  await git(env.working_path, 'push', '-q', 'origin', env.branch_name);
+  await db.query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
+    env.working_path,
+    codebaseId,
+  ]);
+  const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+  expect(result.worktreeRemoved).toBe(true);
+  expect(result.warnings).toEqual([]);
+  expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe('');
+  expect(await status()).toBe('destroyed');
+});
+
+test.each(['deleted', 'absent', 'surviving', 'unreachable'] as const)(
+  'remote cleanup runs after registration commit (%s)',
+  async outcome => {
     const acquire = isolationDb.withWorktreeRegistration;
-    let claimedId = '';
-    const race = spyOn(isolationDb, 'withWorktreeRegistration').mockImplementation(
+    let inClaim = false;
+    const claim = spyOn(isolationDb, 'withWorktreeRegistration').mockImplementation(
       async (observed, remove) => {
-        claimedId = await seedRunAt(null, 'pending');
-        expect(await claimPendingWorkflowRun(claimedId, env.working_path)).not.toBeNull();
-        return acquire(observed, remove);
+        inClaim = true;
+        try {
+          return await acquire(observed, remove);
+        } finally {
+          inClaim = false;
+        }
       }
     );
-    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    const network: { operation: string; inClaim: boolean }[] = [];
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        const operation = args.includes('push')
+          ? 'push'
+          : args.includes('ls-remote')
+            ? 'ls-remote'
+            : null;
+        if (!operation) return originalExec(file, args, options);
+        network.push({ operation, inClaim });
+        if (!inClaim) expect(await status()).toBe('destroyed');
+        if (operation === 'push' && outcome !== 'deleted') throw new Error('remote rejected push');
+        if (operation === 'ls-remote' && outcome === 'unreachable')
+          throw new Error('remote unavailable');
+        return {
+          stdout: outcome === 'surviving' ? `abc123\trefs/heads/${env.branch_name}\n` : '',
+          stderr: '',
+        };
+      }
+    );
     try {
-      await expect(removeEnvironment(env, { settlement })).rejects.toThrow('Worktree kept');
-      expect(destroy).not.toHaveBeenCalled();
-      expect(await status()).toBe('active');
-      expect(existsSync(env.working_path)).toBe(true);
-      expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
-      const row = await db.query<{ status: string }>(
-        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-        [claimedId]
+      const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+      expect(network).toEqual([
+        { operation: 'push', inClaim: false },
+        ...(outcome === 'deleted' ? [] : [{ operation: 'ls-remote', inClaim: false }]),
+      ]);
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.branchDeleted).toBe(true);
+      expect(result.warnings).toHaveLength(
+        outcome === 'surviving' || outcome === 'unreachable' ? 1 : 0
       );
-      expect(row.rows[0]?.status).toBe('running');
+      expect(await status()).toBe('destroyed');
     } finally {
-      race.mockRestore();
-      destroy.mockRestore();
+      exec.mockRestore();
+      claim.mockRestore();
     }
   }
 );
-
-test.each([
-  { settlement: { kind: 'merged' as const }, age: 0, removed: true },
-  { settlement: { kind: 'pr-closed' as const }, age: 0, removed: true },
-  { settlement: { kind: 'stale' as const, staleDays: 14 }, age: 30, removed: true },
-  { settlement: { kind: 'stale' as const, staleDays: 14 }, age: 0, removed: false },
-])(
-  'ordinary cleanup preserves failed-run settlement at exclusion (%j)',
-  async ({ settlement, age, removed }) => {
-    const id = await seedRunAt(env.working_path, 'failed');
-    await db.query(
-      "UPDATE remote_agent_workflow_runs SET completed_at = datetime('now', $2) WHERE id = $1",
-      [id, `-${age} days`]
-    );
-    if (removed) expect((await removeEnvironment(env, { settlement })).worktreeRemoved).toBe(true);
-    else await expect(removeEnvironment(env, { settlement })).rejects.toThrow('Worktree kept');
-    expect(existsSync(env.working_path)).toBe(!removed);
-    expect(await status()).toBe(removed ? 'destroyed' : 'active');
-  }
-);
-
-test('explicit force retains its live-run override inside cleanup exclusion', async () => {
-  await seedRunAt(env.working_path, 'running');
-  expect((await removeEnvironment(env, { force: true })).worktreeRemoved).toBe(true);
-  expect(await status()).toBe('destroyed');
-});
 
 test('ordinary cleanup accepts an unchanged legacy registration with joined codebase fields', async () => {
   const { worktree_registration_id, ...metadata } = env.metadata;

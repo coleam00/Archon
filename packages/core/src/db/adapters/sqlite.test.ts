@@ -1416,8 +1416,7 @@ describe('SqliteAdapter busy locks', () => {
   let adapter: SqliteAdapter;
   let holder: Database;
 
-  /** An adapter plus a second connection that holds the write lock until `release`. */
-  async function lockedAdapter(): Promise<void> {
+  async function lockedAdapter(): Promise<string> {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-core-sqlite-busy-')));
     const path = join(root, 'archon.db');
     adapter = new SqliteAdapter(path);
@@ -1425,6 +1424,7 @@ describe('SqliteAdapter busy locks', () => {
     await adapter.query('PRAGMA busy_timeout = 20');
     holder = new Database(path);
     holder.run('BEGIN IMMEDIATE');
+    return path;
   }
 
   afterEach(async () => {
@@ -1484,23 +1484,53 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(1);
   });
 
-  test('a non-replayable transaction fails busy after one attempt', async () => {
+  test('a non-replayable transaction retries its claim without replaying its callback', async () => {
     await lockedAdapter();
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
     let attempts = 0;
+    await adapter.withTransaction(
+      async query => {
+        attempts++;
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-once', 'cb-once', '/tmp/test-cwd']
+        );
+      },
+      { retryOnBusy: 'first-statement' }
+    );
+    await released;
+    expect(attempts).toBe(1);
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a busy failure after a side effect never replays destruction', async () => {
+    const path = await lockedAdapter();
+    const contender = new Database(path);
+    let busy: unknown;
+    try {
+      contender.run('BEGIN IMMEDIATE');
+    } catch (error) {
+      busy = error;
+    } finally {
+      contender.close();
+      holder.run('COMMIT');
+    }
+    expect(busy).toBeInstanceOf(SQLiteError);
+    let destructions = 0;
     await expect(
       adapter.withTransaction(
         async query => {
-          attempts++;
           await query(
             `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
-            ['cb-once', 'cb-once', '/tmp/test-cwd']
+            ['cb-destroy', 'cb-destroy', '/tmp/test-cwd']
           );
+          destructions++;
+          if (destructions === 1) throw busy;
         },
-        { retryOnBusy: false }
+        { retryOnBusy: 'first-statement' }
       )
-    ).rejects.toMatchObject({ code: 'SQLITE_BUSY' });
-    expect(attempts).toBe(1);
-    holder.run('ROLLBACK');
+    ).rejects.toBe(busy);
+    expect(destructions).toBe(1);
     expect(await codebaseCount()).toBe(0);
   });
 

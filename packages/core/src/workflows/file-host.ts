@@ -1,4 +1,3 @@
-import type { FailedRunRelease } from '@archon/isolation';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -15,7 +14,6 @@ import {
   isTerminalRunStatus,
   RESUMABLE_WORKFLOW_STATUSES,
   ownedWorktreeSchema,
-  type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
@@ -72,33 +70,6 @@ const fileUserSchema = userRowSchema.extend({
   platform: identityPlatformSchema,
   platform_user_id: z.string(),
 });
-function findLiveRunOwningEnv(
-  id: string,
-  env: IsolationEnvironmentRow | null,
-  runs: WorkflowRun[],
-  excludeRunId?: string,
-  release?: FailedRunRelease
-) {
-  return (
-    runs
-      .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-      .find(row => {
-        const terminal = isTerminalRunStatus(row.status);
-        const resumable = RESUMABLE_WORKFLOW_STATUSES.includes(row.status);
-        if (row.id === excludeRunId || (terminal && !resumable)) return false;
-        if (release && terminal) {
-          if (release.kind === 'settled') return false;
-          const lastActive = row.completed_at ?? row.last_activity_at ?? row.started_at;
-          if (lastActive.getTime() < Date.now() - release.staleDays * 86400000) return false;
-        }
-        return (
-          row.metadata.isolation_env_id === id ||
-          worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-          (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path)
-        );
-      }) ?? null
-  );
-}
 export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();
   async function users(): Promise<z.infer<typeof fileUserSchema>[]> {
@@ -323,19 +294,15 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       withWorktreeRegistration: (observed, remove) =>
-        commit(root, 'all', async runs => {
+        commit(root, 'all', async () => {
           const rows = await environments();
           const row = rows.find(row => row.id === observed.id);
           if (!row || row.status !== 'active' || !sameWorktreeRegistration(row, observed)) {
             throw new WorktreeRegistrationChangedError(observed.id);
           }
-          const result = await remove(
-            async () => {
-              row.status = 'destroyed';
-            },
-            async release =>
-              findLiveRunOwningEnv(row.id, row, [...runs.values()], undefined, release)
-          );
+          const result = await remove(async () => {
+            row.status = 'destroyed';
+          });
           return { result, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       countActiveByCodebase: async id => (await records.isolation.listByCodebase(id)).length,
@@ -369,10 +336,22 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   });
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
-    getLiveRunOwningEnv: async (id, release, excludeRunId) => {
+    getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
       const env = await records.isolation.getById(id);
       const runs = await listRuns(root);
-      return findLiveRunOwningEnv(id, env, runs, excludeRunId, release);
+      return (
+        runs
+          .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
+          .find(
+            row =>
+              row.id !== excludeRunId &&
+              (!isTerminalRunStatus(row.status) ||
+                RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
+              (row.metadata.isolation_env_id === id ||
+                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
+                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
+          ) ?? null
+      );
     },
   };
   const deps: ReturnType<typeof createWorkflowDeps> = {

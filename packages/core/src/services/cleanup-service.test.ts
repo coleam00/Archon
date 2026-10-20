@@ -164,6 +164,11 @@ const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>();
 const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>();
 const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>();
 mock.module('@archon/git', () => ({
+  getGitCheckoutIdentity: async () => ({
+    gitDir: '/workspace/repo',
+    commonGitDir: '/workspace/repo',
+    linkedWorktree: false,
+  }),
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
   execFileAsync: mock(() => Promise.resolve({ stdout: '', stderr: '' })),
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
@@ -180,6 +185,7 @@ mock.module('@archon/git', () => ({
 }));
 
 const mockDestroy = mock<IIsolationProvider['destroy']>();
+const mockDeleteRemoteBranch = mock<typeof Isolation.deleteRemoteBranchTracked>();
 const mockGetPrState = mock<typeof Isolation.getPrState>();
 const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 const mockContainerOptions =
@@ -195,6 +201,7 @@ mock.module('@archon/isolation', () => ({
     destroy: mockDestroy,
   }),
   getPrState: mockGetPrState,
+  deleteRemoteBranchTracked: mockDeleteRemoteBranch,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -214,11 +221,7 @@ mock.module('../db/isolation-environments', () => ({
   withWorktreeRegistration: async (
     env: IsolationEnvironmentRow,
     remove: Parameters<typeof IsolationEnvironmentDb.withWorktreeRegistration>[1]
-  ) =>
-    remove(
-      () => mockMarkWorktreeDestroyed(env),
-      release => mockGetLiveRunOwningEnv(env.id, release)
-    ),
+  ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
@@ -290,6 +293,7 @@ beforeEach(() => {
     directoryClean: true,
     warnings: [],
   });
+  mockDeleteRemoteBranch.mockReset().mockResolvedValue(true);
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
   mockContainerOptions.mockReset();
@@ -465,7 +469,6 @@ describe('removeEnvironment', () => {
       force: undefined,
       branchName: 'issue-187',
       canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: undefined,
     });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
@@ -521,9 +524,13 @@ describe('removeEnvironment', () => {
       force: undefined,
       branchName: 'feature-branch',
       canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: true,
-      remote,
     });
+    expect(mockDeleteRemoteBranch).toHaveBeenCalledWith(
+      '/workspace/repo',
+      'feature-branch',
+      expect.any(Object),
+      remote
+    );
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
     );
@@ -549,7 +556,6 @@ describe('removeEnvironment', () => {
     expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/operator-branch', {
       force: undefined,
       canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: undefined,
     });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
@@ -679,8 +685,6 @@ describe('runScheduledCleanup', () => {
         force: false,
         branchName: 'pr-99',
         canonicalRepoPath: '/workspace/repo',
-        deleteRemoteBranch: true,
-        remote: 'origin',
       });
     }
   );
@@ -1260,7 +1264,6 @@ describe('cleanupMergedWorktrees', () => {
     mockIsBranchMerged.mockResolvedValue(true);
     mockGetLiveRunOwningEnv
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'failed-run', status: 'failed' })
       .mockRejectedValueOnce(new Error('settled owner query failed'));
 
@@ -1284,7 +1287,7 @@ describe('cleanupMergedWorktrees', () => {
     expect(result.skipped).toHaveLength(0);
     expect(mockDestroy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/merged-branch',
-      expect.objectContaining({ deleteRemoteBranch: true })
+      expect.objectContaining({ branchName: 'merged-branch' })
     );
   });
 
@@ -1582,13 +1585,13 @@ describe('onConversationClosed', () => {
       label: 'merged',
       options: { merged: true },
       metadata: {},
-      remoteDeletion: { deleteRemoteBranch: true, remote: 'origin' },
+      remoteDeletion: true,
     },
     {
       label: 'not merged',
       options: undefined,
       metadata: { worktree_branch_created: true },
-      remoteDeletion: { deleteRemoteBranch: undefined },
+      remoteDeletion: false,
     },
   ])(
     'deletes the remote branch only when the conversation closed as merged ($label)',
@@ -1602,12 +1605,12 @@ describe('onConversationClosed', () => {
       );
 
       await onConversationClosed('github', 'owner/repo#100', options);
+      expect(mockDeleteRemoteBranch).toHaveBeenCalledTimes(remoteDeletion ? 1 : 0);
 
       expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-100', {
         force: false,
         branchName: 'feature-x',
         canonicalRepoPath: '/workspace/repo',
-        ...remoteDeletion,
       });
     }
   );
@@ -2040,51 +2043,4 @@ describe('failed-run lock release', () => {
       { branchName: 'stale-failed', runId: FAILED_RUN.id, reason: 'stale' },
     ]);
   });
-});
-
-test.each([
-  'conversation',
-  'scheduled missing',
-  'scheduled merged',
-  'scheduled stale',
-  'explicit merged',
-  'explicit stale',
-] as const)('%s rechecks live ownership inside cleanup exclusion', async route => {
-  const env = makeEnvironmentWithCodebase({ created_at: daysAgo(30) });
-  mockWorktreeExists.mockResolvedValue(route !== 'scheduled missing');
-  mockIsBranchMerged.mockResolvedValue(route.endsWith('merged'));
-  mockGetLiveRunOwningEnv
-    .mockResolvedValueOnce(null)
-    .mockResolvedValue({ id: 'late-run', status: 'running' });
-  if (route === 'conversation') {
-    mockGetById.mockResolvedValue(env);
-    mockGetConversationByPlatformId.mockResolvedValue(
-      makeConversation({ isolation_env_id: env.id, cwd: env.working_path })
-    );
-    await expect(onConversationClosed('web', 'web-conv-1')).rejects.toThrow('Worktree kept');
-    expect(mockUpdateConversation).not.toHaveBeenCalled();
-  } else if (route.startsWith('scheduled')) {
-    scheduledSweepFinds(env);
-    const result = await runScheduledCleanup();
-    expect(result.removed).toEqual([]);
-    expect(result.errors).toContainEqual({
-      id: env.id,
-      error: expect.stringContaining('late-run'),
-    });
-  } else {
-    mockListByCodebase.mockResolvedValue([env]);
-    mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
-    const result =
-      route === 'explicit merged'
-        ? await cleanupMergedWorktrees(env.codebase_id, env.codebase_default_cwd)
-        : await cleanupStaleWorktrees(env.codebase_id, env.codebase_default_cwd);
-    expect(result.removed).toEqual([]);
-    expect(result.skipped).toContainEqual({
-      branchName: env.branch_name,
-      reason: expect.stringContaining('late-run'),
-    });
-  }
-  expect(mockGetLiveRunOwningEnv).toHaveBeenCalledTimes(2);
-  expect(mockDestroy).not.toHaveBeenCalled();
-  expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
 });

@@ -13,10 +13,9 @@
  * creates and drops its own scratch database; the database named in the URL is
  * only used to reach the server.
  */
-import { describe, test, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 import { randomUUID } from 'node:crypto';
-import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
 
 const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -115,109 +114,6 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
     await expect(withWorktreeRegistration(env, remove)).rejects.toThrow('changed during cleanup');
     expect(remove).not.toHaveBeenCalled();
   });
-
-  test('run claims wait for cleanup ownership and cannot start in a retired checkout', async () => {
-    const env = await createEnv('pg-run-cleanup-lock');
-    const { rows } = await db.query<{ id: string }>(
-      `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, user_message, status, codebase_id, working_path)
-       VALUES ('test', 'test', 'pending', $1, $2) RETURNING id`,
-      [env.codebase_id, env.working_path]
-    );
-    const { claimPendingWorkflowRun } = await import('./workflow-run-transitions');
-    const transaction = db.withTransaction.bind(db);
-    const timedTransaction: typeof db.withTransaction = fn =>
-      transaction(async query => {
-        await query("SET LOCAL lock_timeout = '20ms'");
-        return fn(query);
-      });
-    const timed = spyOn(db, 'withTransaction').mockImplementation(timedTransaction);
-    try {
-      await withWorktreeRegistration(env, async markDestroyed => {
-        await expect(claimPendingWorkflowRun(rows[0].id)).rejects.toMatchObject({ code: '55P03' });
-        await markDestroyed();
-      });
-      expect(await claimPendingWorkflowRun(rows[0].id)).toBeNull();
-    } finally {
-      timed.mockRestore();
-    }
-  });
-
-  for (const association of ['path', 'conversation', 'metadata', 'owned_worktree'] as const) {
-    for (const reason of [null, ...FAN_OUT_CANCEL_REASONS]) {
-      for (const winner of ['cleanup', 'activation'] as const) {
-        test(`${winner} excludes ${reason ?? 'failed resume'} via ${association}`, async () => {
-          const env = await createEnv(randomUUID());
-          const conversationId = randomUUID();
-          const runId = randomUUID();
-          await seedConversation(conversationId, association === 'conversation' ? env.id : null);
-          await seedRun(runId, conversationId, reason === null ? 'failed' : 'cancelled', {
-            ...(reason === null ? {} : { cancelled_reason: reason }),
-            ...(association === 'metadata' ? { isolation_env_id: env.id } : {}),
-            ...(association === 'owned_worktree' ? { owned_worktree: { envId: env.id } } : {}),
-          });
-          if (association === 'path')
-            await db.query(
-              'UPDATE remote_agent_workflow_runs SET codebase_id = $1, working_path = $2 WHERE id = $3',
-              [env.codebase_id, env.working_path, runId]
-            );
-          const { resumeWorkflowRun, recoverCancelledFanOutRun } = await import(
-            './workflow-run-resume'
-          );
-          const activate = () =>
-            reason === null ? resumeWorkflowRun(runId) : recoverCancelledFanOutRun(runId);
-          const transaction = db.withTransaction.bind(db);
-          let probeCleanup = winner === 'activation';
-          const timed = spyOn(db, 'withTransaction').mockImplementation(fn =>
-            transaction(async query => {
-              await query("SET LOCAL lock_timeout = '20ms'");
-              const result = await fn(query);
-              if (probeCleanup) {
-                probeCleanup = false;
-                const remove = mock(async () => undefined);
-                await expect(withWorktreeRegistration(env, remove)).rejects.toMatchObject({
-                  code: '55P03',
-                });
-                expect(remove).not.toHaveBeenCalled();
-              }
-              return result;
-            })
-          );
-          try {
-            if (winner === 'cleanup') {
-              await withWorktreeRegistration(env, async (markDestroyed, liveRun) => {
-                expect(await liveRun({ kind: 'settled' })).toBeNull();
-                await expect(activate()).rejects.toThrow('lock timeout');
-                await markDestroyed();
-              });
-              await expect(activate()).rejects.toThrow('checkout is no longer active');
-              const run = await db.query<{ status: string }>(
-                'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-                [runId]
-              );
-              expect(run.rows[0].status).toBe(reason === null ? 'failed' : 'cancelled');
-              expect((await getById(env.id))?.status).toBe('destroyed');
-            } else {
-              expect((await activate()).status).toBe('running');
-              await withWorktreeRegistration(env, async (_markDestroyed, liveRun) => {
-                expect(await liveRun({ kind: 'settled' })).toEqual({
-                  id: runId,
-                  status: 'running',
-                });
-                expect(await liveRun({ kind: 'stale', staleDays: 7 })).toEqual({
-                  id: runId,
-                  status: 'running',
-                });
-              });
-              expect((await getById(env.id))?.status).toBe('active');
-            }
-          } finally {
-            timed.mockRestore();
-          }
-        });
-      }
-    }
-  }
 
   test('legacy conditional adoption rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
     const created = await createEnv('pg-legacy-adoption');

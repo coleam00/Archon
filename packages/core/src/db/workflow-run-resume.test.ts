@@ -153,10 +153,6 @@ describe('workflow run resume', () => {
   });
 
   describe('resumeWorkflowRun', () => {
-    beforeEach(() => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-    });
-
     test('updates run to running, clears completed_at, and returns updated row', async () => {
       const updatedRun = { ...mockWorkflowRun, status: 'running' as const, completed_at: null };
       // Pre-CAS read of the metadata about to be cleared (no prior error here)
@@ -170,17 +166,15 @@ describe('workflow run resume', () => {
 
       expect(result.status).toBe('running');
       expect(result.completed_at).toBeNull();
-      const [checkoutQuery] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(checkoutQuery).toContain('FROM remote_agent_isolation_environments e');
-      expect(checkoutQuery).toContain('FOR UPDATE');
-      // The run row is pinned after the checkout registrations.
-      const [priorQuery, priorParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      // First call: the row-pinning read of the error the CAS is about to clear.
+      const [priorQuery, priorParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(priorQuery).toContain('SELECT w.status, w.metadata, q.resource_key');
       // Postgres row lock — without it the value read is not guaranteed to be the
       // value the CAS clears, so the preserved error could be stale (#2348).
       expect(priorQuery).toContain('FOR UPDATE');
       expect(priorParams).toEqual(['workflow-run-123']);
-      const [updateQuery, updateParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      // Second call: UPDATE
+      const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
       expect(updateQuery).toContain('metadata = metadata || $3::jsonb');
@@ -196,11 +190,12 @@ describe('workflow run resume', () => {
         source_release: null,
         execution_claim: expect.any(String),
       });
-      const [selectQuery, selectParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      // Third call: SELECT
+      const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(selectQuery).toContain('SELECT *');
       expect(selectParams).toEqual(['workflow-run-123']);
-      // No prior error means no audit event.
-      expect(mockQuery.mock.calls).toHaveLength(4);
+      // No prior error → no audit event (only three statements ran).
+      expect(mockQuery.mock.calls).toHaveLength(3);
     });
 
     test('refreshes started_at to NOW so resumed row competes fairly in the path-lock tiebreaker', async () => {
@@ -216,7 +211,7 @@ describe('workflow run resume', () => {
 
       await resumeWorkflowRun('workflow-run-123');
 
-      const [updateQuery] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [updateQuery] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain('started_at = NOW()');
     });
 
@@ -232,7 +227,7 @@ describe('workflow run resume', () => {
 
       await resumeWorkflowRun('workflow-run-123');
 
-      const [updateQuery, updateParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain("status IN ('failed', 'paused')");
       expect(updateQuery).toContain("status = 'running' AND");
       // The stale-orphan arm references $2 — it MUST be bound to the day count.
@@ -264,7 +259,7 @@ describe('workflow run resume', () => {
 
       await resumeWorkflowRun('workflow-run-123');
 
-      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [eventQuery, eventParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       // [id, workflow_run_id, event_type, step_index, step_name, data]
       expect(eventParams[1]).toBe('workflow-run-123');
@@ -297,7 +292,7 @@ describe('workflow run resume', () => {
         resumeAt: scheduled.resumeAt,
       });
 
-      const [, updateParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(JSON.parse(updateParams[2] as string)).toMatchObject({
         error: null,
         scheduled_resume: {
@@ -305,10 +300,10 @@ describe('workflow run resume', () => {
           triggeredAt: expect.any(String),
         },
       });
-      const [, resumedParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [, resumedParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(resumedParams[2]).toBe('workflow_resumed');
       expect(resumedParams[5]).toBe('{}');
-      const [eventQuery, eventParams] = mockQuery.mock.calls[4] as [string, unknown[]];
+      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams[2]).toBe('quota_resume_triggered');
       expect(eventParams[5]).toBe(

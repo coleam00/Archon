@@ -24,9 +24,6 @@ import { findRegisteredWorktree } from './adopt';
 import { WorktreeAddError, addLockedWorktree, rollBackOnFailure } from './setup-lock';
 import { GIT_OPERATION_TIMEOUT_MS, getForkReviewBranch, getLog } from './shared';
 
-// Best-effort remote cleanup runs while registration exclusion holds the database writer.
-const REMOTE_CLEANUP_TIMEOUT_MS = 10_000;
-
 /**
  * Generate semantic branch name based on workflow type
  *
@@ -98,13 +95,12 @@ async function localBranchExists(repoPath: string, branchName: string): Promise<
 async function remoteBranchExists(
   repoPath: string,
   remote: string,
-  branchName: string,
-  timeout = GIT_OPERATION_TIMEOUT_MS
+  branchName: string
 ): Promise<boolean> {
   const ref = `refs/heads/${branchName}`;
   try {
     const { stdout } = await execFileAsync('git', ['-C', repoPath, 'ls-remote', remote, ref], {
-      timeout,
+      timeout: GIT_OPERATION_TIMEOUT_MS,
     });
     return stdout.trim() !== '';
   } catch (error) {
@@ -466,15 +462,14 @@ export async function deleteRemoteBranchTracked(
 ): Promise<boolean> {
   try {
     await execFileAsync('git', ['-C', repoPath, 'push', remote, '--delete', branchName], {
-      timeout: REMOTE_CLEANUP_TIMEOUT_MS,
+      timeout: GIT_OPERATION_TIMEOUT_MS,
     });
     getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
     return true;
   } catch (error) {
     const err = error as Error;
     try {
-      if (!(await remoteBranchExists(repoPath, remote, branchName, REMOTE_CLEANUP_TIMEOUT_MS)))
-        return true;
+      if (!(await remoteBranchExists(repoPath, remote, branchName))) return true;
     } catch (inspectionError) {
       getLog().warn(
         { err: inspectionError, repoPath, branchName },

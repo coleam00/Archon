@@ -20,13 +20,6 @@ import type {
   WorktreeCreationEnvironment,
 } from './types';
 
-/**
- * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled (the branch merged or its PR closed), or once the run has been inactive
- * longer than the sweep's stale window. The run row itself is never touched.
- */
-export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
-
 export interface IIsolationStore {
   getById(id: string): Promise<IsolationEnvironmentRow | null>;
   findActiveByWorkflow(
@@ -57,10 +50,7 @@ export interface IIsolationStore {
   /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
-    remove: (
-      markDestroyed: () => Promise<void>,
-      getLiveRun: (release?: FailedRunRelease) => Promise<{ id: string; status: string } | null>
-    ) => Promise<T>
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>
   ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }

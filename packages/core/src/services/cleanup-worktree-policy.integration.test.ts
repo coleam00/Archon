@@ -155,10 +155,10 @@ describe('owned worktree release policy', () => {
     store = {
       ...store,
       withWorktreeRegistration: (observed, remove) =>
-        real.withWorktreeRegistration(observed, (_mark, read) =>
+        real.withWorktreeRegistration(observed, () =>
           remove(async () => {
             throw new Error('record write failed');
-          }, read)
+          })
         ),
     };
     await expect(reclaimRunWorktree(run, store)).rejects.toThrow('record write failed');

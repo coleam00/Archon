@@ -48,6 +48,11 @@ const git = await import('@archon/git');
 const worktreeExists = mock<typeof Git.worktreeExists>(async () => true);
 mock.module('@archon/git', () => ({
   ...git,
+  getGitCheckoutIdentity: async () => ({
+    gitDir: '/probe/repo',
+    commonGitDir: '/probe/repo',
+    linkedWorktree: false,
+  }),
   worktreeExists,
   execFileAsync: async (command: string) => ({ stdout: command === 'gh' ? '[]' : '', stderr: '' }),
   hasUncommittedChangesStrict: async () => false,
@@ -177,7 +182,7 @@ it.each([false, true])('completes unchanged registration (legacy=%s)', async leg
 
   expect(destroy).toHaveBeenCalledWith(
     observed.working_path,
-    expect.objectContaining({ deleteRemoteBranch: true })
+    expect.objectContaining({ branchName: observed.branch_name })
   );
   expect((await isolationDb.getById(observed.id))?.status).toBe('destroyed');
   expect(log).toHaveBeenCalledWith('  Completed: probe-branch');

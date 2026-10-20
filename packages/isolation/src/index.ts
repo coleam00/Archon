@@ -63,7 +63,7 @@ export { dockerCli, dockerPreflight, extractDockerError } from './container/dock
 export type { DockerRunner, DockerExecOptions, DockerExecResult } from './container/docker-exec';
 
 // --- Store ---
-export type { IIsolationStore, FailedRunRelease } from './store';
+export type { IIsolationStore } from './store';
 export { recordWorktreeAdoption, registerWorktree } from './store';
 
 // --- Errors ---
@@ -86,6 +86,7 @@ export type { IsolationResolverDeps } from './resolver';
 
 // --- Provider ---
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
+export { deleteRemoteBranchTracked } from './providers/worktree/branches';
 
 // --- PR state lookup ---
 export { getPrState } from './pr-state';

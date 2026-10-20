@@ -42,11 +42,7 @@ const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>
 );
 
 const mockWithWorktreeRegistration = mock<typeof IsolationDb.withWorktreeRegistration>(
-  async (observed, remove) =>
-    remove(
-      () => mockMarkWorktreeDestroyed(observed),
-      async () => null
-    )
+  async (observed, remove) => remove(() => mockMarkWorktreeDestroyed(observed))
 );
 
 mock.module('@archon/core/db/isolation-environments', () => ({
@@ -953,13 +949,13 @@ describe('isolationCompleteCommand', () => {
   });
 
   it.each(['unavailable', 'malformed', 'failed'])(
-    'refuses a %s PR check and continues later branches',
+    'warns on a %s PR check and continues without force',
     async failure => {
       const later = makeEnvironment({ id: 'env-later', branch_name: 'later' });
       mockListActive
         .mockResolvedValueOnce([makeEnvironment(), later])
         .mockResolvedValueOnce([later]);
-      mockRemoveEnvironment.mockResolvedValueOnce({
+      mockRemoveEnvironment.mockResolvedValue({
         worktreeRemoved: true,
         branchDeleted: true,
         warnings: [],
@@ -975,21 +971,39 @@ describe('isolationCompleteCommand', () => {
         return Promise.resolve({ stdout: cmd === 'gh' ? '[]' : '', stderr: '' });
       });
 
-      await expect(
-        isolationCompleteCommand(['feature-branch', 'later'], { force: false, deleteRemote: true })
-      ).rejects.toThrow('Failed to complete');
+      await isolationCompleteCommand(['feature-branch', 'later'], {
+        force: false,
+        deleteRemote: true,
+      });
 
-      expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
+      expect(mockRemoveEnvironment).toHaveBeenCalledTimes(2);
       expect(mockRemoveEnvironment).toHaveBeenCalledWith(later, {
         force: false,
         deleteRemoteBranch: true,
       });
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('could not check for open PRs')
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('skipping open PR check')
       );
       expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: later');
     }
   );
+
+  it('keeps dirty-worktree and commit checks when the PR query fails', async () => {
+    mockHasUncommittedChanges.mockResolvedValue(true);
+    mockGetUniqueCommitCount.mockResolvedValue(2);
+    mockExecFileAsync.mockImplementation((cmd: string) =>
+      cmd === 'gh'
+        ? Promise.reject(new Error('spawn gh ENOENT'))
+        : Promise.resolve({ stdout: '', stderr: '' })
+    );
+    await expect(isolationCompleteCommand(['feature-branch'], { force: false })).rejects.toThrow(
+      'Failed to complete'
+    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('skipping open PR check'));
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 2 commit(s) unique to this branch');
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+  });
 
   it('proceeds despite all checks when --force is set', async () => {
     const env = makeEnvironment({ branch_name: 'dirty-branch' });
@@ -1208,22 +1222,6 @@ describe('isolationCleanupCommand', () => {
       expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(0);
     }
   );
-
-  it('refuses a run claimed after the age precheck', async () => {
-    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
-    const read = mock(async (_release?: Isolation.FailedRunRelease) => ({
-      id: 'late-run',
-      status: 'running',
-    }));
-    mockWithWorktreeRegistration.mockImplementationOnce(async (_env, remove) =>
-      remove(async () => {}, read)
-    );
-    await isolationCleanupCommand(7);
-    expect(read).toHaveBeenCalledWith({ kind: 'stale', staleDays: 7 });
-    expect(mockDestroyWorktree).not.toHaveBeenCalled();
-    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('late-run'));
-  });
 
   it('refuses a changed stale registration before destruction', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);

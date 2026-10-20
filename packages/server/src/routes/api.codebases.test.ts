@@ -112,11 +112,7 @@ const mockFindRepoRoot = mock(async (p: string) => p as string | null);
 const mockListByCodebase = mock(async (_id: string) => [] as unknown[]);
 const mockRemoveWorktree = mock<typeof realRemoveWorktree>(async () => {});
 const mockWithWorktreeRegistration = mock<typeof withWorktreeRegistration>(
-  async (observed, remove) =>
-    remove(
-      () => mockMarkWorktreeDestroyed(observed),
-      async () => null
-    )
+  async (observed, remove) => remove(() => mockMarkWorktreeDestroyed(observed))
 );
 const mockMarkWorktreeDestroyed = mock<typeof markWorktreeDestroyed>(async () => {});
 const mockIsWorktreeRegistered = mock<typeof realIsWorktreeRegistered>(async () => false);
