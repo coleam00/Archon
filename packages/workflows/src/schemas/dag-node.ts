@@ -53,7 +53,7 @@ import {
   loopControlSchema,
   type LoopControl,
 } from './loop';
-import { workflowNodeHooksSchema } from './hooks';
+import { validateNodeHooks, workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
 
 // ---------------------------------------------------------------------------
@@ -924,26 +924,26 @@ export const includeDirectiveSchema = dagNodeBaseSchema
 /** Load-time-only graph-construction directive — inlines another workflow's nodes at discovery time */
 export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
 
+const numericFanOutParallelismSchema = z
+  .number()
+  .int()
+  .min(1, "'fan_out.max_parallel' must be >= 1");
+
 /**
  * Dynamic fan-out config for a `workflow:` node (#2121 slice 2, PR-C). Expands the
  * node into N governed child runs — one per element of a runtime-length item list —
  * joined into a single node outcome. `items` is a `$node.output[.a.b]` ref that
  * MUST resolve to a JSON array at run time (DATA, per the constitution's
  * §load-time-composition — the child target stays a static name; only the item
- * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
- * bounds a sliding-window concurrency pool (default 5 — documented + defeatable, so
- * an author can't trivially create a runaway N-wide layer, #1961). It is also the serial
- * escape from the shared-checkout collision: `max_parallel: 1` runs the children one at a
- * time, so no two of them contend for the parent checkout's path lock. The window counts
- * UNFINISHED children: a paused child keeps its slot until it finishes (#4044). `max_parallel` caps
- * *concurrency*, NOT the total child count — `items.length` is unbounded here, so a very
- * large list increases cancellation work. Abandon considers every discovered child for
- * cancellation but expands at most 500 parents (`MAX_CASCADE_RUNS`), then makes one
- * aggregate lookup for unvisited descendants. Deeper subtrees may remain unvisited;
- * a warning calls for individual inspection. The bound limits lookup rounds, not
- * cancellation count or total work. The workflow `budget:`
- * does not cover fan-out yet (a budgeted workflow rejects it at load; #2815). `join` reduces the
- * N child outcomes into the node's single outcome + `$<id>.output` aggregate:
+ * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. Numeric
+ * `max_parallel` bounds unfinished children (default 5); `all` uses the resolved item
+ * count. Paused children keep their slots until they finish (#4044), so use `all` to
+ * expose every independent attention question together. For shared-checkout writes,
+ * `max_parallel: 1` keeps children serial. The window caps concurrency, not child count
+ * or total spend. Abandon expands at most 500 parents (`MAX_CASCADE_RUNS`), then checks
+ * unvisited descendants in one aggregate lookup and warns about unvisited subtrees.
+ * The workflow `budget:` does not cover fan-out yet (rejected at load; #2815).
+ * `join` reduces child outcomes into the node's `$<id>.output` aggregate:
  *   - `all_done` (DEFAULT): the node succeeds once every child is terminal; failed and
  *      cancelled entries are represented as `{ archon_failed: true, error, status }`
  *      marker objects in the array (`archon_failed` is the reserved discriminator —
@@ -971,17 +971,20 @@ export const fanOutConfigSchema = z.object({
     .string()
     .min(1, "'fan_out.items' must reference a node output that produces a JSON array"),
   as: z.string().optional(),
-  max_parallel: z.number().int().min(1, "'fan_out.max_parallel' must be >= 1").default(5),
+  max_parallel: z.union([numericFanOutParallelismSchema, z.literal('all')]).default(5),
   join: z.enum(['all_success', 'all_done', 'first_success']).default('all_done'),
 });
 
-/** Dynamic fan-out configuration for a `workflow:` sub-run node (#2121 slice 2, PR-C). */
 export type FanOutConfig = z.infer<typeof fanOutConfigSchema>;
 
 /** Composed fan-out always names the item binding; it has no `$ARGUMENTS` fallback. */
 export const composeFanOutConfigSchema = fanOutConfigSchema.extend({
+  max_parallel: numericFanOutParallelismSchema.default(5),
   as: z
-    .string()
+    .string({
+      error:
+        "'fan_out.as' is required on an include node so each runtime item has an explicit $INPUTS.<name> binding",
+    })
     .min(1, "'fan_out.as' is required on an include node and must be a non-empty input name"),
 });
 
@@ -1600,7 +1603,11 @@ function validateWaitNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 
 function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   if (data.with !== undefined) validateWithShape('include', data.with, ctx);
-  validateComposedFanOut('include', data, ctx);
+  if (data.fan_out !== undefined) {
+    const result = composeFanOutNodeSchema.pick({ fan_out: true }).safeParse(data);
+    if (!result.success) addIssues(ctx, result.error.issues);
+  }
+  validateComposedFanOut(data, ctx);
 }
 
 function validateWorkflowNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
@@ -1625,14 +1632,10 @@ function validateWorkflowNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
       ['retry']
     );
   }
-  validateComposedFanOut('workflow', data, ctx);
+  validateComposedFanOut(data, ctx);
 }
 
-function validateComposedFanOut(
-  kind: 'include' | 'workflow',
-  data: DagNodeFields,
-  ctx: z.RefinementCtx
-): void {
+function validateComposedFanOut(data: DagNodeFields, ctx: z.RefinementCtx): void {
   const fanOut = data.fan_out;
   if (fanOut === undefined) return;
   // `first_success` racing is REJECTED, not deferred — the earlier deferral is dead. A
@@ -1656,16 +1659,7 @@ function validateComposedFanOut(
     );
   }
   const as = fanOut.as;
-  if (as === undefined) {
-    if (kind === 'include') {
-      addIssue(
-        ctx,
-        "'fan_out.as' is required on an include node so each runtime item has an explicit $INPUTS.<name> binding",
-        ['fan_out', 'as']
-      );
-    }
-    return;
-  }
+  if (as === undefined) return;
   if (!INPUT_NAME_PATTERN.test(as)) {
     addIssue(
       ctx,
@@ -1812,15 +1806,9 @@ function validateBindingDirective(
 // ---------------------------------------------------------------------------
 
 /**
- * Validates a raw YAML object as a DAG node and transforms it to a typed DagNode.
- * `dagNodeSchema` wraps it, rejecting misplaced keys on the raw object first.
- *
- * `validateDagNode` requires a non-empty id and exactly one mode key from NODE_MODE_SHAPES,
- * then runs the selected mode's checks from MODE_VALIDATORS and the checks shared by every mode.
- *
- * Note: provider identity, at the workflow and node level, is validated at load time in
- * loader/provider-checks.ts. Model strings are passed through to the SDK
- * unchanged — the SDK is the source of truth for what model names exist.
+ * Validates and normalizes a selected mode after `dagNodeSchema` rejects misplaced keys.
+ * Provider identity is validated in loader/provider-checks.ts; model strings pass
+ * through unchanged to the SDK, which owns that vocabulary.
  */
 const dagNodeVariantSchema = z
   .preprocess(rejectRetiredThinking, dagNodeFlatSchema)
@@ -1976,32 +1964,24 @@ const dagNodeVariantSchema = z
       return { ...base, ...shared, kind: 'halt', reason: data.cancel.trim() } as HaltNode;
     }
     if (data.include !== undefined && data.include.trim().length > 0) {
-      // `include:` + `fan_out:` (#2512) is the runtime-width composed fan-out: the item
-      // list resolves at run time, so this node is NOT expanded away — it survives as a
-      // ComposeFanOutNode and the executor expands one instance per item through the
-      // same expander. Carries only structural fields + include target + with map + the
-      // fan-out config, like the static directive below it.
+      // Runtime-width composition survives expansion so the executor can resolve its items.
       if (data.fan_out !== undefined) {
         return {
           ...structuralBase,
           kind: 'compose_fan_out',
-          include: data.include.trim(),
+          include: data.include,
           ...(data.with !== undefined
             ? { with: composeFanOutNodeSchema.shape.with.unwrap().parse(data.with) }
             : {}),
           fan_out: data.fan_out,
         } as ComposeFanOutNode;
       }
-      // An include is a load-time directive, not an executable node. It carries the
-      // structural graph fields, target name, and optional load-time input mapping. The
-      // expander reads those fields to attach and parameterize the sub-DAG (description just
-      // rides along). aiOnly / shared (retry) and the exec-only base fields (always_run /
-      // output_type / idle_timeout) are intentionally dropped; the loader warns about them
-      // via INCLUDE_NODE_IGNORED_FIELDS.
+      // Static includes carry only graph fields and load-time bindings. The loader warns
+      // about ignored executable fields through INCLUDE_NODE_IGNORED_FIELDS.
       return {
         ...structuralBase,
         kind: 'include',
-        include: data.include.trim(),
+        include: data.include,
         ...(data.with !== undefined
           ? { with: includeDirectiveSchema.shape.with.unwrap().parse(data.with) }
           : {}),
@@ -2062,8 +2042,26 @@ const dagNodeVariantSchema = z
     } satisfies LoopNode;
   });
 
-export const dagNodeSchema = z
-  .preprocess(rejectMisplacedKeys, dagNodeVariantSchema)
+export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
+  .preprocess(validateRawDagNode, dagNodeVariantSchema)
+  // Refinements do not reach OpenAPI; retain the include-specific fan-out contract
+  // structurally so generated authoring types cannot offer workflow-only concurrency.
+  // Retain authored targets on both sides until validation succeeds to avoid merge throws.
+  .and(
+    z.union([
+      // The OpenAPI converter cannot emit ZodNever; an empty enum admits no value.
+      z.object({ include: z.never().meta({ type: 'string', enum: [] }).optional() }),
+      z.object({
+        include: NODE_MODE_SHAPES.include.include,
+        fan_out: composeFanOutConfigSchema.optional(),
+      }),
+    ])
+  )
+  .transform(node =>
+    'include' in node && node.include !== undefined
+      ? { ...node, include: node.include.trim() }
+      : node
+  )
   .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
@@ -2421,9 +2419,10 @@ const LOOP_SETTING_OWNERS: ReadonlyMap<string, readonly NodeMode[]> = (() => {
  * flat schema strips loop settings, and a misplaced key's value is beside the
  * point, so its placement is reported instead of a type error on the value.
  */
-function rejectMisplacedKeys(value: unknown, ctx: z.RefinementCtx): unknown {
+function validateRawDagNode(value: unknown, ctx: z.RefinementCtx): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
   const node = value as Record<string, unknown>;
+  validateNodeHooks(node.hooks, ctx);
   const id = typeof node.id === 'string' ? node.id.trim() : '';
   const modes = selectedModes(node);
   // Without an id or a single mode the variant schema's own error comes first.
