@@ -3369,7 +3369,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$ARGUMENTS` / `$USER_MESSAGE` | The user's input message that triggered the workflow |
 | `$WORKFLOW_ID` | Unique ID for this workflow run |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
-| `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch; see [resolution and child inheritance rules](/reference/variables/#workflow-variables) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$CONTEXT` | GitHub issue/PR context (if available) |
 | `$nodeId.output` | Output of a completed upstream node |
