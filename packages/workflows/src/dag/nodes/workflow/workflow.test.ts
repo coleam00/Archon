@@ -265,6 +265,11 @@ describe('executeDagWorkflow -- workflow: node', () => {
     const settled = await store.getDagResumeSnapshot('recovery');
     expect(settled.costUsd).toBeCloseTo(0.37);
     expect(settled.tokens).toEqual(usage.tokens);
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.37,
+      total_tokens_in: 100,
+      total_tokens_out: 50,
+    });
   });
 
   it.each([false, true])(
@@ -340,6 +345,11 @@ describe('executeDagWorkflow -- workflow: node', () => {
       expect(settled.costUsd).toBeCloseTo(0.37);
       expect(settled.tokensUnknown).toBe(tokensUnknown);
       expect(settled.tokens).toEqual(tokensUnknown ? undefined : { input: 100, output: 50 });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.37,
+        total_tokens_in: tokensUnknown ? null : 100,
+        total_tokens_out: tokensUnknown ? null : 50,
+      });
     }
   );
 

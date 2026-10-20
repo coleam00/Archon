@@ -141,6 +141,11 @@ describe('interactive loop node', () => {
     const settled = await store.getDagResumeSnapshot('paid-loop');
     expect(settled.costUsd).toBeCloseTo(0.47);
     expect(settled.tokens).toEqual({ input: 110, output: 55 });
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.47,
+      total_tokens_in: 110,
+      total_tokens_out: 55,
+    });
   });
 
   it('interactive loop with gate_message pauses after first iteration', async () => {

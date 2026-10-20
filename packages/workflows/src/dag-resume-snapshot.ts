@@ -555,8 +555,13 @@ function countedUsage(
       record.continuedFrom ? [record.continuedFrom] : []
     )
   );
+  const unfinishedAttempts = new Set(
+    [...fold.unfinishedInvocations.values()].map(record => record.attempt.id)
+  );
   const loopUsage = [...fold.loopUsage.entries()]
-    .filter(([id, record]) => record.counted || continuedAttempts.has(id))
+    .filter(
+      ([id, record]) => record.counted || continuedAttempts.has(id) || unfinishedAttempts.has(id)
+    )
     .map(([, { usage, continuedFrom }]) => {
       const base = continuedFrom ? fold.loopUsage.get(continuedFrom)?.usage : undefined;
       if (!base) return usage;
@@ -614,7 +619,7 @@ function countedUsage(
  * deferred-usage row is accounting only: it never changes lifecycle state or output.
  * Recovery checkpoints reconcile with settlement by invocation or attempt identity.
  * Linked loop continuations include a suspended predecessor's total; only their delta
- * is new spend. Unlinked legacy suspensions remain excluded from the total.
+ * is new spend. Settled legacy invocations exclude their unlinked suspension records.
  *
  * This makes a run's total MONEY BURNED, not the cost of the surviving path — the
  * figure an operator watching a budget wants, and a deliberate change from what the

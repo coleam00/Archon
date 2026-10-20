@@ -225,7 +225,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
             (site === 'loop usage'
               ? 'dag.unwind_node_usage_persist_failed'
               : site === 'snapshot'
-                ? 'dag.unwind_usage_refresh_failed'
+                ? 'dag.usage_refresh_failed'
                 : 'dag.run_usage_persist_failed')
         )
       ).toBe(true);
@@ -903,14 +903,20 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
   });
 
   it('carries prior run usage onto the evidence-gate workflow_error row', async () => {
+    const store = createMockStore();
+    const priorUsage = {
+      costUsd: 0.03,
+      tokens: { input: 300, output: 30, cacheRead: 200, cacheWrite: 0 },
+    };
+    store.getDagResumeSnapshot.mockResolvedValue({
+      ...(await store.getDagResumeSnapshot('dag-evidence-run')),
+      ...priorUsage,
+    });
     await runEvidenceWorkflow({
-      store: createMockStore(),
+      store,
       platform: createMockPlatform(),
       evidencePolicy: { required: true },
-      priorUsage: {
-        costUsd: 0.03,
-        tokens: { input: 300, output: 30, cacheRead: 200, cacheWrite: 0 },
-      },
+      priorUsage,
     });
 
     const errorRow = (await readTranscript(join(testDir, 'logs'), 'dag-evidence-run')).find(

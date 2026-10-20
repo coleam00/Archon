@@ -285,6 +285,7 @@ it('keeps paid loop attempts that replay the same gate separate from its continu
     value: { input: 100, output: 50, cacheRead: 20, cacheWrite: 10 },
   };
   events.push(serializeNodeStateRecord(gate));
+  expect((await foldDagResumeSnapshot(events, gate.runId)).costUsd).toBeCloseTo(0.37);
   const legacyCompletion = structuredClone(gate);
   legacyCompletion.attempt.id = 'legacy-completion';
   legacyCompletion.lifecycle = { status: 'completed' };

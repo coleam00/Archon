@@ -267,6 +267,22 @@ export async function executeDagWorkflow(
     loopBodyScopes: [],
   };
 
+  const refreshRunUsage = async (): Promise<void> => {
+    try {
+      const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+      runCtx.totalCostUsd = durable.costUsd ?? runCtx.totalCostUsd;
+      if (durable.tokensUnknown) {
+        runCtx.totalTokens = undefined;
+        runCtx.totalTokensUnknown = true;
+      } else if (durable.tokens !== undefined) {
+        runCtx.totalTokens = durable.tokens;
+        runCtx.totalTokensUnknown = false;
+      }
+    } catch (readError) {
+      getLog().error({ err: readError, workflowRunId: workflowRun.id }, 'dag.usage_refresh_failed');
+    }
+  };
+
   /** Log both figures when the run total and its node events disagree; never fails the run. */
   const reconcileRunUsage = async (): Promise<void> => {
     try {
@@ -451,6 +467,7 @@ export async function executeDagWorkflow(
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
+    if (priorUsage !== undefined || priorCompletedNodes !== undefined) await refreshRunUsage();
   } catch (error) {
     // runLayers guards almost everything, but a failed durable write (terminal status or
     // node event) escapes through its layer join. Persist both durable facts before rethrowing that
@@ -464,19 +481,7 @@ export async function executeDagWorkflow(
       error instanceof RunSourceUnreadableError ||
       error instanceof WorkflowStatusReadError
     ) {
-      // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
-      try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        runCtx.totalCostUsd = durable.costUsd;
-        runCtx.totalTokens = durable.tokens;
-        runCtx.totalTokensUnknown = durable.tokensUnknown;
-      } catch (readError) {
-        getLog().error(
-          { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.unwind_usage_refresh_failed'
-        );
-      }
+      await refreshRunUsage();
     }
     if (error instanceof RunSourceUnreadableError) {
       sourceUnreadable = error;
