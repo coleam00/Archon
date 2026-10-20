@@ -1041,7 +1041,7 @@ const approvalContextBaseSchema = z.object({
   /**
    * `type === 'fan_out'` only: every non-terminal child of the node at pause time, in
    * item order. A paused child keeps its `max_parallel` slot, so this holds at most
-   * `max_parallel` ids.
+   * the numeric `max_parallel` bound, or all resolved items for `max_parallel: all`.
    */
   childRunIds: z.array(z.string()).optional(),
   /**
