@@ -13,6 +13,7 @@
  */
 
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
+import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { readReviewStamp } from './review-comment.ts';
@@ -52,9 +53,10 @@ export type MergeMethod = (typeof MERGE_METHODS)[number];
 
 /**
  * `waiting`: the next sweep decides it. `asking`: a run is paused on its attention item.
- * `merged`: done. `returned`: handed back to the build queue, which owns it until it is
- * ready again. `parked`: the queue stopped working it until the build queue readies it
- * again.
+ * `merged`: this PR merged; a later build may ready another. `returned`: handed back
+ * to the build queue, which owns it until it is ready again. `parked`: the queue
+ * stopped working it until renewed build readiness
+ * or, for an answered own-PR park, a changed head.
  */
 export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked';
 
@@ -81,17 +83,27 @@ export interface MergeRecord {
 const KEPT_DECISIONS = 20;
 const KEPT_TEXT = 1500;
 
+/** The head of the latest answered own-PR park, when changed-head recovery applies. */
+export function answeredOwnPrParkHead(doc: WorkItem): string | null {
+  if (!isOwnPr(doc) || doc.facts.merge?.status !== 'parked') return null;
+  const last = doc.facts.merge.decisions.at(-1);
+  return last?.decision === 'answered: park' && last.answer !== undefined ? last.head : null;
+}
+
 /**
- * Whether an unclaimed item waits for the merge queue: the build queue finished it,
- * and the merge queue has not settled it since. An item left asking by a run that
- * ended without an answer waits again once the pickup releases that run's claim.
+ * Renewed build readiness waits again after settlement. An answered own-PR park
+ * waits only at a different head; an abandoned ask waits once its claim is released.
  */
-export function mergeWaits(doc: WorkItem): boolean {
+export function mergeWaits(doc: WorkItem, currentHead?: string): boolean {
+  const merge = doc.facts.merge;
+  if (isOwnPr(doc)) {
+    if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
+    const parkedHead = answeredOwnPrParkHead(doc);
+    return parkedHead !== null && currentHead !== undefined && currentHead !== parkedHead;
+  }
   const build = doc.facts.build;
-  // A maintainer's own pull request is ready for the queue from its enrollment on.
   const readyAt = build?.status === 'ready' ? build.at : doc.facts.own_pr?.at;
   if (readyAt === undefined) return false;
-  const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
   return readyAt > merge.at;
 }

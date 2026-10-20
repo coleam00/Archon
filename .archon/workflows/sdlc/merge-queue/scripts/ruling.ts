@@ -5,7 +5,8 @@
  * never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
- * sweep wrote; `park` stops working it until the build queue readies it again. A
+ * sweep wrote; `park` stops working it until renewed build readiness or, for an
+ * answered own-PR park, a different head observed by a later sweep. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
  * them as the contract; an enrolled own pull request has no issue body, so its ruling

@@ -123,6 +123,18 @@ change, pauses as an attention item labelled `merge: pr` with the choices `merge
 `return`, `park` and `other`. A red default branch pauses as `merge: base` and holds
 every merge until it is green.
 
+A maintainer's own pull request enrolled through `merge_queue: "own-prs"` has no
+build round to return to, so its question offers no `return`. Answering `park` or
+`other` stops queue work until a later sweep observes a head different from the
+head asked about. At the same head it stays parked, even after green CI or a new
+review. The `other` text is recorded as the ruling on the work item; it starts no
+build round. Recovery preserves the approval's original head and every merge gate.
+
+A build item parked by an answer waits for renewed build readiness. A pull request
+whose read fails twice consecutively is also parked: renewed build readiness can
+bring a build item back, but an unreadable own-PR park stays parked. Changed-head
+recovery applies only to answered own-PR parks, never merged or superseded items.
+
 ## Discoveries drain
 
 Each pass decides the records of up to `limit` finished runs, oldest first. Repeat
