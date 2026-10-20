@@ -765,10 +765,11 @@ export function createTransactionView(
       record({ workflow_run_id: id, event_type: 'workflow_resumed' });
       return structuredClone(run);
     },
-    releaseRunForUnreadableSource: async (id, release) => {
+    releaseRunForUnreadableSource: async (id, release, beforePublish) => {
       const run = row(id);
       if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)
         return { released: false };
+      await beforePublish?.();
       run.status = 'paused';
       run.last_activity_at = new Date();
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));

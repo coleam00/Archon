@@ -18,7 +18,7 @@ import {
   startWorkflow,
 } from './executor/test-utils';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { chmod, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'path';
@@ -29,6 +29,8 @@ import {
   readRunDispatchMetadata,
   workflowDefinitionSchema,
 } from './schemas';
+import * as sourceLoader from './workflow-source/load';
+import { WorkflowSourceUnavailableError } from './workflow-source';
 import { keepAwake } from './utils/keep-awake';
 
 /** What a run resolves before it starts: refusals, the container guard, $BASE_BRANCH and $DOCS_DIR. */
@@ -135,6 +137,55 @@ describe('container resume guard', () => {
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     expect(dagCall()?.priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.5 });
     expect(result.success).toBe(true);
+  });
+
+  it('suspends an unreadable source before returning its retryable pause', async () => {
+    const fault = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
+      new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+    );
+    const stop = mock(async () => undefined);
+    const backend = { ...containerBackend(), prepareSuspend: mock(async () => stop) };
+    const release = mock<import('./store').IWorkflowStore['releaseRunForUnreadableSource']>(
+      async (_id, _release, beforePublish) => {
+        await beforePublish?.();
+        return { released: true };
+      }
+    );
+    const store = makeStore({ releaseRunForUnreadableSource: release });
+    try {
+      const result = await startWorkflow({
+        store,
+        cwd: '/tmp/ops',
+        options: {
+          ...resumeOf(
+            containerRun('source-pause', {
+              metadata: {
+                workflow_source: {
+                  version: 1,
+                  root: '/capture',
+                  origin: '/source',
+                  captured_at: new Date().toISOString(),
+                  digest: 'unread',
+                  file_count: 0,
+                  byte_count: 0,
+                },
+              },
+            })
+          ),
+          ...inContainer(),
+          container: { envId: 'env-x', writeBack: 'approve', backend },
+        },
+      });
+      expect(result).toMatchObject({ success: true, paused: true });
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      fault.mockRestore();
+    }
   });
 
   describe.each([

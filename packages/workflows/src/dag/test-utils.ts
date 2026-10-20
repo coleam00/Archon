@@ -235,7 +235,8 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async () => {
+      async (_id, _release, beforePublish) => {
+        await beforePublish?.();
         getWorkflowRunStatus.mockImplementation(async () => 'paused');
         return { released: true };
       }

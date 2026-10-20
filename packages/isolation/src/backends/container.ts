@@ -307,32 +307,40 @@ export class ContainerBackend implements IIsolationBackend {
    * container we couldn't stop is still consuming resources and the caller must know.
    */
   async suspend(envId: string): Promise<void> {
+    const suspend = await this.prepareSuspend(envId);
+    await suspend();
+  }
+
+  /** Resolve store metadata before entering a workflow store transition. */
+  async prepareSuspend(envId: string): Promise<() => Promise<void>> {
     const meta = await this.loadMetadata(envId);
-    const handle = meta.containerName ?? meta.containerId;
-    if (!handle) {
-      log.warn({ envId }, 'isolation.container_suspend_no_handle');
-      return;
-    }
-    if (meta.artifactsMount !== undefined) {
-      await this.restoreHostOwnership(envId, handle, meta.artifactsMount);
-    }
-    try {
-      await this.docker(['stop', handle]);
-      log.info({ envId, handle }, 'isolation.container_suspended');
-    } catch (err) {
-      const detail = extractDockerError(err);
-      const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
-      if (state === 'missing' || state === 'stopped') {
-        log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
+    return async () => {
+      const handle = meta.containerName ?? meta.containerId;
+      if (!handle) {
+        log.warn({ envId }, 'isolation.container_suspend_no_handle');
         return;
       }
-      log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
-      throw new IsolationFailure(
-        'unclassified',
-        `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
-        err
-      );
-    }
+      if (meta.artifactsMount !== undefined) {
+        await this.restoreHostOwnership(envId, handle, meta.artifactsMount);
+      }
+      try {
+        await this.docker(['stop', handle]);
+        log.info({ envId, handle }, 'isolation.container_suspended');
+      } catch (err) {
+        const detail = extractDockerError(err);
+        const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
+        if (state === 'missing' || state === 'stopped') {
+          log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
+          return;
+        }
+        log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
+        throw new IsolationFailure(
+          'unclassified',
+          `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
+          err
+        );
+      }
+    };
   }
 
   /**

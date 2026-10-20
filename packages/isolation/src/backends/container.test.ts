@@ -795,6 +795,31 @@ describe('ContainerBackend.suspend', () => {
     expect(stop).toEqual(['stop', 'archon-res-1']);
   });
 
+  test('prepares metadata once and repeats the action without store access', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const read = spyOn(store, 'getById');
+    const stop = await backend.prepareSuspend('env-c');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(docker.calls).toEqual([]);
+    read.mockImplementation(async () => {
+      throw new Error('store access inside transition');
+    });
+    try {
+      await stop();
+      await stop();
+      expect(docker.calls.filter(c => c[0] === 'stop')).toEqual([
+        ['stop', 'archon-res-1'],
+        ['stop', 'archon-res-1'],
+      ]);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   test('is idempotent when the container is already gone', async () => {
     const store = fakeStore();
     seedContainerRow(store);

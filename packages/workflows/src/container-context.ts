@@ -77,6 +77,8 @@ export interface WriteBackApplySummary {
 export interface ContainerWriteBackBackend {
   /** `docker stop` on pause; the upper volume persists for resume. */
   suspend(envId: string): Promise<void>;
+  /** Prepare a repeatable stop action with no store I/O, for a locked source release. */
+  prepareSuspend(envId: string): Promise<() => Promise<void>>;
   /** Inspect the overlay diff → whether a write-back gate is warranted + summary. */
   finalize(envId: string): Promise<WriteBackFinalizeResult>;
   /** Apply the overlay diff to the live root (the ONE live-root write). */

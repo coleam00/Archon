@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
+import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
@@ -423,6 +424,8 @@ export async function establishAdoptedRunSource(
     | 'priorCompletedNodes'
     | 'preparedSource'
     | 'capturedSourceOwner'
+    | 'execContext'
+    | 'container'
   >,
   isContinuation: boolean
 ): Promise<
@@ -483,7 +486,7 @@ export async function establishRunSource(
   workflowSourceDir: string,
   opts: Pick<
     ExecuteWorkflowOptions,
-    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner'
+    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner' | 'execContext' | 'container'
   >
 ): Promise<RunPhase<WorkflowSourceRoots | undefined>> {
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
@@ -532,13 +535,21 @@ export async function establishRunSource(
           { workflowRunId: workflowRun.id, path, err: error },
           'workflow.source_restore_unreadable'
         );
-        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-          claimId: executionClaim(workflowRun.metadata),
-          nodeId: 'workflow-source',
-          path,
-          error: error instanceof Error ? error.message : String(error),
-          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-        });
+        const { released } = await releaseUnreadableRunSource(
+          deps,
+          platform,
+          conversationId,
+          workflowRun.id,
+          {
+            claimId: executionClaim(workflowRun.metadata),
+            nodeId: 'workflow-source',
+            path,
+            error: error instanceof Error ? error.message : String(error),
+            retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+          },
+          opts.execContext,
+          opts.container
+        );
         if (released) {
           await safeSendMessage(
             platform,
