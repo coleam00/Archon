@@ -206,6 +206,7 @@ describe('isolationCompleteCommand', () => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    mockLogger.error.mockClear();
     mockListActive.mockReset().mockResolvedValue([mockEnv]);
     mockFindActiveByBranchName.mockReset().mockImplementation(async branch => ({
       ...mockEnv,
@@ -239,9 +240,8 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts a lookup failure and continues completing the remaining branches', async () => {
-    mockListActive
-      .mockRejectedValueOnce(new Error('database unavailable'))
-      .mockResolvedValueOnce([mockEnv]);
+    const lookupError = new Error('database unavailable');
+    mockListActive.mockRejectedValueOnce(lookupError).mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -255,6 +255,10 @@ describe('isolationCompleteCommand', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: lookup-fails — DB lookup error: database unavailable'
     );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { err: lookupError, branch: 'lookup-fails' },
+      'isolation.lookup_failed'
+    );
     expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
     expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
       force: true,
@@ -265,8 +269,9 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('refuses completion when the selected environment cannot be hydrated', async () => {
+    const lookupError = new Error('invalid target path');
     mockListActive.mockResolvedValueOnce([mockEnv]);
-    mockFindActiveByBranchName.mockRejectedValueOnce(new Error('invalid target path'));
+    mockFindActiveByBranchName.mockRejectedValueOnce(lookupError);
 
     await expect(isolationCompleteCommand(['feature-branch'], { force: true })).rejects.toThrow(
       'Failed to complete'
@@ -275,6 +280,10 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: feature-branch — DB lookup error: invalid target path'
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { err: lookupError, branch: 'feature-branch' },
+      'isolation.lookup_failed'
     );
   });
 
@@ -298,6 +307,7 @@ describe('isolationCompleteCommand', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: feature-branch — multiple active environments match this branch; refusing ambiguous deletion'
     );
+    expect(mockLogger.error).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('refuses a changed lookup target even with force=%s', async force => {
@@ -321,6 +331,7 @@ describe('isolationCompleteCommand', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: feature-branch — environment changed during lookup; refusing ambiguous deletion'
     );
+    expect(mockLogger.error).not.toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
@@ -359,6 +370,7 @@ describe('isolationCompleteCommand', () => {
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         '  Failed: feature-branch — environment changed during lookup; refusing ambiguous deletion'
       );
+      expect(mockLogger.error).not.toHaveBeenCalled();
       expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
     }
   );
@@ -403,6 +415,7 @@ describe('isolationCompleteCommand', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '  Failed: feature-branch — not a worktree environment'
     );
+    expect(mockLogger.error).not.toHaveBeenCalled();
   });
 
   it.each(['unknown revision', 'bad revision'])(
