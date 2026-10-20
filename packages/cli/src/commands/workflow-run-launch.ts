@@ -43,6 +43,7 @@ import {
 } from './workflow-shared';
 import {
   assertCodebaseResolvedForIsolation,
+  assertInheritedWorkflowExecutionCwd,
   assertNoWorktreeOptionsForFolder,
   assertWorkflowNotWorktreePinnedForFolder,
   prepareFolderExecution,
@@ -91,6 +92,9 @@ export async function launchDetachedOwnedRun(
   // child's own call finds what this one registered.
   const detachResolved = await resolveRunCodebase(host, cwd, options);
   const detachCodebase = detachResolved.codebase;
+  if (!admission.wantsIsolation && detachCodebase?.kind !== 'folder') {
+    await assertInheritedWorkflowExecutionCwd(host, cwd);
+  }
   // Never on `--json`: stdout carries one machine-readable document and nothing else.
   if (detachResolved.registeredFolder && !options.json) {
     console.log(
@@ -98,10 +102,8 @@ export async function launchDetachedOwnedRun(
         `(${detachResolved.registeredFolder.defaultCwd})`
     );
   }
-  // An isolating run with no project to isolate. The provisioning step enforces it in
-  // whichever process reaches it, which for a detached launch is the child — after the
-  // parent has already printed `Started` (#2872). `options.noWorktree` first, mirroring
-  // provisioning's own branch order.
+  // Refuse before forking; provisioning in the child would fail after the parent
+  // already printed `Started` (#2872).
   if (!options.noWorktree && admission.wantsIsolation) {
     assertCodebaseResolvedForIsolation(detachResolved);
   }
@@ -282,6 +284,9 @@ export async function prepareForegroundLaunch(
     codebase,
     workspace
   );
+  if (!admission.wantsIsolation && codebase?.kind !== 'folder') {
+    await assertInheritedWorkflowExecutionCwd(host, workspace.workingCwd);
+  }
   const existingBranchEnv =
     admission.wantsIsolation && codebase && options.branchName
       ? await host.records.isolation.findActiveByWorkflow(codebase.id, 'task', options.branchName)

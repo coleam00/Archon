@@ -759,11 +759,19 @@ describe('workflowStatusCommand', () => {
   });
 
   it.each([false, true])(
-    'fails a verbose JSON event-query failure (rawEvents=%s)',
+    'fails verbose JSON when a later run event query fails (rawEvents=%s)',
     async rawEvents => {
       const workflowEventsDb = await import('@archon/core/db/workflow-events');
       mockListDashboardRuns.mockResolvedValueOnce(
         statusRuns([
+          {
+            id: 'run-available',
+            workflow_name: 'implement',
+            working_path: '/path/to/first-worktree',
+            status: 'running',
+            started_at: new Date(),
+            active_nodes: ['alpha'],
+          },
           {
             id: 'run-unavailable',
             workflow_name: 'implement',
@@ -774,9 +782,9 @@ describe('workflowStatusCommand', () => {
           },
         ])
       );
-      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
-        new Error('events unavailable')
-      );
+      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(VERBOSE_EVENTS_FIXTURE)
+        .mockRejectedValueOnce(new Error('events unavailable'));
 
       await expect(
         workflowStatusCommand(createTestWorkflowHost(), '/test/path', {

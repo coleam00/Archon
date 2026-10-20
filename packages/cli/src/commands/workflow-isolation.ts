@@ -35,6 +35,7 @@ import { join } from 'node:path';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   assertInheritedWorkflowCodebase,
+  inheritedWorkflowCodebase,
   getLog,
   type WorkflowRunOptions,
 } from './workflow-shared';
@@ -332,6 +333,15 @@ export async function resolveRunCodebase(
   }
 
   return { codebase, registeredFolder };
+}
+
+export async function assertInheritedWorkflowExecutionCwd(
+  host: WorkflowHost,
+  cwd: string
+): Promise<void> {
+  if (!(await inheritedWorkflowCodebase(host))) return;
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  await assertInheritedWorkflowCodebase(host, codebase?.id);
 }
 
 /**

@@ -201,15 +201,73 @@ describe('run codebase resolution', () => {
     }
   });
 
-  it('allows a launch in the selected chat project', async () => {
+  it.each([
+    { detach: false, pinned: false },
+    { detach: true, pinned: false },
+    { detach: false, pinned: true },
+    { detach: true, pinned: true },
+  ])(
+    'refuses a selected project ID executing in a foreign checkout (%j)',
+    async ({ detach, pinned }) => {
+      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(parent);
+      if (pinned) {
+        mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+          workflows: [makeTestWorkflowWithSource({ name: 'probe', worktree: { enabled: false } })],
+          errors: [],
+        });
+      }
+      try {
+        await expect(
+          workflowRunCommand(createTestWorkflowHost(), '/parent', 'probe', 'go', {
+            codebaseId: child.id,
+            noWorktree: !pinned,
+            detach,
+          })
+        ).rejects.toThrow('/setproject');
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      }
+    }
+  );
+
+  it.each([undefined, child.id])(
+    'allows a launch in the selected chat checkout (id=%s)',
+    async codebaseId => {
+      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+      try {
+        await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+          codebaseId,
+          noWorktree: true,
+        });
+        expectChildExecution();
+      } finally {
+        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      }
+    }
+  );
+
+  it('allows a detached explicit project launch in the selected chat checkout', async () => {
     process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
     (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
+    jest.useFakeTimers();
     try {
-      await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+      const command = workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+        codebaseId: child.id,
         noWorktree: true,
+        detach: true,
       });
-      expectChildExecution();
+      await finishStartupWindow(command, spawnSpy);
+      expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ codebase_id: child.id })
+      );
     } finally {
+      jest.useRealTimers();
+      spawnSpy.mockRestore();
       delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
     }
   });
