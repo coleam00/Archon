@@ -81,7 +81,6 @@ describe('codebases', () => {
       () => findCodebaseByRepoUrl('url'),
       () => findCodebaseByDefaultCwd('projects/repo'),
       () => listCodebases(),
-      () => findCodebaseByPathPrefix(resolve('projects/repo')),
     ];
     for (const [index, read] of readers.entries()) {
       test(`reader ${index} rejects legacy values without guessing`, async () => {
@@ -253,6 +252,24 @@ describe('codebases', () => {
       { ...mockCodebase, id: 'under', default_cwd: P('my_app') },
       { ...mockCodebase, id: 'svc', default_cwd: P('platform', 'svc-a') },
     ];
+
+    for (const path of ['projects/repo', '', './repo', '~/repo']) {
+      test(`ignores unrelated legacy path ${JSON.stringify(path)} when ranking ancestors`, async () => {
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ ...mockCodebase, default_cwd: path }, ...rows])
+        );
+        expect((await findCodebaseByPathPrefix(P('platform', 'svc-a', 'deep')))?.id).toBe('svc');
+      });
+    }
+
+    test('never interprets a relative stored path as ownership', async () => {
+      for (const cwd of ['projects/repo/subdir', resolve('projects/repo/subdir')]) {
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ ...mockCodebase, default_cwd: 'projects/repo' }])
+        );
+        expect(await findCodebaseByPathPrefix(cwd)).toBeNull();
+      }
+    });
 
     test('matches an exact default_cwd', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));

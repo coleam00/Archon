@@ -578,7 +578,7 @@ mock.module('@archon/core/db/conversations', () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: mock(() => Promise.resolve(null)),
-  listCodebases: mock(() => Promise.resolve([])),
+  listCodebaseClaims: mock(() => Promise.resolve([])),
   findCodebaseByPathPrefix: mock(() => Promise.resolve(null)),
   getCodebase: mock(() => Promise.resolve(null)),
 }));

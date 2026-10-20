@@ -497,7 +497,7 @@ export async function registerRepository(
   // conflating separate clones, remotes, names, or branches (#1192).
   const existing = await findCodebaseForCheckoutPath(localPath, {
     findCodebaseByDefaultCwd: codebases.findCodebaseByDefaultCwd,
-    listCodebases: codebases.listCodebaseClaims,
+    listCodebaseClaims: codebases.listCodebaseClaims,
   });
   if (existing) {
     rejectExistingChoice(options);
