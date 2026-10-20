@@ -11,7 +11,8 @@
  *
  * Every fact the guard holds a copy to belongs to the engine:
  * - `EXEC_NODE_ENVIRONMENT_NAMES` (`packages/workflows/src/exec-environment.ts`) is the bag an
- *   exec node delivers;
+ *   exec node delivers, and the authority a copy's class delivery is held to: the project's
+ *   configured environment reaches the same subprocess, but it is not the class's delivery;
  * - `substituteWorkflowVariables` (`packages/workflows/src/workflow-variables.ts`) says which
  *   names the engine splices into a source, so the user-controlled class — the names it leaves
  *   out — comes from the engine, not from the copies that name it;
@@ -253,7 +254,7 @@ function assertPromisedNamesAreDelivered(document: Document): void {
       if (EXEC_NODE_ENVIRONMENT_NAMES.has(name)) continue;
       if (isBindingName(name)) continue;
       throw new Error(
-        `${document.file} promises the environment variable ${name} for the user-controlled variables, which the exec node does not deliver`
+        `${document.file} promises the environment variable ${name} for the user-controlled variables, which the exec node's environment bag does not carry`
       );
     }
   }
