@@ -1187,7 +1187,6 @@ describe('GitHub setup wizard', () => {
           writeFileSync(target, original);
           expect(checkExistingConfig(target)?.platforms.github).toBe(false);
           initialAuthMode = undefined;
-          passwordMessages = [];
           expect(await run()).toBe(0);
           expect(initialAuthMode).toBe('pat');
           expect(selectGitHubAuthMode(read())).toEqual({ kind: authMode });
