@@ -260,9 +260,19 @@ describe('dry-run gates and waits', () => {
   });
 });
 
-for (const [name, suspension] of [
-  ['gate', { approval: { message: 'Please decide' } }],
-  ['wait', { wait: { attention: 'Please decide' } }],
+for (const { name, suspension, nesting, topology } of [
+  {
+    name: 'gate',
+    nesting: 'direct',
+    topology: 'sole sink',
+    suspension: { approval: { message: 'Please decide' } },
+  },
+  {
+    name: 'wait',
+    nesting: 'direct',
+    topology: 'sole sink',
+    suspension: { wait: { attention: 'Please decide' } },
+  },
   ...(
     [
       ['gate', { approval: { message: 'Please decide' } }],
@@ -294,21 +304,25 @@ for (const [name, suspension] of [
   ).flatMap(
     ([name, sink]) =>
       [
-        [
-          `nested ${name}`,
-          {
+        {
+          name,
+          nesting: 'nested',
+          topology: 'sole sink',
+          suspension: {
             loop_group: {
               max_iterations: 1,
               until_bash: 'exit 1',
               nodes: [{ id: 'check', ...sink }],
             },
           },
-        ],
-        ...['sole sink', 'before exec', 'beside exec'].map(
+        },
+        ...(['sole sink', 'before exec', 'beside exec'] as const).map(
           topology =>
-            [
-              `recursive ${name} ${topology}`,
-              {
+            ({
+              name,
+              nesting: 'recursive',
+              topology,
+              suspension: {
                 loop_group: {
                   max_iterations: 1,
                   until_bash: 'exit 1',
@@ -333,19 +347,21 @@ for (const [name, suspension] of [
                   ],
                 },
               },
-            ] as const
+            }) as const
         ),
       ] as const
   ),
 ] as const) {
+  const label =
+    nesting === 'direct'
+      ? name
+      : `${nesting} ${name}${nesting === 'recursive' ? ` ${topology}` : ''}`;
   for (const outerTopology of [
     'sole sink',
-    ...('loop_group' in suspension && (name.startsWith('nested') || name.endsWith('sole sink'))
-      ? ['before exec', 'beside exec']
-      : []),
+    ...(nesting !== 'direct' && topology === 'sole sink' ? ['before exec', 'beside exec'] : []),
   ]) {
-    for (const failed of 'loop_group' in suspension ? [true] : [true, false]) {
-      test(`loop-group ${name} outer ${outerTopology} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
+    for (const failed of nesting !== 'direct' ? [true] : [true, false]) {
+      test(`loop-group ${label} outer ${outerTopology} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
         const workflow = makeTestWorkflow({
           name: 'failure-before-suspension',
           nodes: [
@@ -402,9 +418,9 @@ for (const [name, suspension] of [
             result.trace.filter(entry => entry.state === 'failed').map(entry => entry.nodeId)
           ).toEqual(['work', 'group']);
           expect(result.trace.some(entry => entry.state === 'paused')).toBe(false);
-          if (name.includes('beside exec'))
+          if (topology === 'beside exec')
             expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('stubbed');
-          if (name.includes('before exec'))
+          if (topology === 'before exec')
             expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('skipped');
           if (outerTopology !== 'sole sink')
             expect(result.trace.find(entry => entry.nodeId === 'outer-finish')?.state).toBe(
