@@ -26,10 +26,6 @@ const {
   getArchonHome,
   getProjectWorktreesPath,
 } = await import('@archon/paths');
-export const realProjectWorktreesLayout = relative(
-  getArchonHome(),
-  getProjectWorktreesPath('owner', 'repo')
-);
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -46,7 +42,7 @@ mock.module('@archon/paths', () => ({
   isInsideArchonWorkspaces: (p: string) => isPathInside(join(TEST_ARCHON_HOME, 'workspaces'), p),
   getArchonWorktreesPath: () => join(TEST_ARCHON_HOME, 'worktrees'),
   getProjectWorktreesPath: (owner: string, repo: string) =>
-    join(TEST_ARCHON_HOME, 'workspaces', owner, repo, 'worktrees'),
+    join(TEST_ARCHON_HOME, relative(getArchonHome(), getProjectWorktreesPath(owner, repo))),
   isDocker: () => false,
   parseOwnerRepo,
   resolveRepoProjectIdentity,

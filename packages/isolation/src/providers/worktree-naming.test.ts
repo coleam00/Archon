@@ -1,9 +1,8 @@
 /** Branch names and worktree paths the provider derives from a request and repo config. */
-import { TEST_ARCHON_HOME, realProjectWorktreesLayout } from './worktree-test-fixture';
+import { TEST_ARCHON_HOME } from './worktree-test-fixture';
 import { describe, test, expect } from 'bun:test';
-import { join, resolve, relative } from 'node:path';
+import { join, resolve } from 'node:path';
 import * as git from '@archon/git';
-import { getProjectWorktreesPath } from '@archon/paths';
 import type { IsolationRequest } from '../types';
 import { WorktreeProvider } from './worktree';
 
@@ -79,12 +78,6 @@ describe('getWorktreePath', () => {
     provider.getWorktreePath(input, provider.generateBranchName(input));
   const localPath = (repo: string, branch: string): string =>
     join(TEST_ARCHON_HOME, 'workspaces', '_local', repo, 'worktrees', branch);
-
-  test('the test home preserves the production project worktree layout', () => {
-    expect(relative(TEST_ARCHON_HOME, getProjectWorktreesPath('owner', 'repo'))).toBe(
-      realProjectWorktreesLayout
-    );
-  });
 
   test('resolves a repo outside the workspaces tree to _local/<basename>', () => {
     expect(pathFor(issue('/home/dev/projects/repo'))).toBe(localPath('repo', 'archon/issue-42'));
