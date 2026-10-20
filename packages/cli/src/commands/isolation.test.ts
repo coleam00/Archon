@@ -8,7 +8,7 @@ import type * as IsolationOperations from '@archon/core/operations/isolation-ope
 import type * as CleanupService from '@archon/core/services/cleanup-service';
 import type * as Git from '@archon/git';
 import type * as Isolation from '@archon/isolation';
-import { toBranchName } from '@archon/git';
+import { toBranchName, GitFailure } from '@archon/git';
 import { WorktreeRegistrationChangedError, readWorktreeCreationId } from '@archon/isolation';
 import {
   isolationCompleteCommand,
@@ -142,6 +142,7 @@ const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>(() =>
 const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>(() => Promise.resolve(false));
 
 mock.module('@archon/git', () => ({
+  GitFailure,
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   execFileAsync: mockExecFileAsync,
   toWorktreePath: mock((p: string) => p),
@@ -404,6 +405,127 @@ describe('isolationCompleteCommand', () => {
     );
   });
 
+  it.each(['unknown revision', 'bad revision'])(
+    'does not classify unrelated %s prose as an absent ref',
+    async phrase => {
+      mockListActive.mockResolvedValueOnce([mockEnv]);
+      mockGetUniqueCommitCount.mockResolvedValueOnce(2);
+      mockIsPatchEquivalent.mockResolvedValue(true);
+      mockExecFileAsync.mockImplementation(async (cmd, args) => {
+        if (cmd === 'gh') return { stdout: '[]', stderr: '' };
+        if (args.includes('log')) throw new GitFailure('timeout', `timeout at /repo/${phrase}`);
+        throw Object.assign(new Error('missing ref'), { code: 1 });
+      });
+
+      await expect(isolationCompleteCommand(['feature-branch'], {})).rejects.toThrow(
+        'Failed to complete'
+      );
+
+      expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+      expect(mockIsPatchEquivalent).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 2 commit(s) unique to this branch');
+    }
+  );
+
+  it.each([0, 128, null])(
+    'keeps unique commits when the remote ref is present or unverifiable (code=%s)',
+    async code => {
+      mockListActive.mockResolvedValueOnce([mockEnv]);
+      mockGetUniqueCommitCount.mockResolvedValueOnce(1);
+      mockIsPatchEquivalent.mockResolvedValue(true);
+      mockExecFileAsync.mockImplementation(async (cmd, args) => {
+        if (cmd === 'gh') return { stdout: '[]', stderr: '' };
+        if (args.includes('log')) return { stdout: '', stderr: '' };
+        if (code !== 0) throw Object.assign(new Error('ref probe failed'), { code });
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(isolationCompleteCommand(['feature-branch'], {})).rejects.toThrow(
+        'Failed to complete'
+      );
+
+      expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+      expect(mockIsPatchEquivalent).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 1 commit(s) unique to this branch');
+    }
+  );
+
+  it.each([
+    { name: 'unclassified failure', logError: new Error('log failed') },
+    { name: 'timeout', logError: new GitFailure('timeout', 'log timed out') },
+    {
+      name: 'missing repository',
+      logError: new GitFailure('not_repository', 'repository missing'),
+    },
+  ])('refuses unverified push state with zero unique commits: $name', async ({ logError }) => {
+    mockListActive.mockResolvedValue([mockEnv]);
+    mockGetUniqueCommitCount.mockResolvedValue(0);
+    mockIsPatchEquivalent.mockResolvedValue(true);
+    mockExecFileAsync.mockImplementation(async (cmd, args) => {
+      if (cmd === 'gh') return { stdout: '[]', stderr: '' };
+      if (args.includes('log')) throw logError;
+      throw Object.assign(new Error('missing ref'), { code: 1 });
+    });
+
+    for (const deleteRemote of [false, true]) {
+      await expect(isolationCompleteCommand(['feature-branch'], { deleteRemote })).rejects.toThrow(
+        'Failed to complete'
+      );
+      expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    }
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      `    ✗ could not verify unpushed commits (${logError.message}) — refusing to delete unverified`
+    );
+    expect(mockIsPatchEquivalent).not.toHaveBeenCalled();
+
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      warnings: [],
+    });
+    await isolationCompleteCommand(['feature-branch'], { force: true });
+    expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      force: true,
+      deleteRemoteBranch: true,
+    });
+  });
+
+  it('finishes removing the first shared ref before checking the last one', async () => {
+    const lastEnv = makeEnvironment({ id: 'last-env', branch_name: 'last' });
+    mockListActive
+      .mockResolvedValueOnce([makeEnvironment({ branch_name: 'first' })])
+      .mockResolvedValueOnce([lastEnv]);
+    mockFindActiveByBranchName
+      .mockResolvedValueOnce(makeEnvironment({ branch_name: 'first' }))
+      .mockResolvedValueOnce(lastEnv);
+    let firstRemoved = false;
+    const removalHeld = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    mockGetUniqueCommitCount.mockImplementation(async () => (firstRemoved ? 1 : 0));
+    mockRemoveEnvironment.mockImplementationOnce(async () => {
+      started.resolve();
+      await removalHeld.promise;
+      firstRemoved = true;
+      return { worktreeRemoved: true, branchDeleted: true, warnings: [] };
+    });
+
+    const completion = isolationCompleteCommand(['first', 'last'], {}).then(
+      () => null,
+      (error: unknown) => error
+    );
+    await started.promise;
+    try {
+      expect(mockGetUniqueCommitCount).toHaveBeenCalledTimes(1);
+    } finally {
+      removalHeld.resolve();
+      expect(await completion).toBeInstanceOf(Error);
+    }
+    expect(mockGetUniqueCommitCount).toHaveBeenCalledTimes(2);
+    expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 1 commit(s) unique to this branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 0 not found');
+  });
+
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
@@ -608,7 +730,14 @@ describe('isolationCompleteCommand', () => {
     );
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       'git',
-      ['-C', '/test/repo', 'log', 'upstream/feature-branch..feature-branch', '--oneline'],
+      [
+        '-C',
+        '/test/repo',
+        'log',
+        '--ignore-missing',
+        'upstream/feature-branch..feature-branch',
+        '--oneline',
+      ],
       { timeout: 15000 }
     );
     expect(mockRemoveEnvironment).toHaveBeenCalled();
@@ -664,10 +793,13 @@ describe('isolationCompleteCommand', () => {
       warnings: [],
     });
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
       if (cmd === 'git' && args.some((a: string) => a.startsWith('origin/'))) {
+        if (args.includes('--ignore-missing')) return Promise.resolve({ stdout: '', stderr: '' });
         return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
       }
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -697,10 +829,13 @@ describe('isolationCompleteCommand', () => {
       Promise.resolve(baseRef === 'dev')
     );
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
       if (cmd === 'git' && args.some((a: string) => a.startsWith('origin/'))) {
+        if (args.includes('--ignore-missing')) return Promise.resolve({ stdout: '', stderr: '' });
         return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
       }
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -718,13 +853,13 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
-  // The unique-commits blocker is pushed from two places since the refactor. This
-  // covers the second one — an unpushed probe that fails for a reason that is NOT a
-  // missing ref — so the copy on the destructive path cannot rot untested.
   it('still blocks on unique commits when the unpushed probe fails unexpectedly', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
+    mockIsPatchEquivalent.mockResolvedValue(true);
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
@@ -750,10 +885,13 @@ describe('isolationCompleteCommand', () => {
     mockGetUniqueCommitCount.mockResolvedValueOnce(1);
     mockIsPatchEquivalent.mockRejectedValueOnce(new Error('unknown revision origin/dev'));
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
       if (cmd === 'git' && args.some((a: string) => a.startsWith('origin/'))) {
+        if (args.includes('--ignore-missing')) return Promise.resolve({ stdout: '', stderr: '' });
         return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
       }
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -783,10 +921,13 @@ describe('isolationCompleteCommand', () => {
       warnings: [],
     });
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
       if (cmd === 'git' && args.some((a: string) => a.startsWith('origin/'))) {
+        if (args.includes('--ignore-missing')) return Promise.resolve({ stdout: '', stderr: '' });
         return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
       }
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -815,10 +956,13 @@ describe('isolationCompleteCommand', () => {
     // be misread as "verified zero unique commits".
     mockGetUniqueCommitCount.mockRejectedValueOnce(new Error('git rev-list failed'));
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('show-ref'))
+        return Promise.reject(Object.assign(new Error('missing ref'), { code: 1 }));
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
       }
       if (cmd === 'git' && args.some((a: string) => a.startsWith('origin/'))) {
+        if (args.includes('--ignore-missing')) return Promise.resolve({ stdout: '', stderr: '' });
         return Promise.reject(new Error('fatal: unknown revision origin/feature-branch'));
       }
       return Promise.resolve({ stdout: '', stderr: '' });

@@ -387,6 +387,32 @@ async function checkMissingRemoteBranch(
   }
 }
 
+async function isCompletionRemoteRefMissing(
+  env: CompletionEnvironment,
+  branch: string,
+  remote: string
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        env.codebase_default_cwd,
+        'show-ref',
+        '--verify',
+        '--quiet',
+        `refs/remotes/${remote}/${branch}`,
+      ],
+      { timeout: 15000 }
+    );
+    return false;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 1) return true;
+    getLog().warn({ err: error, branch }, 'isolation.complete_remote_ref_check_failed');
+    return false;
+  }
+}
+
 async function checkCompletionUnpushedCommits(
   env: CompletionEnvironment,
   branch: string,
@@ -396,33 +422,37 @@ async function checkCompletionUnpushedCommits(
   blockers: string[]
 ): Promise<void> {
   try {
+    // Missing revisions are handled below, so every failed log remains a refusal.
     const unpushedResult = await execFileAsync(
       'git',
-      ['-C', env.codebase_default_cwd, 'log', `${remote}/${branch}..${branch}`, '--oneline'],
+      [
+        '-C',
+        env.codebase_default_cwd,
+        'log',
+        '--ignore-missing',
+        `${remote}/${branch}..${branch}`,
+        '--oneline',
+      ],
       { timeout: 15000 }
     );
     const unpushedLines = unpushedResult.stdout.trim().split('\n').filter(Boolean);
     if (unpushedLines.length > 0) {
       blockers.push(`${unpushedLines.length} commit(s) not pushed to remote`);
     }
-    if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
-      blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
-    }
-  } catch (error) {
-    const err = error as Error;
-    // git gives the same "unknown revision" for a ref GitHub deleted after a
-    // squash merge and for one that was never pushed. The safety decision is the
-    // same either way — is the content on the base? — but the operator's message
-    // must not assert a deletion that may never have happened.
-    if (err.message.includes('unknown revision') || err.message.includes('bad revision')) {
-      if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
-        await checkMissingRemoteBranch(env, branch, remote, repoConfig, blockers);
-      }
+    if (uniqueCommitCount === undefined || uniqueCommitCount === 0) return;
+    if (await isCompletionRemoteRefMissing(env, branch, remote)) {
+      await checkMissingRemoteBranch(env, branch, remote, repoConfig, blockers);
       return;
     }
+    blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
+  } catch (error) {
+    const err = error as Error;
     if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
       blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
     }
+    blockers.push(
+      `could not verify unpushed commits (${err.message}) — refusing to delete unverified`
+    );
     getLog().warn({ err, branch }, 'isolation.complete_unpushed_check_failed');
   }
 }
@@ -505,35 +535,37 @@ function reportCompletionResult(
   return 'completed';
 }
 
+async function resolveCompletionEnvironment(branch: string): Promise<CompletionEnvironment | null> {
+  const matches = (await isolationDb.listActive()).filter(
+    candidate => candidate.branch_name === branch
+  );
+  if (matches.length > 1) {
+    throw new Error('multiple active environments match this branch; refusing ambiguous deletion');
+  }
+  const selected = matches[0];
+  if (selected && selected.provider !== 'worktree') {
+    throw new Error('not a worktree environment');
+  }
+  const env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
+  // Hydration adds codebase fields; legacy registration identity compares the whole row.
+  const observed = selected && {
+    ...selected,
+    codebase_default_cwd: env?.codebase_default_cwd,
+    codebase_name: env?.codebase_name,
+  };
+  if (env && observed && !sameWorktreeRegistration(env, observed)) {
+    throw new Error('environment changed during lookup; refusing ambiguous deletion');
+  }
+  return env;
+}
+
 async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
   let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
   try {
-    const matches = (await isolationDb.listActive()).filter(
-      candidate => candidate.branch_name === branch
-    );
-    if (matches.length > 1) {
-      console.error(
-        `  Failed: ${branch} — multiple active environments match this branch; refusing ambiguous deletion`
-      );
-      return 'failed';
-    }
-    const selected = matches[0];
-    if (selected && selected.provider !== 'worktree') {
-      throw new Error('not a worktree environment');
-    }
-    env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
-    // Hydration adds codebase fields; legacy registration identity compares the whole row.
-    const observed = selected && {
-      ...selected,
-      codebase_default_cwd: env?.codebase_default_cwd,
-      codebase_name: env?.codebase_name,
-    };
-    if (env && observed && !sameWorktreeRegistration(env, observed)) {
-      throw new Error('environment changed during lookup; refusing ambiguous deletion');
-    }
+    env = await resolveCompletionEnvironment(branch);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');
