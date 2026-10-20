@@ -181,7 +181,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(dirname(data.node_output_spill_path)).toBe(
       join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
     );
-    expect(data.node_output_spill_path).toEndWith('.over-cap.nodeoutput');
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 
@@ -321,7 +320,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(dirname(data.node_output_spill_path)).toBe(
       join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
     );
-    expect(data.node_output_spill_path).toEndWith('.script-over-cap.nodeoutput');
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 

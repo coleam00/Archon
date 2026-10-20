@@ -218,7 +218,7 @@ export async function executeBashNode(
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
 
-  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
+  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir);
 
   return recordNodeState(
     { store: deps.store, logDir },

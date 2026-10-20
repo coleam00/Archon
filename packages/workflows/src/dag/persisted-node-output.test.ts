@@ -38,9 +38,9 @@ describe('persisted output event association', () => {
   it.each(['group.emit', 'folder/../emit', 'folder/../../escaped', 'folder\\..\\emit'])(
     'restores the durable output for %s after an equal-length uncommitted spill',
     async stepName => {
-      const first = formatPersistedNodeOutput(outputA, artifactsDir, stepName);
+      const first = formatPersistedNodeOutput(outputA, artifactsDir);
       const durableEvents = [completion(first, stepName)];
-      const second = formatPersistedNodeOutput(outputB, artifactsDir, stepName);
+      const second = formatPersistedNodeOutput(outputB, artifactsDir);
 
       const snapshot = await foldDagResumeSnapshot(durableEvents, 'run');
       expect(snapshot.completedNodeOutputs.get(stepName)).toEqual({ output: outputA });
@@ -56,8 +56,8 @@ describe('persisted output event association', () => {
   );
 
   it('selects the full output by durable event order rather than spill write order', async () => {
-    const first = completion(formatPersistedNodeOutput(outputA, artifactsDir, 'group.emit'));
-    const second = completion(formatPersistedNodeOutput(outputB, artifactsDir, 'group.emit'));
+    const first = completion(formatPersistedNodeOutput(outputA, artifactsDir));
+    const second = completion(formatPersistedNodeOutput(outputB, artifactsDir));
 
     const forward = await foldDagResumeSnapshot([first, second], 'run');
     expect(forward.completedNodeOutputs.get('group.emit')).toEqual({ output: outputB });
