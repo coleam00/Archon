@@ -1,4 +1,5 @@
 import type { ExecutionContext } from '@archon/provider-contract';
+import type { WorkflowRun } from './schemas';
 
 /**
  * Container run context shared by the executor and the DAG engine (Phase C).
@@ -132,13 +133,22 @@ export type RunExecutionMode =
 export function resolveRunExecutionMode(
   execContext: ExecutionContext = { kind: 'host' },
   container?: ContainerRunContext,
-  recordedIsolation?: unknown
+  recordedMetadata?: WorkflowRun['metadata']
 ): RunExecutionMode {
   if (execContext.kind === 'container') {
     if (!container) throw new Error('Container execution requires a container backend context');
+    if (
+      recordedMetadata &&
+      (recordedMetadata.isolation !== 'container' ||
+        typeof recordedMetadata.isolation_env_id !== 'string' ||
+        recordedMetadata.isolation_env_id.length === 0 ||
+        recordedMetadata.isolation_env_id !== container.envId)
+    ) {
+      throw new Error('Execution context does not match the recorded run isolation');
+    }
     return { kind: 'container', execContext, container };
   }
-  if (container || recordedIsolation === 'container') {
+  if (container || recordedMetadata?.isolation === 'container') {
     throw new Error('Container backend requires a container execution context');
   }
   return { kind: 'host', execContext };

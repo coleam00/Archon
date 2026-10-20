@@ -435,7 +435,7 @@ export async function executeDagWorkflow(
         error: error.message,
         retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
       },
-      resolveRunExecutionMode(execContext, containerCtx, workflowRun.metadata.isolation)
+      resolveRunExecutionMode(execContext, containerCtx, workflowRun.metadata)
     );
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');

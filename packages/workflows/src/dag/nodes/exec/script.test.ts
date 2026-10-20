@@ -560,6 +560,10 @@ describe('executeDagWorkflow -- script nodes', () => {
     [true, true, 'absent'],
     [true, true, 'no-backend'],
     [true, true, 'no-context'],
+    [true, true, 'wrong-env'],
+    [true, true, 'missing-env'],
+    [true, true, 'host-record'],
+    [true, true, 'missing-record'],
   ] as const)(
     'container source release won=%s matching container=%s execution=%s',
     async (released, matches, execution) => {
@@ -611,7 +615,17 @@ describe('executeDagWorkflow -- script nodes', () => {
               nodes: [{ id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }],
             },
             workflowRun: makeWorkflowRun('unreadable-container', {
-              metadata: { isolation: 'container' },
+              metadata:
+                execution === 'missing-record'
+                  ? {}
+                  : execution === 'host-record'
+                    ? { isolation: 'host' }
+                    : {
+                        isolation: 'container',
+                        ...(execution === 'missing-env'
+                          ? {}
+                          : { isolation_env_id: execution === 'wrong-env' ? 'other-env' : 'env' }),
+                      },
             }),
             workflowSourceRoots: capturedSourceRoots(capture.anchor),
             execContext:
@@ -630,12 +644,16 @@ describe('executeDagWorkflow -- script nodes', () => {
           await expect(executing).rejects.toThrow(
             execution === 'no-backend'
               ? 'Container execution requires a container backend context'
-              : 'Container backend requires a container execution context'
+              : execution === 'host' || execution === 'absent' || execution === 'no-context'
+                ? 'Container backend requires a container execution context'
+                : 'Execution context does not match the recorded run isolation'
           );
           expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
           expect(backend.prepareSuspend).not.toHaveBeenCalled();
           expect(stop).not.toHaveBeenCalled();
           expect(backend.suspend).not.toHaveBeenCalled();
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
           return;
         }
         expect(await executing).toEqual({ kind: 'source_release', released });

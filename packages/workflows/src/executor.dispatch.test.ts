@@ -185,6 +185,48 @@ describe('container resume guard', () => {
     }
   );
 
+  it.each([
+    { isolation: 'container', isolation_env_id: 'different-env' },
+    { isolation: 'container' },
+    { isolation: 'container', isolation_env_id: '' },
+    { isolation: 'container', isolation_env_id: 42 },
+    { isolation: 'host', isolation_env_id: 'env-x' },
+    {},
+  ])(
+    'rejects resumed container identity inconsistent with %j before source access',
+    async metadata => {
+      const store = makeStore();
+      const container = {
+        envId: 'env-x',
+        writeBack: 'approve' as const,
+        backend: containerBackend(),
+      };
+      const source = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
+        new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+      );
+      try {
+        await expect(
+          startWorkflow({
+            store,
+            options: {
+              ...resumeOf(makeRun({ metadata })),
+              ...inContainer(),
+              container,
+            },
+          })
+        ).rejects.toThrow('Execution context does not match the recorded run isolation');
+        expect(source).not.toHaveBeenCalled();
+        expect(store.updateWorkflowRun).not.toHaveBeenCalled();
+        expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        expect(container.backend.prepareSuspend).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      } finally {
+        source.mockRestore();
+      }
+    }
+  );
+
   it('proceeds when the container context is provided', async () => {
     const result = await startWorkflow({
       cwd: '/tmp/ops',

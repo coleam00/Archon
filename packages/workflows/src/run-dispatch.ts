@@ -64,7 +64,6 @@ export async function resolveRunDispatch(
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions
 ): Promise<RunPhase<RunDispatch>> {
-  const execution = resolveRunExecutionMode(opts.execContext, opts.container);
   const { preCreatedRun } = opts;
   const isContinuation =
     preCreatedRun !== undefined &&
@@ -77,6 +76,11 @@ export async function resolveRunDispatch(
     opts
   );
   if (containerRefusal) return { stopped: true, result: containerRefusal };
+  const execution = resolveRunExecutionMode(
+    opts.execContext,
+    opts.container,
+    isContinuation ? preCreatedRun.metadata : undefined
+  );
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : origin?.userId;
   const prepared = await prepareDispatchAiConfiguration(
