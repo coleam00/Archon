@@ -92,11 +92,51 @@ async function resolveWorkflowSource({
   return workflowSource;
 }
 
+async function resolveRunProject({
+  values,
+  json,
+  host,
+}: WorkflowRoute): Promise<string | undefined | 1> {
+  const project = values.project as string | undefined;
+  if (project === undefined) return undefined;
+  for (const flag of ['folder', 'base-branch', 'resume', 'dry-run']) {
+    if (values[flag] !== undefined && values[flag] !== false) {
+      return await fail(json, `Error: --project cannot be combined with --${flag}.`);
+    }
+  }
+  try {
+    const { resolveAttentionProject } = await import('@archon/core/operations/attention-queue');
+    const selected = await resolveAttentionProject(host.records.codebases, project);
+    if (!selected.codebaseId) {
+      return await fail(
+        json,
+        `Error: Project '${project}' is not registered. Use archon project list to find a registered repository.`
+      );
+    }
+    const codebase = await host.records.codebases.getCodebase(selected.codebaseId);
+    if (!codebase) return await fail(json, `Error: Project '${project}' no longer exists.`);
+    if (codebase.kind !== 'repo') {
+      return await fail(
+        json,
+        'Error: --project requires a registered repository; folder projects run from their registered directory.'
+      );
+    }
+    return codebase.id;
+  } catch (error) {
+    return await fail(
+      json,
+      `Error: Cannot select registered project '${project}': ${error instanceof Error ? error.message : String(error)}\nUse archon project list to find a registered repository.`
+    );
+  }
+}
+
 function buildRunOptions(
   { values, cwd, json, detachedRunConfig }: WorkflowRoute,
-  workflowSource: string | undefined
+  workflowSource: string | undefined,
+  codebaseId: string | undefined
 ) {
   return {
+    codebaseId,
     branchName: values.branch as string | undefined,
     fromBranch:
       (values.from as string | undefined) ?? (values['from-branch'] as string | undefined),
@@ -156,6 +196,8 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
   }
   const worktreeConflict = worktreeFlagConflict(values);
   if (worktreeConflict) return await fail(json, worktreeConflict);
+  const codebaseId = await resolveRunProject(route);
+  if (codebaseId === 1) return 1;
   const workflowSource = await resolveWorkflowSource(route);
   if (workflowSource === 1) return 1;
   await route.commands.workflowRunCommand(
@@ -163,7 +205,7 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
     route.effectiveCwd,
     workflowName,
     userMessage,
-    buildRunOptions(route, workflowSource)
+    buildRunOptions(route, workflowSource, codebaseId)
   );
   return 0;
 }

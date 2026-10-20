@@ -756,6 +756,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [],
   },
   {
+    spec: '--project <id|name>',
+    description:
+      'Bind to a registered repository (see project list). Source/config come from --cwd;\nisolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.\nCannot combine with --folder, --base-branch, --resume or --dry-run.',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--branch, -b <name>',
     description: 'Create worktree for branch (or reuse existing)',
     owners: [{ command: 'workflow', subcommand: 'run' }],

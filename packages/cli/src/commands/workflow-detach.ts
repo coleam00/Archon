@@ -575,6 +575,10 @@ function buildDetachedChildArgs(
   const supersededRunId = declaration?.mode === 'supersede' ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
+  // Pin identity after name resolution so a rename cannot redirect the child.
+  if (!launch.isContinuation && options.codebaseId && launch.codebase) {
+    extraArgs.push('--project', launch.codebase.id);
+  }
   // Pin a generated branch only when isolating AND the caller didn't pass
   // --branch (an explicit --branch is already in argv). Without this, the child
   // would generate its own timestamped branch and fork a second worktree.

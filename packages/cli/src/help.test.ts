@@ -31,7 +31,7 @@ function scopedHelpOptions(argv: string[]): string {
 
 it('keeps run source and isolation flags consistent with the parser', () => {
   const options = scopedHelpOptions(['workflow', 'run']).split('\n');
-  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+  for (const name of ['project', 'workflow-source', 'no-worktree', 'folder', 'container']) {
     const parserOption = cliArgOptions[name];
     expect(parserOption).toBeDefined();
     const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
@@ -288,6 +288,9 @@ Commands:
 
 Options:
   --cwd <path>               Override working directory (default: current directory)
+  --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
+                             isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.
+                             Cannot combine with --folder, --base-branch, --resume or --dry-run.
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
