@@ -21,6 +21,7 @@ facts:
   blocked_count: 0
 route:
   decision: launch
+  ready_head: null
   brief: "stub: continue PR 8"
   reason: "stub: the body is a contract"
   attention: null

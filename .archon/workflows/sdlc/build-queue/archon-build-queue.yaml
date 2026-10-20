@@ -157,7 +157,7 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, brief, reason, attention]
+      required: [decision, ready_head, brief, reason, attention]
 
   # A round that continues a pull request starts from that pull request's head, not
   # from the branch the run's checkout was cut from, so its publish fast-forwards.

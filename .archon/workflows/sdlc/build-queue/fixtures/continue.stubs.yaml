@@ -18,6 +18,7 @@ facts:
   blocked_count: 0
 route:
   decision: launch
+  ready_head: null
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
   attention: null
