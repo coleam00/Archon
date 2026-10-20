@@ -39,7 +39,7 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   {
     id: 'variables-rule',
     label: 'The shipped user-controlled variable rule matches the engine',
-    commands: [['bun', 'test', './scripts/variables-rule-parity.test.ts']],
+    commands: [['bun', 'run', 'test', './scripts/variables-rule-parity.test.ts']],
   },
   {
     id: 'type-check',
