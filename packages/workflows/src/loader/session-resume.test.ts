@@ -253,10 +253,11 @@ nodes:
     ).toContain("consumer uses 'codex'");
   });
 
-  it('rejects named resume from the same loop_group body', () => {
-    const result = parseAddressable(`
-name: nested
-description: nested
+  it('accepts an upstream same-body source and rejects other same-body and cross-body shapes', () => {
+    const withConsumer = (consumer: string, siblingGroup = '') =>
+      parseAddressable(`
+name: same-body
+description: same-body
 nodes:
   - id: group
     loop_group:
@@ -265,12 +266,40 @@ nodes:
       nodes:
         - id: source
           prompt: source
+        - id: other
+          prompt: other
         - id: consumer
-          prompt: continue
+${consumer}
+${siblingGroup}`);
+
+    expect(
+      withConsumer(`          prompt: continue
           depends_on: [source]
-          context: { resume: source }
-`);
-    expect(result.error?.error).toContain('inside the same loop_group body');
+          context: { resume: source }`).error
+    ).toBeNull();
+    expect(
+      withConsumer(`          prompt: continue
+          depends_on: [other]
+          context: { resume: source }`).error?.error
+    ).toContain("source 'source' is not an upstream dependency");
+    expect(
+      withConsumer(
+        `          prompt: continue
+          context: { resume: elsewhere }`,
+        `  - id: sibling
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: elsewhere
+          prompt: elsewhere`
+      ).error?.error
+    ).toContain("references unknown node 'elsewhere'");
+    expect(
+      withConsumer(`          bash: echo hi
+          depends_on: [source]
+          context: { resume: source }`).error?.error
+    ).toContain("'context.resume' is only supported on command and prompt nodes");
   });
 
   it('rejects statically mismatched and fork-incapable providers', () => {

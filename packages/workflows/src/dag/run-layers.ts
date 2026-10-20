@@ -24,7 +24,12 @@ import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
-import { beginExecution, type LayerNodeResult, type RunLayersContext } from './run-context';
+import {
+  beginExecution,
+  ownsBodySessionCursor,
+  type LayerNodeResult,
+  type RunLayersContext,
+} from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
 import { isCheckoutGuarded } from './checkout-guard';
@@ -550,6 +555,7 @@ async function aggregateLayerResults(
   isParallelLayer: boolean
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
+  const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
@@ -596,7 +602,7 @@ async function aggregateLayerResults(
       const ownerNode = nodeById.get(nodeId);
       if (
         ownerNode &&
-        isNodeContextResume(ownerNode.context) &&
+        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
         output.state === 'completed' &&
         output.sessionId !== undefined &&
         sessionProvider !== undefined
