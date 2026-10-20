@@ -6,6 +6,7 @@ import type {
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
   ModelRegistry,
+  ModelRuntime,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import type { ExtensionProviderRegistration } from './resource-loader';
@@ -77,20 +78,28 @@ export let fileCreds: Record<
 > = {};
 export let runtimeOverrides: Record<string, string> = {};
 
-export const mockSetRuntimeApiKey = mock(async (providerId: string, key: string) => {
-  runtimeOverrides[providerId] = key;
-});
-export const mockGetAuth = mock(async (providerId: string) => {
-  if (runtimeOverrides[providerId]) {
-    return { auth: { apiKey: runtimeOverrides[providerId] }, source: 'runtime-override' };
+export const mockSetRuntimeApiKey = mock<ModelRuntime['setRuntimeApiKey']>(
+  async (providerId, key) => {
+    runtimeOverrides[providerId] = key;
   }
-  const cred = fileCreds[providerId];
-  if (cred?.type === 'api_key') return { auth: { apiKey: cred.key }, source: 'auth.json' };
-  if (cred?.type === 'oauth')
-    return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
-  return undefined;
-});
-export const mockCheckAuth = mock(async (providerId: string) => {
+);
+export const mockGetAuth = mock(
+  async (
+    provider: string | Parameters<ModelRuntime['getAuth']>[0],
+    _overrides?: Parameters<ModelRuntime['getAuth']>[1]
+  ): ReturnType<ModelRuntime['getAuth']> => {
+    const providerId = typeof provider === 'string' ? provider : provider.provider;
+    if (runtimeOverrides[providerId]) {
+      return { auth: { apiKey: runtimeOverrides[providerId] }, source: 'runtime-override' };
+    }
+    const cred = fileCreds[providerId];
+    if (cred?.type === 'api_key') return { auth: { apiKey: cred.key }, source: 'auth.json' };
+    if (cred?.type === 'oauth')
+      return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
+    return undefined;
+  }
+);
+export const mockCheckAuth = mock<ModelRuntime['checkAuth']>(async providerId => {
   if (runtimeOverrides[providerId]) return { type: 'api_key', source: 'runtime override' };
   if (fileCreds[providerId])
     return { type: fileCreds[providerId].type, source: 'stored credential' };
@@ -98,9 +107,8 @@ export const mockCheckAuth = mock(async (providerId: string) => {
     return { type: 'api_key', source: 'config' };
   return undefined;
 });
-export const mockHasConfiguredAuth = mock(
-  (providerId: string) =>
-    runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
+export const mockHasConfiguredAuth = mock<ModelRuntime['hasConfiguredAuth']>(
+  providerId => runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
 );
 
 export function createMockModel(provider: string, modelId: string): Model<Api> {
@@ -139,15 +147,16 @@ export type MockModelRegistry = Pick<ModelRegistry, 'find'> &
     registered?: Map<string, unknown>;
   };
 
-export type MockModelRuntime = {
-  checkAuth: typeof mockCheckAuth;
-  getModels: import('@earendil-works/pi-coding-agent').ModelRuntime['getModels'];
-  setRuntimeApiKey(providerId: string, key: string): Promise<void>;
-  getAuth(providerId: string): Promise<unknown>;
-  hasConfiguredAuth(providerId: string): boolean;
-  getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
-  listCredentials(): Promise<readonly { providerId: string }[]>;
-};
+export type MockModelRuntime = Pick<
+  ModelRuntime,
+  | 'checkAuth'
+  | 'getModels'
+  | 'setRuntimeApiKey'
+  | 'getAuth'
+  | 'hasConfiguredAuth'
+  | 'getProviderAuthStatus'
+  | 'listCredentials'
+>;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
   return {
     find: mockModelRegistryFind,
@@ -155,9 +164,7 @@ function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
     getProvider: mockModelRegistryGetProvider,
     hasConfiguredAuth: mock(model => runtime.hasConfiguredAuth(model.provider)),
     getApiKeyAndHeaders: mock(async model => {
-      const resolution = (await runtime.getAuth(model.provider)) as
-        | { auth: { apiKey?: string } }
-        | undefined;
+      const resolution = await runtime.getAuth(model.provider);
       return {
         ok: true as const,
         apiKey: resolution?.auth.apiKey,
@@ -184,11 +191,7 @@ export const mockModelRegistryConstruct = mock(
 );
 
 export const mockModelRuntimeCreate = mock(
-  async (_options?: {
-    authPath?: string;
-    modelsPath?: string;
-    signal?: AbortSignal;
-  }): Promise<MockModelRuntime> => ({
+  async (..._args: Parameters<typeof ModelRuntime.create>): Promise<MockModelRuntime> => ({
     checkAuth: mockCheckAuth,
     getModels: () => [createMockModel('google', 'gemini-2.5-pro')],
     setRuntimeApiKey: mockSetRuntimeApiKey,

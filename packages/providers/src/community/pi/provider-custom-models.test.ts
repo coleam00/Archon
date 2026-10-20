@@ -46,7 +46,7 @@ describe('PiProvider custom models', () => {
 
     // The provider removes the per-call file at turn end; capture it while the runtime loads.
     let capturedPerCallContent: string | undefined;
-    mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
+    mockModelRuntimeCreate.mockImplementationOnce(async options => {
       if (options?.modelsPath && existsSync(options.modelsPath)) {
         capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
       }
@@ -62,7 +62,7 @@ describe('PiProvider custom models', () => {
     });
 
     resetScript(scriptedAgentEnd());
-    let createArgs: { authPath?: string; modelsPath?: string } | undefined;
+    let createArgs: Parameters<typeof mockModelRuntimeCreate>[0];
     try {
       await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
@@ -78,9 +78,7 @@ describe('PiProvider custom models', () => {
       );
 
       expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
-      createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
-        | { authPath?: string; modelsPath?: string }
-        | undefined;
+      createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0];
       expect(createArgs?.modelsPath).toBeDefined();
       expect(createArgs?.modelsPath).not.toBe(userModelsPath);
 
@@ -148,8 +146,7 @@ describe('PiProvider custom models', () => {
     try {
       await run();
     } finally {
-      const perCallPath = (mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string })
-        ?.modelsPath;
+      const perCallPath = mockModelRuntimeCreate.mock.calls[0]?.[0]?.modelsPath;
       if (perCallPath) rmSync(perCallPath, { force: true });
       await removeTempTree(userModelsDir);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -158,9 +155,9 @@ describe('PiProvider custom models', () => {
   }
 
   function perCallModelsPath(): string {
-    const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string };
-    expect(createArgs.modelsPath).toBeDefined();
-    return createArgs.modelsPath as string;
+    const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0];
+    expect(createArgs?.modelsPath).toBeDefined();
+    return createArgs?.modelsPath as string;
   }
 
   test('custom provider: per-call models.json lives until the session ends', async () => {
@@ -257,7 +254,7 @@ describe('PiProvider custom models', () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
 
-    mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
+    mockModelRuntimeCreate.mockImplementationOnce(async options => {
       expect(options?.modelsPath).toBeDefined();
       expect(existsSync(options!.modelsPath!)).toBe(true);
       throw new Error('simulated SDK failure');
@@ -275,9 +272,7 @@ describe('PiProvider custom models', () => {
       expect(failure?.evidence).toContain('Pi auth storage init failed');
       expect(failure?.evidence).toContain('simulated SDK failure');
 
-      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
-        | { modelsPath?: string }
-        | undefined;
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0];
       expect(createArgs?.modelsPath).toBeDefined();
 
       expect(existsSync(createArgs!.modelsPath as string)).toBe(false);
@@ -388,9 +383,7 @@ describe('PiProvider custom models', () => {
       );
 
       expect(mockModelRuntimeCreate).toHaveBeenCalledTimes(1);
-      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
-        | { modelsPath?: string }
-        | undefined;
+      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0];
 
       expect(createArgs?.modelsPath).toBeUndefined();
     } finally {

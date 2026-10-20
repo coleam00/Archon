@@ -171,17 +171,14 @@ describe('PiProvider lifecycle', () => {
     const checking = new Promise<void>(resolve => {
       entered = resolve;
     });
-    mockCheckAuth.mockImplementationOnce((async (
-      _providerId: string,
-      options?: { signal?: AbortSignal }
-    ) => {
+    mockCheckAuth.mockImplementationOnce(async (_providerId, options) => {
       entered();
-      return new Promise((_resolve, reject) => {
+      return new Promise<never>((_resolve, reject) => {
         options?.signal?.addEventListener('abort', () => {
           reject(new Error('The operation was aborted.'));
         });
       });
-    }) as unknown as typeof mockCheckAuth);
+    });
     resetScript(scriptedAgentEnd());
 
     const pending = consume(
