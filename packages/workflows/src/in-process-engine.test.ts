@@ -20,10 +20,11 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
+const mockErrorLog = mock((..._args: unknown[]) => {});
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,
-  error: mockLogFn,
+  error: mockErrorLog,
   debug: mockLogFn,
   trace: mockLogFn,
   fatal: mockLogFn,
@@ -123,6 +124,7 @@ import type { IWorkflowStore } from './store';
 
 runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
+  errorLogs: () => mockErrorLog.mock.calls,
 });
 
 describe('InProcessWorkflowEngine.subscribe', () => {

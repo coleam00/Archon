@@ -248,6 +248,7 @@ async function capturedRun(
 
 interface WorkflowEngineContractObservations {
   executedWorkflow: () => ResolvedWorkflow | undefined;
+  errorLogs: () => readonly (readonly unknown[])[];
 }
 
 export function runWorkflowEngineContractTests(
@@ -708,6 +709,7 @@ nodes:
       new Error('status query failed'),
       new WorkflowStatusReadError('unreadable-recovery', new Error('unsupported status')),
     ])('preserves the execution error when recovery status cannot be read: %s', async readError => {
+      const priorLogCount = observations.errorLogs().length;
       const cause = new Error('config failed');
       const resumed = makeRun({ id: 'unreadable-recovery', status: 'running' });
       let writes = 0;
@@ -733,6 +735,10 @@ nodes:
       expect(await captureRejection(admission.settled)).toBe(cause);
       expect(writes).toBe(1);
       expect(resumed.status).toBe('failed');
+      expect(observations.errorLogs().slice(priorLogCount)).toContainEqual([
+        { err: readError, workflowRunId: resumed.id },
+        'workflow.resume_recovery_status_read_failed',
+      ]);
     });
 
     it('does not retry a failed terminal compensation write', async () => {
