@@ -348,10 +348,14 @@ concurrently.
   `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as
   environment variables (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`,
   `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`, `EXTERNAL_CONTEXT`,
-  `ISSUE_CONTEXT`) — read them in `bash:` as `"$ARGUMENTS"` and in `script:` via
-  `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python).
+  `ISSUE_CONTEXT`) — read an environment-delivered value in `bash:` as `"$ARGUMENTS"`
+  and in `script:` via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']`
+  (uv/python).
   A `loop_group` body's `bash:` node is the exception: the loop scope splices the
-  reply (`$LOOP_USER_INPUT`) into its source, shell-quoted.
+  reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives
+  already quoted. Read the spliced reply as an already-quoted value — assign it
+  and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather
+  than as `"$LOOP_USER_INPUT"`.
   `$nodeId.output` refs ARE substituted; give prose producers an `output_format`
   before assigning their output directly in a script.
 

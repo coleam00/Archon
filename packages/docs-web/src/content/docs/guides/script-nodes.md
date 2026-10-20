@@ -361,7 +361,7 @@ literally embedded into the code string at execution time.
 ## Environment and Isolation
 
 :::note[Shell injection prevention]
-User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection — read them as `"$ARGUMENTS"`. `script:` nodes receive these values the same way (`process.env.USER_MESSAGE`, `process.env.ARGUMENTS` in bun; `os.environ['USER_MESSAGE']`, `os.environ['ARGUMENTS']` in uv/python).
+User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection — read an environment-delivered value with `"$ARGUMENTS"`. `script:` nodes receive these values the same way (`process.env.USER_MESSAGE`, `process.env.ARGUMENTS` in bun; `os.environ['USER_MESSAGE']`, `os.environ['ARGUMENTS']` in uv/python). A `loop_group` body's `bash:` node is the exception: the loop scope splices the reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives already quoted. Read the spliced reply as an already-quoted value — assign it and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather than as `"$LOOP_USER_INPUT"`.
 :::
 
 Script subprocesses receive `process.env` merged with any codebase-scoped env
