@@ -11,6 +11,7 @@
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore, WorkflowEventCursor } from '@archon/workflows/store';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { mapWorkflowEventRow, DASHBOARD_SOURCE_EVENT_TYPES } from './workflow-bridge';
 import { DASHBOARD_STREAM } from './transport';
 
@@ -20,6 +21,23 @@ const log = createLogger('adapter.web.dashboard-poller');
 const PAGE_LIMIT = 500;
 /** Escalate from warn → error after this many consecutive failed drains (a sustained outage). */
 const FAILURE_ESCALATION_THRESHOLD = 5;
+
+function mapRowForDashboard(event: WorkflowEventRow): string | null {
+  try {
+    return mapWorkflowEventRow(event);
+  } catch (err) {
+    log.warn(
+      {
+        err,
+        eventId: event.id,
+        runId: event.workflow_run_id,
+        eventType: event.event_type,
+      },
+      'dashboard_poller.row_mapping_failed'
+    );
+    return null;
+  }
+}
 
 export type DashboardEventFeed = Pick<
   IWorkflowStore,
@@ -141,7 +159,7 @@ export class DashboardEventPoller {
         eventTypes: DASHBOARD_SOURCE_EVENT_TYPES,
       });
       for (const { event } of page.events) {
-        const sse = mapWorkflowEventRow(event);
+        const sse = mapRowForDashboard(event);
         if (sse) transport.emitWorkflowEvent(DASHBOARD_STREAM, sse);
       }
       if (page.next === this.cursor) return;
