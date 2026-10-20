@@ -44,14 +44,17 @@ const NOT_SUBSTITUTED = [
 
 /** A promise that the engine emits something about a variable, in any wording. */
 const DIAGNOSTIC =
-  /\b(?:warn|notice|log|alert|diagnostic|announce|report|emit|print|inform|tell)[A-Za-z]*(?![_\w])/gi;
+  /\b(?:warn|notice|log|alert|diagnostic|announce|report|emit|print|inform|tell|surface|remind|signal)[A-Za-z]*(?![_\w])/gi;
 
 /** A negation in front of a promise, which says the opposite of promising it. */
 const NEGATED = /\b(?:not|never|no|without|instead of|rather than)\s*$/i;
 
+/** The subject of a promise: the user-controlled variables, however the sentence names them. */
+const ABOUT_USER_CONTROLLED = /user-controlled|literal[^.]{0,60}variable/i;
+
 /** The markdown items of a document: paragraphs, list items, table rows and admonitions. */
 function items(file: string): string[] {
-  const found: string[] = [];
+  const found: string[][] = [];
   for (const chunk of readFileSync(join(REPO, file), 'utf8').split(/\n[ \t]*\n/)) {
     let current: string[] | undefined;
     for (const line of chunk.split('\n')) {
@@ -202,6 +205,19 @@ describe('the user-controlled variable rule', () => {
     }
   });
 
+  test('a copy that names examples names examples of the class', () => {
+    const expected = [...namedVariables(copies.find(copy => copy.names === 'the class')!)].sort();
+    for (const copy of copies.filter(copy => copy.names !== 'the class')) {
+      for (const name of namedVariables(copy)) {
+        if (!expected.includes(name)) {
+          throw new Error(
+            `${copy.file} names ${name}, which the user-controlled class does not contain`
+          );
+        }
+      }
+    }
+  });
+
   test('no copy promises a warning for a literal user-controlled variable', () => {
     // The whole copy, not only the rule items: a promise of the removed warning reads
     // the same wherever it stands.
@@ -212,7 +228,7 @@ describe('the user-controlled variable rule', () => {
         if (item.startsWith('```')) continue;
         for (const sentence of sentences(item)) {
           const named = [...variables].filter(variable => sentence.includes(`$${variable}`));
-          if (named.length === 0 && !/user-controlled variables?/i.test(sentence)) continue;
+          if (named.length === 0 && !ABOUT_USER_CONTROLLED.test(sentence)) continue;
           for (const match of sentence.matchAll(DIAGNOSTIC)) {
             if (NEGATED.test(sentence.slice(0, match.index))) continue;
             throw new Error(
