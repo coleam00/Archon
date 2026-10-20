@@ -191,15 +191,29 @@ describe('CommandHandler', () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockGetWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockRequestDetachedRunStop.mockImplementationOnce(() =>
-          Promise.resolve({ pid: 4242, stop: () => Promise.resolve(), release: () => undefined })
+          Promise.resolve({
+            pid: 4242,
+            stop: () =>
+              Promise.resolve({
+                survivors: [],
+                warnings: [
+                  'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.',
+                ],
+              }),
+            release: () => undefined,
+          })
         );
 
         const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
+        expect(result.message).toContain(
+          'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.'
+        );
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached', {
           cancel_reason: 'operator',
+          reason: 'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.',
         });
       });
 

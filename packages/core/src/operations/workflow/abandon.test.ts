@@ -481,6 +481,33 @@ describe('abandonWorkflow', () => {
   // real processes in run-owner-stop.test.ts and the CLI integration specs. Here the
   // operation's own decision is under test: which answers stop, fall through, or refuse.
 
+  test('preserves owner warnings alongside reclamation warnings and in the cancellation reason', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        metadata: { isolation: 'container', isolation_env_id: 'env-9' },
+      })
+    );
+    mockRequestDetachedRunStop.mockResolvedValueOnce({
+      pid: 42,
+      stop: async () => ({ survivors: [], warnings: ['Owner cleanup warning'] }),
+      release: () => undefined,
+    });
+    mockReclaimContainerEnv.mockRejectedValueOnce(new Error('fixture reclamation failure'));
+    const result = await abandonWorkflow('run-1', operator);
+    expect(result.cleanupWarnings).toHaveLength(2);
+    expect(result.cleanupWarnings?.[0]).toBe('Owner cleanup warning');
+    expect(result.cleanupWarnings?.[1]).toContain('env-9');
+    expect(result.owner).toMatchObject({
+      kind: 'stopped',
+      cleanupWarnings: ['Owner cleanup warning'],
+    });
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', {
+      cancel_reason: 'operator',
+      reason: 'Owner cleanup warning',
+    });
+  });
+
   test('stops a live owner before recording cancelled', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
     const order: string[] = [];
@@ -489,6 +516,7 @@ describe('abandonWorkflow', () => {
         pid: 42,
         stop: async () => {
           order.push('stop');
+          return { survivors: [], warnings: [] };
         },
         release: () => undefined,
       })
@@ -929,7 +957,7 @@ describe('abandon owned worktrees', () => {
     mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'running' }));
     mockRequestDetachedRunStop.mockResolvedValueOnce({
       pid: 4242,
-      stop: async () => {},
+      stop: async () => ({ survivors: [], warnings: [] }),
       release: () => {},
     });
     await operations.cancelWorkflow('run-1', operator);

@@ -272,15 +272,14 @@ type SubprocessOptions = {
   /**
    * A host node body: its deadline ends the node's whole tree before the timeout is
    * reported. On POSIX that needs the node's own process group, which only a recording
-   * owner gives it; an unrecorded POSIX node shares its owner's group, which
-   * `archon workflow cancel` kills to end a detached run, so its deadline still ends the
-   * root only.
+   * owner gives it. Detached POSIX CLI owners also record command groups and confirm
+   * their disappearance. Without a recorder, the deadline ends only the root.
    */
   endTreeOnTimeout?: true;
   /**
    * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
-   * host node. An unrecorded (detached) node is ended by its owner's group kill; a
-   * container node's command is not ended.
+   * host node. Unrecorded processes remain in their owner's group; a container node's
+   * command is not ended.
    */
   abortSignal?: AbortSignal;
   env: NodeJS.ProcessEnv;

@@ -1138,8 +1138,14 @@ who owns the run:
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
-  contacts that process, terminates its host process tree, confirms termination, and
-  only then records the run as `cancelled`.
+  contacts that process and stops its owner before recording the run as `cancelled`.
+  On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
+  then confirms those groups and the owner group are gone. A group whose leader was already
+  reaped is never signalled: cancellation still ends the run, but surviving members are
+  reported with PID, PGID, executable command and reason in `cleanupWarnings` and the run's
+  cancellation event. End those processes by exact PID. Background jobs left by completed
+  nodes and processes that deliberately leave their node group are excluded. Windows uses
+  the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run

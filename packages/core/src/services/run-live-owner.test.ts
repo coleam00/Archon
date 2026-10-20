@@ -1,5 +1,8 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, expectTypeOf, test } from 'bun:test';
+import type { z } from 'zod';
+import type { ProcessGroupStop } from '@archon/paths/plugin-process';
+import { processGroupStopSchema } from './run-owner-preparation';
 import { testTimeout } from '@archon/paths/test-utils';
 import {
   chmodSync,
@@ -423,4 +426,102 @@ describe('run live owner', () => {
       await owner.close();
     }
   });
+});
+
+describe('detached owner preparation', () => {
+  test('prepares only on commit, streams inventory, and shares holds until the last controller releases', async () => {
+    const runId = `prepared-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+    let prepared = 0;
+    let released = 0;
+    let finish!: (warnings: string[]) => void;
+    const ready = new Promise<string[]>(resolve => {
+      finish = resolve;
+    });
+    const groups = Array.from({ length: 12 }, (_, i) => ({
+      pgid: 1000 + i,
+      leaderReaped: true as const,
+      signalAttempted: false as const,
+    }));
+    const unregister = owner.registerTerminationPreparation(() => {
+      prepared++;
+      return {
+        groups,
+        ready,
+        release: () => {
+          released++;
+        },
+      };
+    });
+    const first = await requestRunLiveOwnerStop(runId);
+    const second = await requestRunLiveOwnerStop(runId);
+    try {
+      expect(prepared).toBe(0);
+      const firstCommit = first.commit();
+      const secondCommit = second.commit();
+      await waitForOwnerEvent(() => prepared === 1);
+      let acknowledged = false;
+      void firstCommit.then(() => {
+        acknowledged = true;
+      });
+      await Bun.sleep(10);
+      expect(acknowledged).toBe(false);
+      finish(['Cleanup fixture warning']);
+      expect(await firstCommit).toEqual({ groups, warnings: ['Cleanup fixture warning'] });
+      expect(await secondCommit).toEqual({ groups, warnings: ['Cleanup fixture warning'] });
+      first.release();
+      await Bun.sleep(10);
+      expect(released).toBe(0);
+      second.release();
+      await waitForOwnerEvent(() => released === 1);
+      const third = await requestRunLiveOwnerStop(runId);
+      try {
+        expect((await third.commit())?.groups).toEqual(groups);
+        expect(prepared).toBe(2);
+      } finally {
+        third.release();
+      }
+      await waitForOwnerEvent(() => released === 2);
+      unregister();
+      const legacy = await requestRunLiveOwnerStop(runId);
+      try {
+        expect(await legacy.commit()).toBeUndefined();
+      } finally {
+        legacy.release();
+      }
+    } finally {
+      first.release();
+      second.release();
+      unregister();
+      await owner.close();
+    }
+  });
+
+  test('rejects malformed and oversized preparation frames instead of acknowledging a stop', async () => {
+    for (const frame of [
+      '{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}',
+      'x'.repeat(257),
+    ]) {
+      const runId = `invalid-preparation-${crypto.randomUUID()}`;
+      const path = runLiveOwnerPath(runId);
+      const server = createServer(socket => {
+        socket.once('data', () => {
+          socket.write('{"kind":"detached","pid":12345}\n');
+          socket.once('data', () => socket.write(`preparing\n${frame}\nready\n`));
+        });
+      });
+      await listen(server, path);
+      const lease = await requestRunLiveOwnerStop(runId);
+      try {
+        await expect(lease.commit()).rejects.toThrow();
+      } finally {
+        lease.release();
+        await close(server);
+      }
+    }
+  });
+});
+
+test('lease group frames conform to the process owner facts', () => {
+  expectTypeOf<z.output<typeof processGroupStopSchema>>().toEqualTypeOf<ProcessGroupStop>();
 });

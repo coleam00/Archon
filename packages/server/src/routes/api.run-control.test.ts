@@ -104,6 +104,10 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
       pid: 4242,
       stop: async () => {
         order.push('stop');
+        return {
+          survivors: [],
+          warnings: ['Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.'],
+        };
       },
       release: () => undefined,
     }));
@@ -120,6 +124,9 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(response.status).toBe(200);
     expect(order).toEqual(['stop', 'cancel']);
     const body = (await response.json()) as { message: string };
+    expect(body.message).toContain(
+      'Surviving process PID 77, PGID 76, command /bin/sleep: leader was reaped.'
+    );
     expect(body.message).toContain("Stopped the run's live owner process (pid 4242)");
   });
 
@@ -812,7 +819,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
     mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
       pid: 4242,
-      stop: () => Promise.resolve(),
+      stop: () => Promise.resolve({ survivors: [], warnings: [] }),
       release: () => undefined,
     }));
     const { app } = makeApp();

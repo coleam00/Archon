@@ -3,6 +3,15 @@ import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync 
 import { createServer, type Server, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  PREPARATION_HEADER,
+  PREPARATION_TIMEOUT_MS,
+  readPreparationFrame,
+  writeOwnerPreparation,
+  type PrepareRunOwnerTermination,
+  type RunOwnerPreparedStop,
+  type RunOwnerTerminationPreparation,
+} from './run-owner-preparation';
 import { currentWindowsRunJob } from './windows-run-job';
 
 /** Idle lifetime for a connection that has not completed an owner handshake. */
@@ -36,6 +45,7 @@ export interface RunLiveOwner {
   close(): Promise<void>;
   /** True only while a detached controller holds a stop lease. */
   isStopRequested(): boolean;
+  registerTerminationPreparation(prepare: PrepareRunOwnerTermination): () => void;
 }
 
 export type RunLiveOwnerWatchEvent = 'attention' | 'control_handoff' | 'disconnected';
@@ -54,7 +64,7 @@ export interface RunLiveOwnerStopLease {
   /** The Windows job object holding the owner's process tree, as the owner reported it. */
   readonly windowsJob: string | undefined;
   /** Commit the lease before the caller starts terminating the process tree. */
-  commit(): Promise<void>;
+  commit(): Promise<RunOwnerPreparedStop | undefined>;
   release(): void;
   isLive(): boolean;
 }
@@ -299,6 +309,21 @@ export async function startRunLiveOwner(
   const watcherSockets = new Set<Socket>();
   const stopSockets = new Set<Socket>();
   const stopReleaseWaiters = new Set<() => void>();
+  let prepare: PrepareRunOwnerTermination | undefined;
+  let preparation: RunOwnerTerminationPreparation | undefined;
+
+  const prepareStop = (socket: Socket): void => {
+    if (!prepare) {
+      socket.write(TERMINATE_READY);
+      return;
+    }
+    try {
+      preparation ??= prepare();
+      void writeOwnerPreparation(socket, preparation).catch(() => socket.destroy());
+    } catch {
+      socket.destroy();
+    }
+  };
 
   const server = createServer(socket => {
     sockets.add(socket);
@@ -343,7 +368,7 @@ export async function startRunLiveOwner(
           phase = 'terminating';
           socket.setTimeout(0);
           for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
-          socket.write(TERMINATE_READY);
+          prepareStop(socket);
         } else {
           socket.destroy();
           return;
@@ -355,6 +380,8 @@ export async function startRunLiveOwner(
       sockets.delete(socket);
       watcherSockets.delete(socket);
       if (stopSockets.delete(socket) && stopSockets.size === 0) {
+        preparation?.release();
+        preparation = undefined;
         for (const resolve of stopReleaseWaiters) resolve();
         stopReleaseWaiters.clear();
       }
@@ -409,6 +436,16 @@ export async function startRunLiveOwner(
       return closePromise;
     },
     isStopRequested: (): boolean => stopSockets.size > 0,
+    registerTerminationPreparation: hook => {
+      if (prepare) throw new Error('Run owner already has a termination preparation hook');
+      prepare = hook;
+      return () => {
+        if (prepare !== hook) return;
+        prepare = undefined;
+        preparation?.release();
+        preparation = undefined;
+      };
+    },
   };
 }
 
@@ -632,14 +669,15 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
         resolve({
           pid: stopResponse.pid,
           windowsJob: stopResponse.windowsJob,
-          commit: async (): Promise<void> => {
+          commit: async (): Promise<RunOwnerPreparedStop | undefined> => {
             if (committed) throw new Error('Run termination lease is already committed');
             if (released || socket.destroyed || socket.readableEnded) {
               throw new Error('Run owner ended before termination started');
             }
             committed = true;
-            await new Promise<void>((ready, rejectReady) => {
+            return new Promise<RunOwnerPreparedStop | undefined>((ready, rejectReady) => {
               let acknowledgement = '';
+              let report: RunOwnerPreparedStop | undefined;
               const cleanup = (): void => {
                 socket.off('data', onData);
                 socket.off('error', onError);
@@ -653,19 +691,31 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
               };
               const onData = (data: string): void => {
                 acknowledgement += data;
-                if (Buffer.byteLength(acknowledgement) > MAX_MESSAGE_BYTES) {
-                  failReady(new Error('Run owner acknowledgement exceeded its size limit'));
-                  return;
+                let newline = acknowledgement.indexOf('\n');
+                try {
+                  while (newline !== -1) {
+                    const frame = acknowledgement.slice(0, newline + 1);
+                    acknowledgement = acknowledgement.slice(newline + 1);
+                    if (Buffer.byteLength(frame) > MAX_MESSAGE_BYTES)
+                      throw new Error('Run owner acknowledgement exceeded its size limit');
+                    if (frame === TERMINATE_READY) {
+                      cleanup();
+                      socket.setTimeout(0);
+                      ready(report);
+                      return;
+                    }
+                    if (frame === PREPARATION_HEADER && !report) {
+                      report = { groups: [], warnings: [] };
+                      socket.setTimeout(PREPARATION_TIMEOUT_MS);
+                    } else if (report) readPreparationFrame(frame, report);
+                    else throw new Error('Run owner returned an invalid acknowledgement');
+                    newline = acknowledgement.indexOf('\n');
+                  }
+                  if (Buffer.byteLength(acknowledgement) > MAX_MESSAGE_BYTES)
+                    throw new Error('Run owner acknowledgement exceeded its size limit');
+                } catch (error) {
+                  failReady(error instanceof Error ? error : new Error(String(error)));
                 }
-                const readyNewline = acknowledgement.indexOf('\n');
-                if (readyNewline === -1) return;
-                if (acknowledgement.slice(0, readyNewline + 1) !== TERMINATE_READY) {
-                  failReady(new Error('Run owner returned an invalid acknowledgement'));
-                  return;
-                }
-                cleanup();
-                socket.setTimeout(0);
-                ready();
               };
               const onError = (error: Error): void => {
                 failReady(error);

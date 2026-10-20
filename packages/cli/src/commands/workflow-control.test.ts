@@ -934,6 +934,7 @@ describe('workflowAbandonCommand', () => {
       pid: 42,
       stop: async () => {
         order.push('terminate');
+        return { survivors: [], warnings: [] };
       },
       release: mockDetachedTargetRelease,
     }));
@@ -1008,7 +1009,7 @@ describe('workflowCancelCommand', () => {
       release: mockDetachedTargetRelease,
     });
     mockDetachedTargetStop.mockReset();
-    mockDetachedTargetStop.mockResolvedValue();
+    mockDetachedTargetStop.mockResolvedValue({ survivors: [], warnings: [] });
     mockDetachedTargetRelease.mockClear();
     mockReclaimContainerEnv.mockReset();
     mockReclaimContainerEnv.mockResolvedValue();
@@ -1042,6 +1043,7 @@ describe('workflowCancelCommand', () => {
         pid: 4242,
         stop: async () => {
           order.push('terminate');
+          return { survivors: [], warnings: [] };
         },
         release: mockDetachedTargetRelease,
       };
@@ -1055,9 +1057,7 @@ describe('workflowCancelCommand', () => {
 
     expect(order).toEqual(['owner', 'terminate', 'cancel-state']);
     expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      'Host process tree stopped before run state was changed.'
-    );
+    expect(consoleSpy).toHaveBeenCalledWith('Run owner stopped before run state was changed.');
   });
 
   it('leaves run state unchanged when no live detached owner answers', async () => {
@@ -1119,8 +1119,9 @@ describe('workflowCancelCommand', () => {
       id: 'container-env-1',
       provider: 'container',
     });
-    mockDetachedTargetStop.mockImplementation(async (): Promise<void> => {
+    mockDetachedTargetStop.mockImplementation(async () => {
       order.push('terminate-owner');
+      return { survivors: [], warnings: [] };
     });
     mockReclaimContainerEnv.mockImplementation(async (): Promise<void> => {
       order.push('reclaim-container');

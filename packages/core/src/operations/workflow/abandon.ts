@@ -82,7 +82,11 @@ export async function abandonWorkflow(
   assertAbandonable(run);
   const owner = await stopLiveOwner(ctx, run);
   if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
-  const result = await recordAbandonment(ctx, run);
+  const result = await recordAbandonment(
+    ctx,
+    run,
+    owner.kind === 'stopped' ? owner.cleanupWarnings : undefined
+  );
   const { warnings, releasedWorktrees } = await releaseAbandonedWorktrees(ctx, run, result, owner);
   return {
     run,
@@ -97,7 +101,8 @@ export async function abandonWorkflow(
 
 async function recordAbandonment(
   ctx: OperationContext,
-  run: WorkflowRun
+  run: WorkflowRun,
+  stopWarnings: string[] = []
 ): Promise<AbandonAttemptResult> {
   // A cancelled run reaches here only with creation proof: the retry finishes a
   // worktree release that an earlier abandonment reported as failed.
@@ -111,7 +116,7 @@ async function recordAbandonment(
       blockedParentRunId: null,
     };
   }
-  const result = await cancelRunAndCleanup(ctx, run);
+  const result = await cancelRunAndCleanup(ctx, run, stopWarnings);
   if (!result.cancelled)
     throw new AbandonRefusedError(
       `Run ${run.id} changed before abandonment; no worktree was released. Inspect its current status.`
