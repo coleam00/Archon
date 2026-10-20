@@ -619,7 +619,8 @@ then the project's file, whose lines win where the two conflict.
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
   else can post a verdict. A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
-  A successful read resets that sequence even if later work fails.
+  Renewed build readiness gives a parked item another first-read wait. A successful
+  read resets that sequence even if later work fails.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default

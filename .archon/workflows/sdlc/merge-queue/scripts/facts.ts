@@ -87,7 +87,9 @@ function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): 
 
 function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): MergeSettled {
   const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
-  const status = doc.facts.merge?.decisions.at(-1)?.decision === UNREADABLE ? 'parked' : 'waiting';
+  const prior = doc.facts.merge;
+  const consecutive = prior?.status === 'waiting' && prior.decisions.at(-1)?.decision === UNREADABLE;
+  const status = consecutive ? 'parked' : 'waiting';
   return { item: doc.subject, pr, status, decision: UNREADABLE, reason };
 }
 

@@ -587,6 +587,19 @@ describe('the merge queue scripts', () => {
       expect(mergeWaits(doc)).toBe(status === 'waiting');
     }
     expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'sweep', items: [{ item: OTHER }], settled: [] });
+    const parked = stored(at).value as WorkItem;
+    const readyAt = new Date(Date.parse(parked.facts.merge?.at ?? '') + 1).toISOString();
+    seed(at, { ...parked, facts: { ...parked.facts, build: { ...BUILT, at: readyAt } } });
+    expect(mergeWaits(stored(at).value as WorkItem)).toBe(true);
+    for (const status of ['waiting', 'parked'] as const) {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { settled: MergeSettled[] };
+      expect(output.settled).toMatchObject([{ item: SUBJECT, status, decision: UNREADABLE }]);
+      ok(run(at, 'record', {
+        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
+      }));
+      expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status } } });
+      expect(mergeWaits(stored(at).value as WorkItem)).toBe(status === 'waiting');
+    }
   }, 60_000);
 
   test('a successful read and sweep decision break the consecutive unreadable sequence', () => {
