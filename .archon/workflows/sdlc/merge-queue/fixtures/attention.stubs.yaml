@@ -11,7 +11,6 @@ facts:
       url: "https://github.com/example/repo/pull/42"
       facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
-      prior_report: "/stub/merge/42/review/report.md"
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
@@ -21,7 +20,6 @@ sweep:
       action: ask
       class: unclear
       head: "1111111"
-      synced: false
       reran: false
       reason: "stub: a pack change; the gate passes"
       brief: "stub: rework PR 42 under the ruling"
@@ -34,9 +32,7 @@ sweep:
           - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
         if_unanswered: "stub: it waits"
         links: ["https://github.com/example/repo/pull/42"]
-  review_url: ""
-  review_prior: ""
-  dev: { state: unchecked, rerun: none, summary: "stub: nothing merged", attention: null }
+  dev: { summary: "stub: dev is green", attention: null }
   summary: "stub: asked about PR 42"
 record:
   merged: []

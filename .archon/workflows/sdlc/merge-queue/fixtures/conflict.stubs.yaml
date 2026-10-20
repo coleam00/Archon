@@ -1,9 +1,8 @@
-# Dry-run fixture, a conflict: the pull request conflicts with the default branch, so
-# the sweep merges the branch in, resolves the conflict, regenerates the generated file
-# and pushes. That push makes the verdict stale, so the delta review runs in the same
-# run, continuing from the trusted review report facts wrote. The pull request merges
-# in a later sweep, once the gate passes at the new head. The queue's scripts are
-# stubbed here and proved by .archon/scripts/__tests__/merge-queue.test.ts.
+# Dry-run fixture, a conflict: the pull request conflicts with the default branch. The
+# queue never pushes, so it goes back to the build queue with a brief to merge the
+# default branch in and resolve the conflict, and its next round brings it back Ready.
+# The queue's scripts are stubbed here and proved by
+# .archon/scripts/__tests__/merge-queue.test.ts.
 facts:
   path: sweep
   base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
@@ -13,36 +12,17 @@ facts:
       url: "https://github.com/example/repo/pull/42"
       facts: { state: open, head_revision: "1111111", mergeable: conflict, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
-      prior_report: "/stub/merge/42/review/report.md"
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
 sweep:
   decisions:
-    - { number: 42, action: review, class: clear, head: "3333333", synced: true, reran: false, reason: "stub: synced with dev; one conflict resolved, the generated file regenerated", brief: "", attention: null }
-  review_url: "https://github.com/example/repo/pull/42"
-  review_prior: "/stub/merge/42/review/report.md"
-  dev: { state: unchecked, rerun: none, summary: "stub: nothing merged", attention: null }
-  summary: "stub: synced PR 42 and sent it to a delta review"
-review__mode: '{"continuation":true,"light":false,"head":"3333333","cursor":"1111111","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":true,"tests":false,"errors":false,"docs":false,"part":null}'
-review__route: { seams: false, code: false, tests: false, errors: false, docs: false, reason: "stub: the delta is the base merge and its resolution" }
-review__scope:
-  head_matches: true
-  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
-  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
-review__code: "0 findings in the delta"
-review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
-review__synthesize: &verdict
-  ready: true
-  action: none
-  findings_summary: "stub: the delta is clean"
-  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-  discoveries: []
-  contract_left: []
-review__publish: *verdict
+    - { number: 42, action: return, class: clear, head: "1111111", reran: false, reason: "stub: it conflicts with dev in one file", brief: "stub: merge dev into PR 42 and resolve the conflict in src/a.ts", attention: null }
+  dev: { summary: "stub: dev is green", attention: null }
+  summary: "stub: sent PR 42 back for its conflict"
 record:
   merged: []
-  summary: "stub: PR 42 waits for the next sweep"
+  summary: "stub: PR 42 went back to the build queue"
   attention: ""
   options: []
   class: ""
@@ -50,5 +30,5 @@ record:
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, sweep, review__code, review__publish, record]
+  reached: [facts, sweep, record]
 exec-code: true

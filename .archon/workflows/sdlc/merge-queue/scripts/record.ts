@@ -7,9 +7,10 @@
  * show fails the record, but only after every decision is written: that pull request is
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
- * back to the build queue with its brief. A run raises at most one attention item: a red
- * default branch first, because it holds every merge, otherwise the first pull request
- * the sweep asked about, in its order. That item keeps its claim while the run waits;
+ * back to the build queue with its brief. A run raises at most one attention item: the
+ * sweep's item for a red default branch first, because it holds every merge, otherwise
+ * the first pull request the sweep asked about, in its order. That item keeps its claim
+ * while the run waits;
  * every other claim is released, and an ask that was not raised waits for the next sweep,
  * which decides it again.
  *
@@ -26,7 +27,6 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type DevAttention,
-  type DevState,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -36,7 +36,6 @@ import {
   type MergeStatus,
   type PolicyClass,
   type PrFacts,
-  type Rerun,
   readPr,
   type SweepAction,
   withMerge,
@@ -72,7 +71,6 @@ interface Decision {
   readonly action: SweepAction;
   readonly class: PolicyClass;
   readonly head: string;
-  readonly synced: boolean;
   readonly reran: boolean;
   readonly reason: string;
   readonly brief: string;
@@ -81,11 +79,7 @@ interface Decision {
 
 interface Sweep {
   readonly decisions: readonly Decision[];
-  readonly review_url: string;
-  readonly review_prior: string;
   readonly dev: {
-    readonly state: DevState;
-    readonly rerun: Rerun;
     readonly summary: string;
     readonly attention: DevAttention | null;
   };
@@ -122,7 +116,6 @@ function decide(items: readonly Item[], sweep: Sweep): Decision[] {
       action: 'wait',
       class: 'unclear',
       head: item.facts?.head_revision ?? '',
-      synced: false,
       reran: false,
       reason: 'the sweep left it undecided; the next sweep decides it',
       brief: '',
@@ -158,7 +151,6 @@ function settle(decision: Decision, after: PrFacts): Outcome {
   }
   if (decision.action === 'merged') return { status: 'waiting', reason: claimed, head, contradiction: claimed };
   const status: Record<Exclude<SweepAction, 'merged'>, MergeStatus> = {
-    review: 'waiting',
     return: 'returned',
     ask: 'waiting',
     wait: 'waiting',
@@ -173,7 +165,7 @@ function settle(decision: Decision, after: PrFacts): Outcome {
 function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<string>): Outcome {
   let after: PrFacts;
   try {
-    after = readPr(item.pr, maintainers).facts;
+    after = readPr(item.pr, maintainers);
   } catch (error) {
     return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}`, head: decision.head, contradiction: null };
   }
@@ -216,7 +208,7 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const { at, runId } = writes;
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
-  const decided = `${label} (${[decision.class, ...(decision.synced ? ['synced'] : [])].join(', ')})`;
+  const decided = `${label} (${decision.class})`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
   if (item.item === null) {
@@ -252,8 +244,7 @@ function main(): void {
   const decisions = sweep === null ? [] : decide(items, sweep);
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  // A red default branch holds every merge whether or not the sweep wrote an item for it.
-  const devAttention = sweep?.dev.state === 'red' ? sweep.dev.attention : null;
+  const devAttention = sweep?.dev.attention ?? null;
   const firstAsk = decisions.find(decision => decision.attention !== null);
   let asked: MergeAsked | null =
     devAttention !== null
@@ -272,7 +263,7 @@ function main(): void {
     raised === null
       ? ''
       : raised.by === 'dev'
-        ? renderAttention('Merge queue: the default branch is red after a batch', raised.attention)
+        ? renderAttention('Merge queue: the default branch is red', raised.attention)
         : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
 
   const runId = text(process.env.WORKFLOW_ID);
@@ -286,7 +277,7 @@ function main(): void {
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
   // the next sweep, and a red default branch is named in the failure instead.
   if (asked?.by === 'dev' && contradictions.length > 0) {
-    contradictions.push(`the default branch is red after the batch and was not raised (${sweep?.dev.summary ?? ''})`);
+    contradictions.push(`the default branch is red and was not raised (${sweep?.dev.summary ?? ''})`);
   }
   // The asked pull request was merged or closed under the question: there is nothing to ask.
   const askedPr = asked?.by === 'pr' ? asked.pr.number : null;

@@ -3,10 +3,11 @@
  *
  *   gate.ts --method <squash|merge> --pr <url> --head <sha> [--merge]
  *
- * It reads the pull request fresh and refuses unless the trusted review verdict says
- * Ready, CI is green at `head`, and the pull
- * request is open, not a draft, into the default branch, still at `head`, and `head`
- * contains the default branch's head or the forge reports it merges cleanly. Without
+ * It reads the pull request and the default branch fresh and refuses unless the trusted
+ * review verdict says Ready at `head`, CI is green at `head`, the default branch's CI is
+ * not red, and the pull request is open, not a draft, into the default branch, still at
+ * `head`, and `head` contains the default branch's head or the forge reports it merges
+ * cleanly. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head` and reads the
  * merge back. A pull request that reads back unmerged, as on a branch whose merges the
  * forge queues, fails the gate. The record node reads every pull request back itself.
@@ -23,6 +24,7 @@ import {
   mergeCommitAt,
   type PrFacts,
   prFromUrl,
+  readBase,
   readPr,
   requireGh,
 } from '../../.shared/merge.ts';
@@ -45,7 +47,7 @@ function main(): void {
   requireGh();
   const pr = prFromUrl(url);
   const maintainers = readMaintainers(pr.repo);
-  const refusals = gateRefusals(readPr(pr, maintainers).facts, head);
+  const refusals = gateRefusals(readPr(pr, maintainers), head, readBase(pr.repo));
   if (!merge || refusals.length > 0) {
     emit({ pr: url, head, refusals, merge_commit: null });
     if (merge) process.exitCode = 1;
@@ -54,7 +56,7 @@ function main(): void {
   mergeAtHead(pr, head, method);
   let after: PrFacts;
   try {
-    after = readPr(pr, maintainers).facts;
+    after = readPr(pr, maintainers);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`merged ${url} at ${head}, so declare it merged, but the read-back failed: ${reason}`);

@@ -594,49 +594,48 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   queue's last round delivered. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). The sweep
-  reviews such a pull request in full when it has no verdict, and asks instead of
-  returning it, since no build round owns it.
+  work item names yet: it gets a work item of its own (`facts.own_pr`). No build round
+  owns such a pull request, so where another would go back to the build queue (no
+  verdict, a stale one, a conflict, a holding thread) the sweep asks instead, naming
+  what is missing and the command a maintainer can launch. The queue never starts that
+  run itself.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
-  else can post a verdict. The trusted report is written under the run's
-  `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
-  review.
+  else can post a verdict.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
-  A Ready pull request with green CI that the forge reports merges cleanly into the
-  default branch merges directly, even when it is behind; the default branch's CI
-  after the batch judges the combined result. The agent syncs first only a pull
-  request that conflicts, or one whose diff moves, renames or reshapes code across a
-  package (a refactor or file split) or that its review calls cross-cutting: it merges
-  the default branch in, resolving each conflict and regenerating generated files with
-  their owning script, pushes without force, and the pull request merges once CI at the
-  synced head is green, usually in a later sweep. A
-  sync with no conflict keeps the Ready verdict; CI judges the composed result. A
-  conflict resolution, a push by anyone else, or a comment published before verdicts
-  were stamped makes the verdict stale: one such pull request gets a delta review in
-  the same run, through an included `archon-review-block` continuing from its last report,
-  and the rest wait for the next sweep. Red CI in code a pull request does not touch
+  The queue never pushes, never changes its checkout and never waits for CI. A Ready
+  pull request with green CI that the forge reports merges cleanly into the default
+  branch merges, reshape or not, even when it is behind; the default branch's CI on the
+  merge is the next sweep's first fact. Every pull request that can merge in a sweep
+  merges in it. What the build queue can fix goes back to it with a brief: a verdict
+  that is not Ready or is for another commit (a push after the review), a conflict with
+  the default branch (the round merges it in and resolves the conflict, regenerating
+  generated files with their owning script), an unresolved thread that raises a defect
+  in the change, and red the change caused. Red CI in code a pull request does not touch
   gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
-  sweep reads it so it never reruns twice at one head. The sweep measures each diff with
-  git against the merge base, not the forge's counts. What the build queue can fix (a verdict that is
-  not Ready, an unresolved thread, red the change caused) goes back to it with a
-  brief. A clear pull request whose gate passes is merged.
+  sweep reads it so it never reruns twice at one head. The sweep measures each diff
+  with git against the merge base, not the forge's counts. An unclear pull request is
+  asked as soon as its verdict is Ready at its head, even while its CI is pending or it
+  conflicts; the approval is pinned to that head and a later sweep merges it once the
+  gate passes. An approval carries to a later head only when the sweep judges that
+  everything since the approved head is merges of the default branch and their
+  conflict resolutions, and the verdict is Ready at the later head; any doubt voids it.
 - **Gate.** The sweep merges only through
-  [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
-  refuses unless the verdict says Ready and CI is green at the head (which commit the
-  verdict is for, across a clean sync, and open review threads are the sweep's judgment), and the pull request is open, not a draft, into the default
-  branch, at the head the sweep named, and that head contains the default branch's
-  head or the forge reports it merges cleanly. A clean merge of a head that is behind
-  is checked by the default branch's CI after the batch. It merges with `--match-head-commit`
+  [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request and the
+  default branch fresh and refuses unless the verdict says Ready for the head, CI is
+  green at the head, the default branch's CI is not red (pending does not hold a
+  merge), and the pull request is open, not a draft, into the default branch, at the
+  head the sweep named, and that head contains the default branch's head or the forge
+  reports it merges cleanly. Open review threads are the sweep's judgment. It merges with `--match-head-commit`
   and reads the merge back. A pull request that reads back unmerged, as when the forge
   queues merges, fails the gate.
-- **The default branch.** While its CI is red, the sweep merges nothing. After a
-  batch it waits for CI on the default branch, rerunning a red in code the batch did
-  not touch once; red after that is raised to a maintainer, naming the pull requests
-  merged without a sync since it was last green, with a revert or fix-forward
-  recommendation.
+- **The default branch.** The sweep judges it first. While its CI is red the gate
+  refuses every merge. Red in code no recent merge touched gets one rerun of its failed
+  jobs; red after that, or red in code a recent merge touched, is raised to a
+  maintainer, naming the pull requests merged since it was last green, with a revert
+  or fix-forward recommendation.
 - **Record.** The `record` script refuses a sweep that decided a pull request this
   run did not claim, because that item belongs to another run. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -648,7 +647,7 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   item it could not write. A pull
   request that cannot be read waits for the next sweep; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.
-  It runs even when the delta review failed. It writes one decision per item under
+  It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
@@ -667,9 +666,8 @@ replaces with its own `.archon/sdlc/policy/merge.md`.
   back to the build queue, whose next round starts at once; `park` stops working it until the build queue readies it
   again. Any other ask waits for a later sweep, which decides it again.
 
-The pack installs no binding. A schedule sweeps the queue; each run changes its
-checkout when it syncs a pull request, so it needs its own worktree, and one sweep at a
-time keeps two runs from syncing the same branch:
+The pack installs no binding. A schedule sweeps the queue. A run never changes its
+checkout, and the claim keeps two runs off the same item:
 
 ```json
 {
@@ -686,8 +684,7 @@ time keeps two runs from syncing the same branch:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
-      "isolation": { "kind": "worktree" }
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
