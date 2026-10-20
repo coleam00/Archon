@@ -373,6 +373,8 @@ archon workflow run investigate --project owner/repo --cwd /other/clone --no-wor
 
 Use `archon project list` to find the registered name or ID. `--no-worktree` executes in the clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message). Removing a worktree or changing the branch name does not resolve a registration refusal.
 
+Inspect the run with `archon workflow get <full-run-id>`, or run `archon workflow runs` from the registered checkout. From the separate clone, `workflow runs` falls back to an install-wide list limited to 20 rows by default.
+
 If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs. For legacy nested GitLab projects, follow the [storage recovery steps below](#legacy-nested-gitlab-storage-recovery) before changing the path.
 
 **Ownership errors:** Older registrations or manually changed worktrees can still produce the ownership errors above. Inspect `git worktree list` from the registered checkout and the checkout named in the error. Preserve in-progress work and use the registered checkout's worktree. Only remove an obsolete worktree from its owning checkout after confirming it is no longer needed. Archon refuses to adopt worktrees from another clone.

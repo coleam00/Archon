@@ -6,7 +6,10 @@ import { z } from '@hono/zod-openapi';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workflowSourceMetadataSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  terminalWorkflowRunStatusSchema,
+  workflowSourceMetadataSchema,
+} from '@archon/workflows/schemas/workflow-run';
 import { workflowRunCommand } from './workflow-run-owned';
 import { resolveRunCodebase } from './workflow-isolation';
 import type { WorkflowRunOptions } from './workflow-shared';
@@ -81,7 +84,7 @@ async function waitForTerminalRun(db: Database, runId: string): Promise<void> {
   );
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (['completed', 'failed', 'cancelled'].includes(runs.get(runId)?.status ?? '')) return;
+    if (terminalWorkflowRunStatusSchema.safeParse(runs.get(runId)?.status).success) return;
     await Bun.sleep(100);
   }
   throw new Error(`Detached run ${runId} did not reach terminal state`);

@@ -92,6 +92,10 @@ archon workflow run investigate --project owner/repo --cwd /other/clone --no-wor
 Find the registered name or ID with `archon project list`. `--no-worktree` executes in the
 clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message).
 
+Inspect the run with `archon workflow get <full-run-id>`, or run `archon workflow runs`
+from the registered checkout. From the separate clone, `workflow runs` falls back to
+an install-wide list limited to 20 rows by default.
+
 Unregistered working directories use `@cwd/<basename>-<digest>`, where the digest is
 SHA-256 of the resolved absolute directory path. Distinct directory paths have separate
 `$STATE_DIR` roots, even when their folder names match. Moving a directory changes its root.
