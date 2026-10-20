@@ -184,6 +184,7 @@ describe('supersession does not gate on output_root', () => {
       })
     );
     expect(store.getWorkflowRun).not.toHaveBeenCalledWith('superseded-run');
+    expect(adoptedRunEvents(store)).toHaveLength(1);
     const [event] = adoptedRunEvents(store) as { data: Record<string, unknown> }[];
     expect(event?.data).toMatchObject({ adopted_from_run_id: 'superseded-run', mode: 'supersede' });
   });
