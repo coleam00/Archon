@@ -588,6 +588,7 @@ describe('hook events (#2324)', () => {
     expect(chunks).toEqual([
       { type: 'hook', hookId: 'h-2', hookName: 'Edit', hookEvent: 'PreToolUse', status: 'failed' },
     ]);
+    expect(chunks[0]).not.toHaveProperty('exitCode');
   });
 
   test('drops hook_progress frames (only emitted for async hooks — none registered)', async () => {
