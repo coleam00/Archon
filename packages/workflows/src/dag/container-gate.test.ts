@@ -9,6 +9,7 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  mockLogger,
   stubMissingContainer,
   dagOptions,
   makeWorkflowRun,
@@ -303,6 +304,47 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.claimWriteback).toHaveBeenCalledTimes(1);
     expect(backend.applyChanges).not.toHaveBeenCalled(); // no double-apply
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns when an already-claimed write-back resolution cannot be recorded', async () => {
+    const backend = makeWritebackBackend();
+    const { store } = statefulGateStore({
+      pending_writeback: { envId: 'env-x' },
+      approval: wbApproval('approved'),
+    });
+    store.claimWriteback = mock(async () => ({ claimed: false }));
+    const persistError = new Error('resolution store unavailable');
+    const update = store.updateWorkflowRun;
+    store.updateWorkflowRun = mock(async (id, updates) => {
+      if (updates.metadata?.writeback_resolved === true) throw persistError;
+      await update(id, updates);
+    });
+    const originalWarn = mockLogger.warn;
+    const warn = mock((_data: unknown, _message?: string): void => undefined);
+    mockLogger.warn = warn;
+    try {
+      await runGateWithStore(store, backend, 'approve');
+      expect(warn).toHaveBeenCalledWith(
+        {
+          runId: 'wb-run',
+          operation: 'updateWorkflowRun',
+          err: persistError,
+          recovery: expect.stringContaining('inspect the run and live-folder changes'),
+        },
+        'dag.writeback_resolution_persist_failed'
+      );
+      const warning = warn.mock.calls.find(
+        ([, event]) => event === 'dag.writeback_resolution_persist_failed'
+      );
+      expect(warning?.[0]).toHaveProperty('err', persistError);
+      expect((warning?.[0] as { err: unknown }).err).toBe(persistError);
+      expect(store.claimWriteback).toHaveBeenCalledTimes(1);
+      expect(backend.applyChanges).not.toHaveBeenCalled();
+      expect(store.releaseWritebackClaim).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    } finally {
+      mockLogger.warn = originalWarn;
+    }
   });
 
   // R2-F4 — a failed apply RELEASES the claim (so `workflow resume` can retry) and

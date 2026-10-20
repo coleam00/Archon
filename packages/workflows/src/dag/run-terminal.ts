@@ -435,10 +435,12 @@ async function completeRun(
 
 /**
  * The wait a failed pass takes instead of failing, when every failed node either hit a
- * provider usage limit whose reset the provider reported and that is still ahead, or hit a
+ * provider usage limit whose reset the provider reported, or hit a
  * rate limit that outlasted its retries (deadline: its reported reset when still ahead,
  * else a jittered backoff). The run cannot progress before the last of those deadlines, so
- * it waits for it. Any other failure, a usage limit without a reported reset,
+ * it waits for it if it is still ahead. An expired usage reset does not prevent waiting
+ * for another node's later deadline: continuation retries both failed nodes. Any other
+ * failure, a usage limit without a reported reset, no deadline still ahead,
  * `autoResumeOnQuotaReset: false`, or a container run (the continuation host does not
  * continue one) leaves the run to fail. Only the typed class says a limit is hit; the
  * error text never does.
