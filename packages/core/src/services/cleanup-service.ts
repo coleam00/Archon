@@ -3,7 +3,6 @@
  * Handles removal triggered by events, schedule, or commands
  */
 import { lstat } from 'node:fs/promises';
-import { destroyEnvironment } from './cleanup-destroy';
 import {
   readOwnedWorktree,
   type OwnedWorktree,
@@ -473,7 +472,42 @@ export async function removeEnvironment(
         );
         if (liveRun) throw new Error(`Worktree kept: ${toLiveRunBlocker(liveRun).display}`);
       }
-      return destroyEnvironment(env, options, canonicalRepoPath, remote, markDestroyed);
+      const provider = getIsolationProvider();
+      // A branch this environment did not create (an existing branch it checked out)
+      // may hold the only copy of someone's commits, so local deletion requires a
+      // request for remote cleanup. Callers request that only when the branch is finished:
+      // merged, or an operator's explicit `--include-closed` or `archon complete`.
+      const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
+      const destroyResult = await provider.destroy(env.working_path, {
+        force: options?.force,
+        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
+        ...(deleteBranch ? { branchName: toBranchName(env.branch_name) } : {}),
+        canonicalRepoPath,
+        deleteRemoteBranch: options?.deleteRemoteBranch,
+        remote,
+      });
+
+      if (destroyResult.warnings.length > 0) {
+        getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
+      }
+
+      if (!destroyResult.worktreeRemoved || !destroyResult.directoryClean) {
+        return {
+          worktreeRemoved: destroyResult.worktreeRemoved,
+          branchDeleted: destroyResult.branchDeleted,
+          warnings: destroyResult.warnings,
+          skippedReason: 'filesystem removal incomplete; environment remains active',
+        };
+      }
+      await markDestroyed();
+
+      getLog().info({ envId, workingPath: env.working_path }, 'env_removed');
+
+      return {
+        worktreeRemoved: destroyResult.worktreeRemoved,
+        branchDeleted: destroyResult.branchDeleted,
+        warnings: destroyResult.warnings,
+      };
     });
   } catch (error) {
     const err = error as Error;
