@@ -2388,7 +2388,8 @@ describe('executeWorkflow', () => {
             expect(await write).toBeInstanceOf(ArtifactWriteError);
             expect(await readdir(outside)).toEqual([]);
           } else {
-            expect(await readdir(outside)).toEqual(['probe.md', 'probe.meta.json']);
+            // readdir order is filesystem-defined, so compare the sorted names.
+            expect((await readdir(outside)).sort()).toEqual(['probe.md', 'probe.meta.json']);
           }
         } finally {
           if (planted !== undefined) await rm(planted, { force: true });
