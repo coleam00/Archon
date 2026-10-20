@@ -86,6 +86,7 @@ export type { IsolationResolverDeps } from './resolver';
 
 // --- Provider ---
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
+export { getGitCommandAnchors } from './providers/worktree/shared';
 export { deleteRemoteBranchTracked } from './providers/worktree/branches';
 
 // --- PR state lookup ---

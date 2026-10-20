@@ -837,6 +837,31 @@ test('ordinary cleanup removes a proven checkout and its branch', async () => {
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
 });
 
+test.each([false, true])(
+  'remote cleanup preserves relative URL resolution (decoy repository: %s)',
+  async decoy => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(repo, 'remote', 'set-url', 'origin', '../remote.git');
+    await git(repo, 'push', '-q', 'origin', env.branch_name);
+    const wrongRemote = join(repo, 'remote.git');
+    if (decoy) {
+      await mkdir(wrongRemote);
+      await git(wrongRemote, 'init', '--bare', '-q');
+      await git(repo, 'push', '-q', wrongRemote, env.branch_name);
+    }
+    const result = await removeEnvironment(env, { deleteRemoteBranch: true });
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe('');
+    if (decoy) {
+      expect(await git(wrongRemote, 'branch', '--list', env.branch_name)).toContain(
+        env.branch_name
+      );
+    }
+    expect(await status()).toBe('destroyed');
+  }
+);
+
 test('remote deletion keeps a durable Git anchor when the codebase path is removed', async () => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(env.working_path, 'push', '-q', 'origin', env.branch_name);

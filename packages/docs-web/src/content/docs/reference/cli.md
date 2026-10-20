@@ -1487,7 +1487,7 @@ their checks. Completion with `--force` bypasses commit-safety checks, so it can
 delete a branch with unmerged commits. Merged cleanup and completion also attempt
 remote branch deletion. A remote deletion failure produces a warning;
 local removal and registration retirement can still complete while the remote
-branch remains.
+branch remains. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
@@ -1562,6 +1562,27 @@ the remote cannot be read, the worktree stays and the record says `check_failed`
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
 
+#### Recovering remote branch cleanup
+
+Remote deletion is attempted once, after local removal and registration retirement.
+Archon cleanup and completion select active registrations, so retrying either
+command cannot retry remote deletion for a retired registration.
+
+From the surviving primary checkout, verify the configured remote and the branch
+before deleting it manually. Replace `<remote>` with `worktree.remote` (default:
+`origin`) and `<branch>` with the branch reported by cleanup:
+
+```bash
+git remote get-url <remote>
+git ls-remote --heads <remote> refs/heads/<branch>
+git push <remote> --delete <branch>
+```
+
+If verification shows the wrong repository or branch, correct the selection before
+running the push. After resolving the reported network, authentication or remote
+policy failure, rerun the Git deletion command. An empty `ls-remote` result means
+the branch is already absent.
+
 ### `validate workflows [name]`
 
 Validate workflow YAML definitions and their referenced resources (command files, MCP configs, skill directories).
@@ -1604,7 +1625,9 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 
 Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
 Also attempt remote branch deletion. If that fails, completion warns and
-can still finish local removal, leaving the remote branch behind.
+can still finish local removal, leaving the remote branch behind. Archon cannot
+retry remote deletion after retiring the registration; follow
+[recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 
 ```bash
 archon complete feature-auth

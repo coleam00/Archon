@@ -137,7 +137,8 @@ to the caller.
 Cleanup holds registration exclusion through local checkout and branch removal.
 Remote branch deletion runs after the claim commits, so network operations do not
 hold the SQLite writer. A failed remote cleanup is logged as a warning; local removal
-and registration retirement can still complete.
+and registration retirement can still complete. Archon cannot retry remote deletion
+for that retired registration; see [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

@@ -11,6 +11,7 @@ import {
 import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
 import {
   deleteRemoteBranchTracked,
+  getGitCommandAnchors,
   readWorktreeBranchCreated,
   readWorktreeCreationId,
   WorktreeLeftoverError,
@@ -31,7 +32,6 @@ import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
-  getGitCheckoutIdentity,
   hasUncommittedChangesStrict,
   isWorktreeRegistered,
   worktreeExists,
@@ -450,7 +450,7 @@ export async function removeEnvironment(
     // that's the one destroy path that pushes to a remote.
     if (options?.deleteRemoteBranch && codebase?.default_cwd) {
       remote = configuredRemote(await loadRepoConfig(codebase.default_cwd));
-      remoteRepoPath = (await getGitCheckoutIdentity(codebase.default_cwd)).commonGitDir;
+      remoteRepoPath = (await getGitCommandAnchors(codebase.default_cwd)).durable;
     }
   }
 

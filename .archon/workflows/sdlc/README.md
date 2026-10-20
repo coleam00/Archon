@@ -768,7 +768,12 @@ back:
 `archon isolation cleanup --merged` across every project registered on the install. It
 removes each worktree whose pull request merged, with its local branch. It also attempts
 remote branch deletion. If it fails, cleanup warns and can still finish local
-removal, leaving the remote branch behind. A worktree with uncommitted changes, a run
+removal, leaving the remote branch behind. Archon cannot retry remote deletion
+after retiring the registration. From the primary checkout, verify the remote with
+`git remote get-url <remote>` and the branch with
+`git ls-remote --heads <remote> refs/heads/<branch>`, then remove it with
+`git push <remote> --delete <branch>`. Use the configured `worktree.remote`
+(default: `origin`) and the branch reported by cleanup. A worktree with uncommitted changes, a run
 that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
