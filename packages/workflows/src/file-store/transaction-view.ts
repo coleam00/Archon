@@ -1,4 +1,5 @@
 import {
+  TERMINAL_RUN_EVENT_TYPE,
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   CAPACITY_WAIT_METADATA_KEY,
   SOURCE_RELEASE_METADATA_KEY,
@@ -79,12 +80,7 @@ export type TransactionView = Omit<
   clearCapacityWait(id: string): void;
 };
 
-/** Events that end a run; a commit that adds one reports the run's terminal telemetry. */
-export const TERMINAL_RUN_EVENT_TYPES = [
-  'workflow_completed',
-  'workflow_failed',
-  'workflow_cancelled',
-] as const;
+export { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 
 export function createTransactionView(
   runs: Map<string, WorkflowRun>,
@@ -357,7 +353,7 @@ export function createTransactionView(
       Object.assign(run.metadata, metadata);
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_completed',
+        event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
       });
     },
@@ -378,7 +374,7 @@ export function createTransactionView(
         };
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_failed',
+        event_type: TERMINAL_RUN_EVENT_TYPE.failed,
         data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
       });
       return { failed: true };
@@ -681,7 +677,7 @@ export function createTransactionView(
         run,
         {
           workflow_run_id: id,
-          event_type: 'workflow_cancelled',
+          event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
           step_name: cancellation.step_name,
           data: {
             cancel_reason: 'approval_rejected',
@@ -707,7 +703,7 @@ export function createTransactionView(
           run: { ...structuredClone(target), status: 'cancelled' },
           event: {
             workflow_run_id: target.id,
-            event_type: 'workflow_cancelled',
+            event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
             data: { cancel_reason: 'conversation_reset' },
           },
         }))
@@ -721,7 +717,7 @@ export function createTransactionView(
       run.status = 'cancelled';
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_cancelled',
+        event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         step_name: details?.step_name,
         data: {
           ...(details?.reason === undefined ? {} : { reason: details.reason }),
@@ -738,7 +734,7 @@ export function createTransactionView(
       run.metadata.cancelled_reason = reason;
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_cancelled',
+        event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         data: { reason, cancel_reason: 'fan_out' },
       });
       return { cancelled: true };
@@ -761,7 +757,7 @@ export function createTransactionView(
         const event = events[index];
         if (
           event?.workflow_run_id === id &&
-          event.event_type === 'workflow_cancelled' &&
+          event.event_type === TERMINAL_RUN_EVENT_TYPE.cancelled &&
           FAN_OUT_CANCEL_REASONS.some(reason => reason === event.data.reason)
         )
           events.splice(index, 1);

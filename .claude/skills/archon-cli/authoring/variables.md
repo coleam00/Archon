@@ -10,7 +10,7 @@ Variables are placeholders in command files and workflow prompts that get replac
 | `$USER_MESSAGE` | All modes | Same as `$ARGUMENTS` — both resolve to the user's message |
 | `$WORKFLOW_ID` | All modes | Unique workflow run ID (for tracking and logging) |
 | `$ARTIFACTS_DIR` | All modes | Pre-created directory for this workflow run's artifacts. Write outputs here |
-| `$BASE_BRANCH` | All modes | Base branch name. Auto-detected from git, or set via `worktree.baseBranch` in config. Throws if referenced but unresolvable |
+| `$BASE_BRANCH` | All modes | The run's resolved or recorded base branch. Throws if referenced but unresolved. See the [Variable Reference](https://archon.diy/reference/variables/#workflow-variables) for resolution and child inheritance rules |
 | `$DOCS_DIR` | All modes | Documentation directory (config `docs.path`, default `docs/`). Never throws |
 | `$CONTEXT` | All modes | GitHub issue/PR context (if available from platform). Empty string if unavailable |
 | `$EXTERNAL_CONTEXT` | All modes | Alias for `$CONTEXT` |

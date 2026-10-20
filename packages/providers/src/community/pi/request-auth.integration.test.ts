@@ -35,11 +35,11 @@
  * uses. If the SDK ever fails to import, every other Pi test fails too —
  * this test will surface the same failure with an actionable label.
  *
- * Mock-isolation note: `provider.test.ts` mocks
- * `@earendil-works/pi-coding-agent` at module scope, and Bun's
+ * Mock isolation: `provider-test-fixture.ts` mocks the Pi SDK at module
+ * scope for the provider unit tests, and Bun's
  * `mock.module()` is process-global, irreversible, AND matches all
  * subpath imports of a mocked package (AGENTS.md, #2240; verified against
- * bun 1.3.11). Running this test alongside `provider.test.ts` in a single
+ * bun 1.3.11). Running this test alongside the provider unit tests in a single
  * `bun test <file1> <file2>` invocation therefore contaminates the SDK
  * here even when we use a deep subpath — the SDK is loaded by file path,
  * but the mock registration matches by package specifier and is applied to
@@ -87,7 +87,7 @@ interface ModelRuntimeCtor {
 
 /**
  * Load the REAL `ModelRuntime` class via a deep subpath that
- * `provider.test.ts`'s `mock.module('@earendil-works/pi-coding-agent', …)`
+ * `provider-test-fixture.ts`'s `mock.module('@earendil-works/pi-coding-agent', …)`
  * does not match in isolation. Resolved from the package's main entry —
  * bun's hoisted install path is opaque, so we derive `dist/core/model-runtime.js`
  * from the resolved `dist/index.js` location.
@@ -115,12 +115,11 @@ async function loadRealModelRuntime(): Promise<ModelRuntimeCtor> {
  * `realSdkAvailable` and used by `test.skipIf(...)` below. This is the
  * reviewer's option 2 ("Skip the test when `import.meta.resolve` probes a
  * mock — fragile"), and it IS fragile: if the mock factory grows
- * `getModel` (it shouldn't, since `provider.test.ts` only stubs the
+ * `getModel` (it shouldn't, since `provider-test-fixture.ts` only stubs the
  * auth-call surface), the probe would silently say the SDK is real when it
- * isn't. The trade-off is acceptable because (a) `provider.test.ts` is the
- * only file in this package that mocks the SDK, (b) the SDK's auth-call
+ * isn't. The shared mock lives in `provider-test-fixture.ts`; the SDK's auth-call
  * surface is large and not stubbed today (it's the point of the unit tests
- * there to NOT stub the full surface), and (c) the CI runs each file in
+ * there to NOT stub the full surface). CI runs each file in
  * its own `bun test` process so the probe always returns `true` in CI.
  */
 async function probeRealSdkAvailable(): Promise<boolean> {
@@ -152,7 +151,7 @@ if (!realSdkAvailable) {
   console.warn(
     '\n⚠️  request-auth.integration.test.ts: skipping SDK-dependent tests\n' +
       '   Real ModelRuntime is not available in this bun process — the\n' +
-      "   '@earendil-works/pi-coding-agent' mock from provider.test.ts is in\n" +
+      "   '@earendil-works/pi-coding-agent' mock from provider-test-fixture.ts is in\n" +
       '   effect. Run this file in its own bun invocation to exercise the\n' +
       '   real SDK end-to-end:\n' +
       '\n' +

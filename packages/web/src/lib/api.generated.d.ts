@@ -1259,7 +1259,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List registered codebases */
+    /** List codebases with the newest representative of each resolved repository remote */
     get: {
       parameters: {
         query?: never;
@@ -5365,7 +5365,7 @@ export interface components {
         items: string;
         as?: string;
         /** @default 5 */
-        max_parallel: number;
+        max_parallel: number | 'all';
         /**
          * @default all_done
          * @enum {string}
@@ -5376,7 +5376,26 @@ export interface components {
       input?: string;
       /** @enum {string} */
       isolation?: 'inherit' | 'worktree';
-    };
+    } & (
+      | {
+          /** @enum {string} */
+          include?: never;
+        }
+      | {
+          include: string;
+          fan_out?: {
+            items: string;
+            as: string;
+            /** @default 5 */
+            max_parallel: number;
+            /**
+             * @default all_done
+             * @enum {string}
+             */
+            join: 'all_success' | 'all_done' | 'first_success';
+          };
+        }
+    );
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {

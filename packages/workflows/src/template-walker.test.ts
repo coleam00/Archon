@@ -169,6 +169,10 @@ const STRING_FIELD_CLASSIFICATIONS = {
     slots: ['workflow.fan_out.items', 'compose_fan_out.fan_out.items'],
   },
   'fan_out.as': { kind: 'literal', reason: 'Fan-out alias is an input identifier' },
+  'fan_out.max_parallel': {
+    kind: 'literal',
+    reason: 'Fan-out concurrency is a numeric bound or the literal all policy',
+  },
   'fan_out.join': { kind: 'literal', reason: 'Fan-out join is an execution policy enum' },
   'with.*': {
     kind: 'template',

@@ -996,7 +996,7 @@ export function captureCodebaseRegistered(): void {
   });
 }
 
-const TERMINAL_EVENT = {
+export const WORKFLOW_TERMINAL_EVENT_TYPE = {
   completed: 'workflow_completed',
   failed: 'workflow_failed',
   cancelled: 'workflow_cancelled',
@@ -1021,7 +1021,7 @@ export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void
   fireAndForget(client => {
     client.capture({
       distinctId: getTelemetryId(),
-      event: TERMINAL_EVENT[props.outcome],
+      event: WORKFLOW_TERMINAL_EVENT_TYPE[props.outcome],
       properties: {
         ...PRIVACY_INVARIANTS,
         ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),

@@ -44,6 +44,7 @@ import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { runWithAdoptedRunDir } from './workflow-variables';
+import { withContainerArtifactsRoot } from './artifact-writes';
 import { announceRunStart } from './run-start';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import { logWorkflowError } from './logger';
@@ -122,6 +123,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * auto-detection remains the last resort.
    */
   baseBranch?: string;
+  /** Already resolved checkout base, including unresolved empty; recorded resumes take priority. */
+  resolvedBaseBranch?: string;
   /**
    * Per-dispatch base-branch override (CLI `--base <branch>`), the top
    * precedence level for `$BASE_BRANCH` — above repo config and the codebase
@@ -324,16 +327,26 @@ export async function executeWorkflow(
   if (paths.stopped) return paths.result;
   const { artifactsDir, workflowSourceDir, logDir, stateDir, outputRoot, scopeArtifactsDir } =
     paths.value;
+  // A container mounts this run's artifacts directory read-write, so engine writes into
+  // it are checked against links the container planted. Entered on every run so a
+  // child run never inherits its parent's root.
+  const withArtifactWrites = <T>(operation: () => T): T =>
+    withContainerArtifactsRoot(
+      execContext.kind === 'container' ? artifactsDir : undefined,
+      operation
+    );
 
   if (checkoutBaselineSample !== undefined) {
-    const baselineFailure = await recordRunCheckoutBaseline(
-      deps,
-      platform,
-      conversationId,
-      workflowRun,
-      checkoutBaselineSample,
-      artifactsDir,
-      cutFromCommit
+    const baselineFailure = await withArtifactWrites(() =>
+      recordRunCheckoutBaseline(
+        deps,
+        platform,
+        conversationId,
+        workflowRun,
+        checkoutBaselineSample,
+        artifactsDir,
+        cutFromCommit
+      )
     );
     if (baselineFailure) return baselineFailure;
   }
@@ -384,15 +397,17 @@ export async function executeWorkflow(
     // win over file/db/bot-github env — preserves the GitHub merge order and
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
     // returns empty bags when the feature is disabled or no userId is present).
-    await clearManagedProviderCredentialFiles(artifactsDir);
-    await assertRunCredentials(deps, prepared, { cwd, execContext });
-    const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
-      deps,
-      executionUserId,
-      artifactsDir,
-      prepared.requirements,
-      prepared.connectedVendors
-    );
+    const { env: userProviderEnv, protectedValues } = await withArtifactWrites(async () => {
+      await clearManagedProviderCredentialFiles(artifactsDir);
+      await assertRunCredentials(deps, prepared, { cwd, execContext });
+      return resolveUserProviderEnvForWorkflow(
+        deps,
+        executionUserId,
+        artifactsDir,
+        prepared.requirements,
+        prepared.connectedVendors
+      );
+    });
     config.envVars = { ...config.envVars, ...userProviderEnv };
     config.userCredentialEnvKeys = Object.keys(userProviderEnv);
     for (const key of Object.keys(userProviderEnv)) {
@@ -461,51 +476,54 @@ export async function executeWorkflow(
     // from a node re-enters
     // `executeWorkflow` and scopes its own (absent) adoption.
     const dagResult = await runWithAdoptedRunDir(adoptedRunDir, () =>
-      executeDagWorkflow({
-        deps,
-        platform,
-        conversationId,
-        cwd,
-        workflow,
-        workflowRun: runForDag,
-        workflowProvider: resolvedProvider,
-        workflowModel: resolvedModel,
-        artifactsDir,
-        stateDir,
-        logDir,
-        baseBranch,
-        docsDir,
-        config,
-        configuredCommandFolder,
-        issueContext,
-        priorCompletedNodes,
-        // Only a run continued after a pause has moved past its earlier failures.
-        replayedFailures: resumeCause === 'continue_after_wait' ? priorFailedNodes : undefined,
-        aiProfile,
-        workflowPreset,
-        scopeArtifactsDir,
-        execContext,
-        containerCtx,
-        // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
-        // import cycle) so a `workflow:` node can spawn a governed child run in-process.
-        // Also captures the per-child isolation resolver (slice 2, PR-A) so an
-        // `isolation: 'worktree'` child gets its own worktree cwd.
-        runChildWorkflow: (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
-          runChildWorkflow(
-            deps,
-            platform,
-            childArgs,
-            resolvedModelOverrides,
-            effectiveRunConfig,
-            resolveChildIsolation
-          ),
-        priorUsage,
-        priorNodeSessions,
-        // Container runs resolve from the capture like every other run: it is bind-mounted
-        // read-only at the SAME absolute path inside the container, so one source-roots
-        // value means the same thing on both sides of the boundary.
-        workflowSourceRoots,
-      })
+      withArtifactWrites(() =>
+        executeDagWorkflow({
+          deps,
+          platform,
+          conversationId,
+          cwd,
+          workflow,
+          workflowRun: runForDag,
+          workflowProvider: resolvedProvider,
+          workflowModel: resolvedModel,
+          artifactsDir,
+          stateDir,
+          logDir,
+          baseBranch,
+          docsDir,
+          config,
+          configuredCommandFolder,
+          issueContext,
+          priorCompletedNodes,
+          // Only a run continued after a pause has moved past its earlier failures.
+          replayedFailures: resumeCause === 'continue_after_wait' ? priorFailedNodes : undefined,
+          aiProfile,
+          workflowPreset,
+          scopeArtifactsDir,
+          execContext,
+          containerCtx,
+          // Sub-run closure (#2121 Phase 2): captures executeWorkflow (this module — no
+          // import cycle) so a `workflow:` node can spawn a governed child run in-process.
+          // Also captures the per-child isolation resolver (slice 2, PR-A) so an
+          // `isolation: 'worktree'` child gets its own worktree cwd.
+          runChildWorkflow: (childArgs: RunChildWorkflowArgs): Promise<ChildWorkflowOutcome> =>
+            runChildWorkflow(
+              deps,
+              platform,
+              childArgs,
+              resolvedModelOverrides,
+              effectiveRunConfig,
+              baseBranch,
+              resolveChildIsolation
+            ),
+          priorUsage,
+          priorNodeSessions,
+          // Container runs resolve from the capture like every other run: it is bind-mounted
+          // read-only at the SAME absolute path inside the container, so one source-roots
+          // value means the same thing on both sides of the boundary.
+          workflowSourceRoots,
+        })
+      )
     );
 
     if (typeof dagResult === 'object') {

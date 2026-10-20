@@ -482,7 +482,7 @@ export async function executeFanOutWorkflowNode(
 
   const windowFailure = await driveChildWindow(
     items.length,
-    fanOut.max_parallel,
+    fanOut.max_parallel === 'all' ? items.length : fanOut.max_parallel,
     state,
     spawn,
     () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
