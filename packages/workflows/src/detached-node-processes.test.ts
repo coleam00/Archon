@@ -132,12 +132,12 @@ posixOnly(
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
       expect(settled).toBe(false);
-      for (const endTreeOnTimeout of [true, undefined] as const) {
+      for (const options of [{ endTreeOnTimeout: true }, {}, { ownProcessGroup: true }] as const) {
         await expect(
           runSubprocess({ kind: 'host' }, '/bin/echo', ['blocked'], {
             cwd: dir,
             env: {},
-            endTreeOnTimeout,
+            ...options,
             retention: { standalone: true },
           })
         ).rejects.toThrow('The run owner is terminating');
