@@ -63,6 +63,7 @@ import { watchAttentionQueue, type AttentionStreamLine } from './attention-watch
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
+  seedPersistedWait(runId: string, wait: Record<string, unknown>): Promise<void>;
   backdate(
     runId: string,
     dates: { started_at?: Date; last_activity_at?: Date | null }
@@ -1499,6 +1500,48 @@ export function describeWorkflowStoreConformance(
       expect(await store.listWorkflowEvents(run.id)).toEqual(events);
     });
 
+    test.each(['create', 'update', 'complete', 'resolve'] as const)(
+      '%s validates waits in generic metadata before changing rows or events',
+      async operation => {
+        const run = await running(store);
+        if (operation === 'update')
+          await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });
+        if (operation === 'resolve') await store.pauseWorkflowRun(run.id, approval);
+        const id = operation === 'create' ? crypto.randomUUID() : run.id;
+        const write = (value: unknown): Promise<unknown> => {
+          const metadata = { wait: value, extra: true };
+          switch (operation) {
+            case 'create':
+              return create(store, { id, metadata });
+            case 'update':
+              return store.updateWorkflowRun(id, { metadata });
+            case 'complete':
+              return store.completeWorkflowRun(id, { duration_ms: 1 }, metadata);
+            case 'resolve':
+              return store.resolveApprovalGate(id, metadata, gateEvents(0));
+          }
+        };
+        const before = await store.getWorkflowRun(id);
+        const events = await store.listWorkflowEvents(id);
+        for (const invalid of [
+          { ...wait, futureField: true },
+          { ...wait, resumeAt: 42 },
+        ]) {
+          await expect(write(invalid)).rejects.toThrow();
+          expect(await store.getWorkflowRun(id)).toEqual(before);
+          expect(await store.listWorkflowEvents(id)).toEqual(events);
+        }
+        await write(wait);
+        expect((await store.getWorkflowRun(id))?.metadata).toMatchObject({ wait, extra: true });
+      }
+    );
+
+    test('approval pauses discard caller-supplied wait metadata', async () => {
+      const run = await running(store);
+      await store.pauseWorkflowRun(run.id, approval, { wait: { ...wait, futureField: true } });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toBeUndefined();
+    });
+
     test('future wait fields preserve attention actions, continuations and event signals', async () => {
       const run = await running(store);
       await store.pauseWorkflowRunForWait(run.id, attentionWait, {
@@ -1510,11 +1553,8 @@ export function describeWorkflowStoreConformance(
         if (!current) throw new Error('Expected paused run');
         return current;
       };
-      const seedFuture = async (context: WorkflowWaitContext): Promise<void> => {
-        await store.updateWorkflowRun(run.id, {
-          metadata: { wait: { ...context, futureField: true } },
-        });
-      };
+      const seedFuture = (context: WorkflowWaitContext): Promise<void> =>
+        harness.seedPersistedWait(run.id, { ...context, futureField: true });
       await seedFuture(attentionWait);
       expect(pausedAttentionWait(await currentRun())).toEqual(attentionWait);
       expect(
@@ -1850,6 +1890,7 @@ export function describeWorkflowStoreConformance(
         kind: 'started',
         stepName: limit.nodeId,
       });
+      await harness.seedPersistedWait(run.id, { ...limit, futureField: true });
       const paused = await store.getWorkflowRun(run.id);
       expect(paused?.status).toBe('paused');
       expect(paused && continuablePauseCursor(paused)).toEqual(deadlineWaitCursor(limit));

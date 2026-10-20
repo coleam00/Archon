@@ -10,6 +10,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   TOOL_CALL_ATTENTION_METADATA_KEY,
   toolCallAttentionArraySchema,
+  validateWorkflowWaitMetadata,
   type ToolCallAttention,
   type WorkflowRun,
   type WorkflowRunOutcome,
@@ -104,6 +105,7 @@ export async function updateWorkflowRun(
   const setClauses: string[] = [];
   const values: unknown[] = [];
   const requestedStatus: WorkflowRunStatus | undefined = updates.status;
+  validateWorkflowWaitMetadata(updates.metadata);
 
   if (requestedStatus !== undefined && TERMINAL_WORKFLOW_STATUSES.includes(requestedStatus)) {
     throw new Error(`Terminal workflow status '${requestedStatus}' requires a lifecycle writer`);

@@ -42,6 +42,7 @@ import {
   isAttentionQueueRow,
   workflowWaitStepName,
   workflowWaitContextSchema,
+  validateWorkflowWaitMetadata,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
@@ -198,6 +199,7 @@ export function createTransactionView(
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
+    validateWorkflowWaitMetadata(input.metadata);
     const origin =
       input.origin && Object.values(input.origin).some(value => value !== undefined)
         ? structuredClone(input.origin)
@@ -321,6 +323,7 @@ export function createTransactionView(
       return structuredClone(run);
     },
     updateWorkflowRun: async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
+      validateWorkflowWaitMetadata(updates.metadata);
       const run = row(id);
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
@@ -347,6 +350,7 @@ export function createTransactionView(
       completion,
       metadata
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
@@ -400,6 +404,7 @@ export function createTransactionView(
       gateEvents,
       expected
     ): ReturnType<IWorkflowStore['resolveApprovalGate']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       Object.assign(run.metadata, structuredClone(metadata));

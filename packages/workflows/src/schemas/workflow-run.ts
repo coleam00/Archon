@@ -174,6 +174,10 @@ export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
 export type WorkflowAttentionWaitContext = Extract<WorkflowWaitContext, { kind: 'attention' }>;
 export type WorkflowUsageLimitWaitContext = Extract<WorkflowWaitContext, { kind: 'quota' }>;
 
+export function validateWorkflowWaitMetadata(metadata: Record<string, unknown> | undefined): void {
+  if (metadata && Object.hasOwn(metadata, 'wait')) workflowWaitContextSchema.parse(metadata.wait);
+}
+
 const workflowWaitContextKeys = new Set(
   workflowWaitContextSchema.options.flatMap(branch => Object.keys(branch.shape))
 );
