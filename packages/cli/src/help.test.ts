@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
@@ -290,7 +292,7 @@ Options:
   --cwd <path>               Override working directory (default: current directory)
   --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
                              isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.
-                             Cannot combine with --folder, --base-branch, --resume or --dry-run.
+                             Cannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
@@ -473,4 +475,17 @@ it('documents host metadata separately from plugin operations', () => {
   expect(scoped).toContain('without credentials or forge operations');
   expect(scoped).toContain('"host":"github.com"');
   expect(renderHelp()).not.toContain('forge metadata');
+});
+
+it('keeps the documented run project conflicts aligned with CLI policy', () => {
+  const docs = readFileSync(
+    join(import.meta.dir, '../../docs-web/src/content/docs/reference/cli.md'),
+    'utf8'
+  );
+  const row = docs.split('\n').find(line => line.startsWith('| `--project <id\\|name>`'));
+  expect(row).toBeDefined();
+  const conflicts = row?.split('Refused with ')[1]?.split(', and for folder projects.')[0];
+  expect(conflicts).toBeDefined();
+  const flags = [...(conflicts ?? '').matchAll(/`--([^`]+)`/g)].map(match => match[1]);
+  expect(flags).toEqual([...RUN_PROJECT_CONFLICT_FLAGS]);
 });

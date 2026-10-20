@@ -1,6 +1,6 @@
 import { resolve } from 'path';
 import { stat } from 'fs/promises';
-import { rejectConfigOnContinue } from '../dispatch-guards';
+import { rejectConfigOnContinue, RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import { fail } from './context';
 import type { WorkflowRoute } from './workflow';
 
@@ -99,21 +99,28 @@ async function resolveRunProject({
 }: WorkflowRoute): Promise<string | undefined | 1> {
   const project = values.project as string | undefined;
   if (project === undefined) return undefined;
-  for (const flag of ['folder', 'base-branch', 'resume', 'dry-run']) {
+  for (const flag of RUN_PROJECT_CONFLICT_FLAGS) {
     if (values[flag] !== undefined && values[flag] !== false) {
       return await fail(json, `Error: --project cannot be combined with --${flag}.`);
     }
   }
   try {
-    const { resolveAttentionProject } = await import('@archon/core/operations/attention-queue');
-    const selected = await resolveAttentionProject(host.records.codebases, project);
-    if (!selected.codebaseId) {
+    const claims = await host.records.codebases.listCodebaseClaims();
+    const byId = claims.find(row => row.id === project);
+    const matches = byId ? [byId] : claims.filter(row => row.name === project);
+    if (matches.length > 1) {
+      throw new Error(
+        `Project name '${project}' matches ${matches.length} codebases (${matches.map(row => row.id).join(', ')}). Name one by id.`
+      );
+    }
+    const [selected] = matches;
+    if (!selected) {
       return await fail(
         json,
         `Error: Project '${project}' is not registered. Use archon project list to find a registered repository.`
       );
     }
-    const codebase = await host.records.codebases.getCodebase(selected.codebaseId);
+    const codebase = await host.records.codebases.getCodebase(selected.id);
     if (!codebase) return await fail(json, `Error: Project '${project}' no longer exists.`);
     if (codebase.kind !== 'repo') {
       return await fail(

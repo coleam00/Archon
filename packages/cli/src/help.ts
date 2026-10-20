@@ -17,6 +17,7 @@
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
 import { attachmentCommands } from './attachment-commands';
+import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 
 interface FlagOwner {
   command: string;
@@ -757,8 +758,7 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--project <id|name>',
-    description:
-      'Bind to a registered repository (see project list). Source/config come from --cwd;\nisolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.\nCannot combine with --folder, --base-branch, --resume or --dry-run.',
+    description: `Bind to a registered repository (see project list). Source/config come from --cwd;\nisolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.\nCannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.`,
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

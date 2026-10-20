@@ -75,6 +75,18 @@ interface RunRow {
   status: string;
 }
 
+async function waitForTerminalRun(db: Database, runId: string): Promise<void> {
+  const runs = db.query<Pick<RunRow, 'status'>, [string]>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = ?'
+  );
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (['completed', 'failed', 'cancelled'].includes(runs.get(runId)?.status ?? '')) return;
+    await Bun.sleep(100);
+  }
+  throw new Error(`Detached run ${runId} did not reach terminal state`);
+}
+
 test('nested repo registers independently and its worktree retains the child owner', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-codebase-resolution-'));
   roots.push(root);
@@ -600,6 +612,11 @@ test('explicit project binds a separate clone while preserving launch source and
       'INSERT INTO remote_agent_codebase_env_vars (id, codebase_id, key, value) VALUES (?, ?, ?, ?)',
       [crypto.randomUUID(), project.id, 'BINDING_ENV', 'registered-env']
     );
+    db.run('INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)', [
+      'legacy-id',
+      'legacy/project',
+      'projects/legacy',
+    ]);
     const run = (flags: string[]): SpawnSyncReturns<string> =>
       spawnSync(
         process.execPath,
@@ -630,6 +647,16 @@ test('explicit project binds a separate clone while preserving launch source and
     for (const { selector, flags, source } of [
       { selector: project.name, flags: ['--no-worktree'], source: 'clone-source' },
       {
+        selector: project.name,
+        flags: ['--no-worktree', '--detach', '--json'],
+        source: 'clone-source',
+      },
+      {
+        selector: project.id,
+        flags: ['--no-worktree', '--detach', '--json'],
+        source: 'clone-source',
+      },
+      {
         selector: project.id,
         flags: ['--branch', 'binding-probe', '--from', 'main'],
         source: 'clone-source',
@@ -642,6 +669,11 @@ test('explicit project binds a separate clone while preserving launch source and
     ]) {
       const launched = run(['--project', selector, ...flags]);
       expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+      if (flags.includes('--detach')) {
+        const receipt = z.object({ runId: z.string() }).parse(JSON.parse(launched.stdout));
+        await waitForTerminalRun(db, receipt.runId);
+        expect(runs.all().at(-1)?.id).toBe(receipt.runId);
+      }
       const row = runs.all().at(-1);
       if (!row) throw new Error('Missing run');
       expect(row).toMatchObject({ codebase_id: project.id, status: 'completed' });
@@ -673,12 +705,20 @@ test('explicit project binds a separate clone while preserving launch source and
       );
     }
     const count = runs.all().length;
+    for (const selector of ['legacy-id', 'legacy/project']) {
+      const refused = run(['--project', selector, '--no-worktree']);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+      expect(refused.stderr).toContain('stored default_cwd that is not absolute');
+    }
     for (const flags of [['--project', 'unknown/repo', '--no-worktree'], ['--no-worktree']]) {
       const refused = run(flags);
       expect(refused.status, refused.stdout + refused.stderr).toBe(1);
     }
     expect(runs.all()).toHaveLength(count);
-    expect(projects.all()).toEqual([project]);
+    expect(projects.all()).toEqual([
+      project,
+      { id: 'legacy-id', name: 'legacy/project', default_cwd: 'projects/legacy' },
+    ]);
   } finally {
     db.close();
   }

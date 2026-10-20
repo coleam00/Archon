@@ -365,7 +365,13 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 - `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
 - `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
 
-**Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. Removing a worktree or changing the branch name does not resolve a registration refusal.
+**Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. For a fresh run from the separate clone, bind it to the existing project instead:
+
+```bash
+archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree
+```
+
+Use `archon project list` to find the registered name or ID. `--no-worktree` executes in the clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message). Removing a worktree or changing the branch name does not resolve a registration refusal.
 
 If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs. For legacy nested GitLab projects, follow the [storage recovery steps below](#legacy-nested-gitlab-storage-recovery) before changing the path.
 

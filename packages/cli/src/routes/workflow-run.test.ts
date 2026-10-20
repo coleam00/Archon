@@ -4,6 +4,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
 import { runWorkflowRun } from './workflow-run';
@@ -46,10 +47,12 @@ async function invoke(
     return true;
   });
   const result = await captureWorkflowCommand(home, async host => {
-    const list = spyOn(host.records.codebases, 'listCodebases').mockImplementation(async () => {
-      if (options.lookupError) throw new Error('registry unavailable');
-      return rows;
-    });
+    const list = spyOn(host.records.codebases, 'listCodebaseClaims').mockImplementation(
+      async () => {
+        if (options.lookupError) throw new Error('registry unavailable');
+        return rows;
+      }
+    );
     const get = spyOn(host.records.codebases, 'getCodebase').mockImplementation(async id =>
       options.missing ? null : (rows.find(row => row.id === id) ?? null)
     );
@@ -118,18 +121,15 @@ test('flag absent preserves cwd and options without selecting a project', async 
   });
 });
 
-test.each(['folder', 'base-branch', 'resume', 'dry-run'])(
-  'refuses --project with --%s',
-  async flag => {
-    const result = await invoke({
-      project: repo.name,
-      [flag]: flag === 'base-branch' ? 'main' : true,
-    });
-    expect(result.exitCode).toBe(1);
-    expect(result.output).toContain(`--${flag}`);
-    expect(result.run).not.toHaveBeenCalled();
-  }
-);
+test.each([...RUN_PROJECT_CONFLICT_FLAGS])('refuses --project with --%s', async flag => {
+  const result = await invoke({
+    project: repo.name,
+    [flag]: flag === 'base-branch' ? 'main' : true,
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`--${flag}`);
+  expect(result.run).not.toHaveBeenCalled();
+});
 
 test.each(['', 'unknown/repo', '@cwd/unknown', '_folder/unknown', 'not a key'])(
   'refuses unregistered selector %j before launch',
