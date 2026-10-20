@@ -658,7 +658,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         webAuthEnabled: true,
         multiUser: false,
         githubAuthMode: 'app',
-        adapterSlack: true,
+        chatPluginIds: ['slack'],
         adapterTelegram: false,
         adapterDiscord: false,
         adapterGitea: false,
@@ -674,7 +674,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         dbKind: 'postgresql',
         webAuthEnabled: true,
         githubAuthMode: 'app',
-        adapterSlack: true,
+        chatPluginIds: ['slack', 'community-chat'],
         // multiUser and the remaining adapter booleans intentionally omitted —
         // absent fields must be omitted from the wire, not sent as undefined.
       });
@@ -685,6 +685,8 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(props.web_auth_enabled).toBe(true);
     expect(props.github_auth_mode).toBe('app');
     expect(props.adapter_slack).toBe(true);
+    expect(props.chat_plugins).toBe(2);
+    expect(JSON.stringify(props)).not.toContain('community-chat');
     // Omitted fields must not appear on the wire at all
     expect('multi_user' in props).toBe(false);
     expect('adapter_telegram' in props).toBe(false);

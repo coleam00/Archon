@@ -22,6 +22,8 @@ export interface GitHubAppConfig {
   defaultInstallationId?: number;
   /** App slug (e.g. "archon"); used to derive the bot login `<slug>[bot]` for self-filter. */
   slug: string;
+  /** REST API root the App's clients call: `https://api.github.com` or `<GITHUB_URL>/api/v3`. */
+  apiBaseUrl: string;
 }
 
 /** A cached installation token with its absolute expiry timestamp (ms epoch). */

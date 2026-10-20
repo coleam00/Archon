@@ -512,7 +512,7 @@ export async function startAdmittedResourceStart(
       }
     );
     try {
-      await assertRunCredentials(deps, preparedAiConfiguration);
+      await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
     } catch (error) {
       if (error instanceof WorkflowCredentialPreflightError) {
         await requireTerminalStatusWrite(deps.store.failWorkflowRun(run.id, error.message), {

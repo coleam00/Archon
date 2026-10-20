@@ -34,20 +34,24 @@ if (BUNDLED_IS_BINARY) {
 }
 
 /**
- * Conversation concurrency as `GET /api/health` reports it: the lock manager's
- * stats, with `active` widened to include background workflow conversations.
- * `satisfies` ties the declared fields to `getStats()`, so a rename there fails
- * the type-check instead of reaching the console as a missing field.
+ * Public aggregate view of conversation processing. Health is outside the auth
+ * gate, so it carries counts and ages but never a conversation id; the
+ * per-conversation facts are on the gated `GET /api/dashboard/conversations`.
  */
 const healthConcurrencySchema = z.object({
-  active: z.number(),
+  active: z
+    .number()
+    .describe('Conversations holding a processing slot plus background workflow conversations'),
   queuedTotal: z.number(),
-  queuedByConversation: z.array(
-    z.object({ conversationId: z.string(), queuedMessages: z.number() })
-  ),
   maxConcurrent: z.number(),
-  activeConversationIds: z.array(z.string()),
-}) satisfies z.ZodType<ReturnType<ConversationLockManager['getStats']>>;
+  oldestActiveAgeMs: z
+    .number()
+    .nullable()
+    .describe(
+      'Age of the oldest conversation holding a processing slot in this process. Background workflow runs are counted in `active` but not aged here; see /api/dashboard/runs.'
+    ),
+  oldestQueuedAgeMs: z.number().nullable().describe('Age of the oldest waiting message'),
+});
 
 const getHealthRoute = createRoute({
   method: 'get',
@@ -108,6 +112,10 @@ const getUpdateCheckRoute = createRoute({
   },
 });
 
+function oldestAge(ages: number[]): number | null {
+  return ages.length === 0 ? null : Math.max(...ages);
+}
+
 export function registerHealthRoutes(
   app: OpenAPIHono,
   {
@@ -127,13 +135,12 @@ export function registerHealthRoutes(
     const stats = lockManager.getStats();
     const runningWorkflowRows = await workflowDb.getRunningWorkflows();
 
-    // Merge lock-based and DB-based active tracking.
-    // Background workflows bypass the lock manager, so we combine both sources.
-    const lockActiveSet = new Set(stats.activeConversationIds);
-    const backgroundConversationIds = runningWorkflowRows
-      .map(r => r.conversation_id)
-      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
-    const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    // Background workflows bypass the lock manager, so `active` counts the union
+    // of both sources. The ids only feed the count and never reach the response.
+    const activeIds = new Set(stats.activeConversations.map(c => c.conversationId));
+    for (const row of runningWorkflowRows) {
+      if (row.conversation_id !== null) activeIds.add(row.conversation_id);
+    }
     const wslDistro = getWSLDistroName();
 
     // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the
@@ -157,9 +164,11 @@ export function registerHealthRoutes(
     }
 
     const concurrency: z.infer<typeof healthConcurrencySchema> = {
-      ...stats,
-      active: allActiveIds.length,
-      activeConversationIds: allActiveIds,
+      active: activeIds.size,
+      queuedTotal: stats.queuedTotal,
+      maxConcurrent: stats.maxConcurrent,
+      oldestActiveAgeMs: oldestAge(stats.activeConversations.map(c => c.ageMs)),
+      oldestQueuedAgeMs: oldestAge(stats.queuedConversations.map(c => c.oldestAgeMs)),
     };
     return c.json({
       status: 'ok',

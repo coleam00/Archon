@@ -13,14 +13,7 @@ import {
   type reviewThreadSchema,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
-import {
-  GitHubError,
-  githubRequest,
-  graphqlEndpoint,
-  location,
-  repositoryPath,
-  type Fetch,
-} from './api';
+import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
 import { applied, failure, refused, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
@@ -60,8 +53,8 @@ async function githubGraphql(
   variables: Record<string, unknown>,
   acknowledge?: () => void
 ): Promise<unknown> {
-  const { root } = location(repo);
-  const raw = await githubRequest(fetchImpl, token, graphqlEndpoint(root), {
+  const { graphql } = location(repo);
+  const raw = await githubRequest(fetchImpl, token, graphql, {
     method: 'POST',
     body: JSON.stringify({ query, variables }),
   });

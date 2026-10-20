@@ -43,7 +43,7 @@ const SETUP =
   "Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when configured, or `/.archon/.env` in Docker), " +
   'set `GITHUB_TOKEN`, use `gh auth login`, or configure GitHub App mode. When per-user GitHub ' +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
-  '`archon auth github`, `/archon connect github` in Slack, or the Web UI Settings page. ' +
+  '`archon auth github` or the Web UI Settings page. ' +
   USE_GH;
 
 /**

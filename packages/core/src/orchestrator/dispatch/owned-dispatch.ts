@@ -69,7 +69,9 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     executable.branchPrepared ??
     (!willContinueExistingRun ? await prepareLaunch(workflow) : undefined);
   if (preparedAiConfiguration)
-    await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
+    await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration, {
+      cwd: launchConfigCwd,
+    });
 
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {

@@ -90,7 +90,7 @@ Summarize (under 250 words):
 
 ### Server
 - Port allocation: 3090 default, auto-allocated worktree ports
-- Adapters wired: Telegram, GitHub, Discord, Slack, Web (SSE)
+- Adapters wired: Telegram, GitHub, Discord, Web (SSE); Slack runs as a chat plugin
 
 ### Recent Changes
 - Last few backend commits

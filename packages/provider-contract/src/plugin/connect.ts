@@ -19,7 +19,7 @@ import {
   toolCallRequestSchema,
   logNotificationSchema,
   type ProviderLog,
-  checkCredentialRequestSchema,
+  checkCredentialParamsSchema,
   resolveCredentialModelRequestSchema,
   HOST_ONLY_REQUEST_KEYS,
   initializeResponseSchema,
@@ -176,14 +176,15 @@ export async function connectProvider(
     },
     async checkCredential(request): Promise<CredentialStatus> {
       request.signal.throwIfAborted();
+      const { env, signal, ...params } = request;
       const response = rpc.request(
         '_archon/check_credential',
-        checkCredentialRequestSchema.parse({
-          model: request.model,
-          assistantConfig: request.assistantConfig,
+        checkCredentialParamsSchema.parse({
+          ...params,
+          ...(request.execContext?.kind === 'container' ? { env } : {}),
         })
       );
-      return rpc.parse(credentialStatusSchema, await abortable(response, request.signal));
+      return rpc.parse(credentialStatusSchema, await abortable(response, signal));
     },
     async resolveCredentialModel(request): Promise<string | undefined> {
       return rpc.parse(

@@ -533,24 +533,38 @@ export type LaneConfigSource =
 export async function prepareLaneAiConfiguration(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  lane: LaneConfigSource
+  lane: LaneConfigSource,
+  executesInContainer: boolean
 ): Promise<PreparedRunAiConfiguration> {
   const recaptures = request.options.discoveryCwd === undefined;
   if (lane.kind === 'branch') {
     return withBranchLaunchSource(lane.codebase.default_cwd, lane.branch, async snapshot => {
       if (recaptures) await recaptureForLane(request, admission, snapshot);
-      return prepareCredentialPreflight(request, admission, snapshot, lane.codebase.id);
+      return prepareCredentialPreflight(
+        request,
+        admission,
+        snapshot,
+        lane.codebase.id,
+        executesInContainer
+      );
     });
   }
   if (lane.recapture && recaptures) await recaptureForLane(request, admission, lane.cwd);
-  return prepareCredentialPreflight(request, admission, lane.cwd, lane.codebaseId);
+  return prepareCredentialPreflight(
+    request,
+    admission,
+    lane.cwd,
+    lane.codebaseId,
+    executesInContainer
+  );
 }
 
 async function prepareCredentialPreflight(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
   configCwd: string,
-  codebaseId: string | undefined
+  codebaseId: string | undefined,
+  executesInContainer: boolean
 ): Promise<PreparedRunAiConfiguration> {
   const { host } = request;
   const { preCreatedRun, continuationRun, modelOverrides } = admission;
@@ -568,6 +582,10 @@ async function prepareCredentialPreflight(
             : {}),
         }),
   });
-  await assertRunCredentials(host.deps, prepared);
+  await assertRunCredentials(
+    host.deps,
+    prepared,
+    executesInContainer ? 'pending-container' : { cwd: configCwd }
+  );
   return prepared;
 }

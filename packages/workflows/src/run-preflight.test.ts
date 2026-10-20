@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { FileStoreUnsupportedError } from './file-store/errors';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
@@ -138,7 +137,9 @@ describe('run credential preflight', () => {
       name: 'shell',
       nodes: [{ id: 'sh', bash: 'true' }],
     });
-    await assertRunCredentials(deps, await prepareRunAiConfiguration(deps, workflow, '/p'));
+    await assertRunCredentials(deps, await prepareRunAiConfiguration(deps, workflow, '/p'), {
+      cwd: '/p',
+    });
     expect(checkCredential).not.toHaveBeenCalled();
     expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
   });
@@ -157,7 +158,7 @@ describe('run credential preflight', () => {
         getStatus: async () => status,
       });
       const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-      await expect(assertRunCredentials(deps, prepared)).rejects.toThrow(
+      await expect(assertRunCredentials(deps, prepared, { cwd: '/p' })).rejects.toThrow(
         "provider 'claude' (vendor 'anthropic')"
       );
       expect(checkCredential).not.toHaveBeenCalled();
@@ -180,7 +181,8 @@ describe('run credential preflight', () => {
     deps.getUserProviderCredential.mockImplementation(async () => ({ kind: 'api_key', getStatus }));
     await assertRunCredentials(
       deps,
-      await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' })
+      await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' }),
+      { cwd: '/p' }
     );
     expect(getStatus).toHaveBeenCalledTimes(1);
     expect(deps.getUserProviderCredential).toHaveBeenCalledTimes(1);
@@ -197,7 +199,7 @@ describe('run credential preflight', () => {
     const workflow = makeTestResolvedWorkflow({ name: 'ai' });
     const { deps, checkCredential } = fixture(status);
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-    const check = assertRunCredentials(deps, prepared);
+    const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
     if (allowed) await check;
     else
       await expect(check).rejects.toThrow(
@@ -213,7 +215,7 @@ describe('run credential preflight', () => {
     const { deps, checkCredential } = fixture();
     checkCredential.mockRejectedValue(new Error('probe unavailable'));
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p');
-    const check = assertRunCredentials(deps, prepared);
+    const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
     await expect(check).rejects.toBeInstanceOf(WorkflowCredentialPreflightError);
     await expect(check).rejects.toThrow(
       "Credential preflight failed for provider 'claude' (vendor 'anthropic'): could not verify native authentication"
@@ -229,8 +231,8 @@ describe('run credential preflight', () => {
       getStatus: async () => ({ state: 'usable', source: 'archon' }),
     });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-    await assertRunCredentials(deps, prepared);
-    await expect(assertRunCredentials(deps, prepared)).rejects.toThrow(
+    await assertRunCredentials(deps, prepared, { cwd: '/p' });
+    await expect(assertRunCredentials(deps, prepared, { cwd: '/p' })).rejects.toThrow(
       "provider 'claude' (vendor 'anthropic'): no usable login"
     );
     expect(checkCredential).not.toHaveBeenCalled();
@@ -250,7 +252,7 @@ describe('run credential preflight', () => {
         '/p',
         { userId: 'origin' }
       );
-      const check = assertRunCredentials(deps, prepared);
+      const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
       if (provider === 'pi') {
         await check;
         expect(getStatus).not.toHaveBeenCalled();
@@ -272,7 +274,7 @@ describe('run credential preflight', () => {
       getStatus: async () => ({ state: 'usable', source: 'archon' }),
     });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-    await expect(assertRunCredentials(deps, prepared)).rejects.toThrow(
+    await expect(assertRunCredentials(deps, prepared, { cwd: '/p' })).rejects.toThrow(
       "provider 'pi' (vendor 'anthropic'): the anthropic subscription connected in Archon runs on `provider: claude`, not on pi. Use `provider: claude`, or give pi its own anthropic API key."
     );
     expect(checkCredential).toHaveBeenCalledTimes(1);
@@ -293,7 +295,7 @@ describe('run credential preflight', () => {
       getStatus: async () => ({ state: 'usable', source: 'archon' }),
     });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-    await assertRunCredentials(deps, prepared);
+    await assertRunCredentials(deps, prepared, { cwd: '/p' });
     // The Claude node consumes the stored subscription; only the Pi node checks natively.
     expect(prepared.connectedVendors.has('anthropic')).toBe(true);
     expect(checkCredential.mock.calls.map(([r]) => r.model)).toEqual(['anthropic/sonnet']);
@@ -311,7 +313,7 @@ describe('run credential preflight', () => {
     const { deps, checkCredential } = fixture();
     deps.loadConfig.mockResolvedValue({ ...config, envVars: { SETTING: 'file' } });
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { codebaseId: 'cb' });
-    await assertRunCredentials(deps, prepared);
+    await assertRunCredentials(deps, prepared, { cwd: '/p' });
     expect(checkCredential.mock.calls.map(([r]) => r.model)).toEqual(['one', 'two']);
     expect(checkCredential.mock.calls[0]?.[0]).toMatchObject({
       assistantConfig: {},
@@ -332,7 +334,9 @@ describe('run credential preflight', () => {
       userId: 'origin',
     });
     expect(prepared.config.assistants.pi?.model).toBe('openai/native-model');
-    await expect(assertRunCredentials(deps, prepared)).rejects.toThrow("vendor 'openai'");
+    await expect(assertRunCredentials(deps, prepared, { cwd: '/project' })).rejects.toThrow(
+      "vendor 'openai'"
+    );
     expect(provider.resolveCredentialModel).toHaveBeenCalledWith({
       cwd: '/project',
       assistantConfig: {},
@@ -571,23 +575,52 @@ test('preflight protects only effective database values after run overrides', as
   expect(overridden.config.protectedCredentialValues).not.toContain('db');
 });
 
-test('files reject stored per-user credential reads, while native credentials and script-only runs work', async () => {
-  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+test.each(['claude', 'codex', 'pi'])(
+  'files check native %s authentication with a CLI user and never read stored credentials',
+  async provider => {
+    const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+    deps.loadConfig.mockResolvedValue({
+      ...config,
+      envVars: { NATIVE_AUTH: 'environment-credential' },
+    });
+    deps.getUserProviderCredential.mockRejectedValue(new Error('SQL must not be read'));
+    const files = { ...deps, credentialStore: 'files' as const };
+    const ai = makeTestResolvedWorkflow({ name: 'ai', provider });
+    const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
+    await assertRunCredentials(files, prepared, { cwd: '/p' });
+    expect(prepared.executionUserId).toBe('origin');
+    expect(checkCredential).toHaveBeenCalledTimes(1);
+    expect(checkCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantConfig: prepared.config.assistants[provider],
+        env: expect.objectContaining({ NATIVE_AUTH: 'environment-credential' }),
+      })
+    );
+    expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
+    expect([...prepared.connectedVendors]).toEqual([]);
+    const shell = makeTestResolvedWorkflow({
+      name: 'shell',
+      nodes: [{ id: 'shell', bash: 'true' }],
+    });
+    await assertRunCredentials(
+      files,
+      await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' }),
+      { cwd: '/p' }
+    );
+    expect(checkCredential).toHaveBeenCalledTimes(1);
+    expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
+  }
+);
+
+test('files report a missing native login at preflight with a CLI user', async () => {
+  const { deps, checkCredential } = fixture({ state: 'not_connected', source: 'native' });
   const files = { ...deps, credentialStore: 'files' as const };
-  const ai = makeTestResolvedWorkflow({ name: 'ai' });
+  const ai = makeTestResolvedWorkflow({ name: 'ai', provider: 'claude' });
   const prepared = await prepareRunAiConfiguration(files, ai, '/p', { userId: 'origin' });
-  const refused = assertRunCredentials(files, prepared);
-  await expect(refused).rejects.toBeInstanceOf(FileStoreUnsupportedError);
-  await expect(refused).rejects.toThrow('store: database');
-  expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
-  expect(checkCredential).not.toHaveBeenCalled();
-  await assertRunCredentials(files, await prepareRunAiConfiguration(files, ai, '/p'));
-  expect(checkCredential).toHaveBeenCalledTimes(1);
-  const shell = makeTestResolvedWorkflow({ name: 'shell', nodes: [{ id: 'shell', bash: 'true' }] });
-  await assertRunCredentials(
-    files,
-    await prepareRunAiConfiguration(files, shell, '/p', { userId: 'origin' })
+  await expect(assertRunCredentials(files, prepared, { cwd: '/p' })).rejects.toThrow(
+    "Credential preflight failed for provider 'claude' (vendor 'anthropic'): no usable login"
   );
+  expect(checkCredential).toHaveBeenCalledTimes(1);
   expect(deps.getUserProviderCredential).not.toHaveBeenCalled();
 });
 
@@ -680,4 +713,90 @@ test('an implicit built-in tier cannot choose a provider when the default is uns
       '/project'
     )
   ).rejects.toThrow('No providers installed');
+});
+
+test('credential preflight retains each node setting scope and target cwd', async () => {
+  const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+  const workflow = makeTestResolvedWorkflow({
+    name: 'scopes',
+    nodes: [
+      { id: 'default', prompt: 'a' },
+      { id: 'disabled', prompt: 'b', settingSources: [] },
+      { id: 'project', prompt: 'c', settingSources: ['project'] },
+      { id: 'same', prompt: 'd', settingSources: ['project'] },
+    ],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/target-project');
+  await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, {
+    cwd: '/target-project',
+  });
+  expect(
+    checkCredential.mock.calls.map(([request]) => ({
+      cwd: request.cwd,
+      settingSources: request.settingSources,
+    }))
+  ).toEqual([
+    { cwd: '/target-project', settingSources: undefined },
+    { cwd: '/target-project', settingSources: [] },
+    { cwd: '/target-project', settingSources: ['project'] },
+  ]);
+});
+
+test('a usable same-model node cannot hide another node with no native credential in its scope', async () => {
+  const { deps, checkCredential } = fixture();
+  checkCredential.mockImplementation(async request => ({
+    state: request.settingSources?.includes('project') ? 'usable' : 'not_connected',
+    source: 'native',
+  }));
+  const workflow = makeTestResolvedWorkflow({
+    name: 'scopes',
+    nodes: [
+      { id: 'disabled', prompt: 'b', settingSources: [] },
+      { id: 'project', prompt: 'a', settingSources: ['project'] },
+    ],
+  });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/target-project');
+  await expect(
+    assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, {
+      cwd: '/target-project',
+    })
+  ).rejects.toThrow('no usable login');
+  expect(checkCredential).toHaveBeenCalledTimes(1);
+});
+
+for (const execContext of [
+  { kind: 'host' },
+  { kind: 'container', containerId: 'runner' },
+] as const) {
+  test(`native preflight uses resolved execution context: ${execContext.kind}`, async () => {
+    const { deps, checkCredential } = fixture({ state: 'usable', source: 'native' });
+    const workflow = makeTestResolvedWorkflow({
+      name: 'isolated',
+      nodes: [{ id: 'ai', prompt: 'hello' }],
+    });
+    const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch');
+    await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, {
+      cwd: '/execution',
+      execContext,
+    });
+    expect(checkCredential.mock.calls[0]?.[0]).toMatchObject({ cwd: '/execution', execContext });
+    if (execContext.kind === 'container')
+      expect(checkCredential.mock.calls[0]?.[0].env.PATH).toBeUndefined();
+  });
+}
+
+test('before its container exists, preflight refuses a stored credential but defers native authentication', async () => {
+  const { deps, checkCredential } = fixture({ state: 'not_connected', source: 'native' });
+  const workflow = makeTestResolvedWorkflow({ name: 'pending', provider: 'claude' });
+  const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch', { userId: 'origin' });
+  await assertRunCredentials(deps, prepared, 'pending-container');
+  await assertRunCredentials({ ...deps, credentialStore: 'files' }, prepared, 'pending-container');
+  deps.getUserProviderCredential.mockResolvedValue({
+    kind: 'api_key',
+    getStatus: async () => ({ state: 'unusable', source: 'archon', evidence: 'revoked' }),
+  });
+  await expect(assertRunCredentials(deps, prepared, 'pending-container')).rejects.toThrow(
+    'credential cannot be used: revoked'
+  );
+  expect(checkCredential).not.toHaveBeenCalled();
 });

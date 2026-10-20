@@ -11,6 +11,7 @@ import { getLog } from './log';
  * Always uses canonical path (not worktree paths) for codebase registration
  */
 export async function getOrCreateCodebaseForRepo(
+  webUrl: string,
   owner: string,
   repo: string
 ): Promise<{
@@ -19,7 +20,7 @@ export async function getOrCreateCodebaseForRepo(
   isNew: boolean;
 }> {
   // Try both with and without .git suffix to match existing clones
-  const repoUrlNoGit = `https://github.com/${owner}/${repo}`;
+  const repoUrlNoGit = `${webUrl}/${owner}/${repo}`;
   const repoUrlWithGit = `${repoUrlNoGit}.git`;
 
   let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);

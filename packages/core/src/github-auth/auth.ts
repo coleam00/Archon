@@ -100,6 +100,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
   // App-level Octokit (uses JWT). Used for `/repos/{owner}/{repo}/installation`
   // lookups and for issuing installation access tokens.
   const appOctokit = new Octokit({
+    baseUrl: config.apiBaseUrl,
     authStrategy: createAppAuth,
     auth: { appId: config.appId, privateKey: config.privateKey },
   });
@@ -196,6 +197,7 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
       // within the SDK. We still cache tokens explicitly above for the clone
       // path + credential-helper endpoint, which need the raw token string.
       octokit = new Octokit({
+        baseUrl: config.apiBaseUrl,
         authStrategy: createAppAuth,
         auth: {
           appId: config.appId,

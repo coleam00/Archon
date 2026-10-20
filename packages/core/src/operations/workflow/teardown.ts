@@ -1,5 +1,9 @@
 import { hostname } from 'node:os';
-import { isRunBlockedOnChild, readExecutionOwner } from '@archon/workflows/schemas/workflow-run';
+import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
+  isRunBlockedOnChild,
+  readExecutionOwner,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree } from '../../services/cleanup-service';
 import {
@@ -8,7 +12,7 @@ import {
 } from '../../services/run-owner-stop';
 import { getLog, type OperationContext } from './context';
 
-/** Safety bound on the abandon cascade walk (guards against corrupted run trees). */
+/** Maximum parent expansions in the abandon tree walks. */
 export const MAX_CASCADE_RUNS = 500;
 
 /**
@@ -127,7 +131,7 @@ export function ownerNotStoppedMessage(
 /**
  * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
  * A child sub-run shares the parent's conversation and runs in-process, so
- * abandoning the parent walks every DESCENDANT, not just direct children (a child
+ * abandoning the parent walks descendants up to the expansion cap (a child
  * may itself spawn grandchildren). Best-effort — a per-run failure is logged, never
  * thrown, so the parent abandon always succeeds; the failure COUNT is returned so
  * callers can tell the user part of the tree may still be alive.
@@ -157,16 +161,29 @@ export async function cascadeCancelChildren(
     runs.push(...batch.cancelled);
     failures += batch.failures;
   }
-  // Truncation is NOT silent success: if we hit the cap with the queue non-empty,
-  // an unbounded-deep/wide tree still has live descendants we never reached. Surface
-  // it via the same `failures` channel (caller reports "part of the tree may still be
-  // alive") AND a distinct log line, rather than returning a false all-clear.
+  // Queued runs were already considered for cancellation; only their children
+  // remain unvisited. Probe after cancellation so a wide leaf level is all-clear.
   if (queue.length > 0) {
-    getLog().warn(
-      { rootId, cap: MAX_CASCADE_RUNS, unreached: queue.length },
-      'operations.workflow_abandon_cascade_truncated'
-    );
-    failures += queue.length;
+    try {
+      const { total } = await ctx.store.listWorkflowRuns({
+        parentRunIds: queue,
+        excludeLeafStatuses: [...CANCELLATION_NOOP_WORKFLOW_STATUSES],
+        limit: 0,
+      });
+      if (total > 0) {
+        getLog().warn(
+          { rootId, cap: MAX_CASCADE_RUNS, unreached: total, pendingParents: queue.length },
+          'operations.workflow_abandon_cascade_truncated'
+        );
+        failures += total;
+      }
+    } catch (err) {
+      getLog().warn(
+        { err, rootId, pendingParents: queue.length },
+        'operations.workflow_abandon_cascade_lookup_failed'
+      );
+      failures++;
+    }
   }
   return { failures, runs };
 }
@@ -184,21 +201,32 @@ async function cancelUnseenChildren(
     if (seen.has(child.id)) continue;
     seen.add(child.id);
     queue.push(child.id); // traverse deeper even under an already-terminal child
-    if (child.status === 'completed' || child.status === 'cancelled') continue;
-    try {
-      const result = await cancelByOperator(ctx, child.id);
-      if (result.cancelled) {
-        cancelled.push(child);
-      } else failures++;
-    } catch (err) {
-      getLog().warn(
-        { err, childId: child.id },
-        'operations.workflow_abandon_cascade_cancel_failed'
-      );
-      failures++;
-    }
+    if (CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(child.status)) continue;
+    const outcome = await cancelCascadeChild(ctx, child.id);
+    if (outcome === 'cancelled') cancelled.push(child);
+    else if (outcome === 'failed') failures++;
   }
   return { cancelled, failures };
+}
+
+/**
+ * Cancel one cascade child. A lost cancel whose re-read shows the child already
+ * settled (completed or cancelled meanwhile) is not a failure.
+ */
+async function cancelCascadeChild(
+  ctx: OperationContext,
+  childId: string
+): Promise<'cancelled' | 'settled' | 'failed'> {
+  try {
+    const result = await cancelByOperator(ctx, childId);
+    if (result.cancelled) return 'cancelled';
+    const current = await ctx.store.getWorkflowRun(childId);
+    if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status)) return 'settled';
+    getLog().warn({ childId }, 'operations.workflow_abandon_cascade_cancel_failed');
+  } catch (err) {
+    getLog().warn({ err, childId }, 'operations.workflow_abandon_cascade_cancel_failed');
+  }
+  return 'failed';
 }
 
 /**

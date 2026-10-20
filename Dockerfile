@@ -1,6 +1,6 @@
 # =============================================================================
 # Archon - Remote Agentic Coding Platform
-# Multi-stage build: workspace layout → deps → web build → production image
+# Multi-stage build: workspace layout → deps → image plugins + web build → production image
 # =============================================================================
 
 ARG BUN_VERSION=1.4.2
@@ -19,8 +19,8 @@ RUN find packages -mindepth 2 -maxdepth 2 ! -name package.json -exec rm -r {} +
 # without -f fails the build if an excluded package is renamed or removed.
 #   docs-web   - static site deployed separately (.github/workflows/deploy-docs.yml)
 #   web        - ships only as the pre-built dist from the web-build stage
-#   chat-slack - compiled plugin binary installed with `archon plugin add`;
-#                the server never imports it
+#   chat-slack - ships as a verified release binary in image-plugins;
+#                the server never imports its source
 FROM oven/bun:${BUN_VERSION}-slim AS sources
 WORKDIR /app
 COPY packages/ ./packages/
@@ -45,6 +45,17 @@ COPY --from=manifests /app/packages/ ./packages/
 # node_modules/.bun/ with symlinks that Vite/Rollup cannot resolve during
 # production builds. Hoisted layout gives classic flat node_modules.
 RUN bun install --frozen-lockfile --linker=hoisted
+
+# Release acquisition happens only at build time; startup provisions from this bundle offline.
+FROM deps AS image-plugins
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=sources /app/packages/ ./packages/
+COPY scripts/prepare-docker-plugins.ts ./scripts/
+ARG SLACK_PLUGIN_TAG=v0.12.1
+ARG SLACK_PLUGIN_COMMIT=5f2b4841aaca38180c0abbd32bc6345593292019
+RUN SLACK_PLUGIN_TAG="$SLACK_PLUGIN_TAG" SLACK_PLUGIN_COMMIT="$SLACK_PLUGIN_COMMIT" \
+    bun run scripts/prepare-docker-plugins.ts
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build web UI (Vite + React)
@@ -158,6 +169,9 @@ RUN HOME=/home/appuser BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache \
 # Copy application source (Bun runs TypeScript directly, no compile step needed).
 # The sources stage lists the packages left out.
 COPY --from=sources --chown=appuser:appuser /app/packages/ ./packages/
+
+COPY --from=image-plugins /opt/archon/image-plugins/ /opt/archon/image-plugins/
+COPY --chown=appuser:appuser scripts/provision-docker-plugins.ts ./scripts/
 
 # Copy pre-built web UI from build stage
 COPY --from=web-build --chown=appuser:appuser /app/packages/web/dist/ ./packages/web/dist/

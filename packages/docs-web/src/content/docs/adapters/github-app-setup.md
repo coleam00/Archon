@@ -149,7 +149,6 @@ Then, on the GitHub App settings page, enable **Device Flow** (under "Identifyin
 Teammates connect once via any surface:
 
 - **CLI:** `archon auth github`
-- **Slack:** `/archon connect github`
 - **Web UI:** Settings → **Connect GitHub**
 
 Once enabled:

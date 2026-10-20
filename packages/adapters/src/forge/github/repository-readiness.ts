@@ -34,6 +34,7 @@ const repositoryReadiness = new Map<string, Promise<void>>();
  * @param shouldSync - Whether to sync an existing clone (pass true to ensure latest code)
  */
 export function ensureRepoReady(
+  webUrl: string,
   auth: ReadinessAuth,
   owner: string,
   repo: string,
@@ -44,6 +45,7 @@ export function ensureRepoReady(
   const key = resolve(codebase.default_cwd);
   const prepare = () =>
     prepareRepository(
+      webUrl,
       auth,
       owner,
       repo,
@@ -61,6 +63,7 @@ export function ensureRepoReady(
 }
 
 async function prepareRepository(
+  webUrl: string,
   auth: ReadinessAuth,
   owner: string,
   repo: string,
@@ -75,7 +78,7 @@ async function prepareRepository(
     if (shouldSync) await syncCheckout(repoPath, defaultBranch);
     return;
   }
-  await cloneIntoProject(auth, owner, repo, repoPath, projectName);
+  await cloneIntoProject(webUrl, auth, owner, repo, repoPath, projectName);
   await ensureRepositorySetup(auth, owner, repo, repoPath);
 }
 
@@ -99,6 +102,7 @@ function gitErrorDetail(error: GitError): string {
 }
 
 async function cloneIntoProject(
+  webUrl: string,
   auth: ReadinessAuth,
   owner: string,
   repo: string,
@@ -114,7 +118,7 @@ async function cloneIntoProject(
   await ensureProjectStructure(storage.owner, storage.repo);
 
   const ghToken = await cloneToken(auth, owner, repo);
-  const repoUrl = `https://github.com/${owner}/${repo}.git`;
+  const repoUrl = `${webUrl}/${owner}/${repo}.git`;
 
   // Readiness is serialized through cleanup, so an empty target cannot be
   // populated by a sibling webhook while this attempt owns it.

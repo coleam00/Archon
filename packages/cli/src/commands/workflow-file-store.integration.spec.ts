@@ -1,9 +1,15 @@
+import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
 } from '@archon/workflows/schemas/resource-start';
 import { z } from '@hono/zod-openapi';
-import { answeredPauseContinuation, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  answeredPauseContinuation,
+  runAttention,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { expect, test, setSystemTime } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -15,6 +21,7 @@ import {
   realpathSync,
   writeFileSync,
   readFileSync,
+  unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -30,7 +37,10 @@ interface Fixture {
   trap: string;
   env: NodeJS.ProcessEnv;
 }
-function fixture(config = 'store: files\n'): Fixture {
+function fixture(
+  config = 'store: files\n',
+  nativeStatus?: 'usable' | 'not_connected' | 'real'
+): Fixture {
   const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
   const project = join(root, 'project'),
     home = join(root, 'home'),
@@ -68,6 +78,14 @@ import {appendFileSync} from 'node:fs';
 const fail=() => {appendFileSync(${JSON.stringify(trap)},'open\\n');throw new Error('SQL open trap');};
 const connection=await import(${src('packages/core/src/db/connection.ts')});
 mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,getDatabase:fail,getDialect:fail,pool:{query:fail,connect:fail}}));
+${
+  nativeStatus
+    ? `const {ClaudeProvider}=await import(${src('packages/providers/src/claude/provider.ts')});
+${nativeStatus === 'real' ? '' : `ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});`}
+const {registerBuiltinProviders}=await import(${src('packages/providers/src/in-process.ts')});
+mock.module(${src('packages/core/src/providers/register-host-providers.ts')},()=>({registerHostProviders:async()=>registerBuiltinProviders()}));`
+    : ''
+}
 await import(${src('packages/cli/src/cli.ts')});`
   );
   const env = {
@@ -91,10 +109,11 @@ async function cli(
   f: ReturnType<typeof fixture>,
   args: string[],
   env = f.env,
-  input = ''
+  input = '',
+  launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
   const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: f.project,
+    cwd: launchCwd,
     env,
     stdin: 'pipe',
     stdout: 'pipe',
@@ -108,6 +127,254 @@ async function cli(
     child.exited,
   ]);
   return { output, error, code };
+}
+/** A Claude environment with no login, so only project settings can supply one. */
+function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
+  return {
+    ...f.env,
+    CLAUDE_CONFIG_DIR: claudeConfig,
+    ANTHROPIC_API_KEY: '',
+    CLAUDE_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    ANTHROPIC_AUTH_TOKEN: '',
+    CLAUDE_CODE_USE_BEDROCK: '0',
+    CLAUDE_CODE_USE_VERTEX: '0',
+    CLAUDE_CODE_USE_FOUNDRY: '0',
+    CLAUDE_CODE_USE_MANTLE: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  };
+}
+/** The file store's runs; a detached launch is awaited until its run settles. */
+async function listRuns(f: Fixture, awaitSettled: boolean): Promise<WorkflowRun[]> {
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  let { runs } = await store.listWorkflowRuns();
+  const deadline = Date.now() + 15000;
+  while (
+    awaitSettled &&
+    Date.now() < deadline &&
+    !runs.some(run => ['failed', 'paused'].includes(run.status))
+  ) {
+    await Bun.sleep(25);
+    ({ runs } = await store.listWorkflowRuns());
+  }
+  return runs;
+}
+function isolatedCheckout(project: string): string {
+  const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], { cwd: project });
+  const worktree = paths.stdout
+    .toString()
+    .split('\0')
+    .filter(field => field.startsWith('worktree '))
+    .map(field => field.slice('worktree '.length))
+    .find(path => realpathSync(path) !== realpathSync(project));
+  if (!worktree) throw new Error('Missing isolated checkout');
+  return worktree;
+}
+test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
+  const f = fixture('store: files\ndefaultAssistant: claude\n', 'usable');
+  writeFileSync(
+    join(f.project, '.archon/workflows/native.yaml'),
+    `name: native
+description: native credential preflight
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready to call Claude?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+  );
+  const started = await cli(f, ['workflow', 'run', 'native', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(listed.code).toBe(0);
+  expect(JSON.parse(listed.output).runs).toMatchObject([
+    { workflow_name: 'native', status: 'paused', user_id: expect.any(String) },
+  ]);
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
+for (const nodeOverride of [false, true]) {
+  test(`Claude native CLI preflight uses --cwd and node settings (override=${nodeOverride})`, async () => {
+    const f = fixture(
+      `store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: ${nodeOverride ? '[]' : '[project]'}\n`,
+      'real'
+    );
+    mkdirSync(join(f.project, '.claude'));
+    writeFileSync(
+      join(f.project, '.claude/settings.json'),
+      JSON.stringify({ apiKeyHelper: 'printf project-key' })
+    );
+    const claudeConfig = join(f.root, 'claude-config');
+    mkdirSync(claudeConfig);
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: scoped native credentials
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    ${nodeOverride ? 'settingSources: [project]' : ''}
+    prompt: Say hello
+`
+    );
+    const env = withoutClaudeLogin(f, claudeConfig);
+    const started = await cli(
+      f,
+      ['workflow', 'run', 'native', '--cwd', f.project, '--folder', '--no-worktree'],
+      env,
+      '',
+      f.root
+    );
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toMatchObject([
+      { workflow_name: 'native', status: 'paused' },
+    ]);
+    expect(existsSync(f.trap)).toBe(false);
+  }, 30000);
+}
+for (const detached of [false, true]) {
+  for (const launchOnly of [true, false]) {
+    test(`isolated Claude CLI checks the launch checkout, then the worktree (launchOnly=${launchOnly}, detached=${detached})`, async () => {
+      const f = fixture(
+        'store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: [project]\n',
+        'real'
+      );
+      const git = (...args: string[]): void => {
+        const result = Bun.spawnSync(['git', ...args], {
+          cwd: f.project,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+      };
+      git('init', '-b', 'main');
+      git('remote', 'add', 'origin', f.project);
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'user.name', 'Fixture');
+      writeFileSync(join(f.project, '.gitignore'), launchOnly ? '.claude/\n' : '');
+      mkdirSync(join(f.project, '.claude'));
+      const settings = join(f.project, '.claude/settings.json');
+      writeFileSync(settings, JSON.stringify({ apiKeyHelper: 'printf worktree-key' }));
+      writeFileSync(
+        join(f.project, '.archon/workflows/native.yaml'),
+        `name: native
+description: isolated credentials
+provider: claude
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+      );
+      git('add', '.gitignore', '.archon');
+      if (!launchOnly) git('add', '.claude');
+      git('commit', '-m', 'Fixture');
+      if (!launchOnly) unlinkSync(settings);
+      const claudeConfig = join(f.root, 'claude-config');
+      mkdirSync(claudeConfig);
+      const env = withoutClaudeLogin(f, claudeConfig);
+      const started = await cli(
+        f,
+        [
+          'workflow',
+          'run',
+          'native',
+          '--branch',
+          'credential-test',
+          '--base',
+          'main',
+          ...(detached ? ['--detach'] : []),
+        ],
+        env
+      );
+      if (!launchOnly) {
+        // The login is committed but missing from the launch checkout, so the host check
+        // before isolation refuses: no run row, no worktree.
+        expect(started, started.output + started.error).toMatchObject({ code: 1 });
+        expect(started.error).toContain('no usable login');
+        expect(await listRuns(f, false)).toEqual([]);
+        expect(() => isolatedCheckout(f.project)).toThrow('Missing isolated checkout');
+        expect(existsSync(f.trap)).toBe(false);
+        return;
+      }
+      // The launch checkout's login is gitignored, so the worktree has none: the check in
+      // the worktree refuses before any node runs.
+      expect(started, started.output + started.error).toMatchObject({ code: detached ? 0 : 1 });
+      if (!detached) expect(started.error).toContain('no usable login');
+      expect(await listRuns(f, detached)).toMatchObject([
+        { workflow_name: 'native', status: 'failed' },
+      ]);
+      expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+      expect(existsSync(join(isolatedCheckout(f.project), 'before-count'))).toBe(false);
+      expect(existsSync(f.trap)).toBe(false);
+    }, 30000);
+  }
+}
+for (const flags of [[], ['--detach']] as const) {
+  test(`file-store CLI refuses missing native login before launch (${flags.join(' ') || 'foreground'})`, async () => {
+    const f = fixture('store: files\ndefaultAssistant: claude\n', 'not_connected');
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: refuse before launch
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: ai
+    depends_on: [before]
+    prompt: Say hello
+`
+    );
+    const refused = await cli(f, [
+      'workflow',
+      'run',
+      'native',
+      '--folder',
+      '--no-worktree',
+      ...flags,
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.output + refused.error).toContain('no usable login');
+    expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toEqual([]);
+    expect(existsSync(f.trap)).toBe(false);
+    expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+  }, 30000);
 }
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();
@@ -756,3 +1023,68 @@ nodes:
     ).toHaveLength(1);
   }, 30_000);
 }
+
+test('independent questions survive separate CLI processes and apply second first', async () => {
+  const f = fixture();
+  for (const [name, yaml] of Object.entries(multiAttentionWorkflows))
+    writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
+  const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const queue = async () => {
+    const result = await cli(f, ['workflow', 'attention', '--json']);
+    expect(result, result.error).toMatchObject({ code: 0 });
+    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+  };
+  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  expect(items).toHaveLength(2);
+  const [first, second] = items;
+  for (const item of items) {
+    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    expect(read, read.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(read.output).item).toEqual(item);
+  }
+  const answer = async (item: typeof first, choose: string) => {
+    if (item.kind !== 'attention') throw new Error('Expected attention');
+    const answered = await cli(f, [
+      'workflow',
+      'answer',
+      item.runId,
+      '--occurrence',
+      item.occurrence,
+      '--choose',
+      choose,
+    ]);
+    expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
+  };
+  await answer(second, 'defer');
+  expect(await queue()).toEqual([first]);
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  const parentId = first.fanOut!.parentRunId;
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
+  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect(
+    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+  ).toEqual([]);
+  await answer(first, 'accept');
+  expect(await queue()).toEqual([]);
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
+  expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
+    items.map(i => i.runId).sort()
+  );
+  expect(
+    (await store.listWorkflowEvents(parentId)).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'answers'
+    )?.data.structured_output
+  ).toEqual([
+    { key: 'first', decision: 'accept' },
+    { key: 'second', decision: 'defer' },
+  ]);
+  for (const item of items) {
+    const events = await store.listWorkflowEvents(item.runId);
+    expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
+    expect(
+      events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')
+    ).toHaveLength(1);
+  }
+  expect(existsSync(f.trap)).toBe(false);
+}, 30_000);

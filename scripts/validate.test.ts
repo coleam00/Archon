@@ -55,69 +55,90 @@ describe('validate check selection', () => {
     expect(() => selectChecks(['docs_build'])).toThrow(/Unknown check id: docs_build/);
   });
 
-  test('every check is selected by a CI job', () => {
-    // CI is the full validation, so a check no job selects runs nowhere.
-    const workflow = Bun.YAML.parse(
+  interface MatrixLeg {
+    os: string;
+    check: string;
+    part: string;
+  }
+  interface WorkflowJob {
+    strategy?: { matrix: { os?: string[]; include?: MatrixLeg[] } };
+    steps?: { if?: string; run?: string; env?: Record<string, string> }[];
+  }
+  const readWorkflow = (): { jobs: Record<string, WorkflowJob> } =>
+    Bun.YAML.parse(
       readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
-    ) as { jobs: Record<string, { steps?: { run?: string }[] }> };
+    ) as { jobs: Record<string, WorkflowJob> };
+  /** The check ids a step selects; `${{ matrix.check }}` stands for every leg's check. */
+  const stepChecks = (job: WorkflowJob, run: string): string[] =>
+    [...run.matchAll(/bun run validate --only (\S+)/g)].flatMap(match =>
+      match[1] === '${{'
+        ? (job.strategy?.matrix.include ?? []).map(leg => leg.check)
+        : match[1].split(',')
+    );
+
+  test('every check is selected by a CI job', () => {
     const selected = new Set(
-      Object.values(workflow.jobs)
-        .flatMap(job => job.steps ?? [])
-        .flatMap(step => [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)])
-        .flatMap(match => match[1].split(','))
+      Object.values(readWorkflow().jobs).flatMap(job =>
+        (job.steps ?? []).flatMap(step => stepChecks(job, step.run ?? ''))
+      )
     );
     expect(VALIDATE_CHECKS.map(check => check.id).filter(id => !selected.has(id))).toEqual([]);
   });
 
-  test('every test job leg runs its own shard of the tests', () => {
-    // The matrix legs share one step list and pick their checks through step `if`s, so a
-    // dropped or mistyped step would leave a leg green while running none of its tests.
-    const workflow = Bun.YAML.parse(
-      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
-    ) as {
-      jobs: Record<
-        'test' | 'test-scripts',
-        {
-          strategy: { matrix: { os: string[]; shard?: string[] } };
-          steps: { if?: string; run?: string }[];
-        }
-      >;
-    };
-    const runnerOs: Record<string, string> = {
-      'ubuntu-latest': 'Linux',
-      'windows-latest': 'Windows',
-    };
-    const shardCheck: Record<string, string> = {
-      cli: 'cli-tests',
-      core: 'core-tests',
-      packages: 'package-tests',
-      scripts: 'script-tests',
-    };
-    const legs = (['test', 'test-scripts'] as const).flatMap(job => {
-      const { matrix } = workflow.jobs[job].strategy;
-      return matrix.os.flatMap(os =>
-        (matrix.shard ?? ['scripts']).map(shard => ({ job, os, shard }))
-      );
-    });
-    const selectedBy = ({ job, os, shard }: (typeof legs)[number]): string[] =>
-      workflow.jobs[job].steps
-        .filter(step => {
-          const condition = step.if ?? '';
-          const wantedOs = /runner\.os == '(\w+)'/.exec(condition)?.[1];
-          const wantedShard = /matrix\.shard == '(\w+)'/.exec(condition)?.[1];
-          return (
-            (wantedOs === undefined || wantedOs === runnerOs[os]) &&
-            (wantedShard === undefined || wantedShard === shard)
-          );
-        })
-        .flatMap(step => [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)])
-        .flatMap(match => match[1].split(','));
-
-    expect(new Set(legs.map(leg => leg.shard))).toEqual(new Set(Object.keys(shardCheck)));
-    for (const leg of legs) {
-      const tests = selectedBy(leg).filter(id => Object.values(shardCheck).includes(id));
-      expect({ ...leg, tests }).toEqual({ ...leg, tests: [shardCheck[leg.shard]] });
+  test('on each OS the test legs run every part of every workspace shard', () => {
+    // A missing leg, or a part list such as 1/3 and 2/3 without 3/3, would leave some test
+    // groups unrun on that OS while every leg reports green.
+    const { test: testJob } = readWorkflow().jobs;
+    const legs = testJob.strategy?.matrix.include ?? [];
+    const workspaceChecks = ['cli-tests', 'core-tests', 'package-tests'];
+    const oses = ['ubuntu-latest', 'windows-latest'];
+    for (const os of oses) {
+      for (const check of workspaceChecks) {
+        const parts = legs.filter(leg => leg.os === os && leg.check === check).map(leg => leg.part);
+        // One part count per shard, so an empty list (the shard dropped from this OS) fails too.
+        const counts = [...new Set(parts.map(part => Number(part.split('/')[1])))];
+        const count = counts[0] ?? 0;
+        expect({ os, check, counts, parts: parts.sort() }).toEqual({
+          os,
+          check,
+          counts: [Math.max(count, 1)],
+          parts: Array.from(
+            { length: count },
+            (_, index) => `${String(index + 1)}/${String(count)}`
+          ),
+        });
+      }
     }
+    expect(
+      legs.filter(leg => !oses.includes(leg.os) || !workspaceChecks.includes(leg.check))
+    ).toEqual([]);
+
+    // One validate step per OS, each running the leg's own check and part.
+    const validateSteps = (testJob.steps ?? []).filter(step =>
+      (step.run ?? '').includes('bun run validate')
+    );
+    expect(validateSteps.map(step => step.if).sort()).toEqual([
+      "runner.os == 'Linux'",
+      "runner.os == 'Windows'",
+    ]);
+    for (const step of validateSteps) {
+      expect(step.run).toContain('bun run validate --only ${{ matrix.check }}');
+      expect(step.env?.ARCHON_TEST_PART).toBe('${{ matrix.part }}');
+    }
+  });
+
+  test('the scripts shard runs on every OS', () => {
+    const job = readWorkflow().jobs['test-scripts'];
+    for (const os of ['Linux', 'Windows']) {
+      const checks = (job.steps ?? [])
+        .filter(step => step.if === `runner.os == '${os}'`)
+        .flatMap(step => stepChecks(job, step.run ?? ''));
+      expect({ os, runsScripts: checks.includes('script-tests') }).toEqual({
+        os,
+        runsScripts: true,
+      });
+    }
+    expect(job.strategy?.matrix.os).toEqual(['ubuntu-latest', 'windows-latest']);
   });
 
   test('pack tests run in CI only on a dispatch that asks for them', () => {

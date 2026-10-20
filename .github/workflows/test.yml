@@ -86,14 +86,28 @@ jobs:
       # the next round — and a cancelled leg blocks a merge once it is a
       # required check.
       fail-fast: false
+      # `check` is the validate id the leg runs, and `part` is its ARCHON_TEST_PART: a shard
+      # too slow for one runner runs as parts split by measured group time
+      # (`partitionTestGroups` in scripts/package-test-groups.ts, weights in
+      # scripts/test-weights.json). The parts of a shard together run every one of its
+      # groups, and scripts/validate.test.ts fails if a part is missing from this list.
+      #
+      # @archon/cli and @archon/core have their own shards: with every package on one 4-vCPU
+      # Windows runner the step took about 19 minutes (#4430). Whole, the Windows shards still
+      # took 5-7.5 minutes each, so each runs in two parts of about 2.5-3 minutes. On Linux
+      # only cli needs two parts; core and packages finish whole before the Windows parts.
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        # @archon/cli runs on its own runner: with every package on one 4-vCPU Windows
-        # runner the packages step took about 19 minutes, and cli finished last (#4430).
-        # @archon/core has its own runner for the same reason: sharing one with the other
-        # packages, it finished last on every green Windows leg (8.4-9.4 min of a ~9 min step),
-        # about a minute behind @archon/workflows.
-        shard: [cli, core, packages]
+        include:
+          - { os: ubuntu-latest, check: cli-tests, part: 1/2 }
+          - { os: ubuntu-latest, check: cli-tests, part: 2/2 }
+          - { os: ubuntu-latest, check: core-tests, part: 1/1 }
+          - { os: ubuntu-latest, check: package-tests, part: 1/1 }
+          - { os: windows-latest, check: cli-tests, part: 1/2 }
+          - { os: windows-latest, check: cli-tests, part: 2/2 }
+          - { os: windows-latest, check: core-tests, part: 1/2 }
+          - { os: windows-latest, check: core-tests, part: 2/2 }
+          - { os: windows-latest, check: package-tests, part: 1/2 }
+          - { os: windows-latest, check: package-tests, part: 2/2 }
     runs-on: ${{ matrix.os }}
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
     # every other PR queues behind it.
@@ -112,8 +126,16 @@ jobs:
       # No Bun download cache on Windows either. Restoring the ~600MB cache took as long
       # as a plain install (52s + 10s against 53s, measured side by side on PR #3438), and
       # it took Actions cache space that the Docker layer cache needs.
+      #
+      # Bun's install cache defaults to the user profile on C:, the slow remote-backed OS
+      # disk (see the Windows validate steps), and node_modules is on D: with the checkout.
+      # With the cache on D: as well, a Windows install takes 14-19 s instead of 40-86 s.
+      # The directory starts empty on every runner, so nothing carries over between runs.
+      # Every job with a Windows leg sets it.
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
@@ -130,17 +152,11 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
 
-      - name: Validate (Linux, cli)
-        if: runner.os == 'Linux' && matrix.shard == 'cli'
-        run: bun run validate --only cli-tests
-
-      - name: Validate (Linux, core)
-        if: runner.os == 'Linux' && matrix.shard == 'core'
-        run: bun run validate --only core-tests
-
-      - name: Validate (Linux, packages)
-        if: runner.os == 'Linux' && matrix.shard == 'packages'
-        run: bun run validate --only package-tests
+      - name: Validate (Linux)
+        if: runner.os == 'Linux'
+        env:
+          ARCHON_TEST_PART: ${{ matrix.part }}
+        run: bun run validate --only ${{ matrix.check }}
 
       # The test checks use the shared 20 s per-test budget in scripts/bun-test-command.ts;
       # see coleam00/Archon#3294. The temp-disk and git-launcher settings below apply to
@@ -156,32 +172,15 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
-      - name: Validate (Windows, cli)
-        if: runner.os == 'Windows' && matrix.shard == 'cli'
+      - name: Validate (Windows)
+        if: runner.os == 'Windows'
         env:
+          ARCHON_TEST_PART: ${{ matrix.part }}
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
         run: |
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          bun run validate --only cli-tests
-
-      - name: Validate (Windows, core)
-        if: runner.os == 'Windows' && matrix.shard == 'core'
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: |
-          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          bun run validate --only core-tests
-
-      - name: Validate (Windows, packages)
-        if: runner.os == 'Windows' && matrix.shard == 'packages'
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: |
-          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
-          bun run validate --only package-tests
+          bun run validate --only ${{ matrix.check }}
 
   # The root scripts shard. Root tests read the packages, so it runs whenever the suite does.
   test-scripts:
@@ -206,6 +205,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          # On D: beside the checkout; see the install step in `test`.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
       - name: Compile Slack chat conformance fixture
         if: runner.os == 'Linux'
@@ -519,6 +521,29 @@ jobs:
           cache-from: type=gha
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
+      - name: Slack upgrade on persistent volumes, offline
+        run: bash scripts/test-docker-slack-upgrade.sh archon-ci:test
+
+      - name: Set up QEMU for arm64 plugin verification
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build arm64 Slack bundle
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: image-plugins
+          platforms: linux/arm64
+          load: true
+          tags: archon-ci:slack-arm64
+          cache-from: type=gha
+
+      - name: Initialize arm64 Slack bundle offline
+        run: |
+          docker run --rm --platform linux/arm64 --network none --entrypoint bun archon-ci:slack-arm64 \
+            -e 'import { inspectChatPlugin } from "./packages/cli/src/commands/inspect-chat-plugin"; const descriptor = await inspectChatPlugin("/opt/archon/image-plugins/archon-chat-slack"); if (descriptor.id !== "slack") process.exit(1);'
+
       - name: Smoke test — container starts and serves /api/health
         run: |
           docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test
@@ -557,6 +582,9 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+        env:
+          # On D: beside the checkout; see the install step in `test`.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
       - name: Build web UI
         run: bun run build:web
       - name: Build matching server and CLI

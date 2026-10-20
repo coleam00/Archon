@@ -3,6 +3,7 @@
 review__policy: { defaults: "fixture-policy-defaults" }
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: true, docs: true, reason: "stub: every lens" }
+review__review-dir: ""
 review__scope:
   head_matches: true
   pr: null

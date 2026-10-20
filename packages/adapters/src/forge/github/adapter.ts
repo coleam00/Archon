@@ -16,6 +16,7 @@ import {
   type ConversationLockManager,
   DeliveryDeduplicator,
 } from '@archon/core';
+import { resolveGitHubHost, type GitHubHost } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as userDb from '@archon/core/db/users';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
@@ -53,6 +54,7 @@ export class GitHubAdapter implements IPlatformAdapter {
    */
   private octokit: GitHubApi | null;
   private readonly auth: GitHubAdapterAuth;
+  private readonly github: GitHubHost;
   private webhookSecret: string;
   private allowedUsers: string[];
   private botMention: string;
@@ -78,7 +80,11 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
   ) {
     this.auth = auth;
-    this.octokit = auth.kind === 'pat' ? new Octokit({ auth: auth.token }) : null;
+    this.github = resolveGitHubHost();
+    this.octokit =
+      auth.kind === 'pat'
+        ? new Octokit({ auth: auth.token, baseUrl: this.github.apiBaseUrl })
+        : null;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
@@ -93,6 +99,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     this.comments = new CommentDelivery({
       appMode: auth.kind === 'app',
+      apiBaseUrl: this.github.apiBaseUrl,
       callApi: this.callApi,
       retryDelayMs: options?.retryDelayMs ?? ((attempt: number): number => 1000 * attempt),
       getUserToken: options?.getUserToken,
@@ -296,7 +303,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       return 'malformed';
     }
     if (eventName === 'check_run') {
-      if (isCheckRunCompletedEvent(decoded)) await signalCheckRunWaits(decoded);
+      if (isCheckRunCompletedEvent(decoded)) await signalCheckRunWaits(decoded, this.github.host);
     } else {
       // Chat execution is asynchronous; source-plugin receipt acceptance has its own endpoint.
       void this.handleWebhook(payload, signature, deliveryId, eventName).catch((error: unknown) => {
@@ -332,7 +339,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     const decoded = JSON.parse(payload) as unknown;
     if (githubEvent === 'check_run') {
       if (isCheckRunCompletedEvent(decoded)) {
-        await signalCheckRunWaits(decoded);
+        await signalCheckRunWaits(decoded, this.github.host);
       } else {
         getLog().debug('github.check_run_ignored');
       }
@@ -425,18 +432,26 @@ export class GitHubAdapter implements IPlatformAdapter {
       codebase,
       repoPath,
       isNew: isNewCodebase,
-    } = await getOrCreateCodebaseForRepo(owner, repo);
+    } = await getOrCreateCodebaseForRepo(this.github.webUrl, owner, repo);
     const defaultBranch = await this.fetchDefaultBranch(owner, repo, conversationId);
     if (defaultBranch === undefined) return;
 
     // Clone if needed, sync if new conversation
-    await ensureRepoReady(this.auth, owner, repo, defaultBranch, codebase, isNewCodebase);
+    await ensureRepoReady(
+      this.github.webUrl,
+      this.auth,
+      owner,
+      repo,
+      defaultBranch,
+      codebase,
+      isNewCodebase
+    );
     await linkConversationToCodebase(conversationId, codebase.id, repoPath);
     // Defaults are loaded at runtime, not copied
     if (isNewCodebase) await autoDetectAndLoadCommands(repoPath, codebase.id);
 
     const isPR = !!pullRequest || !!issue?.pull_request;
-    const isolationHints = await buildIsolationHints(this.callApi, parsed, isPR);
+    const isolationHints = await buildIsolationHints(this.callApi, parsed, isPR, this.github.host);
     const { message, issueContext } = buildCommentMessage(
       stripMention(parsed.comment, this.botMention),
       issue,

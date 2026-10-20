@@ -310,6 +310,12 @@ describe('server-side /api/* gate', () => {
     expect(res.status).toBe(401);
   });
 
+  test('gate on + no identity → 401 on /api/dashboard/conversations (names conversations)', async () => {
+    apiGateEnabled = true;
+    const res = await makeApp().request('/api/dashboard/conversations');
+    expect(res.status).toBe(401);
+  });
+
   test('gate on → /api/auth/status stays public (login surface allowlisted)', async () => {
     apiGateEnabled = true;
     authEnabled = true;

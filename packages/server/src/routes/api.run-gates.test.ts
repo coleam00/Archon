@@ -132,6 +132,55 @@ describe('POST /api/workflows/runs/:runId/answer', () => {
     });
   });
 
+  test('answers only the named fan-out child and validates its own choices', async () => {
+    const children = [0, 1].map(index => ({
+      ...askRun(),
+      id: `child-${index}`,
+      parent_run_id: 'questions-parent',
+      metadata: {
+        parent_node_id: 'answers',
+        child_index: index,
+        wait: {
+          owner: 'node' as const,
+          nodeId: 'ask',
+          kind: 'attention' as const,
+          waitingSince: '2026-10-14T10:00:00.000Z',
+          message: `Question ${index}`,
+          pauseId: `pause-${index}`,
+          form: 'select' as const,
+          options: [{ id: `choice-${index}` }],
+        },
+      },
+    }));
+    mockGetWorkflowRun.mockImplementation(async id => children.find(run => run.id === id) ?? null);
+    const firstBefore = structuredClone(children[0]);
+    const wrongChoice = await post('/api/workflows/runs/child-1/answer', {
+      occurrence: 'pause-1',
+      choose: ['choice-0'],
+    });
+    expect(wrongChoice.status).toBe(400);
+    expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+    const wrongOccurrence = await post('/api/workflows/runs/child-1/answer', {
+      occurrence: 'pause-0',
+      choose: ['choice-1'],
+    });
+    expect(wrongOccurrence.status).toBe(409);
+    expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
+    const answered = await post('/api/workflows/runs/child-1/answer', {
+      occurrence: 'pause-1',
+      choose: ['choice-1'],
+    });
+    expect(answered.status).toBe(200);
+    expect(mockAnswerAttentionWait).toHaveBeenCalledTimes(1);
+    expect(mockAnswerAttentionWait).toHaveBeenCalledWith('child-1', {
+      pauseId: 'pause-1',
+      answer: { decision: 'choice-1', text: '' },
+      answeredVia: 'api',
+      answeredAt: expect.any(String),
+    });
+    expect(children[0]).toEqual(firstBefore);
+  });
+
   test('refuses an undeclared option with 400 and a stale occurrence with 409', async () => {
     mockGetWorkflowRun.mockResolvedValue(askRun());
     const undeclared = await post('/api/workflows/runs/run-ask/answer', {

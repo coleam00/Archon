@@ -138,8 +138,11 @@ and normalizes that field without validating unrelated run fields or root constr
 The text before the first `/` selects a declared vendor after credential alias
 normalization; a model rejected by its field rule selects none. An empty list uses native auth.
 `checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
-its environment and abort signal from Archon. Return `not_checked` when the runtime
-cannot check without spending on a session.
+its environment and abort signal from Archon. During run preflight it also receives the
+run's `cwd`, `execContext` and `settingSources`: check authentication where the run will
+execute (the checkout, or the container for a container `execContext`), not in the
+host process directory. Return `not_checked` when the runtime cannot check without
+spending on a session.
 
 Optional `IAgentProvider.diagnose({ assistantConfig, signal })` and `listModels({ signal })` hooks
 serve information to hosts through `_archon/diagnose` and `_archon/list_models`.

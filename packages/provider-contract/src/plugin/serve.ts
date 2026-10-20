@@ -12,7 +12,7 @@ import {
   logNotificationSchema,
   type ProviderLogSink,
   cancelNotificationSchema,
-  checkCredentialRequestSchema,
+  checkCredentialParamsSchema,
   initializeRequestSchema,
   newSessionRequestSchema,
   promptRequestSchema,
@@ -129,8 +129,12 @@ export async function serveProvider(
   });
   rpc.handle('_archon/check_credential', async raw => {
     requireInitialized();
-    const request = checkCredentialRequestSchema.parse(raw);
-    return options.create(log).checkCredential({ ...request, env, signal: connectionAbort.signal });
+    const request = checkCredentialParamsSchema.parse(raw);
+    return options.create(log).checkCredential({
+      ...request,
+      env: request.execContext?.kind === 'container' ? (request.env ?? {}) : env,
+      signal: connectionAbort.signal,
+    });
   });
   rpc.handle('_archon/resolve_credential_model', async raw => {
     requireInitialized();

@@ -219,12 +219,16 @@ test.each([
     expect(prepared.requirements).toEqual([
       { provider: registration.id, model: 'openai/gpt', vendor: 'openai' },
     ]);
-    await assertRunCredentials(deps, {
-      ...prepared,
-      requirements: [
-        { provider: registration.id, model, vendor: registration.credentials.vendorFor(model) },
-      ],
-    });
+    await assertRunCredentials(
+      deps,
+      {
+        ...prepared,
+        requirements: [
+          { provider: registration.id, model, vendor: registration.credentials.vendorFor(model) },
+        ],
+      },
+      { cwd: '/project' }
+    );
     expect(getUserProviderCredential).toHaveBeenCalledWith('user', 'openai');
     expect(checkCredential).not.toHaveBeenCalled();
   }
@@ -718,10 +722,14 @@ test('whitespace Pi models preflight the stored vendor credential instead of nat
     { provider: 'pi', model: 'google/gemini-2.5-pro', vendor: 'google' },
   ]);
   const model = '  google / gemini-2.5-pro  ';
-  await assertRunCredentials(deps, {
-    ...prepared,
-    requirements: [{ provider: 'pi', model, vendor: registration.credentials.vendorFor(model) }],
-  });
+  await assertRunCredentials(
+    deps,
+    {
+      ...prepared,
+      requirements: [{ provider: 'pi', model, vendor: registration.credentials.vendorFor(model) }],
+    },
+    { cwd: '/project' }
+  );
   expect(getUserProviderCredential).toHaveBeenCalledWith('user', 'google');
   expect(checkCredential).not.toHaveBeenCalled();
 });

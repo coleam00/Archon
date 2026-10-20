@@ -1,6 +1,7 @@
 # A mismatched PR head stops before route, every lens, synthesis and publish.
 # Those nodes have no stubs, so reaching any of them fails the fixture.
 policy: { defaults: "fixture-policy-defaults" }
+review-dir: ""
 scope:
   head_matches: false
   pr: { repo: { host: github.com, path: example/repo }, number: 1 }

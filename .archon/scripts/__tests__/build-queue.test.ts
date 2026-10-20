@@ -243,7 +243,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'apply' | 'ruling' | 'retriage',
+  script: 'facts' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
 ): ScriptRun {
@@ -637,5 +637,30 @@ describe('the build queue scripts', () => {
     expect(lost.code).not.toBe(0);
     expect(lost.stderr).toContain('does not read back with the section');
     expect(stored(at).revision).toBe(before);
+  }, 60_000);
+});
+
+describe('the build queue checkout', () => {
+  function git(cwd: string, ...args: string[]): string {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  }
+
+  test("a round that continues a pull request starts from that pull request's head", () => {
+    const at = install();
+    // The fixture leaves the checkout on the pull request's branch. Publish it, then go
+    // back to dev, where a run's checkout starts.
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    git(at.checkout, 'checkout', '-q', 'dev');
+    const result = run(
+      at,
+      'checkout',
+      { INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
+      { pr: { headRefOid: head } }
+    );
+    expect(ok(result)).toEqual({ head });
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
   }, 60_000);
 });

@@ -50,7 +50,7 @@ Every adapter reads its env var in the constructor and stores the parsed whiteli
 
 | Adapter | Env Var | ID Type | Auth File |
 |---------|---------|---------|-----------|
-| Slack | `SLACK_ALLOWED_USER_IDS` | `string[]` (regex `/^[UW][A-Z0-9]+$/`) | `chat/slack/auth.ts` |
+| Slack | `SLACK_ALLOWED_USER_IDS` | descriptor `allowlist`, enforced by the chat host | `packages/chat-slack/src/descriptor.ts` |
 | Telegram | `TELEGRAM_ALLOWED_USER_IDS` | `number[]` (positive integers) | `chat/telegram/auth.ts` |
 | GitHub | `GITHUB_ALLOWED_USERS` | `string[]` (lowercase normalized) | `forge/github/auth.ts` |
 | Discord | `DISCORD_ALLOWED_USER_IDS` | `string[]` (numeric snowflakes) | `community/chat/discord/auth.ts` |
@@ -71,11 +71,10 @@ void this.messageHandler(event);
 
 ### 4. Message Splitting
 
-All adapters use `splitIntoParagraphChunks(message, maxLength)` from `packages/adapters/src/utils/message-splitting.ts`:
+Bundled adapters use `splitIntoParagraphChunks(message, maxLength)` from `packages/adapters/src/utils/message-splitting.ts`:
 
 | Platform | Limit | Buffer | Effective Split At |
 |----------|-------|--------|-------------------|
-| Slack | 12,000 | 500 | 11,500 |
 | Telegram | 4,096 | 200 | 3,896 |
 | GitHub | 65,000 | 500 | 64,500 |
 | Discord | 2,000 | 100 | 1,900 |
@@ -84,29 +83,15 @@ Two-pass algorithm: split on `\n\n+` first, then `\n` for oversized paragraphs.
 
 ### 5. `ensureThread()` is Usually a No-op
 
-Only Discord creates real threads. Slack's `channel:ts` format already ensures threading. Telegram and GitHub have no thread concept (or use inherent threading).
+Only Discord creates real threads. Telegram and GitHub have no thread concept (or use inherent threading).
 
 ---
 
 ## Per-Adapter Deep Dive
 
-### Slack (`SlackAdapter`)
+### Slack (chat plugin)
 
-**File:** `packages/adapters/src/chat/slack/adapter.ts`
-
-**Receiving:** Socket Mode (WebSocket) via `@slack/bolt`. Handles two events:
-- `app_mention` (line 246): bot is `@mentioned` in a channel
-- `message` (line 269): DMs only (`channel_type === 'im'`), skips bot messages via `bot_id` check
-
-**Conversation ID:** `channel:thread_ts` or `channel:ts`. The `getConversationId()` function (line 190) encodes both channel and thread into a single string. `sendMessage()` splits on `:` to extract the parts for `chat.postMessage`.
-
-**Sending:** Uses `sendWithMarkdownBlock()` which posts via `app.client.chat.postMessage` with a `markdown` block type. Falls back to plain text on error.
-
-**Streaming mode:** `'batch'` by default, overridden via `SLACK_STREAMING_MODE`.
-
-**Unique:**
-- `stripBotMention(text)` strips `<@USERID>` prefixes and normalizes Slack `<url|label>` format
-- `fetchThreadHistory(event)` fetches up to 100 replies via `conversations.replies`
+Slack is not a bundled adapter. It ships as the `@archon/chat-slack` chat plugin (`packages/chat-slack/`), which the server hosts through `@archon/chat-contract`. Its allowlist row above points at its descriptor; see `guides/publishing-plugins.md#chat-plugins` for the contract.
 
 ---
 

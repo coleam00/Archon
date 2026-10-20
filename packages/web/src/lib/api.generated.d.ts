@@ -1259,7 +1259,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List registered codebases */
+    /** List codebases with the newest representative of each resolved repository remote */
     get: {
       parameters: {
         query?: never;
@@ -2094,6 +2094,45 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/dashboard/conversations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Active and queued conversation processing in this server process
+     * @description Background workflow runs bypass the conversation lock and are listed by /api/dashboard/runs.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Conversations holding a processing slot or waiting for one */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConversationProcessingResponse'];
           };
         };
       };
@@ -5326,7 +5365,7 @@ export interface components {
         items: string;
         as?: string;
         /** @default 5 */
-        max_parallel: number;
+        max_parallel: number | 'all';
         /**
          * @default all_done
          * @enum {string}
@@ -5337,7 +5376,26 @@ export interface components {
       input?: string;
       /** @enum {string} */
       isolation?: 'inherit' | 'worktree';
-    };
+    } & (
+      | {
+          /** @enum {string} */
+          include?: never;
+        }
+      | {
+          include: string;
+          fan_out?: {
+            items: string;
+            as: string;
+            /** @default 5 */
+            max_parallel: number;
+            /**
+             * @default all_done
+             * @enum {string}
+             */
+            join: 'all_success' | 'all_done' | 'first_success';
+          };
+        }
+    );
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
@@ -6478,6 +6536,22 @@ export interface components {
         paused: number;
       };
     };
+    ConversationProcessingResponse: {
+      active: number;
+      maxConcurrent: number;
+      queuedTotal: number;
+      activeConversations: {
+        conversationId: string;
+        acquiredAt: string;
+        ageMs: number;
+      }[];
+      queuedConversations: {
+        conversationId: string;
+        queuedMessages: number;
+        oldestEnqueuedAt: string;
+        oldestAgeMs: number;
+      }[];
+    };
     CancelWorkflowRunResponse: {
       success: boolean;
       message: string;
@@ -7119,14 +7193,14 @@ export interface components {
       status: string;
       adapter: string;
       concurrency: {
+        /** @description Conversations holding a processing slot plus background workflow conversations */
         active: number;
         queuedTotal: number;
-        queuedByConversation: {
-          conversationId: string;
-          queuedMessages: number;
-        }[];
         maxConcurrent: number;
-        activeConversationIds: string[];
+        /** @description Age of the oldest conversation holding a processing slot in this process. Background workflow runs are counted in `active` but not aged here; see /api/dashboard/runs. */
+        oldestActiveAgeMs: number | null;
+        /** @description Age of the oldest waiting message */
+        oldestQueuedAgeMs: number | null;
       };
       runningWorkflows: number;
       version?: string;

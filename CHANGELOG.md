@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The server no longer contains a Slack adapter; Slack runs only as the `chat-slack` plugin. Docker images ship a verified release and provision it offline on startup when `SLACK_BOT_TOKEN` is configured, including on existing volumes. Boot logs explain provisioning; valid installed versions are retained. Removing the plugin while tokens remain configured reinstalls it on restart: remove tokens from every effective env source as well to keep Slack off. Outside Docker, run `archon plugin add coleam00/Archon/plugins/chat-slack` and restart. A token without a receipt logs `chat.bundled_adapter_retired` with Docker guidance and the manual command. (#4674) The Slack app, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_USER_IDS`, `SLACK_STREAMING_MODE`, and existing Slack conversations, linked identities and workspaces are unchanged. In Slack, `/archon connect github` now points to the Web UI or `archon auth github` instead of running the device flow. Remove the plugin before downgrading to a release without chat plugin support, which rejects its receipt. (#3646)
+
 ### Added
 
 - `archon workflow artifacts <run-id> [path]` lists a run's artifact files or prints one, and `archon project list` lists registered projects with the key `--project` accepts. Both take `--json` and need no running server. (#2239)
 
 ### Changed
 
+- Server telemetry reports how many chat plugins it hosts (`chat_plugins`), and `adapter_slack` now means the Slack plugin is installed rather than that Slack tokens are set. Plugin ids are not sent. Telemetry `schema_version` is 11. (#3646)
 - A workflow node that carries a key belonging to another node type, or a loop setting outside `loop:`/`loop_group:`, now fails the workflow load instead of being ignored or only warned about. For example, `runtime: bun` on a `prompt:` node or a top-level `interactive: true` on a `command:` node is now a load error naming the node, the key and the node types that support it. Move the key to a node that honours it, or delete it. (#2478)
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
 - Runs in an unregistered working directory now store their output under `@cwd/<basename>-<digest>`, where the digest comes from the directory's full path, so two directories with the same folder name no longer share `$STATE_DIR`. Moving a directory gives it a new root. Existing `_cwd/<basename>` trees are left in place and are no longer read; when one exists, a run logs its location and the new root so you can move state that belongs to that directory. Resumed runs keep their recorded root. (#4387)

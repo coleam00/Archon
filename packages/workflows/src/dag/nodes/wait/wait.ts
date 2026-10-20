@@ -19,7 +19,7 @@ import {
 import { waitOutputFormat } from '../../../schemas/dag-node';
 import type { WaitNode, WorkflowWaitContext } from '../../../schemas';
 import { type BodySessionCursorAncestry, type SessionCursor } from '../../../schemas';
-import { isWorkflowWaitContext, waitUntilTimestampSchema, waitCondition } from '../../../schemas';
+import { readWorkflowWaitContext, waitUntilTimestampSchema, waitCondition } from '../../../schemas';
 import { waitCompletionEvents } from '../../../store';
 import {
   declaredOutputPathsFromSchema,
@@ -63,8 +63,8 @@ function resumableWaitContext(
   loopOwner: WaitLoopOwner | undefined,
   render: (text: string) => string
 ): { persisted: WorkflowWaitContext | undefined; discarded?: DiscardedAnswer } {
-  const raw = ctx.workflowRun.metadata?.wait;
-  if (!isWorkflowWaitContext(raw)) return { persisted: undefined };
+  const raw = readWorkflowWaitContext(ctx.workflowRun.metadata?.wait);
+  if (!raw) return { persisted: undefined };
   const owned =
     loopOwner === undefined
       ? raw.owner === 'node' && raw.nodeId === node.id

@@ -1,6 +1,6 @@
 ---
 title: Slack
-description: Connect Archon to Slack using Socket Mode -- works behind firewalls with no public URL needed.
+description: Install the Slack chat plugin and connect Archon to Slack over Socket Mode -- works behind firewalls with no public URL needed.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -11,12 +11,15 @@ sidebar:
 
 Connect Archon to Slack so you can interact with your AI coding assistant from any Slack workspace.
 
+Slack runs as a chat plugin, `chat-slack`, released with Archon. The server starts the plugin as its own process and talks to it over the chat plugin protocol; the server itself contains no Slack code. You create a Slack app, set its two tokens in the server environment, and install the plugin. Docker provisions the image-provided plugin automatically when `SLACK_BOT_TOKEN` is configured.
+
 New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); only a run's starter or an admin can act on it. See [Who can act on a run](/reference/security/#who-can-act-on-a-run).
 
 ## Prerequisites
 
 - Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - A Slack workspace where you have permission to install apps
+- An Archon release that publishes the Slack plugin asset (`archon-chat-slack-<os>-<arch>`)
 
 ## Overview
 
@@ -48,7 +51,6 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - **Scopes**: Add `connections:write`
    - Click **Generate**
 4. **Copy the token** (starts with `xapp-`) -- this is your `SLACK_APP_TOKEN`
-5. Copy the token and put it in your `.env` file
 
 ## Step 3: Configure Bot Scopes
 
@@ -67,7 +69,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
    - `mpim:write` -- Send group DMs
    - `reactions:write` -- Add lifecycle reactions (🔄 / ✅ / ❌) to the triggering message
    - `commands` -- Required for the `/archon` and `/archon-workflow` slash commands
-   - `users:read` -- Look up real names via `users.info` for user attribution. The adapter degrades gracefully if this scope is missing (real names won't appear in the Archon DB, but messages still flow); a one-time `slack.users_info_missing_scope` warning surfaces the misconfiguration in the server log.
+   - `users:read` -- Look up real names via `users.info` for user attribution. Without this scope messages still flow, but real names do not appear in the Archon database.
 
 ## Step 4: Subscribe to Events
 
@@ -119,18 +121,35 @@ fresh token with the new permissions.
 2. Click **Install to Workspace**
 3. Review the permissions and click **Allow**
 4. **Copy the Bot User OAuth Token** (starts with `xoxb-`) -- this is your `SLACK_BOT_TOKEN`
-5. Set the bot token in your `.env` file
 
 ## Step 6: Set Environment Variables
 
-Add to your `.env` file:
+Add both tokens to the server's env file (`~/.archon/.env`, or the compose `.env` in Docker):
 
 ```ini
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 ```
 
-## Step 7: Invite Bot to Channel
+In Docker, a nonempty `SLACK_BOT_TOKEN` declares installation at startup, including tokens in `/.archon/.env`. Both tokens are required for a connection.
+
+The plugin reads them from the environment the server starts it with. If either is missing, the plugin fails to start and the server does not retry it.
+
+## Step 7: Install the Slack Plugin
+
+With the release binary or Homebrew:
+
+```bash
+archon plugin add coleam00/Archon/plugins/chat-slack
+```
+
+In a source checkout, run `bun run cli plugin add coleam00/Archon/plugins/chat-slack`.
+
+In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Docker plugins](/deployment/docker/#plugins) for release pins and build args.
+
+Without a tag, manual `plugin add` installs the latest release. Restart the server; Slack appears in `/api/health` once the plugin connects. Keep the plugin current with `archon plugin update coleam00/Archon/plugins/chat-slack`, and remove it with `archon plugin remove coleam00/Archon/plugins/chat-slack`. In Docker, remove Slack tokens from every effective env source as well, or the image plugin is reinstalled on restart. Outside Docker, removal followed by a restart keeps Slack off. See [`archon plugin`](/reference/cli/#plugin).
+
+## Step 8: Invite Bot to Channel
 
 1. Go to the Slack channel where you want to use the bot
 2. Type `/invite @your-bot` (your bot's display name)
@@ -146,7 +165,7 @@ To restrict bot access to specific users:
 SLACK_ALLOWED_USER_IDS=U01ABC123,U02DEF456
 ```
 
-When set, only listed user IDs can interact with the bot. When empty/unset, the bot responds to all users.
+When set, only listed user IDs can interact with the bot. When empty/unset, the bot responds to all users. The server enforces this list, for messages and for button clicks alike, before anything reaches Archon.
 
 ## Configure Streaming Mode (Optional)
 
@@ -206,7 +225,7 @@ When a workflow runs in a Slack thread, Archon now:
   notice naming the run instead of decision buttons or response commands. Check
   the run status before responding
 - Adds a **Cancel** button on the status message while the run is
-  non-terminal, so anyone on the allowed user list can abandon a runaway run
+  non-terminal, so the run's starter or an admin can abandon a runaway run
   with a click
 - Appends a small italic cost / token footer after direct-chat replies
   (e.g. `_cost: $0.0234 · 12.4k tokens · stop: end_turn_`) and on the
@@ -217,16 +236,32 @@ When a workflow runs in a Slack thread, Archon now:
   `_part i/n_` footers so it's clear they belong together
 
 All gate-decision and Cancel clicks run through the same
-`SLACK_ALLOWED_USER_IDS` whitelist as inbound messages -- unauthorized
-clicks are silently dropped and logged.
+`SLACK_ALLOWED_USER_IDS` whitelist as inbound messages -- clicks from users
+outside it are dropped. A member who is not the run's starter or an admin sees
+a refusal only they can see.
+
+`/archon connect github` replies with a pointer to the Web UI or
+`archon auth github`; it does not run the GitHub device flow in Slack.
+
+## Upgrading From the Bundled Slack Adapter
+
+Earlier Archon versions ran Slack inside the server whenever `SLACK_BOT_TOKEN` and
+`SLACK_APP_TOKEN` were set. The server no longer contains that adapter: without the
+plugin, Slack stays off. When `SLACK_BOT_TOKEN` is set and no Slack plugin is installed,
+startup logs a `chat.bundled_adapter_retired` warning with Docker provisioning guidance and the manual install command.
+
+In Docker, existing token configuration provisions the image-provided plugin offline on restart; no manual step is needed. The boot log names the release and why it was installed. Outside Docker, install the plugin (Step 7) and restart. Nothing else changes: the tokens, the Slack app
+configuration, `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` stay as they are, and
+existing conversations, linked identities and workspaces carry over because the plugin
+keeps the platform id `slack`.
 
 ## Troubleshooting
 
 ### Bot Doesn't Respond
 
-1. Check that Socket Mode is enabled
-2. Verify both tokens are correct in `.env`
-3. Check the app logs for errors
+1. Check that the plugin is installed: `archon plugin list` shows `coleam00/Archon/plugins/chat-slack`
+2. Check that Socket Mode is enabled
+3. Verify both tokens are correct in `.env`, then check the server log for `chat.bundled_adapter_retired` or a plugin start failure
 4. Ensure the bot is invited to the channel
 5. Make sure you're @mentioning the bot (not just typing)
 

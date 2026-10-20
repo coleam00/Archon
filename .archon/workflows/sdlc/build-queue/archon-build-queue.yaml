@@ -4,7 +4,8 @@ description: |
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
   agent routes it (and proves a bug's symptom first) and launches archon-ship from a
-  brief; one agent answers how that round ended; and after several rounds that each
+  brief, or marks a pull request already reviewed Ready and green ready without
+  another round; one agent answers how that round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
   attention item whose answer is a declared choice; the ruling is written into the
@@ -115,7 +116,11 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [launch, ask] }
+        decision: { type: string, enum: [launch, ask, ready] }
+        # On ready, the full head SHA the pull request is already reviewed Ready and
+        # green at; apply takes it out of draft only while its head is still this
+        # commit. Null otherwise.
+        ready_head: { type: [string, 'null'] }
         # The brief archon-ship starts from on launch; on ask, the brief a continue
         # choice launches.
         brief: { type: string, pattern: '\S' }
@@ -152,11 +157,27 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, brief, reason, attention]
+      required: [decision, ready_head, brief, reason, attention]
+
+  # A round that continues a pull request starts from that pull request's head, not
+  # from the branch the run's checkout was cut from, so its publish fast-forwards.
+  - id: checkout
+    script: checkout
+    runtime: bun
+    depends_on: [facts, route]
+    when: "$route.output.decision == 'launch'"
+    with:
+      pull_request: { from: "$facts.output.pull_request" }
+      continues: "$facts.output.continues"
+    output_format:
+      type: object
+      properties:
+        head: { type: [string, 'null'] }
+      required: [head]
 
   - id: ship
     include: archon-ship-block
-    depends_on: [facts, route]
+    depends_on: [facts, route, checkout]
     when: "$route.output.decision == 'launch'"
     with:
       target: "$route.output.brief"
@@ -211,6 +232,7 @@ nodes:
     with:
       path: "$facts.output.path"
       item: { from: "$facts.output.item" }
+      pull_request: { from: "$facts.output.pull_request" }
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }

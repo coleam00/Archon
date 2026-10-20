@@ -30,6 +30,7 @@ function createDelivery(
   const octokit = { rest: { issues: { createComment } } } as unknown as GitHubApi;
   return new CommentDelivery({
     appMode: false,
+    apiBaseUrl: 'https://api.github.com',
     callApi: (_owner, _repo, fn) => fn(octokit),
     retryDelayMs,
   });
@@ -205,5 +206,38 @@ describe('retry logic', () => {
 
     // Should have tried 3 times (max retries)
     expect(mockCreateComment).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('per-user attribution', () => {
+  test('the per-user client posts to the configured API root', async () => {
+    const createComment = makeCreateCommentMock();
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ id: 1 }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    try {
+      const delivery = new CommentDelivery({
+        appMode: true,
+        apiBaseUrl: 'https://ghe.example/api/v3',
+        callApi: (_owner, _repo, fn) =>
+          fn({ rest: { issues: { createComment } } } as unknown as GitHubApi),
+        retryDelayMs: () => 0,
+        getUserToken: async () => 'user-token',
+      });
+      delivery.rememberActor('owner/repo#7', 'user-1');
+
+      await delivery.send('owner/repo#7', 'hello');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [request] = fetchSpy.mock.calls[0] as [string | URL | Request];
+      const url = request instanceof Request ? request.url : String(request);
+      expect(url).toBe('https://ghe.example/api/v3/repos/owner/repo/issues/7/comments');
+      expect(createComment).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

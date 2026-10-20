@@ -291,7 +291,7 @@ export class ProcessAgentProvider implements IAgentProvider {
       this.descriptor,
       this.argv,
       this.origin,
-      { env: request.env },
+      { env: request.env, execContext: request.execContext },
       request.signal
     );
     try {

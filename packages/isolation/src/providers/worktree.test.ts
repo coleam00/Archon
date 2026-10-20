@@ -466,6 +466,7 @@ describe('WorktreeProvider', () => {
 
       const env = await provider.create(baseRequest);
 
+      expect(env.resolvedBaseBranch).toBeUndefined();
       expect(env.metadata).toHaveProperty('adopted', true);
       expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
     });
@@ -535,6 +536,7 @@ describe('WorktreeProvider', () => {
       expect(adoptionWarnings()).toHaveLength(1);
       // Adoption continues an existing branch; it never claims a cut-from commit.
       expect(Object.hasOwn(env.metadata, 'cutFromCommit')).toBe(false);
+      expect(env.resolvedBaseBranch).toBeUndefined();
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
       expect(execSpy).toHaveBeenCalledWith(
         'git',
@@ -606,6 +608,7 @@ describe('WorktreeProvider', () => {
       expect(env.workingPath).toBe('/external/worktrees/feature-live-pr');
       expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
       expect(adoptionWarnings()).toHaveLength(1);
+      expect(env.resolvedBaseBranch).toBeUndefined();
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
     });
 
@@ -3443,7 +3446,8 @@ describe('WorktreeProvider', () => {
         'gitdir: /workspace/owner/repo/.git/worktrees/archon/issue-42\n'
       );
 
-      await provider.create(baseRequest);
+      const env = await provider.create(baseRequest);
+      expect(env.resolvedBaseBranch).toBeUndefined();
 
       // Verify sync was NOT called (adoption skips createWorktree entirely)
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
@@ -3536,16 +3540,44 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('returns the base selected by sync rather than the request hint', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      provider = new WorktreeProvider(async () => ({}));
+      syncWorkspaceSpy.mockResolvedValueOnce({
+        branch: git.toBranchName('detected-release'),
+        synced: true,
+        mode: 'fast-forward',
+        state: 'in_sync',
+        previousHead: '',
+        newHead: '',
+        updated: false,
+      });
+      const env = await provider.create(baseRequest);
+      expect(env.resolvedBaseBranch).toBe('detected-release');
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          'worktree',
+          'add',
+          '-b',
+          'archon/issue-42',
+          'origin/detected-release',
+        ]),
+        expect.any(Object)
+      );
+    });
+
     test('uses configured baseBranch over request baseBranch when both are set', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       const configLoader: RepoConfigLoader = async () => ({ baseBranch: git.toBranchName('main') });
       provider = new WorktreeProvider(configLoader);
 
-      await provider.create({
+      const env = await provider.create({
         ...baseRequest,
         baseBranch: git.toBranchName('develop'),
       });
 
+      expect(env.resolvedBaseBranch).toBe('main');
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
         mode: 'fast-forward',
         remote: 'origin',
@@ -3557,11 +3589,13 @@ describe('WorktreeProvider', () => {
       const configLoader: RepoConfigLoader = async () => ({ baseBranch: git.toBranchName('main') });
       provider = new WorktreeProvider(configLoader);
 
-      await provider.create({
+      const env = await provider.create({
         ...baseRequest,
         baseBranch: git.toBranchName('develop'),
         baseOverride: git.toBranchName('epic/foo'),
       });
+
+      expect(env.resolvedBaseBranch).toBe('main');
 
       // --base (baseOverride) is the top precedence level: it beats repo-config
       // 'main' and the codebase-default request.baseBranch 'develop'.
@@ -3617,9 +3651,10 @@ describe('WorktreeProvider', () => {
         taskBranch: { kind: 'new', fromBranch: git.toBranchName('dev') },
       };
 
-      await provider.create(request);
+      const env = await provider.create(request);
 
       // fromBranch is the start-point for the branch, not for sync — sync auto-detects
+      expect(env.resolvedBaseBranch).toBe('main');
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
         mode: 'fast-forward',
         remote: 'origin',

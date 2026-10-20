@@ -44,7 +44,7 @@ import { createHash, randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PostHog } from 'posthog-node';
-import { getArchonHome, isDocker } from './archon-paths';
+import { getArchonHome, isDocker } from './home-paths';
 import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { readSourceCommit } from './source-commit';
 import { createLogger } from './logger';
@@ -53,7 +53,7 @@ import { createLogger } from './logger';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 10;
+export const TELEMETRY_SCHEMA_VERSION = 11;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -617,7 +617,8 @@ export interface DeploymentShapeProperties {
   /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
   multiUser?: boolean;
   githubAuthMode?: 'app' | 'pat' | 'none' | 'conflict';
-  adapterSlack?: boolean;
+  /** Hosted chat plugin ids, sent only as a count and `adapter_slack`; ids never leave. */
+  chatPluginIds?: readonly string[];
   adapterTelegram?: boolean;
   adapterDiscord?: boolean;
   adapterGitea?: boolean;
@@ -851,13 +852,16 @@ function workflowShapeWireProps(shape: WorkflowShapeProperties): Record<string, 
  */
 function deploymentShapeWireProps(
   props: DeploymentShapeProperties
-): Record<string, string | boolean> {
+): Record<string, string | number | boolean> {
   return {
     ...(props.dbKind !== undefined ? { db_kind: props.dbKind } : {}),
     ...(props.webAuthEnabled !== undefined ? { web_auth_enabled: props.webAuthEnabled } : {}),
     ...(props.multiUser !== undefined ? { multi_user: props.multiUser } : {}),
     ...(props.githubAuthMode !== undefined ? { github_auth_mode: props.githubAuthMode } : {}),
-    ...(props.adapterSlack !== undefined ? { adapter_slack: props.adapterSlack } : {}),
+    ...(props.chatPluginIds && {
+      chat_plugins: props.chatPluginIds.length,
+      adapter_slack: props.chatPluginIds.includes('slack'),
+    }),
     ...(props.adapterTelegram !== undefined ? { adapter_telegram: props.adapterTelegram } : {}),
     ...(props.adapterDiscord !== undefined ? { adapter_discord: props.adapterDiscord } : {}),
     ...(props.adapterGitea !== undefined ? { adapter_gitea: props.adapterGitea } : {}),
@@ -992,7 +996,7 @@ export function captureCodebaseRegistered(): void {
   });
 }
 
-const TERMINAL_EVENT = {
+export const WORKFLOW_TERMINAL_EVENT_TYPE = {
   completed: 'workflow_completed',
   failed: 'workflow_failed',
   cancelled: 'workflow_cancelled',
@@ -1017,7 +1021,7 @@ export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void
   fireAndForget(client => {
     client.capture({
       distinctId: getTelemetryId(),
-      event: TERMINAL_EVENT[props.outcome],
+      event: WORKFLOW_TERMINAL_EVENT_TYPE[props.outcome],
       properties: {
         ...PRIVACY_INVARIANTS,
         ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
