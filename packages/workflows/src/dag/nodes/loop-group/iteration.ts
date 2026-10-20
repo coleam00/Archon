@@ -37,6 +37,7 @@ import {
   type LoopGroupRun,
   type LoopGroupState,
 } from './loop-group-state';
+import { restoredBodyOutput } from './interrupted-iteration';
 import { runGroupUntilBash } from './until-bash';
 
 /** One iteration's body run: its scoped outputs and the context it ran in. */
@@ -207,9 +208,9 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const group = node.loop_group;
   // This iteration's $LOOP_PREV.* outputs and $LOOP_USER_INPUT reply, which every body
   // node resolves through iterCtx.loopBodyScopes. On iteration 1 loopPrevOutputs is
-  // undefined → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first
+  // empty → $LOOP_PREV refs resolve to ''; $LOOP_USER_INPUT is '' except on the first
   // resumed iteration of an interactive loop.
-  const prevSnapshot = state.loopPrevOutputs;
+  const prevSnapshot = state.loopPrevOutputs ?? new Map<string, NodeOutput>();
   const userInputForIter =
     resume.isLoopResume && i === resume.startIteration ? resume.loopUserInput : '';
   const iterScope = loopBodyScope(bodyNodes, prevSnapshot, userInputForIter, ctx.artifactsDir);
@@ -219,6 +220,20 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   // upstream outputs so body nodes can reference outer context via $nodeId.output if
   // needed (the body is sealed against depends_on, but prompt refs remain valid).
   const scopedNodeOutputs = new Map<string, NodeOutput>(ctx.nodeOutputs);
+  const priorCompletedNodes =
+    i === run.interruptedIteration?.iteration ? run.interruptedIteration.completed : undefined;
+  for (const body of bodyNodes) {
+    const prior = priorCompletedNodes?.get(body.id);
+    if (prior && !body.always_run)
+      scopedNodeOutputs.set(
+        body.id,
+        restoredBodyOutput(
+          body,
+          prior,
+          run.interruptedIteration?.sessions.get(run.bodyStepNamePrefix + body.id)
+        )
+      );
+  }
 
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   const iterCtx: RunLayersContext = {
@@ -276,7 +291,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
     nodeOutputs: scopedNodeOutputs,
-    priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+    priorCompletedNodes,
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,
     // Thread the loop-level session cursor: fresh_context (or the loop's true first
     // iteration) starts fresh; otherwise carry the prior iteration's last sequential
@@ -301,7 +316,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // "$LOOP_USER_INPUT" token into the script source; this env var covers indirect reads
     // (${LOOP_USER_INPUT}, printenv, env) that splice can't reach.
     bodyLoopUserInput: userInputForIter,
-    loopPrevOutputs: prevSnapshot ?? new Map(),
+    loopPrevOutputs: prevSnapshot,
     loopBodyScopes: [...ctx.loopBodyScopes, iterScope],
   };
   return { iterCtx, scopedNodeOutputs, prevSnapshot, terminalSuspendNode };

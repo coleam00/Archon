@@ -2,13 +2,14 @@
 import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from '../test-settling-provider';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { SendQueryOptions } from '@archon/provider-contract';
 import {
+  persistedEvents,
   mockArtifactHome,
   setMockArtifactHome,
   composeScope,
@@ -27,6 +28,7 @@ import {
   ready,
   makeWorkflowRun,
 } from './test-utils';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { executeDagWorkflow } from '../dag-executor';
 import { checkComposedBlockBoundaries } from './trigger-rule';
 import { resolvedBodyNodes } from '../graph-plan';
@@ -411,7 +413,254 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
-  it('checks cached include entries against the supplied previous-iteration snapshot', () => {
+  for (const value of ['go', '']) {
+    it(`retains an inherited gate's outer scope inside a nested loop for '${value}'`, async () => {
+      const leaf = buildWf('leaf', [
+        { id: 'entry', bash: 'echo entry' },
+        { id: 'tail', bash: 'echo tail', depends_on: ['entry'], trigger_rule: 'all_done' },
+      ]);
+      const block = buildWf('nested-block', [
+        {
+          id: 'inner',
+          loop_group: {
+            max_iterations: 2,
+            until: 'FIN',
+            nodes: [
+              { id: 'innerWork', bash: 'echo inner' },
+              {
+                id: 'local',
+                include: 'leaf',
+                when: "$LOOP_PREV.innerWork.output == 'inner'",
+                depends_on: ['innerWork'],
+              },
+              {
+                id: 'finish',
+                bash: 'echo FIN',
+                when: "$LOOP_PREV.innerWork.output == 'inner'",
+                depends_on: ['local'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
+        },
+      ]);
+      const when = `$LOOP_PREV.work.output == '${value}'`;
+      const parent = buildWf('nested-parent', [
+        {
+          id: 'outer',
+          loop_group: {
+            max_iterations: 2,
+            until: 'DONE',
+            nodes: [
+              { id: 'work', bash: 'echo go' },
+              { id: 'inc', include: 'nested-block', when, depends_on: ['work'] },
+              {
+                id: 'end',
+                bash: 'echo DONE',
+                when: "$LOOP_PREV.work.output == 'go'",
+                depends_on: ['inc'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
+        },
+      ]);
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['leaf', leaf],
+          ['nested-block', block],
+          ['nested-parent', parent],
+        ])
+      );
+      expect(expanded.errors).toEqual([]);
+      const workflow = expanded.workflows.get('nested-parent')!;
+      const { events } = await executeExpanded([...workflow.nodes], `nested-${value}`);
+      expect(events.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      const dryRun = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: testDir,
+        stubs: {
+          work: 'go',
+          innerWork: 'inner',
+          local__entry: 'entry',
+          local__tail: 'tail',
+          finish: 'FIN',
+          end: 'DONE',
+        },
+      });
+      expect(dryRun.outcome).toBe('completed');
+      for (const id of ['entry', 'tail']) {
+        const leafEvents = events.filter(
+          e =>
+            e.step_name === `outer.inc__inner.local__${id}` &&
+            ['node_completed', 'node_skipped'].includes(e.event_type)
+        );
+        expect(leafEvents.map(e => e.event_type)).toEqual(['node_skipped', 'node_completed']);
+        expect(leafEvents[0]?.data?.cause).toEqual({
+          kind: 'condition',
+          expr: "$LOOP_PREV.innerWork.output == 'inner'",
+        });
+        expect(dryRun.trace.filter(e => e.nodeId === `local__${id}`).map(e => e.state)).toEqual([
+          'skipped',
+          'stubbed',
+        ]);
+      }
+    });
+  }
+
+  for (const { enabled, force } of [
+    { enabled: true, force: 'none' },
+    { enabled: false, force: 'none' },
+    { enabled: true, force: 'entry' },
+    { enabled: true, force: 'group' },
+    { enabled: true, force: 'nested' },
+    { enabled: true, force: 'upstream' },
+  ]) {
+    it(`resumes an actual cached loop entry (gate=${String(enabled)}, always_run=${force})`, async () => {
+      const marker = join(testDir, `entry-${String(enabled)}`);
+      const retry = join(testDir, `retry-${String(enabled)}`);
+      const when = "$LOOP_PREV.work.output == 'go' && $INPUTS.enabled == true";
+      const block = buildWf('cached-block', [
+        {
+          id: 'entry',
+          bash: `echo entry >> '${marker}'; echo entry`,
+          always_run: force === 'entry',
+        },
+        {
+          id: 'tail',
+          bash:
+            force === 'nested'
+              ? `if [ ! -f '${retry}' ]; then touch '${retry}'; elif [ ! -f '${retry}-recovered' ]; then touch '${retry}-recovered'; exit 1; fi; echo tail`
+              : `if [ ! -f '${retry}' ]; then touch '${retry}'; exit 1; fi; echo tail`,
+          depends_on: ['entry'],
+          trigger_rule: 'all_done',
+        },
+      ]);
+      const parent = buildWf('cached-parent', [
+        {
+          id: 'cycle',
+          always_run: force === 'group',
+          loop_group: {
+            max_iterations: 2,
+            until: 'DONE',
+            nodes: [
+              {
+                id: 'work',
+                bash:
+                  force === 'upstream'
+                    ? `if [ -f '${retry}' ]; then echo changed; else echo go; fi`
+                    : 'echo go',
+                always_run: force === 'upstream',
+              },
+              { id: 'inc', include: 'cached-block', depends_on: ['work'], when },
+              {
+                id: 'end',
+                bash: 'echo DONE',
+                depends_on: ['inc'],
+                trigger_rule: 'all_done',
+                when: "$LOOP_PREV.work.output == 'go'",
+              },
+            ],
+          },
+        },
+      ]);
+      if (force === 'nested') {
+        const outer = dagNodeSchema.parse({
+          id: 'outer',
+          loop_group: {
+            max_iterations: 2,
+            until: 'OUTERDONE',
+            nodes: [
+              { id: 'outerWork', bash: 'echo go' },
+              {
+                id: 'outerEnd',
+                bash: 'echo OUTERDONE',
+                depends_on: ['cycle'],
+                trigger_rule: 'all_done',
+                when: "$LOOP_PREV.outerWork.output == 'go'",
+              },
+            ],
+          },
+        });
+        if (outer.kind !== 'loop_group') throw new Error('expected outer loop');
+        outer.loop_group.nodes.splice(1, 0, { ...parent.nodes[0]!, depends_on: ['outerWork'] });
+        parent.nodes = [outer];
+      }
+      const prefix = force === 'nested' ? 'outer.cycle' : 'cycle';
+      const initialEntries = force === 'nested' ? 'entry\nentry\n' : 'entry\n';
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['cached-block', block],
+          ['cached-parent', parent],
+        ])
+      );
+      expect(expanded.errors).toEqual([]);
+      const workflow = expanded.workflows.get('cached-parent')!;
+      const workflowRun = makeWorkflowRun(`cached-loop-${String(enabled)}`, {
+        workflow_name: workflow.name,
+        metadata: { inputs: { enabled: 'true' } },
+      });
+      const deps = createMockDeps();
+      await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
+      const rows = persistedEvents(deps.store);
+      expect(
+        rows.some(e => e.event_type === 'node_failed' && e.step_name === `${prefix}.inc__tail`)
+      ).toBe(true);
+      expect(await readFile(marker, 'utf8')).toBe(initialEntries);
+      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        rows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      const before = rows.length;
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow,
+          workflowRun: { ...workflowRun, metadata: { inputs: { enabled: String(enabled) } } },
+          priorCompletedNodes: snapshot.completedNodeOutputs,
+        })
+      );
+      const resumed = persistedEvents(deps.store).slice(before);
+      expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      expect(await readFile(marker, 'utf8')).toBe(
+        ['none', 'nested'].includes(force) ? initialEntries : 'entry\nentry\n'
+      );
+      if (enabled) {
+        expect(
+          resumed.some(
+            e =>
+              e.event_type === 'node_skipped_prior_success' &&
+              e.step_name === `${prefix}.inc__entry`
+          )
+        ).toBe(['none', 'nested'].includes(force));
+        expect(
+          resumed.some(
+            e => e.event_type === 'node_completed' && e.step_name === `${prefix}.inc__tail`
+          )
+        ).toBe(true);
+      } else {
+        for (const id of ['entry', 'tail']) {
+          expect(
+            resumed.find(
+              e => e.event_type === 'node_skipped' && e.step_name === `${prefix}.inc__${id}`
+            )?.data?.cause
+          ).toEqual({ kind: 'condition', expr: when });
+        }
+      }
+    });
+  }
+
+  it('rejects a loop reference in an include boundary without loop context', () => {
     const when = "$LOOP_PREV.work.output == 'go'";
     const workflow = loopGatedWorkflow(when);
     const group = workflow.nodes[0];
@@ -419,24 +668,6 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     const entry = resolvedBodyNodes(group.loop_group).find(node => node.id === 'inc__entry');
     if (!entry) throw new Error('expected expanded entry');
     const outputs = new Map([['work', { state: 'completed' as const, output: 'current' }]]);
-    for (const previous of ['go', 'stop', undefined]) {
-      const loopPrevOutputs = new Map(
-        previous === undefined ? [] : [['work', { state: 'completed' as const, output: previous }]]
-      );
-      expect(
-        checkComposedBlockBoundaries(entry, outputs, undefined, {
-          evaluateEntryBoundary: true,
-          loopPrevOutputs,
-        })
-      ).toEqual(
-        previous === 'go'
-          ? { decision: 'run' }
-          : {
-              decision: 'skip',
-              cause: { kind: 'condition', expr: when },
-            }
-      );
-    }
     expect(
       checkComposedBlockBoundaries(entry, outputs, undefined, {
         evaluateEntryBoundary: true,

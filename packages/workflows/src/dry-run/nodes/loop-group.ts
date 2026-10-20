@@ -47,11 +47,12 @@ export async function simulateLoopGroup(
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
     // in a real run outside an interactive resume.
+    loopPrevOutputs ??= new Map();
     const iterScope = loopBodyScope(bodyNodes, loopPrevOutputs, '', ctx.artifactsDir);
     const bodyPlan = planGraph(bodyNodes);
     const bodyOutputs = new Map(outputs);
     ctx.scope = bodyScope;
-    ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
+    ctx.loopPrevOutputs = loopPrevOutputs;
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);

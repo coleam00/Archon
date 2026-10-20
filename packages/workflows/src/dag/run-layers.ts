@@ -165,7 +165,11 @@ async function admitNode(
     node,
     ctx.nodeOutputs,
     resolveRunInputs(ctx.workflowRun),
-    { evaluateEntryBoundary: isCachedPriorSuccess, loopPrevOutputs: ctx.loopPrevOutputs }
+    {
+      evaluateEntryBoundary: isCachedPriorSuccess,
+      loopPrevOutputs: ctx.loopPrevOutputs,
+      loopBodyScopes: ctx.loopBodyScopes,
+    }
   );
 
   // 0. Skip if this node completed successfully in a prior run (resume path),
@@ -418,6 +422,7 @@ async function replayPriorSuccess(
       return {
         nodeId: node.id,
         output: cachedOutput,
+        sessionProvider: cachedOutput.execution?.binding.provider,
       };
     }
   }

@@ -23,6 +23,7 @@ import {
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { writeNodeArtifact } from '../../../artifacts-index';
 import type {
@@ -1197,6 +1198,74 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       });
     }
   }
+
+  it('retains a cached owner and its private session when retrying an interrupted iteration', async () => {
+    const nodes = ownerWorkflow('claude', true);
+    let reviews = 0;
+    mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
+      if (prompt === 'review' && ++reviews === 2) throw new Error('review interrupted');
+      const done = prompt === 'review' && reviews === 4;
+      yield {
+        type: 'agent_message_chunk',
+        text: prompt === 'review' ? JSON.stringify({ done }) : prompt,
+      };
+      yield {
+        type: 'result',
+        sessionId: prompt === 'source' ? 'S' : prompt === 'owner' ? 'O' : `R${reviews}`,
+        ...(options?.outputFormat ? { structuredOutput: { done } } : {}),
+        ...(session ? { resumed: true } : {}),
+      };
+    });
+    const store = await runAddressableWorkflow(nodes);
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const rows = persistedEvents(store);
+    const snapshot = await foldDagResumeSnapshot(rows, 'addressable-run');
+    const resumedStore = createMockStore();
+    resumedStore.getDagResumeSnapshot.mockResolvedValue(snapshot);
+    resumedStore.listWorkflowEvents.mockResolvedValue(
+      rows.map((event, index) => ({
+        ...event,
+        id: String(index),
+        created_at: new Date().toISOString(),
+        step_index: null,
+        step_name: event.step_name ?? null,
+        data: event.data ?? {},
+      }))
+    );
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(resumedStore),
+        cwd: testDir,
+        workflow: { name: 'addressable', nodes },
+        workflowRun: makeWorkflowRun('addressable-run'),
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        priorNodeSessions: [
+          {
+            workflow_run_id: 'addressable-run',
+            node_id: 'source',
+            provider: 'claude',
+            provider_session_id: 'S',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      })
+    );
+    expect(resumedStore.failWorkflowRun).not.toHaveBeenCalled();
+    expect(resumedStore.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(resumedStore).some(
+        e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'corrections.owner'
+      )
+    ).toBe(true);
+    expect(
+      mockSendQueryDag.mock.calls.filter(c => c[0] === 'owner').map(c => [c[2], c[3]?.forkSession])
+    ).toEqual([
+      ['S', true],
+      ['O', false],
+      ['O', false],
+    ]);
+  });
 
   it('restores private ownership from serialized interactive pause state in a new execution', async () => {
     const nodes = ownerWorkflow('claude', true);

@@ -72,12 +72,10 @@ function bodyComposedMeta(patch: ComposedNodeMeta): ComposedNodeMeta {
 }
 
 function bodyBoundary(boundary: ComposedBlockBoundary): ComposedBlockBoundary {
-  const clone = structuredClone(boundary);
-  if (!clone.isEntry) return clone;
+  const { isEntry: _isEntry, entryTriggerRule: _entryTriggerRule, ...predicate } = boundary;
   return {
-    dependsOn: clone.dependsOn,
-    entryTriggerRules: clone.entryTriggerRules,
-    ...(clone.when !== undefined ? { when: clone.when } : {}),
+    ...structuredClone(predicate),
+    loopDepth: (boundary.loopDepth ?? 0) + 1,
     isEntry: false,
   };
 }

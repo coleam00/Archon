@@ -1,3 +1,4 @@
+import type { InterruptedIteration } from './interrupted-iteration';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import type {
@@ -58,6 +59,7 @@ export interface LoopGroupResume {
 
 /** What one loop group execution holds fixed across its iterations. */
 export interface LoopGroupRun {
+  interruptedIteration?: InterruptedIteration;
   ctx: RunLayersContext;
   node: LoopGroupNode;
   bodyNodes: readonly DagNode[];

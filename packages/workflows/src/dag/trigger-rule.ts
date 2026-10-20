@@ -1,6 +1,7 @@
 import type { SkipCause, NodeOutput, DagNode, TriggerRule } from '../schemas';
 import type { JsonValue } from '../output-ref';
 import { readComposedMeta } from '../compiled-command';
+import type { LoopBodyScope } from './loop-scope';
 import { evaluateCondition } from '../condition-evaluator';
 
 export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
@@ -103,6 +104,7 @@ export function checkComposedBlockBoundaries(
   options: {
     evaluateEntryBoundary?: boolean;
     loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
+    loopBodyScopes?: readonly LoopBodyScope[];
   } = {}
 ): TriggerRuleDecision {
   const { evaluateEntryBoundary = false } = options;
@@ -122,7 +124,17 @@ export function checkComposedBlockBoundaries(
 
     if (boundary.when !== undefined) {
       try {
-        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs, options);
+        const depth = boundary.loopDepth ?? 0;
+        const scopeIndex = (options.loopBodyScopes?.length ?? 0) - 1 - depth;
+        const loopPrevOutputs =
+          depth === 0
+            ? options.loopPrevOutputs
+            : scopeIndex >= 0
+              ? options.loopBodyScopes?.[scopeIndex]?.loopPrevOutputs
+              : undefined;
+        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs, {
+          loopPrevOutputs,
+        });
         if (!condition.parsed) {
           return {
             decision: 'skip',
