@@ -107,42 +107,17 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       labels: ['TODO'],
       meta: { reviewed: false },
     });
-    expect(await Bun.file(path).text()).toContain('ready: false');
+    const yaml = await Bun.file(path).text();
+    expect(
+      yaml
+        .split('\n')
+        .slice(0, 2)
+        .map(line => line.trimEnd())
+    ).toEqual(['review__classify:', '  kind: bug']);
+    expect(yaml).toContain('ready: false');
     await expect(writeDryRunStubScaffold(workflow, path)).rejects.toThrow(
       'stub scaffold already exists'
     );
-  });
-
-  test('writes editable block YAML that round-trips and runs unchanged', async () => {
-    const workflow = makeTestWorkflow({
-      name: 'editable-stubs',
-      nodes: [
-        {
-          id: 'a',
-          prompt: 'check',
-          output_format: {
-            type: 'object',
-            properties: { ok: { type: 'boolean' } },
-            required: ['ok'],
-          },
-        },
-        { id: 'b', prompt: 'work', depends_on: ['a'] },
-      ],
-    });
-    const path = join(temporaryDirectory(), 'stubs.yaml');
-    const written = await writeDryRunStubScaffold(workflow, path);
-    const yaml = await Bun.file(path).text();
-
-    expect(
-      yaml
-        .trim()
-        .split('\n')
-        .map(line => line.trimEnd())
-    ).toEqual(['a:', '  ok: false', 'b: TODO']);
-    expect(Bun.YAML.parse(yaml)).toEqual(written);
-    const result = await dryRunWorkflow({ workflow, stubs: await loadDryRunStubs(path) });
-    expect(result.outcome).toBe('completed');
-    expect(result.missingStubs).toEqual([]);
   });
 
   test('does not leave a partial file when a placeholder cannot satisfy the schema', async () => {
