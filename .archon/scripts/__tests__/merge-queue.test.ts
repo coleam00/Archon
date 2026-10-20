@@ -582,6 +582,38 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at, 42).value?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
   }, 60_000);
 
+  test('only the pull request of a build item\'s latest round supersedes; an earlier round\'s pull request stays an own PR', () => {
+    const at = install();
+    const earlier = { ...BUILT.rounds[0]!, run_id: 'ship-0', pr_url: PR_URL.replace(/42$/, '30') };
+    seed(at, item({ ...BUILT, status: 'next', rounds: [earlier, ...BUILT.rounds] }));
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 30 }, AT), facts: { own_pr: { url: earlier.pr_url, at: AT } } });
+    const output = ok(run(at, 'facts', {})) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[30, true]]);
+    expect(stored(at, 30).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('a merged own-PR item stays merged when a build item names its pull request', () => {
+    const at = install();
+    seed(at, item({ ...BUILT, status: 'next' }));
+    const merged: MergeRecord = {
+      ...merge('merged'),
+      decisions: [{ at: LATER, run_id: 'old-run', decision: 'merged', reason: 'the gate passed', links: [], head: HEAD, reran: false }],
+    };
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT }, merge: merged } });
+    ok(run(at, 'facts', {}));
+    expect(stored(at, 42).value?.facts.merge).toEqual(merged);
+  }, 60_000);
+
+  test('a malformed work item is noted and skipped, and own pull requests still enroll', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    inProcess(at, () => expect(statePut('work/9', { version: 0 }, stateGet('work/9').revision)).toBe('ok'));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const picked = run(at, 'facts', {}, { pr: { ownPrs } });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).not.toContain('own-PR enrollment stopped');
+    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(ownPrs[0]!.url);
+  }, 60_000);
+
   test('an own pull request listed without its head branch is not enrolled', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false }] } });

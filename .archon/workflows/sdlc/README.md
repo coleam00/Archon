@@ -607,9 +607,9 @@ then the project's file, whose lines win where the two conflict.
   work item names yet and whose head branch is not one the build queue creates
   (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). A pull request
   on a build branch belongs to its build item alone until that item is ready. When a
-  build item's rounds come to name a pull request that already has an own-PR item, the
-  run settles the own-PR item as superseded before claiming, recording the build
-  item's number, so the sweep never sees it. A claim whose run ended is released
+  build item's latest round names a pull request that already has an unmerged own-PR
+  item, the run settles the own-PR item as superseded before claiming, recording the
+  build item's number, so the sweep never sees it. A claim whose run ended is released
   first; one a live run still holds waits for that run to end. No build round owns an
   own-PR pull request, so where another would go back to the build queue (no verdict,
   a stale one, a conflict, a holding thread, red CI the change caused) the sweep asks

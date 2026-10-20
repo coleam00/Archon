@@ -16,7 +16,6 @@ import { record, type QualifiedPr } from './forge.ts';
 import { claimDisposition, runStatus, stateDocuments, stateGet, statePut } from './state.ts';
 import {
   newWorkItem,
-  parseWorkItem,
   read,
   type Read,
   releaseIfTerminal,
@@ -52,15 +51,20 @@ function prKey(pr: QualifiedPr): string {
   return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`;
 }
 
-/** The pull requests some work item already names, and the work items themselves. */
+/**
+ * The pull requests some work item already names, and the work items themselves. A
+ * malformed item is noted and skipped, as the pickup skips it.
+ */
 function namedPrs(): Set<string> {
   const named = new Set<string>();
-  for (const stored of stateDocuments('work/')) {
-    if (stored.value === null) continue;
-    const doc = parseWorkItem(stored.value);
+  for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
     named.add(prKey(doc.subject));
-    const pr = itemPr(doc);
-    if (pr !== null) named.add(prKey(pr));
+    try {
+      const pr = itemPr(doc);
+      if (pr !== null) named.add(prKey(pr));
+    } catch (error) {
+      skipped('own-PR enrollment', name, error);
+    }
   }
   return named;
 }
@@ -91,12 +95,12 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
 }
 
 /**
- * Settle each own-PR item whose pull request a build item's rounds now name, before the
- * pickup claims anything. The build item owns the pull request; the settled item stays
- * on record with the reason and no longer waits for the merge queue. A claim whose run
- * ended is released first, as the pickup would release it; a live or unknown claim is
- * held, and its run still owns the item. A malformed item is noted and skipped. Returns
- * the superseded item numbers.
+ * Settle each own-PR item whose pull request a build item's latest round names, before
+ * the pickup claims anything. The build item owns the pull request; the settled item
+ * stays on record with the reason and no longer waits for the merge queue. A merged
+ * one stays merged. A claim whose run ended is released first, as the pickup would
+ * release it; a live or unknown claim is held, and its run still owns the item. A
+ * malformed item is noted and skipped. Returns the superseded item numbers.
  */
 export function supersedeOwnPrs(at: string, runId: string): number[] {
   const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? []);
@@ -111,32 +115,40 @@ export function supersedeOwnPrs(at: string, runId: string): number[] {
   return superseded;
 }
 
-function skipped(name: string, error: unknown): void {
-  note(`own-PR supersession skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+function skipped(what: string, name: string, error: unknown): void {
+  note(`${what} skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-/** Each pull request a build round names, to the number of the item whose round names it. */
+/**
+ * The pull request each build item delivers now, its latest round's, to that item's
+ * number. An earlier round's pull request is no longer the build item's.
+ */
 function buildersOf(items: readonly Read[]): Map<string, number> {
   const builders = new Map<string, number>();
   for (const { name, doc } of items) {
+    if (doc.facts.build === undefined) continue;
     try {
-      for (const round of doc.facts.build?.rounds ?? []) {
-        if (round.pr_url !== '') builders.set(prKey(prFromUrl(round.pr_url)), doc.subject.number);
-      }
+      const pr = itemPr(doc);
+      if (pr !== null) builders.set(prKey(pr), doc.subject.number);
     } catch (error) {
-      skipped(name, error);
+      skipped('own-PR supersession', name, error);
     }
   }
   return builders;
 }
 
+/** An own-PR item a build item can take over: a merged one is settled for good. */
+function supersedable(doc: WorkItem): boolean {
+  return isOwnPr(doc) && doc.facts.merge?.status !== 'merged';
+}
+
 /** The pull request of an own-PR item, or null for any other item or one whose URL does not parse. */
 function ownPrOf(item: Read): QualifiedPr | null {
-  if (!isOwnPr(item.doc)) return null;
+  if (!supersedable(item.doc)) return null;
   try {
     return itemPr(item.doc);
   } catch (error) {
-    skipped(item.name, error);
+    skipped('own-PR supersession', item.name, error);
     return null;
   }
 }
@@ -148,7 +160,7 @@ function ownPrOf(item: Read): QualifiedPr | null {
 function supersede(item: Read, pr: QualifiedPr, builder: number, at: string, runId: string): boolean {
   const reason = `superseded: the build queue delivers ${pr.repo.path}#${String(pr.number)} under work item ${String(builder)}`;
   let current: Read | undefined = item;
-  for (let attempt = 0; attempt < 3 && current !== undefined && isOwnPr(current.doc); attempt++) {
+  for (let attempt = 0; attempt < 3 && current !== undefined && supersedable(current.doc); attempt++) {
     const claim = current.doc.claim;
     if (claim !== null && claimDisposition(runStatus(claim.run_id)) === 'hold') return false;
     // The reason is this function's own record of the builder, so equality is the check.
@@ -162,6 +174,6 @@ function supersede(item: Read, pr: QualifiedPr, builder: number, at: string, run
     }
     current = read(item.name);
   }
-  if (current === undefined || !isOwnPr(current.doc)) return false;
+  if (current === undefined || !supersedable(current.doc)) return false;
   throw new Error(`${item.name} kept changing: three supersession writes conflicted`);
 }
