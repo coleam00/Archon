@@ -299,6 +299,95 @@ describe('isolationCompleteCommand', () => {
     );
   });
 
+  it.each([false, true])('refuses a changed lookup target even with force=%s', async force => {
+    mockListActive.mockResolvedValueOnce([mockEnv]);
+    mockFindActiveByBranchName.mockResolvedValueOnce(
+      makeEnvironment({
+        id: 'newer-env',
+        codebase_id: 'other-codebase',
+        codebase_default_cwd: '/other/repo',
+        working_path: '/other/worktree',
+      })
+    );
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockFindActiveByBranchName).toHaveBeenCalledWith('feature-branch');
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockWorktreeExists).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('environment changed during lookup')
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+  });
+
+  it.each(
+    [false, true].flatMap(force => ['token', 'path', 'legacy'].map(change => ({ force, change })))
+  )(
+    'refuses same-ID $change registration replacements with force=$force',
+    async ({ force, change }) => {
+      const observed = makeEnvironment({
+        metadata: change === 'legacy' ? {} : { worktree_registration_id: 'observed-registration' },
+      });
+      const { codebase_default_cwd, codebase_name, ...row } = observed;
+      mockListActive.mockResolvedValueOnce([row]);
+      mockFindActiveByBranchName.mockResolvedValueOnce({
+        ...row,
+        codebase_default_cwd,
+        codebase_name,
+        working_path: change === 'path' ? '/replacement/worktree' : row.working_path,
+        metadata:
+          change === 'path'
+            ? row.metadata
+            : { worktree_registration_id: 'replacement-registration' },
+      });
+
+      await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
+        'Failed to complete'
+      );
+
+      expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+      expect(mockWorktreeExists).not.toHaveBeenCalled();
+      expect(mockHasUncommittedChanges).not.toHaveBeenCalled();
+      expect(mockGetLiveRunBlocker).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+      expect(mockLoadRepoConfig).not.toHaveBeenCalled();
+      expect(mockGetUniqueCommitCount).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('environment changed during lookup')
+      );
+      expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    }
+  );
+
+  it.each([false, true])('completes an unchanged registration (legacy=%s)', async legacy => {
+    const hydrated = makeEnvironment({
+      metadata: legacy ? {} : { worktree_registration_id: 'stable-registration' },
+    });
+    const { codebase_default_cwd, codebase_name, ...row } = hydrated;
+    mockListActive.mockResolvedValueOnce([row]);
+    mockFindActiveByBranchName.mockResolvedValueOnce({
+      ...row,
+      codebase_default_cwd,
+      codebase_name,
+    });
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      warnings: [],
+    });
+
+    await isolationCompleteCommand(['feature-branch'], {});
+
+    expect(mockRemoveEnvironment).toHaveBeenCalledWith(row.id, {
+      force: undefined,
+      deleteRemoteBranch: true,
+    });
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
+  });
+
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);

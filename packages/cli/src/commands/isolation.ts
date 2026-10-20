@@ -1,6 +1,7 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
+import { sameWorktreeRegistration } from '@archon/isolation/types';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -519,7 +520,17 @@ async function completeBranch(
       );
       return 'failed';
     }
-    env = matches[0] ? await isolationDb.findActiveByBranchName(branch) : null;
+    const selected = matches[0];
+    env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
+    // Hydration adds codebase fields; legacy registration identity compares the whole row.
+    const observed = selected && {
+      ...selected,
+      codebase_default_cwd: env?.codebase_default_cwd,
+      codebase_name: env?.codebase_name,
+    };
+    if (env && observed && !sameWorktreeRegistration(env, observed)) {
+      throw new Error('environment changed during lookup; refusing ambiguous deletion');
+    }
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');
