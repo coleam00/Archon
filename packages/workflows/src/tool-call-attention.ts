@@ -21,6 +21,12 @@ interface ToolCallAttentionOptions {
   streamId?: string;
 }
 
+/** A stream whose stalled calls are on the run row, and when the oldest was raised. */
+export interface StreamStall {
+  streamId: string;
+  raisedAt: string;
+}
+
 const terminalSubtasks: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
 export function createRunToolCallAttention(
@@ -51,6 +57,8 @@ function createToolCallAttention(
   retainCleanup: (retry: () => Promise<boolean>) => void
 ): {
   hasOpenTools(): boolean;
+  /** This stream's id and when its current stall was raised, while the run row shows one. */
+  stall(): StreamStall | undefined;
   observe(event: ProviderEvent): Promise<void>;
   refresh(): Promise<void>;
   clear(): Promise<void>;
@@ -68,6 +76,7 @@ function createToolCallAttention(
   const subtasks = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const parents = new Map<string, string>();
   let persisted = '[]';
+  let stall: StreamStall | undefined;
 
   async function persist(): Promise<boolean> {
     const time = now();
@@ -94,6 +103,8 @@ function createToolCallAttention(
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
       if (changed || calls.length === 0) {
         persisted = snapshot;
+        const raisedAt = calls.map(call => call.raisedAt).sort()[0];
+        stall = raisedAt === undefined ? undefined : { streamId, raisedAt };
         return true;
       }
     } catch {
@@ -112,6 +123,7 @@ function createToolCallAttention(
 
   return {
     hasOpenTools: () => tools.size > 0,
+    stall: () => stall,
     async observe(event: ProviderEvent): Promise<void> {
       if (event.type === 'tool_call' && !tools.has(event.toolCallId)) {
         const at = new Date(now()).toISOString();

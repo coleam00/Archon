@@ -16,6 +16,7 @@ import {
 } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout } from '../../../utils/idle-timeout';
+import { isEndTurnRequested } from '../../../end-turn-request';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
@@ -29,6 +30,7 @@ import {
 } from '../../run-control';
 import type { NodeMcpResolution } from '../../provider-resolution';
 import {
+  type TurnCutOff,
   type WatchdogReset,
   type structuredOutputPass,
   providerReportedFailure,
@@ -78,7 +80,8 @@ export interface AgentAttemptState {
   outputText: string;
   structuredOutput: unknown;
   batchMessages: string[];
-  idleTimedOut: boolean;
+  /** What cut the last pass off before it settled, if anything did. */
+  cutOff: TurnCutOff | undefined;
   lastWatchdogReset: WatchdogReset | undefined;
   watchdogResets: WatchdogResetRecorder;
   /**
@@ -106,7 +109,7 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
     outputText: '',
     structuredOutput: undefined,
     batchMessages: [],
-    idleTimedOut: false,
+    cutOff: undefined,
     lastWatchdogReset: undefined,
     watchdogResets: createWatchdogResetRecorder(ctx.logDir, ctx.workflowRun.id, nodeId),
     backgroundTasksIncomplete: [],
@@ -127,7 +130,7 @@ export async function runStreamPass(
 ): Promise<void> {
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
-  const shouldStopStream = stopCheck(pc, providerEvents);
+  const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
     for await (const msg of withIdleTimeout(
       pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
@@ -178,8 +181,8 @@ export async function runStreamPass(
       {
         nodeId: pc.node.id,
         taskIds: state.backgroundTasksIncomplete,
-        idleTimedOut: state.idleTimedOut,
-        cancelled: pc.abortController.signal.aborted && !state.idleTimedOut,
+        cutOff: state.cutOff,
+        cancelled: pc.abortController.signal.aborted && !state.cutOff,
       },
       'dag.node_stream_ended_with_live_background_tasks'
     );
@@ -201,7 +204,7 @@ function resetPass(
   state.costUsd = undefined;
   state.passSawResult = false;
   state.tokens = undefined;
-  state.idleTimedOut = false;
+  state.cutOff = undefined;
   state.settled = false;
   state.lastWatchdogReset = undefined;
   state.watchdogResets = createWatchdogResetRecorder(
@@ -265,9 +268,13 @@ function createPassEventHandler(
   });
 }
 
-/** Refreshes tool attention and, throttled, aborts the stream once the run is no longer running. */
+/**
+ * Refreshes tool attention and, throttled, aborts the stream once the run is no longer
+ * running or the operator ended this stream's stalled turn.
+ */
 function stopCheck(
   pc: AgentPassContext,
+  state: AgentAttemptState,
   providerEvents: ProviderEventHandler
 ): () => Promise<boolean> {
   const { ctx, node, nodeKey } = pc;
@@ -291,6 +298,11 @@ function stopCheck(
           pc.abortController.abort();
           return true;
         }
+        if (await operatorEndedTurn(pc, providerEvents)) {
+          state.cutOff = 'operator';
+          pc.abortController.abort();
+          return true;
+        }
       } catch (cancelCheckErr) {
         getLog().warn(
           { err: cancelCheckErr as Error, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
@@ -303,8 +315,21 @@ function stopCheck(
   };
 }
 
+/** Whether the operator ended this pass's turn while it had stalled calls raised. */
+async function operatorEndedTurn(
+  pc: AgentPassContext,
+  providerEvents: ProviderEventHandler
+): Promise<boolean> {
+  const stall = providerEvents.stall();
+  if (stall === undefined) return false;
+  const runId = pc.ctx.workflowRun.id;
+  if (!(await isEndTurnRequested(pc.ctx.deps.store, runId, stall))) return false;
+  getLog().warn({ workflowRunId: runId, nodeId: pc.node.id }, 'dag.turn_ended_by_operator');
+  return true;
+}
+
 function onIdleTimeout(pc: AgentPassContext, state: AgentAttemptState): void {
-  state.idleTimedOut = true;
+  state.cutOff = 'idle_timeout';
   const lastReset = state.lastWatchdogReset;
   getLog().warn(
     {

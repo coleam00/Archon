@@ -877,7 +877,7 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) fails the stalled attempt so the run continues, and `workflow cancel` stops the whole run. The advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
 ```bash
 archon workflow wait <run-id>
@@ -1239,6 +1239,35 @@ strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+
+### `workflow end-turn`
+
+End the AI turns behind a run's `stalled_tool_calls` advisory, so the run can move on.
+
+```bash
+archon workflow end-turn <run-id>
+archon workflow end-turn <run-id> --json
+```
+
+A stream that reports a running tool or background work suspends its idle timeout, because
+that work can legitimately run for a long time. Work that never ends, such as a background
+command an agent left polling in a loop, then holds the node open. After
+`workflows.toolCallAttentionMs` (30 minutes by default) without progress, the run reports
+`stalled_tool_calls`; this command is the answer to it.
+
+It records a request naming the attention streams that are stalled now. The process that
+owns the run reads it at its next status check (within about ten seconds), stops that
+stream's provider turn, and fails the node attempt as a `timeout`. The node's retry policy
+then decides what happens: by default an agent node runs a fresh attempt, and once retries
+run out the node fails and the run continues under its trigger rules. Every owner reads the
+request the same way, whether it is a server, a `--detach` run or a foreground command;
+nothing is killed by this command itself.
+
+It is refused, with exit `1`, when the run is not running or reports no stalled calls.
+Tool calls that recover before the owner reads the request clear the advisory, and the
+request then ends nothing. `--json` prints `{ ok, runId, action: "end_turn", nodes }`, or
+`{ ok: false, runId, action, error }` with `error` one of `not_found`, `not_running` and
+`nothing_stalled`.
 
 ### `workflow respond`
 

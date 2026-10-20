@@ -341,7 +341,9 @@ function formatRunDetail(run: WorkflowRun): string {
       parts.push(
         `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
       );
-    parts.push(`inspect with archon workflow logs ${run.id}, or explicitly cancel`);
+    parts.push(
+      `inspect with archon workflow logs ${run.id}; archon workflow end-turn ${run.id} fails the stalled attempt as a timeout, or explicitly cancel`
+    );
   }
   if (attention?.kind === 'attention') {
     parts.push(`needs attention: ${attention.message.slice(0, 300)}`);

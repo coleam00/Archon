@@ -5,6 +5,7 @@ import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import {
+  cutOffClause,
   formatWatchdogResetDiagnostic,
   STRUCTURED_OUTPUT_MAX_REASKS,
   structuredOutputPass,
@@ -67,7 +68,7 @@ export async function runUntilStructuredOutputValid(
     // Don't reask after an idle-timeout/abort — those are genuine failures, not
     // validation misses; they fall through to a cause-specific throw.
     const canReask =
-      reaskAttempt < maxReasks && !state.idleTimedOut && !pc.abortController.signal.aborted;
+      reaskAttempt < maxReasks && !state.cutOff && !pc.abortController.signal.aborted;
     if (!canReask) throw structuredOutputFailure(pc, state, miss);
     reaskAttempt++;
     reaskPrompt = buildReaskPrompt(finalPrompt, miss.errors);
@@ -167,10 +168,16 @@ function structuredOutputFailure(
   }
   // Surface the real cause: a timeout/abort produces no structured output too,
   // and reporting it as "the model replied with prose" would mislead.
-  if (state.idleTimedOut) {
+  if (state.cutOff === 'idle_timeout') {
     return new NodeFailure(
       'timeout',
       `Node '${nodeId}': timed out (no output for ${String(pc.idleTimeoutMs / 60000)} min) before producing the required structured output.${formatWatchdogResetDiagnostic(state.lastWatchdogReset)}`
+    );
+  }
+  if (state.cutOff === 'operator') {
+    return new NodeFailure(
+      'timeout',
+      `Node '${nodeId}' ${cutOffClause(state.cutOff, pc.idleTimeoutMs)}, before producing the required structured output.`
     );
   }
   return new NodeFailure(
