@@ -4,6 +4,7 @@
  */
 import { spawn } from 'child_process';
 import { isMaintainedProvider } from '@archon/provider-contract';
+import type { SetupOptions } from './setup-shared';
 
 interface SpawnResult {
   success: boolean;
@@ -134,16 +135,25 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
   };
 }
 
+type SetupLaunchOptions = Pick<SetupOptions, 'repoPath' | 'providers' | 'scope' | 'force'>;
+
+export function setupLaunchCommand({ providers, scope, force }: SetupLaunchOptions): string {
+  if (providers?.some(id => !isMaintainedProvider(id)))
+    throw new Error('Invalid setup provider selection');
+  return [
+    'archon setup',
+    ...(providers === undefined ? [] : [`--providers=${providers.join(',')}`]),
+    ...(scope === undefined ? [] : [`--scope=${scope}`]),
+    ...(force ? ['--force'] : []),
+  ].join(' ');
+}
+
 /**
  * Spawn a new terminal window with archon setup
  */
-export async function spawnTerminalWithSetup(
-  repoPath: string,
-  providers?: readonly string[]
-): Promise<SpawnResult> {
-  if (providers?.some(id => !isMaintainedProvider(id)))
-    throw new Error('Invalid setup provider selection');
-  const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
+export async function spawnTerminalWithSetup(options: SetupLaunchOptions): Promise<SpawnResult> {
+  const { repoPath } = options;
+  const command = setupLaunchCommand(options);
   const platform = process.platform;
 
   if (platform === 'win32') {

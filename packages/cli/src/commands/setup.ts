@@ -64,7 +64,7 @@ import {
   collectSlackConfig,
   collectTelegramConfig,
 } from './setup-platforms';
-import { spawnTerminalWithSetup } from './setup-spawn';
+import { setupLaunchCommand, spawnTerminalWithSetup } from './setup-spawn';
 
 // =============================================================================
 // File Generation and Writing
@@ -193,7 +193,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
 async function openSetupTerminal(options: SetupOptions): Promise<void> {
   console.log('Opening setup wizard in a new terminal window...');
-  const result = await spawnTerminalWithSetup(options.repoPath, options.providers);
+  const result = await spawnTerminalWithSetup(options);
 
   if (result.success) {
     console.log('Setup wizard opened. Complete the setup in the new terminal window.');
@@ -201,9 +201,7 @@ async function openSetupTerminal(options: SetupOptions): Promise<void> {
     console.log('');
     console.log('Next step: run the setup wizard in a separate terminal.');
     console.log('');
-    console.log(
-      `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
-    );
+    console.log(`    cd ${options.repoPath} && ${setupLaunchCommand(options)}`);
     console.log('');
     console.log(
       'Come back here and let me know when you finish so I can verify your configuration.'

@@ -37,33 +37,54 @@ function terminalSpawns(successAt: number) {
   return { spawn, children };
 }
 
+const repoPath = '/repo with spaces';
+const setup = 'archon setup --providers=claude,codex';
+const shellSetup = `${setup}; exec bash`;
+
 const platforms = [
-  { platform: 'win32', commands: ['wt.exe', 'cmd.exe'] },
-  { platform: 'darwin', commands: ['osascript'] },
+  {
+    platform: 'win32',
+    commands: ['wt.exe', 'cmd.exe'],
+    args: [
+      ['-d', repoPath, 'cmd', '/k', setup],
+      ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', setup],
+    ],
+  },
+  {
+    platform: 'darwin',
+    commands: ['osascript'],
+    args: [['-e', `tell application "Terminal" to do script "cd '${repoPath}' && ${setup}"`]],
+  },
   {
     platform: 'linux',
     commands: ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm'],
+    args: [
+      [`--working-directory=${repoPath}`, '-e', `bash -c "${shellSetup}"`],
+      [`--working-directory=${repoPath}`, '--', 'bash', '-c', shellSetup],
+      ['--workdir', repoPath, '-e', 'bash', '-c', shellSetup],
+      ['-e', `cd "${repoPath}" && ${shellSetup}`],
+    ],
   },
 ] as const;
 
 describe('setup terminal spawning', () => {
-  for (const { platform, commands } of platforms) {
+  for (const { platform, commands, args } of platforms) {
     it(`${platform}: stops after the first successful spawn and unreferences it`, async () => {
       usePlatform(platform);
       const { spawn, children } = terminalSpawns(0);
-      expect(await spawnTerminalWithSetup('/repo', ['claude', 'codex'])).toEqual({ success: true });
+      expect(await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'] })).toEqual({
+        success: true,
+      });
       expect(spawn.mock.calls.map(call => call[0])).toEqual([commands[0]]);
       expect(spawn.mock.calls[0]?.[2]).toEqual({ detached: true, stdio: 'ignore' });
-      expect(JSON.stringify(spawn.mock.calls[0]?.[1])).toContain(
-        'archon setup --providers=claude,codex'
-      );
+      expect(spawn.mock.calls[0]?.[1]).toEqual(args[0]);
       expect(children[0]?.unref).toHaveBeenCalledTimes(1);
     });
 
     it(`${platform}: handles asynchronous errors from every missing terminal`, async () => {
       usePlatform(platform);
       const { spawn, children } = terminalSpawns(-1);
-      const result = await spawnTerminalWithSetup('/repo');
+      const result = await spawnTerminalWithSetup({ repoPath: '/repo' });
       expect(result.success).toBe(false);
       expect(result.error).toContain('Please run `archon setup` manually.');
       expect(spawn.mock.calls.map(call => call[0])).toEqual([...commands]);
@@ -74,8 +95,13 @@ describe('setup terminal spawning', () => {
       it(`${platform}: falls back through asynchronous errors to ${commands[successAt]}`, async () => {
         usePlatform(platform);
         const { spawn, children } = terminalSpawns(successAt);
-        expect(await spawnTerminalWithSetup('/repo')).toEqual({ success: true });
+        expect(await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'] })).toEqual({
+          success: true,
+        });
         expect(spawn.mock.calls.map(call => call[0])).toEqual(commands.slice(0, successAt + 1));
+        expect(spawn.mock.calls.map(call => call[1])).toEqual(args.slice(0, successAt + 1));
+        for (const call of spawn.mock.calls)
+          expect(call[2]).toEqual({ detached: true, stdio: 'ignore' });
         for (const child of children.slice(0, successAt))
           expect(child.unref).not.toHaveBeenCalled();
         expect(children[successAt]?.unref).toHaveBeenCalledTimes(1);
@@ -89,27 +115,49 @@ describe('setup terminal spawning', () => {
     spawn.mockImplementationOnce(() => {
       throw new Error('spawn failed');
     });
-    expect(await spawnTerminalWithSetup('/repo')).toEqual({ success: true });
+    expect(await spawnTerminalWithSetup({ repoPath: '/repo' })).toEqual({ success: true });
     expect(spawn.mock.calls.map(call => call[0])).toEqual(['wt.exe', 'cmd.exe']);
   });
 
   it('rejects invalid providers before spawning', async () => {
     const { spawn } = terminalSpawns(0);
-    await expect(async () => await spawnTerminalWithSetup('/repo', ['invalid'])).toThrow(
-      'Invalid setup provider selection'
-    );
+    await expect(
+      async () => await spawnTerminalWithSetup({ repoPath: '/repo', providers: ['invalid'] })
+    ).toThrow('Invalid setup provider selection');
     expect(spawn).not.toHaveBeenCalled();
   });
 
   it.each([0, 1, -1])('setup reports the final launch outcome (%s)', async successAt => {
     usePlatform('win32');
-    terminalSpawns(successAt);
+    const { spawn } = terminalSpawns(successAt);
     const log = spyOn(console, 'log').mockImplementation(() => undefined);
-    expect(await setupCommand({ spawn: true, repoPath: '/repo', providers: ['codex'] })).toBe(0);
+    expect(
+      await setupCommand({
+        spawn: true,
+        repoPath: '/repo',
+        providers: ['codex'],
+        scope: 'project',
+        force: true,
+      })
+    ).toBe(0);
+    const command = 'archon setup --providers=codex --scope=project --force';
+    expect(spawn.mock.calls[0]?.[1]).toEqual(['-d', '/repo', 'cmd', '/k', command]);
+    if (successAt !== 0) {
+      expect(spawn.mock.calls[1]?.[1]).toEqual([
+        '/c',
+        'start',
+        '""',
+        '/D',
+        '/repo',
+        'cmd',
+        '/k',
+        command,
+      ]);
+    }
     const output = log.mock.calls.map(call => call.join(' ')).join('\n');
     if (successAt === -1) {
       expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
-      expect(output).toContain('cd /repo && archon setup --providers=codex');
+      expect(output).toContain(`cd /repo && ${command}`);
       expect(output).not.toContain('Setup wizard opened.');
     } else {
       expect(output).toContain('Setup wizard opened.');
