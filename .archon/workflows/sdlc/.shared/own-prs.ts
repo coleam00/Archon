@@ -10,35 +10,57 @@
  */
 
 import { isBuildBranch } from './build.ts';
-import { prFromUrl, itemPr, withMerge } from './merge.ts';
-import type { QualifiedPr } from './forge.ts';
-import { stateDocuments, stateGet, statePut } from './state.ts';
-import { newWorkItem, parseWorkItem, type WorkItem, workItemName } from './workitem.ts';
+import { note } from './io.ts';
+import { MERGE_PICKUP, prFromUrl, itemPr, withMerge } from './merge.ts';
+import { record, type QualifiedPr } from './forge.ts';
+import { claimDisposition, runStatus, stateDocuments, stateGet, statePut } from './state.ts';
+import {
+  newWorkItem,
+  parseWorkItem,
+  read,
+  type Read,
+  releaseIfTerminal,
+  type WorkItem,
+  workItemName,
+} from './workitem.ts';
 
-interface OpenPr {
-  readonly number: number;
-  readonly url: string;
-  readonly isDraft: boolean;
-  readonly headRefName: string;
-}
+/** The fields `gh pr list --json` selects, and the type each row carries for them. */
+const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean', headRefName: 'string' } as const;
+type OpenPr = {
+  readonly [Field in keyof typeof OPEN_PR_FIELDS]: { number: number; string: string; boolean: boolean }[(typeof OPEN_PR_FIELDS)[Field]];
+};
 
 function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
+  const fields = Object.keys(OPEN_PR_FIELDS) as (keyof typeof OPEN_PR_FIELDS)[];
   const result = Bun.spawnSync(
-    ['gh', 'pr', 'list', '--repo', `${repo.host}/${repo.path}`, '--state', 'open', '--author', author, '--json', 'number,url,isDraft,headRefName', '--limit', '100'],
+    ['gh', 'pr', 'list', '--repo', `${repo.host}/${repo.path}`, '--state', 'open', '--author', author, '--json', fields.join(','), '--limit', '100'],
     { stdout: 'pipe', stderr: 'pipe' }
   );
   if (result.exitCode !== 0) throw new Error(`gh pr list failed: ${result.stderr.toString().trim()}`);
-  return JSON.parse(result.stdout.toString()) as OpenPr[];
+  const rows: unknown = JSON.parse(result.stdout.toString());
+  if (!Array.isArray(rows)) throw new Error('gh pr list did not report a list');
+  return rows.map(row => {
+    const fieldsOf = record(row);
+    const missing = fields.filter(field => typeof fieldsOf?.[field] !== OPEN_PR_FIELDS[field]);
+    if (missing.length > 0) throw new Error(`gh pr list reported a pull request without ${missing.join(', ')}`);
+    return fieldsOf as OpenPr;
+  });
 }
 
-/** The pull request numbers some work item already names. */
-function namedPrs(): Set<number> {
-  const named = new Set<number>();
+/** A pull request's identity across repositories: the same number in two repositories is two pull requests. */
+function prKey(pr: QualifiedPr): string {
+  return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`;
+}
+
+/** The pull requests some work item already names, and the work items themselves. */
+function namedPrs(): Set<string> {
+  const named = new Set<string>();
   for (const stored of stateDocuments('work/')) {
     if (stored.value === null) continue;
-    named.add(Number(stored.name.slice('work/'.length)));
-    const pr = itemPr(parseWorkItem(stored.value));
-    if (pr !== null) named.add(pr.number);
+    const doc = parseWorkItem(stored.value);
+    named.add(prKey(doc.subject));
+    const pr = itemPr(doc);
+    if (pr !== null) named.add(prKey(pr));
   }
   return named;
 }
@@ -54,9 +76,10 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
   const named = namedPrs();
   const enrolled: number[] = [];
   for (const author of authors) {
-    for (const pr of openPrsBy(repo, author)) {
-      if (pr.isDraft || named.has(pr.number) || isBuildBranch(pr.headRefName)) continue;
+    const listed = openPrsBy(repo, author).filter(pr => !pr.isDraft && !isBuildBranch(pr.headRefName));
+    for (const pr of listed) {
       const subject = prFromUrl(pr.url);
+      if (named.has(prKey(subject))) continue;
       const name = workItemName(subject.number);
       const stored = stateGet(name);
       if (stored.value !== null) continue;
@@ -68,30 +91,77 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
 }
 
 /**
- * Settle each unclaimed own-PR item whose pull request a build item's rounds now name.
- * The build item owns the pull request; the settled item stays on record with the reason
- * and no longer waits for the merge queue. Returns the superseded item numbers.
+ * Settle each own-PR item whose pull request a build item's rounds now name, before the
+ * pickup claims anything. The build item owns the pull request; the settled item stays
+ * on record with the reason and no longer waits for the merge queue. A claim whose run
+ * ended is released first, as the pickup would release it; a live or unknown claim is
+ * held, and its run still owns the item. A malformed item is noted and skipped. Returns
+ * the superseded item numbers.
  */
 export function supersedeOwnPrs(at: string, runId: string): number[] {
-  const docs = stateDocuments('work/').flatMap(stored =>
-    stored.value === null ? [] : [{ stored, doc: parseWorkItem(stored.value) }]
-  );
-  const builders = new Map<number, number>();
-  for (const { doc } of docs) {
-    for (const round of doc.facts.build?.rounds ?? []) {
-      if (round.pr_url !== '') builders.set(prFromUrl(round.pr_url).number, doc.subject.number);
-    }
-  }
+  const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? []);
+  const builders = buildersOf(items);
   const superseded: number[] = [];
-  for (const { stored, doc } of docs) {
-    if (!isOwnPr(doc) || doc.claim !== null || doc.facts.merge?.status === 'parked') continue;
-    const pr = itemPr(doc);
-    const builder = pr === null ? undefined : builders.get(pr.number);
-    if (pr === null || builder === undefined || builder === doc.subject.number) continue;
-    const reason = `superseded: the build queue delivers ${pr.repo.path}#${String(pr.number)} under work item ${String(builder)}`;
-    const entry = { at, run_id: runId, decision: 'superseded', reason, links: [], head: null, reran: false };
-    const next = withMerge(doc, { at, run_id: runId, entry, status: 'parked', pr, release: false });
-    if (statePut(stored.name, next, stored.revision) === 'ok') superseded.push(doc.subject.number);
+  for (const item of items) {
+    const pr = ownPrOf(item);
+    const builder = pr === null ? undefined : builders.get(prKey(pr));
+    if (pr === null || builder === undefined || builder === item.doc.subject.number) continue;
+    if (supersede(item, pr, builder, at, runId)) superseded.push(item.doc.subject.number);
   }
   return superseded;
+}
+
+function skipped(name: string, error: unknown): void {
+  note(`own-PR supersession skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+/** Each pull request a build round names, to the number of the item whose round names it. */
+function buildersOf(items: readonly Read[]): Map<string, number> {
+  const builders = new Map<string, number>();
+  for (const { name, doc } of items) {
+    try {
+      for (const round of doc.facts.build?.rounds ?? []) {
+        if (round.pr_url !== '') builders.set(prKey(prFromUrl(round.pr_url)), doc.subject.number);
+      }
+    } catch (error) {
+      skipped(name, error);
+    }
+  }
+  return builders;
+}
+
+/** The pull request of an own-PR item, or null for any other item or one whose URL does not parse. */
+function ownPrOf(item: Read): QualifiedPr | null {
+  if (!isOwnPr(item.doc)) return null;
+  try {
+    return itemPr(item.doc);
+  } catch (error) {
+    skipped(item.name, error);
+    return null;
+  }
+}
+
+/**
+ * Record the supersession, re-reading on a conflict so a concurrent write is kept. False
+ * when a live claim holds the item or it already records this supersession.
+ */
+function supersede(item: Read, pr: QualifiedPr, builder: number, at: string, runId: string): boolean {
+  const reason = `superseded: the build queue delivers ${pr.repo.path}#${String(pr.number)} under work item ${String(builder)}`;
+  let current: Read | undefined = item;
+  for (let attempt = 0; attempt < 3 && current !== undefined && isOwnPr(current.doc); attempt++) {
+    const claim = current.doc.claim;
+    if (claim !== null && claimDisposition(runStatus(claim.run_id)) === 'hold') return false;
+    // The reason is this function's own record of the builder, so equality is the check.
+    const last = current.doc.facts.merge?.decisions.at(-1);
+    if (current.doc.facts.merge?.status === 'parked' && last?.decision === 'superseded' && last.reason === reason) return false;
+    current = releaseIfTerminal(current, at, runId, MERGE_PICKUP);
+    if (current.doc.claim === null) {
+      const entry = { at, run_id: runId, decision: 'superseded', reason, links: [], head: null, reran: false };
+      const next = withMerge(current.doc, { at, run_id: runId, entry, status: 'parked', pr, release: false });
+      if (statePut(current.name, next, current.revision) === 'ok') return true;
+    }
+    current = read(item.name);
+  }
+  if (current === undefined || !isOwnPr(current.doc)) return false;
+  throw new Error(`${item.name} kept changing: three supersession writes conflicted`);
 }

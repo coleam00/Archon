@@ -25,7 +25,7 @@ import {
 import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
-import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { type IntakeRequest, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type GhCommentRow, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -263,7 +263,7 @@ interface FakePr {
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean; headRefName: string }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean; headRefName?: string }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -287,7 +287,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[1] === 'pr' && argv[2] === 'list') {
     answered();
     if (forgePr.ownPrsFail) return out(1, '', 'HTTP 502');
-    return out(0, JSON.stringify(forgePr.ownPrs ?? []));
+    // Each row carries only the fields \`--json\` selected, as gh reports them.
+    const selected = String(argv[argv.indexOf('--json') + 1]).split(',');
+    const rows = (forgePr.ownPrs ?? []).map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
+    return out(0, JSON.stringify(rows));
   }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
     answered();
@@ -332,12 +335,12 @@ function run(
   at: Install,
   script: 'facts' | 'gate' | 'record' | 'ruling',
   inputs: Record<string, string>,
-  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string> } = {}
+  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string } = {}
 ): ScriptRun {
   return runPackScript(`merge-queue/scripts/${script}`, {
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    preload: forgePreload(options.pr ?? {}),
+    preload: forgePreload(options.pr ?? {}) + (options.preload ?? ''),
     gh: { issue: { number: 7, author: 'Maintainer', body: 'The contract.' }, comments: options.comments ?? [REVIEWED] },
     args: options.args,
     artifacts: options.artifacts,
@@ -465,6 +468,106 @@ describe('the merge queue scripts', () => {
     expect(merge?.status).toBe('parked');
     expect(merge?.decisions[0]?.decision).toBe('superseded');
     expect(merge?.decisions[0]?.reason).toContain('work item 7');
+  }, 60_000);
+
+  test('an own-PR item left claimed by an ended run is released and superseded; a live claim is held', () => {
+    const ownDoc = (run_id: string) => ({
+      ...newWorkItem({ repo: PR.repo, number: 42 }, AT),
+      claim: { run_id, at: AT, requests: [] },
+      facts: { own_pr: { url: PR_URL, at: AT } },
+    });
+    const ended = install();
+    seed(ended, item());
+    seed(ended, ownDoc('old-run'));
+    const picked = ok(run(ended, 'facts', { INTAKE_RUN_STATUSES: '{"old-run":"failed"}' })) as { items: { item: { number: number } }[] };
+    expect(picked.items.map(entry => entry.item.number)).toEqual([7]);
+    const settled = stored(ended, 42).value;
+    expect(settled?.claim).toBeNull();
+    expect(settled?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
+
+    const live = install();
+    seed(live, item());
+    seed(live, ownDoc('live-run'));
+    const held = ok(run(live, 'facts', { INTAKE_RUN_STATUSES: '{"live-run":"running"}' })) as { items: { item: { number: number } }[] };
+    expect(held.items.map(entry => entry.item.number)).toEqual([7]);
+    expect(stored(live, 42).value?.claim?.run_id).toBe('live-run');
+    expect(stored(live, 42).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('a write that lands on an own-PR item during its supersession is kept, and the item is still superseded', () => {
+    const at = install();
+    seed(at, item());
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
+    const request: IntakeRequest = { at: AT, run_id: 'intake-event', action: 'edited', label: null, actor: null, body_digest: null };
+    // The first conditional write to work/42 races an intake request appended just before it.
+    const race = `
+let raced = false;
+const racing = Bun.spawnSync;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const at = argv.indexOf('state');
+  if (!raced && at >= 0 && argv[at + 1] === 'put' && argv[at + 2] === 'work/42') {
+    raced = true;
+    racing([...argv.slice(0, at), 'state', 'patch', 'work/42'], { ...settings, stdin: Buffer.from(JSON.stringify({ ops: [{ op: 'append', path: '/requests', value: ${JSON.stringify(request)} }] })) });
+  }
+  return racing(argv, settings);
+} });
+`;
+    const output = ok(run(at, 'facts', {}, { preload: race })) as { items: { item: { number: number } }[] };
+    expect(output.items.map(entry => entry.item.number)).toEqual([7]);
+    const settled = stored(at, 42).value;
+    expect(settled?.requests).toEqual([request]);
+    expect(settled?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
+  }, 60_000);
+
+  test('a parked own-PR item a build item takes over records the supersession after its earlier decisions, once', () => {
+    const at = install();
+    seed(at, item());
+    const parked: MergeRecord = {
+      ...merge('parked'),
+      decisions: [{ at: LATER, run_id: 'old-run', decision: 'parked', reason: 'a maintainer parked it', links: [], head: HEAD, reran: false }],
+    };
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT }, merge: parked } });
+    ok(run(at, 'facts', {}));
+    ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"completed"}' }));
+    const decisions = stored(at, 42).value?.facts.merge?.decisions;
+    expect(decisions?.map(entry => [entry.decision, entry.run_id])).toEqual([['parked', 'old-run'], ['superseded', 'run-1']]);
+    expect(decisions?.[1]?.reason).toContain('work item 7');
+  }, 60_000);
+
+  test('ownership compares the repository as well as the number', () => {
+    const other = { host: PR.repo.host, path: 'someone/else' };
+    const otherUrl = (number: number) => `https://${other.host}/${other.path}/pull/${String(number)}`;
+    const rounds = (url: string) => ({ ...BUILT, status: 'next' as const, rounds: [{ ...BUILT.rounds[0]!, pr_url: url }] });
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, { ...item(rounds(otherUrl(42))), subject: { repo: other, number: 7 } });
+    seed(at, { ...item(rounds(otherUrl(50))), subject: { repo: other, number: 8 } });
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true], [50, true]]);
+    expect(stored(at, 42).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('a malformed work item or round URL is noted and skipped while the supersession settles the healthy ones', () => {
+    const at = install();
+    seed(at, item({ ...BUILT, status: 'next' }));
+    seed(at, { ...item({ ...BUILT, status: 'next', rounds: [{ ...BUILT.rounds[0]!, pr_url: 'not a url' }] }), subject: { repo: PR.repo, number: 8 } });
+    inProcess(at, () => expect(statePut('work/9', { version: 0 }, stateGet('work/9').revision)).toBe('ok'));
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
+    const picked = run(at, 'facts', {});
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('work/8');
+    expect(picked.stderr).toContain('work/9');
+    expect((JSON.parse(picked.stdout) as { items: unknown[] }).items).toEqual([]);
+    expect(stored(at, 42).value?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
+  }, 60_000);
+
+  test('an own pull request listed without its head branch is not enrolled', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false }] } });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('own-PR enrollment stopped');
+    expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
   test('a failed own-PR listing is noted and the sweep still takes the existing work', () => {
