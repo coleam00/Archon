@@ -3,7 +3,7 @@
 # .archon/scripts/__tests__/merge-queue.test.ts.
 facts:
   path: idle
-  base: null
+  base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
   items: []
   settled: []
   gate: ""
