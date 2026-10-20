@@ -128,8 +128,6 @@ export {
   definedOutputPaths,
   loopGroupOutputNodes,
   loopGroupSoleTerminalSink,
-  isInteractiveSink,
-  canSuspend,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
@@ -347,3 +345,5 @@ export {
 } from './workflow-run';
 
 export type { SessionCursor } from './workflow-run';
+
+export { canSuspend, isInteractiveSink } from './node-suspension';

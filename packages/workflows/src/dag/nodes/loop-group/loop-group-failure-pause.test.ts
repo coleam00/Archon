@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { dryRunWorkflow } from '../../../dry-run';
 import { validateDagStructure } from '../../../loader/dag-structure';
 import { createFileWorkflowStore } from '../../../file-store/store';
 import { executeDagWorkflow } from '../../../dag-executor';
@@ -124,6 +125,23 @@ for (const [name, suspension] of [
       : []),
   ]) {
     for (const failed of 'wait' in suspension || name === 'gate' ? [true, false] : [true]) {
+      const offChain =
+        outerTopology !== 'sole sink' ||
+        name.includes('before exec') ||
+        name.includes('beside exec');
+      const outerId = offChain ? 'outer-pause' : 'pause';
+      const brokenScript = failed ? 'exit 7' : 'echo success';
+      const outerFinish =
+        outerTopology === 'sole sink'
+          ? []
+          : [
+              {
+                id: 'outer-finish',
+                bash: 'echo done',
+                depends_on: outerTopology === 'before exec' ? ['pause'] : ['cleanup'],
+                trigger_rule: 'all_done',
+              },
+            ];
       test(`${name} outer ${outerTopology}: ${failed ? 'body failure prevents suspension' : 'clean body still pauses'} without losing cleanup or usage`, async () => {
         const root = await mkdtemp(join(tmpdir(), 'archon-loop-failure-pause-'));
         try {
@@ -145,11 +163,6 @@ for (const [name, suspension] of [
           });
           const run = await store.claimPendingWorkflowRun(created.id, root);
           if (!run) throw new Error('Claim failed');
-          const offChain =
-            outerTopology !== 'sole sink' ||
-            name.includes('before exec') ||
-            name.includes('beside exec');
-          const outerId = offChain ? 'outer-pause' : 'pause';
           const options = dagOptions({
             deps: createMockDeps(store),
             platform: createMockPlatform(),
@@ -170,7 +183,7 @@ for (const [name, suspension] of [
                       { id: 'work', prompt: 'Work' },
                       {
                         id: 'broken',
-                        bash: failed ? 'exit 7' : 'echo success',
+                        bash: brokenScript,
                         depends_on: ['work'],
                       },
                       {
@@ -185,16 +198,7 @@ for (const [name, suspension] of [
                         depends_on: ['cleanup'],
                         trigger_rule: 'all_done',
                       },
-                      ...(outerTopology === 'sole sink'
-                        ? []
-                        : [
-                            {
-                              id: 'outer-finish',
-                              bash: 'echo done',
-                              depends_on: outerTopology === 'before exec' ? ['pause'] : ['cleanup'],
-                              trigger_rule: 'all_done',
-                            },
-                          ]),
+                      ...outerFinish,
                     ],
                   },
                 }),
@@ -411,3 +415,159 @@ test('included cleanup failure fails the run and group before included attention
     await removeTempTree(root);
   }
 });
+
+for (const [name, suspension] of [
+  [
+    'nested gate',
+    {
+      loop_group: {
+        max_iterations: 1,
+        until_bash: 'exit 1',
+        nodes: [
+          { id: 'check', approval: { message: 'Decide' }, depends_on: ['nested-cleanup'] },
+          { id: 'nested-cleanup', bash: 'echo cleaned' },
+        ],
+      },
+    },
+  ],
+  [
+    'interactive group',
+    {
+      loop_group: {
+        max_iterations: 1,
+        until_bash: 'exit 1',
+        interactive: true,
+        gate_message: 'Decide',
+        nodes: [{ id: 'nested-cleanup', bash: 'echo cleaned' }],
+      },
+    },
+  ],
+  [
+    'interactive loop',
+    {
+      loop: {
+        max_iterations: 1,
+        until: 'DONE',
+        interactive: true,
+        gate_message: 'Decide',
+        prompt: 'Work',
+      },
+    },
+  ],
+] as const) {
+  for (const interactionFirst of [true, false]) {
+    for (const failed of [true, false]) {
+      const expectedRunStatus = failed ? 'failed' : 'paused';
+      const expectedSimulationStatus = failed
+        ? 'failed'
+        : name === 'nested gate'
+          ? 'paused'
+          : 'completed';
+      const brokenScript = failed ? 'exit 7' : 'echo success';
+      const brokenStubs: Record<string, string> = failed ? {} : { broken: 'success' };
+      test(`same-layer ${name}, interaction ${interactionFirst ? 'first' : 'last'}, ${failed ? 'failed' : 'clean'} sibling`, async () => {
+        const root = await mkdtemp(join(tmpdir(), 'archon-loop-same-layer-'));
+        try {
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'work done' };
+            yield { type: 'result', sessionId: 'work' };
+          });
+          const store = await createFileWorkflowStore({ root });
+          const pauseGate = spyOn(store, 'pauseWorkflowRun');
+          const created = await store.createWorkflowRun({
+            workflow_name: 'same-layer',
+            user_message: '',
+          });
+          const run = await store.claimPendingWorkflowRun(created.id, root);
+          if (!run) throw new Error('Claim failed');
+          const peers = [
+            { id: 'pause', ...suspension },
+            { id: 'broken', bash: brokenScript },
+          ];
+          const options = dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: root,
+            workflowRun: run,
+            workflow: {
+              name: 'same-layer',
+              nodes: [
+                dagNodeSchema.parse({
+                  id: 'cycle',
+                  loop_group: {
+                    max_iterations: 1,
+                    until_bash: 'exit 1',
+                    nodes: [
+                      ...(interactionFirst ? peers : [...peers].reverse()),
+                      {
+                        id: 'cleanup',
+                        bash: 'echo cleaned',
+                        depends_on: ['broken'],
+                        trigger_rule: 'all_done',
+                      },
+                    ],
+                  },
+                }),
+              ],
+            },
+          });
+          expect(validateDagStructure(options.workflow.nodes)).toBeNull();
+          await executeDagWorkflow(options);
+          const persisted = await store.getWorkflowRun(run.id);
+          const events = await store.listWorkflowEvents(run.id);
+          expect(persisted?.status).toBe(expectedRunStatus);
+          if (failed) {
+            const bodyError = events.find(
+              e => e.event_type === 'node_failed' && e.step_name === 'cycle.broken'
+            )?.data.error;
+            expect(bodyError).toBe("Bash node 'broken' failed [exit 7]: no diagnostic output");
+            expect(
+              events.find(e => e.event_type === 'node_failed' && e.step_name === 'cycle')?.data
+                .error
+            ).toBe(`Loop-group node 'cycle' failed at iteration 1: 'broken': ${String(bodyError)}`);
+            expect(persisted?.metadata.approval).toBeUndefined();
+            expect(persisted?.metadata.wait).toBeUndefined();
+            expect(await listAttentionQueue({ store, branchOf: async () => null })).toEqual([]);
+            expect(pauseGate).not.toHaveBeenCalled();
+            expect(
+              events.some(e => e.step_name === 'cycle.cleanup' && e.event_type === 'node_completed')
+            ).toBe(true);
+            if (name !== 'interactive loop')
+              expect(
+                events.some(
+                  e =>
+                    e.step_name === 'cycle.pause.nested-cleanup' &&
+                    e.event_type === 'node_completed'
+                )
+              ).toBe(true);
+          } else {
+            expect(pauseGate).toHaveBeenCalledTimes(1);
+          }
+          const simulated = await dryRunWorkflow({
+            workflow: options.workflow,
+            cwd: root,
+            userMessage: '',
+            stubs: {
+              ...brokenStubs,
+              pause: 'DONE',
+              cleanup: 'cleaned',
+              'nested-cleanup': 'cleaned',
+            },
+            pauseAtGates: true,
+          });
+          expect(simulated.outcome).toBe(expectedSimulationStatus);
+          expect(simulated.trace.some(e => e.state === 'paused')).toBe(
+            !failed && name === 'nested gate'
+          );
+          if (failed)
+            expect(simulated.trace.filter(e => e.state === 'failed').map(e => e.nodeId)).toEqual([
+              'broken',
+              'cycle',
+            ]);
+        } finally {
+          await removeTempTree(root);
+        }
+      });
+    }
+  }
+}

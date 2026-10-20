@@ -125,27 +125,39 @@ export async function simulateNodes(
   iteration?: number
 ): Promise<void> {
   for (const layer of plan.layers) {
-    for (const node of layer) {
+    const ordered = ctx.loopBodyFailure
+      ? [...layer.filter(node => !canSuspend(node)), ...layer.filter(canSuspend)]
+      : layer;
+    for (const node of ordered) {
       if (ctx.halted) return;
-      const origin = ctx.loopBodyFailure?.();
-      if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
-        recordSkipped(
-          node,
-          outputs,
-          ctx,
-          'loop body failed',
-          { kind: 'upstream_failed', origin },
-          iteration
-        );
-        continue;
-      }
-      const execution = await simulatedExecution(node, ctx);
-      await simulateNode(node, outputs, ctx, iteration, execution);
-      const result = outputs.get(node.id);
-      if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
-        outputs.set(node.id, { ...result, execution });
-      }
+      await simulateLayerNode(node, outputs, ctx, iteration);
     }
+  }
+}
+
+async function simulateLayerNode(
+  node: DagNode,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext,
+  iteration?: number
+): Promise<void> {
+  const origin = ctx.loopBodyFailure?.();
+  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+    recordSkipped(
+      node,
+      outputs,
+      ctx,
+      'loop body failed',
+      { kind: 'upstream_failed', origin },
+      iteration
+    );
+    return;
+  }
+  const execution = await simulatedExecution(node, ctx);
+  await simulateNode(node, outputs, ctx, iteration, execution);
+  const result = outputs.get(node.id);
+  if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
+    outputs.set(node.id, { ...result, execution });
   }
 }
 

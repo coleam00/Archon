@@ -50,7 +50,7 @@ async function settleSequentially(
 
 /**
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
- * concurrently, aggregating results into `ctx.nodeOutputs`, and accumulating usage into
+ * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
  *
@@ -70,7 +70,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     }
 
     // Build a thunk per node so the layer can run either concurrently or strictly
-    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
     // asserts after a node's own execution, so when a guarded node shares the layer
     // with any node that isn't checkout-guarded (including loop/loop_group/workflow
     // siblings whose internal execution would overlap the window), that sibling's
@@ -81,45 +81,68 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     const guardedCount = layer.filter(isCheckoutGuarded).length;
     const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
     const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
-    const nodeThunks = layer.map(
-      (node): (() => Promise<LayerNodeResult>) =>
-        async (): Promise<LayerNodeResult> => {
-          const nodeCtx: RunLayersContext = {
-            ...ctx,
-            currentExecution: undefined,
-            guardedLayerSnapshots,
-            nodeInvocation:
-              ctx.unfinishedInvocations?.get(
-                nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-              )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
-          };
-          try {
-            return (
-              (await admitNode(nodeCtx, node)) ??
-              (await dispatchNode(nodeCtx, node, isParallelLayer))
-            );
-          } catch (error) {
-            return recordPreExecutionFailure(nodeCtx, node, error);
-          }
-        }
-    );
-    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
-    // comment above); every other layer keeps the concurrent `allSettled` path.
-    const layerResults = serializeLayer
-      ? await settleSequentially(nodeThunks)
-      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+    // A nested interaction can persist a pause before its ordinary sibling settles.
+    // Settle ordinary peers first inside loop bodies so admission sees their failures.
+    const phases = ctx.loopBodyFailure
+      ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
+      : [layer];
+    for (const phase of phases) {
+      const layerHadFailure = await runLayerPhase(
+        ctx,
+        phase,
+        isParallelLayer,
+        serializeLayer,
+        guardedLayerSnapshots
+      );
 
-    const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
-    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
-
-    if (layerHadFailure) {
-      getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+      if (layerHadFailure) {
+        getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+      }
     }
 
     await ctx.afterLayer?.();
 
     if (await stopsBetweenLayers(ctx, layerIdx)) break;
   }
+}
+
+async function runLayerPhase(
+  ctx: RunLayersContext,
+  layer: readonly DagNode[],
+  isParallelLayer: boolean,
+  serializeLayer: boolean,
+  guardedLayerSnapshots: Set<string> | undefined
+): Promise<boolean> {
+  const nodeThunks = layer.map(
+    (node): (() => Promise<LayerNodeResult>) =>
+      async (): Promise<LayerNodeResult> => {
+        const nodeCtx: RunLayersContext = {
+          ...ctx,
+          currentExecution: undefined,
+          guardedLayerSnapshots,
+          nodeInvocation:
+            ctx.unfinishedInvocations?.get(
+              nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
+            )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
+        };
+        try {
+          return (
+            (await admitNode(nodeCtx, node)) ?? (await dispatchNode(nodeCtx, node, isParallelLayer))
+          );
+        } catch (error) {
+          return recordPreExecutionFailure(nodeCtx, node, error);
+        }
+      }
+  );
+  // Mixed checkout guards still require sequential execution within each phase.
+  const layerResults = serializeLayer
+    ? await settleSequentially(nodeThunks)
+    : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+
+  const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
+  settledValuesOrThrow(layerResults, ctx.workflowRun.id);
+
+  return layerHadFailure;
 }
 
 /**

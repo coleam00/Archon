@@ -1800,164 +1800,6 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
-  for (const [name, suspension] of [
-    ['gate', { approval: { message: 'Please decide' } }],
-    ['wait', { wait: { attention: 'Please decide' } }],
-    ...(
-      [
-        ['gate', { approval: { message: 'Please decide' } }],
-        [
-          'interactive group',
-          {
-            loop_group: {
-              max_iterations: 1,
-              until_bash: 'exit 1',
-              interactive: true,
-              gate_message: 'Please decide',
-              nodes: [{ id: 'task', bash: 'echo done' }],
-            },
-          },
-        ],
-        [
-          'interactive loop',
-          {
-            loop: {
-              max_iterations: 1,
-              until: 'DONE',
-              interactive: true,
-              gate_message: 'Please decide',
-              prompt: 'Work',
-            },
-          },
-        ],
-      ] as const
-    ).flatMap(
-      ([name, sink]) =>
-        [
-          [
-            `nested ${name}`,
-            {
-              loop_group: {
-                max_iterations: 1,
-                until_bash: 'exit 1',
-                nodes: [{ id: 'check', ...sink }],
-              },
-            },
-          ],
-          ...['sole sink', 'before exec', 'beside exec'].map(
-            topology =>
-              [
-                `recursive ${name} ${topology}`,
-                {
-                  loop_group: {
-                    max_iterations: 1,
-                    until_bash: 'exit 1',
-                    nodes: [
-                      {
-                        id: 'nested',
-                        loop_group: {
-                          max_iterations: 1,
-                          until_bash: 'exit 1',
-                          nodes: [{ id: 'check', ...sink }],
-                        },
-                      },
-                      ...(topology === 'sole sink'
-                        ? []
-                        : [
-                            {
-                              id: 'finish',
-                              bash: 'echo done',
-                              depends_on: topology === 'before exec' ? ['nested'] : [],
-                            },
-                          ]),
-                    ],
-                  },
-                },
-              ] as const
-          ),
-        ] as const
-    ),
-  ] as const) {
-    for (const outerTopology of [
-      'sole sink',
-      ...('loop_group' in suspension && (name.startsWith('nested') || name.endsWith('sole sink'))
-        ? ['before exec', 'beside exec']
-        : []),
-    ]) {
-      for (const failed of 'loop_group' in suspension ? [true] : [true, false]) {
-        test(`loop-group ${name} outer ${outerTopology} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
-          const workflow = makeTestWorkflow({
-            name: 'failure-before-suspension',
-            nodes: [
-              {
-                id: 'group',
-                loop_group: {
-                  until_bash: 'exit 1',
-                  max_iterations: 2,
-                  nodes: [
-                    { id: 'work', prompt: 'Work' },
-                    {
-                      id: 'cleanup',
-                      bash: 'echo cleanup',
-                      depends_on: ['work'],
-                      trigger_rule: 'all_done',
-                    },
-                    {
-                      id: 'pause',
-                      ...suspension,
-                      depends_on: ['cleanup'],
-                      trigger_rule: 'all_done',
-                    },
-                    ...(outerTopology === 'sole sink'
-                      ? []
-                      : [
-                          {
-                            id: 'outer-finish',
-                            bash: 'echo done',
-                            depends_on: outerTopology === 'before exec' ? ['pause'] : ['cleanup'],
-                            trigger_rule: 'all_done',
-                          },
-                        ]),
-                  ],
-                },
-              },
-            ],
-          });
-          const result = await dryRunWorkflow({
-            workflow,
-            userMessage: '',
-            cwd: process.cwd(),
-            stubs: {
-              ...(failed ? {} : { work: 'done' }),
-              cleanup: 'cleaned',
-              task: 'done',
-              finish: 'done',
-              'outer-finish': 'done',
-            },
-            pauseAtGates: true,
-          });
-          expect(result.outcome).toBe(failed ? 'failed' : 'paused');
-          if (failed) {
-            expect(
-              result.trace.filter(entry => entry.state === 'failed').map(entry => entry.nodeId)
-            ).toEqual(['work', 'group']);
-            expect(result.trace.some(entry => entry.state === 'paused')).toBe(false);
-            if (name.includes('beside exec'))
-              expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('stubbed');
-            if (name.includes('before exec'))
-              expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('skipped');
-            if (outerTopology !== 'sole sink')
-              expect(result.trace.find(entry => entry.nodeId === 'outer-finish')?.state).toBe(
-                'stubbed'
-              );
-          } else {
-            expect(result.trace.map(entry => entry.nodeId)).toEqual(['work', 'cleanup', 'pause']);
-          }
-        });
-      }
-    }
-  }
-
   test('a failed outer node with the terminal wait id does not suppress a clean body pause', async () => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
@@ -3668,3 +3510,161 @@ describe('dryRunWorkflow — substituted values are previewed verbatim (#4046)',
     expect(drafts.map(entry => entry.resolvedText)).toEqual(['Prior: []', `Prior: [${quoted}]`]);
   });
 });
+
+for (const [name, suspension] of [
+  ['gate', { approval: { message: 'Please decide' } }],
+  ['wait', { wait: { attention: 'Please decide' } }],
+  ...(
+    [
+      ['gate', { approval: { message: 'Please decide' } }],
+      [
+        'interactive group',
+        {
+          loop_group: {
+            max_iterations: 1,
+            until_bash: 'exit 1',
+            interactive: true,
+            gate_message: 'Please decide',
+            nodes: [{ id: 'task', bash: 'echo done' }],
+          },
+        },
+      ],
+      [
+        'interactive loop',
+        {
+          loop: {
+            max_iterations: 1,
+            until: 'DONE',
+            interactive: true,
+            gate_message: 'Please decide',
+            prompt: 'Work',
+          },
+        },
+      ],
+    ] as const
+  ).flatMap(
+    ([name, sink]) =>
+      [
+        [
+          `nested ${name}`,
+          {
+            loop_group: {
+              max_iterations: 1,
+              until_bash: 'exit 1',
+              nodes: [{ id: 'check', ...sink }],
+            },
+          },
+        ],
+        ...['sole sink', 'before exec', 'beside exec'].map(
+          topology =>
+            [
+              `recursive ${name} ${topology}`,
+              {
+                loop_group: {
+                  max_iterations: 1,
+                  until_bash: 'exit 1',
+                  nodes: [
+                    {
+                      id: 'nested',
+                      loop_group: {
+                        max_iterations: 1,
+                        until_bash: 'exit 1',
+                        nodes: [{ id: 'check', ...sink }],
+                      },
+                    },
+                    ...(topology === 'sole sink'
+                      ? []
+                      : [
+                          {
+                            id: 'finish',
+                            bash: 'echo done',
+                            depends_on: topology === 'before exec' ? ['nested'] : [],
+                          },
+                        ]),
+                  ],
+                },
+              },
+            ] as const
+        ),
+      ] as const
+  ),
+] as const) {
+  for (const outerTopology of [
+    'sole sink',
+    ...('loop_group' in suspension && (name.startsWith('nested') || name.endsWith('sole sink'))
+      ? ['before exec', 'beside exec']
+      : []),
+  ]) {
+    for (const failed of 'loop_group' in suspension ? [true] : [true, false]) {
+      test(`loop-group ${name} outer ${outerTopology} ${failed ? 'yields to a body failure' : 'pauses after a clean body'}`, async () => {
+        const workflow = makeTestWorkflow({
+          name: 'failure-before-suspension',
+          nodes: [
+            {
+              id: 'group',
+              loop_group: {
+                until_bash: 'exit 1',
+                max_iterations: 2,
+                nodes: [
+                  { id: 'work', prompt: 'Work' },
+                  {
+                    id: 'cleanup',
+                    bash: 'echo cleanup',
+                    depends_on: ['work'],
+                    trigger_rule: 'all_done',
+                  },
+                  {
+                    id: 'pause',
+                    ...suspension,
+                    depends_on: ['cleanup'],
+                    trigger_rule: 'all_done',
+                  },
+                  ...(outerTopology === 'sole sink'
+                    ? []
+                    : [
+                        {
+                          id: 'outer-finish',
+                          bash: 'echo done',
+                          depends_on: outerTopology === 'before exec' ? ['pause'] : ['cleanup'],
+                          trigger_rule: 'all_done',
+                        },
+                      ]),
+                ],
+              },
+            },
+          ],
+        });
+        const result = await dryRunWorkflow({
+          workflow,
+          userMessage: '',
+          cwd: process.cwd(),
+          stubs: {
+            ...(failed ? {} : { work: 'done' }),
+            cleanup: 'cleaned',
+            task: 'done',
+            finish: 'done',
+            'outer-finish': 'done',
+          },
+          pauseAtGates: true,
+        });
+        expect(result.outcome).toBe(failed ? 'failed' : 'paused');
+        if (failed) {
+          expect(
+            result.trace.filter(entry => entry.state === 'failed').map(entry => entry.nodeId)
+          ).toEqual(['work', 'group']);
+          expect(result.trace.some(entry => entry.state === 'paused')).toBe(false);
+          if (name.includes('beside exec'))
+            expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('stubbed');
+          if (name.includes('before exec'))
+            expect(result.trace.find(entry => entry.nodeId === 'finish')?.state).toBe('skipped');
+          if (outerTopology !== 'sole sink')
+            expect(result.trace.find(entry => entry.nodeId === 'outer-finish')?.state).toBe(
+              'stubbed'
+            );
+        } else {
+          expect(result.trace.map(entry => entry.nodeId)).toEqual(['work', 'cleanup', 'pause']);
+        }
+      });
+    }
+  }
+}

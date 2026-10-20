@@ -592,8 +592,9 @@ warning.
 
 - From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
   *encapsulated* inside it — the outer DAG stays acyclic.
-- Each iteration runs the body's topological layers in full (concurrent nodes
-  within a layer run in parallel, same as a normal DAG).
+- Each iteration runs the body's topological layers in full. Within a layer,
+  ordinary nodes settle before nodes that can suspend, including nested groups
+  containing interactions. Nodes within each phase can run in parallel.
 - The body is **sealed**: a body node's `depends_on` may only reference sibling
   body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
   refs in body prompts.
