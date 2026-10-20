@@ -5047,6 +5047,63 @@ describe('terminal status writes in executor setup', () => {
 });
 
 describe('finally backstop', () => {
+  it.each([false, true])(
+    'preserves the execution result when the backstop status read fails (execution failed: %p)',
+    async executionFailed => {
+      const executionError = new Error('dag execution failed');
+      if (executionFailed) mockExecuteDagWorkflow.mockRejectedValueOnce(executionError);
+      else mockExecuteDagWorkflow.mockResolvedValueOnce(undefined);
+      const readError = new Error('status store unavailable');
+      const store = makeStore({
+        getWorkflowRun: mock(async () => makeRun({ status: 'completed' })),
+        getWorkflowRunStatus: mock(async () => {
+          throw readError;
+        }),
+      });
+      const originalWarn = mockLogger.warn;
+      const warn = mock((_data: unknown, _message?: string): void => undefined);
+      mockLogger.warn = warn;
+      try {
+        const result = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          { conversationId: 'db-conv-1' }
+        );
+        expect(result).toMatchObject({
+          success: !executionFailed,
+          workflowRunId: 'run-123',
+          ...(executionFailed ? { error: executionError.message } : {}),
+        });
+        expect(warn).toHaveBeenCalledWith(
+          {
+            workflowRunId: 'run-123',
+            operation: 'getWorkflowRunStatus',
+            err: readError,
+            recovery: expect.stringContaining('archon workflow get <run-id>'),
+          },
+          'executor.backstop_status_read_failed'
+        );
+        const warning = warn.mock.calls.find(
+          ([, event]) => event === 'executor.backstop_status_read_failed'
+        );
+        expect((warning?.[0] as { err: unknown }).err).toBe(readError);
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(executionFailed ? 1 : 0);
+        if (executionFailed) {
+          expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', executionError.message, {
+            exitReason: 'unhandled_error',
+          });
+        }
+        expect(keepAwake.activeCount()).toBe(0);
+      } finally {
+        mockLogger.warn = originalWarn;
+      }
+    }
+  );
+
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
     const store = makeStore({
