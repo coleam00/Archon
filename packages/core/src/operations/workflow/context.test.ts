@@ -6,6 +6,7 @@ import {
   type RunActor,
 } from '../run-authorization';
 import { describe, test, expect, mock } from 'bun:test';
+import { workflowWaitContextSchema } from '@archon/workflows/schemas/workflow-run';
 import {
   operator,
   mockReclaimContainerEnv,
@@ -160,11 +161,16 @@ describe('starter, admin and operator can act through core', () => {
               kind: 'event',
               nodeId: 'wait',
               event: 'ready',
+              futureField: true,
               resumeAt: '2026-10-06T00:00:00.000Z',
             },
           },
         });
-        const write = mock(async () => ({ resolved: true, cancelled: true, signaled: true }));
+        const write = mock(async (..._args: unknown[]) => ({
+          resolved: true,
+          cancelled: true,
+          signaled: true,
+        }));
         const operations = createWorkflowOperations({
           getUserRole: async id => (id === 'admin' ? 'admin' : 'member'),
           store: {
@@ -173,7 +179,11 @@ describe('starter, admin and operator can act through core', () => {
             resolveApprovalGate: write,
             resolveAndCancelApprovalGate: write,
             cancelWorkflowRun: write,
-            signalWorkflowWait: write,
+            signalWorkflowWait: async (id, cursor, payload) => {
+              expect(workflowWaitContextSchema.parse(cursor)).toEqual(cursor);
+              expect(cursor).not.toHaveProperty('futureField');
+              return write(id, cursor, payload);
+            },
             deleteWorkflowRun: async () => {
               await write();
             },

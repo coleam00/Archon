@@ -683,7 +683,23 @@ export async function executeWorkflow(
     // this finally — see #1561 for the originating zombie-state incident.
     if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
       const runId = workflowRun.id;
-      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
+      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
+        // A failed lookup leaves status unknown, not missing or finalized. Preserve the
+        // prior result/error rather than guessing a terminal transition from this read.
+        getLog().warn(
+          {
+            workflowRunId: runId,
+            operation: 'getWorkflowRunStatus',
+            err,
+            recovery:
+              'The finalization check could not run. Restore store access and inspect the run ' +
+              'with archon workflow get <run-id>. After checking ownership, use ' +
+              'archon workflow abandon <run-id> only if the run should be stopped or discarded.',
+          },
+          'executor.backstop_status_read_failed'
+        );
+        return null;
+      });
       if (backstopStatus === 'running') {
         getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
         await requireTerminalStatusWrite(

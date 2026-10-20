@@ -11,6 +11,7 @@ import * as setupAi from './setup-ai';
 import * as providerAuth from './setup-provider-auth';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
+import * as platformRegistry from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 
@@ -346,6 +347,48 @@ describe('setup docs path target', () => {
         if (!(key in savedEnv)) delete process.env[key];
       }
       Object.assign(process.env, savedEnv);
+      await removeTempTree(root);
+    }
+  });
+});
+
+describe('setup model preferences', () => {
+  it('persists the Pi model before writing the default assistant and chat model', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-models-'));
+    const savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    const policies = spyOn(platformRegistry, 'getRegisteredPlatformPolicies').mockReturnValue([]);
+    const collect = spyOn(setupAi, 'collectAIConfig').mockResolvedValue({
+      claude: true,
+      claudeAuthType: 'global',
+      codex: false,
+      pi: true,
+      piModel: 'anthropic/claude-haiku-4-5',
+      defaultAssistant: 'claude',
+      defaultAssistantSelected: true,
+      defaultModel: 'sonnet',
+    });
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+    const note = spyOn(prompts, 'note').mockImplementation(() => undefined);
+    try {
+      expect(await setupCommand({ repoPath: root, inheritedEnv: {} })).toBe(0);
+      const config = Bun.YAML.parse(readFileSync(join(root, 'home', 'config.yaml'), 'utf8'));
+      expect(config).toMatchObject({
+        defaultAssistant: 'claude',
+        assistants: {
+          pi: { model: 'anthropic/claude-haiku-4-5' },
+          claude: { model: 'sonnet' },
+        },
+      });
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining('AI: Claude (global auth), Pi'),
+        'Configuration Complete'
+      );
+    } finally {
+      for (const spy of [collect, platforms, confirm, note, policies]) spy.mockRestore();
+      if (savedHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedHome;
       await removeTempTree(root);
     }
   });
