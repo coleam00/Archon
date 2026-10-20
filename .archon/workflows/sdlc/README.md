@@ -473,7 +473,7 @@ The predicate only saves runs; intake ignores any other label. A binding install
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
-which a project replaces with its own `.archon/sdlc/policy/build.md`.
+which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order (the `order`
   input). An item waits for the build queue when its work item's stage is a READY

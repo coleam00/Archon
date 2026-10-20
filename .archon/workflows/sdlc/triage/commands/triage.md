@@ -80,7 +80,7 @@ When the target is a tracker issue, declare `item` as its qualified repository (
 
 Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item title>` for a tracker issue, otherwise `# Triage: <the request in a few words>`. Cite code by repository-relative path and line; the checkout you read is temporary and its absolute path is dead once the run ends. Sections:
 
-- **Source and outcome** — what was requested, the affected behavior, which source material was considered, and which triage policy applied: the project's `.archon/sdlc/policy/triage.md` or the pack's default.
+- **Source and outcome** — what was requested, the affected behavior, which source material was considered, and which triage policy applied: the pack's default, plus the project's `.archon/sdlc/policy/triage.md` when it exists, naming any project line that overrode the default.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
 - **Assumptions checked** — each load-bearing claim or prescribed solution you confirmed, refuted, or could not establish.
 - **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found. When the verdict is `READY`, quote the source's invariants, acceptance items, and any solution steering here, each item as the source words it. Later steps plan, implement, and review against this section, and an item you only count or summarize is one they cannot check.
