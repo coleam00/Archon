@@ -15,12 +15,14 @@ import {
   MERGE_PATHS,
   type MergeAttention,
   type MergeRecord,
+  type MergeSettled,
   mergeWaits,
   POLICY_CLASSES,
   type PrFacts,
   prFromUrl,
   RERUNS,
   SWEEP_ACTIONS,
+  UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
@@ -249,8 +251,8 @@ interface FakePr {
   readonly threads?: number;
   /** The thread count the forge reports, when it is more than it returned. */
   readonly threadTotal?: number;
-  /** Every pull request read fails. */
-  readonly unreadable?: boolean;
+  /** Fail every pull request read, or only the listed pull requests. */
+  readonly unreadable?: boolean | readonly number[];
   /** Every pull request read after a merge fails. */
   readonly unreadableAfterMerge?: boolean;
   /** `gh pr merge` succeeds and the pull request stays open, as when the forge queues merges. */
@@ -297,8 +299,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (argv[1] === 'api' && argv[2] === 'graphql' && query.includes('pullRequest(number')) {
     answered();
-    if (forgePr.unreadable) return out(1, '', 'HTTP 502');
     const number = Number(String(argv.find(part => String(part).startsWith('number=')) ?? 'number=42').slice('number='.length));
+    if (forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(number)) return out(1, '', 'HTTP 502');
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev' }, pullRequest: {
       url: ${JSON.stringify(PR_URL.replace(/42$/, ''))} + number, title: 'Fix the thing',
       state: (forgePr.merged ?? []).includes(number) ? 'MERGED' : forgePr.state, isDraft: false,
@@ -531,15 +533,47 @@ describe('the merge queue scripts', () => {
     }
   }, 60_000);
 
-  test('a pull request facts cannot read waits for the next sweep instead of stopping the batch', () => {
+  test('a second consecutive unreadable pull request parks, releases its claim, and leaves the rest of the batch readable', () => {
     const at = install();
     seed(at, item());
-    const output = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { path: string; settled: { status: string; reason: string }[] };
-    expect(output).toMatchObject({ path: 'record', items: [], settled: [{ item: SUBJECT, pr: PR, status: 'waiting' }] });
-    expect(output.settled[0]?.reason).toContain('HTTP 502');
-    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER });
+    for (const status of ['waiting', 'parked'] as const) {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { path: string; items: { item: typeof SUBJECT }[]; settled: MergeSettled[] };
+      expect(output).toMatchObject({ path: 'sweep', settled: [{ item: SUBJECT, pr: PR, status, decision: UNREADABLE }] });
+      expect(output.items.map(entry => entry.item)).toEqual([OTHER]);
+      expect(output.settled[0]?.reason).toContain('HTTP 502');
+      ok(run(at, 'record', {
+        ...recordInputs([decision({ number: OTHER_PR.number, action: 'wait', reason: 'CI pending' })]),
+        INPUTS_ITEMS: JSON.stringify(output.items),
+        INPUTS_SETTLED: JSON.stringify(output.settled),
+      }));
+      expect(stored(at, OTHER.number).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+      const doc = stored(at).value as WorkItem;
+      expect(doc).toMatchObject({ claim: null, facts: { merge: { status } } });
+      expect(doc.facts.merge?.decisions.at(-1)).toMatchObject({ decision: UNREADABLE, reason: output.settled[0]?.reason });
+      expect(doc.facts.merge?.decisions).toHaveLength(status === 'waiting' ? 1 : 2);
+      expect(mergeWaits(doc)).toBe(status === 'waiting');
+    }
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'sweep', items: [{ item: OTHER }], settled: [] });
+  }, 60_000);
+
+  test('a successful read and sweep decision break the consecutive unreadable sequence', () => {
+    const at = install();
+    seed(at, item());
+    const failAndRecord = () => {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
+      expect(output.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
+      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
+    };
+    failAndRecord();
+    const readable = ok(run(at, 'facts', {}));
+    expect(readable).toMatchObject({ path: 'sweep', settled: [] });
+    ok(run(at, 'record', { ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), INPUTS_ITEMS: JSON.stringify(readable.items) }));
+    expect(stored(at).value?.facts.merge?.decisions.at(-1)?.decision).toBe('wait (clear)');
+    failAndRecord();
     const doc = stored(at).value as WorkItem;
-    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+    expect(doc.claim).toBeNull();
+    expect(doc.facts.merge?.decisions).toHaveLength(3);
     expect(mergeWaits(doc)).toBe(true);
   }, 60_000);
 

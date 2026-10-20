@@ -8,8 +8,8 @@
  * trusted review report is written under `merge/<number>/review/` with the commit it
  * reviewed beside it, so a delta review can continue from it. An item whose pull
  * request is already merged or closed, or that names none, is settled without the
- * sweep, and one whose pull request cannot be read waits for the next sweep with the
- * reason, so it never stops the rest of the batch. It writes only the claims.
+ * sweep. An unreadable pull request waits once, then parks on a consecutive failed
+ * read with the reason, without stopping the rest of the batch. It writes only the claims.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -96,6 +96,12 @@ function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): 
   }
 }
 
+function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): MergeSettled {
+  const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
+  const status = doc.facts.merge?.decisions.at(-1)?.decision === UNREADABLE ? 'parked' : 'waiting';
+  return { item: doc.subject, pr, status, decision: UNREADABLE, reason };
+}
+
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -122,8 +128,7 @@ function main(): void {
       }
       read = readPr(pr, maintainers);
     } catch (error) {
-      const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
-      settled.push({ item: doc.subject, pr, status: 'waiting', decision: UNREADABLE, reason });
+      settled.push(unreadableItem(doc, pr, error));
       continue;
     }
     const { facts, report } = read;
