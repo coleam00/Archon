@@ -1,6 +1,7 @@
 import type { DagNode, IncludeDirective } from '../schemas';
 import {
   isGateNode,
+  isInteractiveSink,
   isIncludeDirective,
   isLoopGroupNode,
   isLoopNode,
@@ -182,30 +183,6 @@ export function collectUnknownNodeKeys(
 }
 
 /**
- * True when `node`, used as a loop_group's body-terminal sink, can itself pause
- * in a way that is invisible one level up (#2753) — either directly (a `gate:`
- * node — the pattern #2707 step 3's escalation handles correctly for its OWN
- * enclosing loop_group, but that escalation is bounded to that one level) or
- * transitively (a `loop:` node with `interactive: true`, the legacy mechanism,
- * or a `loop_group:` node that is itself `interactive: true` or whose own sole
- * terminal sink recurses into this same case, following a chain of well-formed
- * sole-terminal-sink nesting to any depth). A gate anywhere else in a body is a
- * load error (`validateDagStructure`), so the chain never meets one. Mirrors
- * `findLoopGroupTerminalSuspendNode`'s doc comment (dag/nodes/loop-group): the runtime
- * has no unambiguous way to escalate a pause through a sink that isn't a bare gate,
- * so this only makes that gap visible at load time.
- */
-function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boolean {
-  if (isIncludeDirective(node)) return false;
-  if (isGateNode(node)) return true;
-  if (isLoopNode(node)) return node.loop.interactive === true;
-  if (!isLoopGroupNode(node)) return false;
-  if (node.loop_group.interactive === true) return true;
-  const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-  return soleSink !== undefined && isUnescalatableInteractiveSink(soleSink);
-}
-
-/**
  * A condition-skipped dependency is neither a success nor a failure, so a
  * `none_failed_min_one_success` node whose ONLY dependency has a `when:` skips
  * whenever that condition is false (#3783). Two or more conditional dependencies
@@ -317,7 +294,7 @@ export function collectLoopGroupSinkWarnings(
       soleSink !== undefined &&
       !isIncludeDirective(soleSink) &&
       !isGateNode(soleSink) &&
-      isUnescalatableInteractiveSink(soleSink) &&
+      isInteractiveSink(soleSink) &&
       !(hasOwnerSessions && isLoopGroupNode(soleSink))
     ) {
       const message =
