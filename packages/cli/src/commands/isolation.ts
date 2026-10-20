@@ -449,6 +449,9 @@ async function checkCompletionUnpushedCommits(
     if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
       blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
     }
+    blockers.push(
+      `could not verify unpushed commits (${err.message}) — refusing to delete unverified`
+    );
     getLog().warn({ err, branch }, 'isolation.complete_unpushed_check_failed');
   }
 }

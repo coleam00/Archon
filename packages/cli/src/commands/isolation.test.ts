@@ -504,6 +504,48 @@ describe('isolationCompleteCommand', () => {
     }
   );
 
+  it.each([
+    { name: 'log timeout', logError: new GitFailure('timeout', 'log timed out'), refCode: 1 },
+    { name: 'present remote ref', logError: new Error('log failed'), refCode: 0 },
+    { name: 'failed remote ref probe', logError: new Error('log failed'), refCode: 128 },
+    { name: 'unclassified remote ref probe', logError: new Error('log failed'), refCode: null },
+  ])(
+    'refuses unverified push state with zero unique commits: $name',
+    async ({ logError, refCode }) => {
+      mockListActive.mockResolvedValue([mockEnv]);
+      mockGetUniqueCommitCount.mockResolvedValue(0);
+      mockIsPatchEquivalent.mockResolvedValue(true);
+      mockExecFileAsync.mockImplementation(async (cmd, args) => {
+        if (cmd === 'gh') return { stdout: '[]', stderr: '' };
+        if (args.includes('log')) throw logError;
+        if (refCode !== 0) throw Object.assign(new Error('ref probe failed'), { code: refCode });
+        return { stdout: '', stderr: '' };
+      });
+
+      for (const deleteRemote of [false, true]) {
+        await expect(
+          isolationCompleteCommand(['feature-branch'], { deleteRemote })
+        ).rejects.toThrow('Failed to complete');
+        expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+      }
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        `    ✗ could not verify unpushed commits (${logError.message}) — refusing to delete unverified`
+      );
+      expect(mockIsPatchEquivalent).not.toHaveBeenCalled();
+
+      mockRemoveEnvironment.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        branchDeleted: true,
+        warnings: [],
+      });
+      await isolationCompleteCommand(['feature-branch'], { force: true });
+      expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+        force: true,
+        deleteRemoteBranch: true,
+      });
+    }
+  );
+
   it('finishes removing the first shared ref before checking the last one', async () => {
     const lastEnv = makeEnvironment({ id: 'last-env', branch_name: 'last' });
     mockListActive
@@ -935,9 +977,10 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
-  it('reports all blockers together when multiple checks fail', async () => {
+  it('reports all blockers in safety-check order when multiple checks fail', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
+    mockGetUniqueCommitCount.mockResolvedValueOnce(2);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
@@ -954,11 +997,14 @@ describe('isolationCompleteCommand', () => {
     ).rejects.toThrow('Failed to complete');
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is running');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ open PR #140 — "fix: metrics"');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
+    expect(consoleErrorSpy.mock.calls).toEqual([
+      ['  Blocked: feature-branch'],
+      ['    ✗ uncommitted changes in worktree'],
+      ['    ✗ run run-live is running'],
+      ['    ✗ open PR #140 — "fix: metrics"'],
+      ['    ✗ 2 commit(s) unique to this branch'],
+      ['  Use --force to override.'],
+    ]);
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
   });
 
