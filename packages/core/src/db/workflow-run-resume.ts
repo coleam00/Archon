@@ -13,7 +13,6 @@ import {
   isScheduledWorkflowResume,
   pausedUsageLimitWait,
   readCapacityWait,
-  workflowRunStatusSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import { resourceResumeBlocker, resumeRefusal } from '@archon/workflows/resource-start-store';
 import {
@@ -36,7 +35,11 @@ import {
   resourceStartOccupancy,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  readWorkflowRunStatus,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
 import { getLog, normalizeMetadata } from './workflow-run-shared';
 
 /**
@@ -221,23 +224,17 @@ export async function resumeWorkflowRun(
         [id]
       );
       const prior = priorRows.rows[0];
+      if (prior === undefined) return { rowCount: 0 };
+      const status = readWorkflowRunStatus({ id, status: prior.status });
       if (
         cursor !== undefined &&
-        (prior === undefined ||
-          !resumeCursorMatches(
-            {
-              status: workflowRunStatusSchema.parse(prior.status),
-              metadata: normalizeMetadata(prior.metadata),
-            },
-            cursor
-          ))
+        !resumeCursorMatches({ status, metadata: normalizeMetadata(prior.metadata) }, cursor)
       )
         return { rowCount: 0 };
-      const resourceKey = prior?.resource_key ?? undefined;
-      const status = prior?.status;
+      const resourceKey = prior.resource_key ?? undefined;
       if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
         const { capacity } = await lockResourceSlot(query, resourceKey);
-        const metadata = normalizeMetadata(prior?.metadata);
+        const metadata = normalizeMetadata(prior.metadata);
         const blocker = resourceResumeBlocker(
           await resourceStartOccupancy(query, resourceKey, capacity),
           { id, status, metadata }
@@ -264,12 +261,12 @@ export async function resumeWorkflowRun(
         }
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
-      const clearedError = readMetadataError(prior?.metadata);
-      const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
+      const clearedError = readMetadataError(prior.metadata);
+      const scheduled = status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
       // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
       const usageLimitWait =
-        prior?.status === 'paused' &&
+        status === 'paused' &&
         pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
           undefined;
       const metadataPatch = {
@@ -306,7 +303,7 @@ export async function resumeWorkflowRun(
       );
 
       const rowCount = result.rowCount;
-      if (rowCount > 0 && (prior?.status === 'failed' || clearedError !== null)) {
+      if (rowCount > 0 && (status === 'failed' || clearedError !== null)) {
         // Same `{ error }` payload shape workflow_failed uses, so every consumer
         // that already reads an error off a workflow_* event keeps working.
         await insertWorkflowEvent(query, {
@@ -315,7 +312,7 @@ export async function resumeWorkflowRun(
           data: clearedError === null ? {} : { error: clearedError },
         });
       }
-      if (rowCount > 0 && prior?.status === 'paused') {
+      if (rowCount > 0 && status === 'paused') {
         await insertWorkflowEvent(query, workflowUnpausedEvent(id));
       }
       if (rowCount > 0 && scheduled !== null && triggeredAt !== null) {
@@ -352,11 +349,12 @@ export async function resumeWorkflowRun(
       getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_probe_failed');
       throw new Error(`Failed to resume workflow run: ${err.message}`, { cause: err });
     }
-    const currentStatus = probeRows[0]?.status;
-    if (currentStatus === undefined) {
+    const currentRow = probeRows[0];
+    if (currentRow === undefined) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
       throw new Error(`Workflow run not found (id: ${id})`);
     }
+    const currentStatus = readWorkflowRunStatus({ id, status: currentRow.status });
     getLog().info({ workflowRunId: id, currentStatus }, 'db.workflow_run_resume_not_resumable');
     throw new WorkflowNotResumableError(id, currentStatus);
   }
@@ -460,12 +458,16 @@ export async function releasePausedRunSlot(
         WHERE w.id = $1${getDialect().rowLock('w')}`,
       [id]
     );
-    const row = rows.rows[0];
+    const raw = rows.rows[0];
+    const row =
+      raw === undefined
+        ? undefined
+        : { ...raw, status: readWorkflowRunStatus({ id, status: raw.status }) };
     if (
       !row?.resource_key ||
       !pauseCursorMatches(
         {
-          status: workflowRunStatusSchema.parse(row.status),
+          status: row.status,
           metadata: normalizeMetadata(row.metadata),
         },
         cursor

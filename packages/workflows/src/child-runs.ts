@@ -456,6 +456,7 @@ export async function runChildWorkflow(
         childRunId = childRun.id;
       }
     } catch (err) {
+      if (err instanceof WorkflowStatusReadError) throw err;
       return failOutcome(
         `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
       );

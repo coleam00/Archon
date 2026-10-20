@@ -263,6 +263,86 @@ nodes:
     expect([...store.runs.values()].find(row => !row.parent_run_id)?.status).toBe('running');
   });
 
+  it.each(
+    [false, true].flatMap(hydrated =>
+      (['single', 'all_success', 'all_done'] as const).map(join => [hydrated, join] as const)
+    )
+  )('preserves a preparation status error (hydrated: %j, join: %s)', async (hydrated, join) => {
+    await writeWorkflow(
+      'resume-child',
+      `
+name: resume-child
+description: child to recover
+mutates_checkout: false
+nodes:
+- id: first
+  prompt: first
+- id: last
+  prompt: last
+`
+    );
+    await writeWorkflow(
+      'resume-parent',
+      `
+name: resume-parent
+description: parent recovering a child
+nodes:
+- id: sub
+  workflow: resume-child
+${
+  join === 'single'
+    ? ''
+    : `  fan_out:
+    items: "[1]"
+    max_parallel: 1
+    join: ${join}
+`
+}
+`
+    );
+    const parent = await discover('resume-parent');
+    const store = new InMemoryStore();
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'resume-parent',
+      user_message: '',
+      working_path: cwd,
+    });
+    const child = await store.createWorkflowRun({
+      workflow_name: 'resume-child',
+      user_message: '',
+      working_path: cwd,
+      parent_run_id: parentRun.id,
+      metadata: { parent_node_id: 'sub', ...(join === 'single' ? {} : { child_index: 0 }) },
+    });
+    await store.failWorkflowRun(child.id, 'interrupted');
+    if (hydrated)
+      await store.persistWorkflowEvent({
+        workflow_run_id: child.id,
+        event_type: 'node_completed',
+        step_name: 'first',
+        data: { node_output: 'done' },
+      });
+    const cause = new WorkflowStatusReadError(child.id, new Error('unsupported child status'));
+    const resume = spyOn(store, 'resumeWorkflowRun').mockRejectedValue(cause);
+    const fail = spyOn(store, 'failWorkflowRun');
+    const cancel = spyOn(store, 'cancelWorkflowRun');
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv', cwd, parent, '', undefined, {
+        preCreatedRun: parentRun,
+      })
+    ).rejects.toBe(cause);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(store.runs.get(parentRun.id)?.status).toBe('running');
+    expect(store.runs.get(child.id)?.status).toBe('failed');
+    expect(
+      store.events.some(
+        e => e.event_type === 'node_failed' || e.event_type === 'workflow_completed'
+      )
+    ).toBe(false);
+  });
+
   it('reports an ordinary failed child when the recovery write succeeds', async () => {
     // The other side of the branch: the child's status IS recorded, so the parent
     // gets a normal failed-sub-run outcome instead of a rejection.

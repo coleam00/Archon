@@ -1,3 +1,4 @@
+import { createLogger } from '@archon/paths';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import { hydrateResumableRun } from './run-resume';
@@ -93,11 +94,19 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     ).catch(async (error: unknown) => {
       // Hydration already claimed the row. The executor's early setup can throw
       // before its terminal-write boundary; recovery must work without a server.
-      if (
-        !(error instanceof TerminalStatusWriteError) &&
-        !(error instanceof WorkflowStatusReadError) &&
-        (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
-      ) {
+      if (error instanceof TerminalStatusWriteError || error instanceof WorkflowStatusReadError)
+        throw error;
+      let status;
+      try {
+        status = await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id);
+      } catch (readError) {
+        createLogger('workflow.engine').error(
+          { err: readError, workflowRunId: hydrated.preCreatedRun.id },
+          'workflow.resume_recovery_status_read_failed'
+        );
+        throw error;
+      }
+      if (status === 'running') {
         await requireTerminalStatusWrite(
           this.deps.store.failWorkflowRun(
             hydrated.preCreatedRun.id,

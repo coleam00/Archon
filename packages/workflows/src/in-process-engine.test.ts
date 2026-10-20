@@ -10,6 +10,7 @@
  * seams need stubbing here too. This file deliberately does NOT mock
  * `./executor` or `@archon/workflows/executor` itself.
  */
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { providerRegistry } from '@archon/providers';
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
@@ -295,7 +296,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
     const cause = new Error('Unreadable status');
     dagBody = async () => {
       store.getWorkflowRun = async () => {
-        throw cause;
+        throw new WorkflowStatusReadError(pending.id, cause);
       };
       return undefined;
     };

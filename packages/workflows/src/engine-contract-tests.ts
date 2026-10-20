@@ -7,6 +7,7 @@ import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { resolveWorkflow } from './graph-plan';
 import { captureWorkflowSource } from './workflow-source';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type {
@@ -701,6 +702,37 @@ nodes:
       const caught = await captureRejection(admission.settled);
       expect(caught).toBe(cause);
       expect(failures).toEqual([{ id: 'failed-run', message: 'config failed' }]);
+    });
+
+    it.each([
+      new Error('status query failed'),
+      new WorkflowStatusReadError('unreadable-recovery', new Error('unsupported status')),
+    ])('preserves the execution error when recovery status cannot be read: %s', async readError => {
+      const cause = new Error('config failed');
+      const resumed = makeRun({ id: 'unreadable-recovery', status: 'running' });
+      let writes = 0;
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRunStatus: async () => {
+          throw readError;
+        },
+        failWorkflowRun: async () => {
+          writes++;
+          resumed.status = 'failed';
+          return { failed: true };
+        },
+      });
+      const admission = await makeEngine(
+        makeDeps(providers, store, {
+          loadConfig: async () => {
+            throw cause;
+          },
+        })
+      ).resume({ ...resumeCallInput(), run: makeRun({ status: 'paused' }) });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      expect(await captureRejection(admission.settled)).toBe(cause);
+      expect(writes).toBe(1);
+      expect(resumed.status).toBe('failed');
     });
 
     it('does not retry a failed terminal compensation write', async () => {

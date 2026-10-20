@@ -90,6 +90,21 @@ test('validates persisted workflow statuses without changing lifecycle state', a
           `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
         );
       }
+      await expect(store.resumeWorkflowRun(run.id)).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(
+        store.resumeWorkflowRun(run.id, {
+          kind: 'quota',
+          attempt: 1,
+          resumeAt: '2026-01-01T00:00:00Z',
+        })
+      ).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(
+        store.releasePausedRunSlot(run.id, {
+          kind: 'wait',
+          nodeId: 'wait',
+          resumeAt: '2026-01-01T00:00:00Z',
+        })
+      ).rejects.toBeInstanceOf(WorkflowStatusReadError);
       expect(
         (await db.query('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
           .rows
