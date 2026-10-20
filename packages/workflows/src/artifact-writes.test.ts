@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -8,7 +9,7 @@ import { ArtifactWriteError, withContainerArtifactsRoot } from './artifact-write
 import { writeNodeArtifact, writeNodeArtifactsListing } from './artifacts-index';
 import { recordCheckoutSample, type CheckoutSample } from './checkout-observation';
 import { formatPersistedNodeOutput } from './dag/node-output';
-import { CHECKOUT_MANIFEST_VERSION } from './schemas/checkout-observation';
+import { CHECKOUT_MANIFEST_VERSION, type CheckoutManifest } from './schemas/checkout-observation';
 import { shellQuoteOrFile, writeSpillFile } from './dag/shell-quote';
 import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS } from './deps';
 import {
@@ -46,14 +47,14 @@ const meta = {
 const large = 'x'.repeat(200_000);
 const engineDir = (...parts: string[]) => join(RUN_ARTIFACTS_ENGINE_SUBDIR, ...parts);
 
-function deliverCredential(path: string) {
+function deliverCredential(...paths: string[]) {
   return resolveUserProviderEnvForWorkflow(
     {
       isPerUserProviderKeysEnabled: () => true,
       getUserProviderEnv: async () => ({
         env: {},
         protectedValues: [],
-        files: [{ path, contents: 'secret' }],
+        files: paths.map(path => ({ path, contents: 'secret' })),
       }),
     },
     'user',
@@ -63,21 +64,26 @@ function deliverCredential(path: string) {
   );
 }
 
+const dirtyManifest: CheckoutManifest = {
+  version: CHECKOUT_MANIFEST_VERSION,
+  objectFormat: 'sha1',
+  commit: null,
+  entries: [],
+};
 const dirtySample: CheckoutSample = {
   observation: { kind: 'git', sampledAt: '2026-10-20T00:00:00Z', commit: null, tree: null },
   worktree: {
     status: 'dirty',
-    manifest: {
-      version: CHECKOUT_MANIFEST_VERSION,
-      objectFormat: 'sha1',
-      commit: null,
-      entries: [],
-    },
+    manifest: dirtyManifest,
     staged: 0,
     unstaged: 1,
     untracked: 0,
   },
 };
+const dirtyManifestPath = engineDir(
+  'checkout',
+  `${createHash('sha256').update(JSON.stringify(dirtyManifest)).digest('hex')}.json`
+);
 
 describe('in a container-mounted artifacts directory', () => {
   const contained = <T>(operation: () => T): T => withContainerArtifactsRoot(root, operation);
@@ -140,6 +146,7 @@ describe('in a container-mounted artifacts directory', () => {
     'nodes/probe.md',
     'nodes/probe.meta.json',
     engineDir('node-output-spills', 'leaf.nodeoutput'),
+    dirtyManifestPath,
     ...MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   ])('replaces a leaf symlink at %s without touching its target', async leaf => {
     const path = join(root, leaf);
@@ -148,7 +155,9 @@ describe('in a container-mounted artifacts directory', () => {
     await contained(async () => {
       if (leaf.startsWith('nodes/')) await writeNodeArtifact(root, meta, 'output');
       else if (leaf.endsWith('auth.json')) await deliverCredential(path);
-      else expect(writeSpillFile(dirname(path), 'leaf.nodeoutput', large)).toBe(path);
+      else if (leaf === dirtyManifestPath) {
+        await recordCheckoutSample(dirtySample, { runId: 'run', artifactsDir: root });
+      } else expect(writeSpillFile(dirname(path), 'leaf.nodeoutput', large)).toBe(path);
     });
     const written = await lstat(path);
     expect(written.isFile()).toBe(true);
@@ -175,6 +184,28 @@ describe('in a container-mounted artifacts directory', () => {
       ArtifactWriteError
     );
     expect(await readFile(join(outside, 'auth.json'), 'utf8')).toBe('host secret');
+  });
+
+  test('credential cleanup still removes later files after a refused path', async () => {
+    const [refused, later] = MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS;
+    await symlink(outside, join(root, dirname(refused)));
+    await mkdir(dirname(join(root, later)));
+    await writeFile(join(root, later), 'stale secret');
+    await expect(contained(() => clearManagedProviderCredentialFiles(root))).rejects.toThrow(
+      ArtifactWriteError
+    );
+    await expect(lstat(join(root, later))).rejects.toThrow();
+    await expectOutsideUntouched();
+  });
+
+  test('a refused credential write cleans every file and reports the delivery failure', async () => {
+    const [refused, delivered] = MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS;
+    await symlink(outside, join(root, dirname(refused)));
+    await expect(
+      contained(() => deliverCredential(join(root, delivered), join(root, refused)))
+    ).rejects.toThrow('Could not safely write provider credential files');
+    await expect(lstat(join(root, delivered))).rejects.toThrow();
+    await expectOutsideUntouched();
   });
 
   test('writes outside the scoped root are not checked', async () => {

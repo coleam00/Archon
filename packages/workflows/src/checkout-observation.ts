@@ -13,11 +13,11 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { lstat, readlink, writeFile } from 'node:fs/promises';
+import { lstat, readlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
-import { prepareArtifactParent } from './artifact-writes';
+import { writeArtifactFile } from './artifact-writes';
 import { ARTIFACT_POINTER_TYPE } from './schemas/artifact-pointer';
 import {
   CHECKOUT_MANIFEST_VERSION,
@@ -659,18 +659,11 @@ export async function recordCheckoutSample(
   };
   if (sample.worktree.status === 'clean') return { ...base, worktree: { status: 'clean' } };
   const { manifest, staged, unstaged, untracked } = sample.worktree;
-  const bytes = Buffer.from(JSON.stringify(manifest), 'utf8');
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const json = JSON.stringify(manifest);
+  const sha256 = createHash('sha256').update(json, 'utf8').digest('hex');
   const relativePath = `${MANIFEST_DIR}/${sha256}.json`;
   const absolute = join(run.artifactsDir, ...relativePath.split('/'));
-  // `wx` never follows an existing leaf, so only the parents need the artifact check.
-  await prepareArtifactParent(absolute);
-  try {
-    await writeFile(absolute, bytes, { flag: 'wx' });
-  } catch (error) {
-    // Same digest means same bytes: an existing file is this manifest already.
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-  }
+  await writeArtifactFile(absolute, json);
   return {
     ...base,
     worktree: {

@@ -195,9 +195,24 @@ async function resolveUserGithubEnvForWorkflow(
  * or after fresh credential resolution fails.
  */
 export async function clearManagedProviderCredentialFiles(artifactsDir: string): Promise<void> {
-  for (const relativePath of MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS) {
-    await removeArtifactFile(join(artifactsDir, relativePath));
+  await removeEach(managedCredentialPaths(artifactsDir));
+}
+
+function managedCredentialPaths(artifactsDir: string): string[] {
+  return MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS.map(path => join(artifactsDir, path));
+}
+
+/** Remove every path even when one is refused, then throw the first failure. */
+async function removeEach(paths: readonly string[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const path of paths) {
+    try {
+      await removeArtifactFile(path);
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  if (failures.length > 0) throw failures[0];
 }
 
 /**
@@ -246,8 +261,11 @@ export async function resolveUserProviderEnvForWorkflow(
   } catch (error) {
     // The error names paths, never contents; the thrown message carries neither.
     getLog().error({ err: error as Error }, 'workflow.provider_credential_write_failed');
-    for (const path of written.reverse()) await removeArtifactFile(path);
-    await clearManagedProviderCredentialFiles(artifactsDir);
+    try {
+      await removeEach([...written.reverse(), ...managedCredentialPaths(artifactsDir)]);
+    } catch (cleanupError) {
+      getLog().error({ err: cleanupError as Error }, 'workflow.provider_credential_cleanup_failed');
+    }
     throw new Error('Could not safely write provider credential files');
   }
 
