@@ -422,84 +422,65 @@ test('new work-item mutations use file requests and record content-free verified
   }
 });
 
-test.each(['pr.reviews', 'pr.comments'] as const)(
-  '%s retains bodies in stdout and digests them through the CLI audit boundary',
-  async op => {
-    const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 42 };
-    const auditRecords: unknown[] = [];
-    const responses: unknown[] = [];
-    const code = await forgeCommand(
-      op,
-      { data: JSON.stringify({ ref }) },
-      {
-        env: { WORKFLOW_ID: 'run' },
-        readConfig: async () => ({}),
-        dispatch: async request => {
-          const response: ForgeResponse = {
-            operationId: request.operationId,
-            ok: true,
-            result:
-              op === 'pr.comments'
-                ? {
-                    op,
-                    value: {
-                      ref,
-                      comments: [
-                        {
-                          id: '1',
-                          author: null,
-                          url: 'https://forge.example/comment/1',
-                          body: 'confidential review',
-                        },
-                      ],
-                    },
-                  }
-                : {
-                    op,
-                    value: {
-                      ref,
-                      items: [
-                        {
-                          kind: 'review',
-                          id: '1',
-                          author: null,
-                          commit: 'head',
-                          state: 'COMMENTED',
-                          createdAt: null,
-                          url: 'https://forge.example/review/1',
-                          body: 'confidential review',
-                        },
-                      ],
-                    },
-                  },
-          };
-          return {
-            response,
-            plugin: null,
-            audit: {
-              operationId: request.operationId,
-              operation: request.op,
-              target: ref,
-              plugin: null,
-              result: forgeAuditResponse(response),
-              durationMs: 1,
+test('reviews retain bodies in stdout and digest them through the CLI audit boundary', async () => {
+  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 42 };
+  const auditRecords: unknown[] = [];
+  const responses: unknown[] = [];
+  const code = await forgeCommand(
+    'pr.reviews',
+    { data: JSON.stringify({ ref }) },
+    {
+      env: { WORKFLOW_ID: 'run' },
+      readConfig: async () => ({}),
+      dispatch: async request => {
+        const response: ForgeResponse = {
+          operationId: request.operationId,
+          ok: true,
+          result: {
+            op: 'pr.reviews',
+            value: {
+              ref,
+              items: [
+                {
+                  kind: 'review',
+                  id: '1',
+                  author: null,
+                  commit: 'head',
+                  state: 'COMMENTED',
+                  createdAt: null,
+                  url: 'https://forge.example/review/1',
+                  body: 'confidential review',
+                },
+              ],
             },
-          };
-        },
-        audit: async audit => {
-          auditRecords.push(audit);
-        },
-        write: async response => {
-          responses.push(response);
-        },
-      }
-    );
-    expect(code).toBe(0);
-    expect(JSON.stringify(responses)).toContain('confidential review');
-    expect(JSON.stringify(auditRecords)).not.toContain('confidential review');
-    expect(JSON.stringify(auditRecords)).toContain('digest');
-  }
-);
+          },
+        };
+        return {
+          response,
+          plugin: null,
+          audit: {
+            operationId: request.operationId,
+            operation: request.op,
+            target: ref,
+            plugin: null,
+            result: forgeAuditResponse(response),
+            durationMs: 1,
+          },
+        };
+      },
+      audit: async audit => {
+        auditRecords.push(audit);
+      },
+      write: async response => {
+        responses.push(response);
+      },
+    }
+  );
+  expect(code).toBe(0);
+  expect(JSON.stringify(responses)).toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).not.toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).toContain('digest');
+});
 
 test('host metadata exposes selected plugin capabilities without credentials or operations', async () => {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-metadata-')));

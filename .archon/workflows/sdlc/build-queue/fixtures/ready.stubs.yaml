@@ -1,3 +1,6 @@
+# Dry-run fixture: the item's open pull request 42 is already reviewed Ready and green
+# at its head, with only its draft state left. Route declares ready; no round runs,
+# and apply takes the pull request out of draft.
 facts:
   path: route
   item: { repo: { host: github.com, path: example/repo }, number: 7 }
@@ -7,8 +10,6 @@ facts:
   rounds: []
   at_cap: false
   policy_defaults: /stub/policy
-  source: forge
-  maintainers: [maintainer]
   pull_request: { schemaVersion: 1, repo: { host: github.com, path: example/repo }, number: 42, url: "https://github.com/example/repo/pull/42", head: feature, base: dev, is_draft: true, state: open, head_repo: { host: github.com, path: example/repo }, head_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, base_revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, maintainer_can_modify: null }
   continues: 42
   branch: ""
@@ -18,11 +19,11 @@ route:
   decision: ready
   ready_head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   brief: "stub: already delivered"
-  reason: "stub: trusted Ready and green at the head"
+  reason: "stub: Ready and green at the head"
   attention: null
 apply:
   decision: ready
-  summary: "stub: marked ready without delivery"
+  summary: "stub: marked ready without a round"
   attention: ""
   options: []
   class: ""

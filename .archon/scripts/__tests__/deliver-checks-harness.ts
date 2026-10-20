@@ -52,20 +52,15 @@ export interface GhPr {
   readonly headRefName?: string;
   readonly headRefOid?: string;
   readonly baseRefName?: string;
-  readonly headRepository?: { readonly name: string } | null;
   /** The head repository's owner; omitted, the head is in the `--repo` repository. */
   readonly headRepositoryOwner?: { readonly login: string };
 }
 
 export interface GhFake {
-  readonly workflowRunPages?: unknown;
-  readonly workflowRunsFail?: string;
-  readonly commitChecks?: { readonly oid: string; readonly statusCheckRollup: unknown };
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
-  readonly afterReady?: GhPr;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
   readonly pr?: GhPr;
   /** No pull request matches `gh pr list --head` until one is created. */
@@ -200,15 +195,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const row = {
       ...pr,
       url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
-      headRepository: pr.headRepository === undefined ? { name } : pr.headRepository,
+      headRepository: { name },
       headRepositoryOwner: pr.headRepositoryOwner ?? { login: owner },
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
-  if (text.includes('/actions/runs?')) {
-    if (fake.workflowRunsFail) return result(1, '', fake.workflowRunsFail);
-    return result(0, JSON.stringify(fake.workflowRunPages === undefined ? [{ total_count: 0, workflow_runs: [] }] : fake.workflowRunPages));
-  }
   if (text.startsWith('auth status --active --hostname ')) {
     const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
     return failure === undefined ? result(0) : result(1, '', failure);
@@ -255,7 +246,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
     if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
-    Object.assign(pr, fake.afterReady ?? {});
     return result(0, 'ready');
   }
   if (text.startsWith('pr create')) {
@@ -284,7 +274,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api graphql')) {
-    if (text.includes('object(oid:$head)')) return result(0, JSON.stringify({ data: { repository: { object: fake.commitChecks ?? null } } }));
     const history = fake.issue?.history ?? {};
     const createdAt = '2026-01-01T00:00:00Z';
     if (text.includes('userContentEdits(first: 100)')) {

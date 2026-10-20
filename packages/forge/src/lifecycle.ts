@@ -204,10 +204,6 @@ export const checksRerunRequestSchema = requestBase.extend({
   revision: gitObjectIdSchema,
   units: selectedChecksSchema,
 });
-export const prCommentsRequestSchema = requestBase.extend({
-  op: z.literal('pr.comments'),
-  ref: prRefSchema,
-});
 export const prReviewsRequestSchema = requestBase.extend({
   op: z.literal('pr.reviews'),
   ref: prRefSchema,
@@ -233,10 +229,6 @@ export const reviewThreadCommentSchema = z.object({
   author: sourceActorSchema.nullable(),
   body: z.string(),
   url: z.url(),
-});
-export const prCommentsSchema = z.object({
-  ref: prRefSchema,
-  comments: z.array(reviewThreadCommentSchema),
 });
 export const reviewThreadSchema = z.object({
   id: text,
@@ -288,7 +280,6 @@ export const lifecycleReadRequestSchemas = [
   prViewRequestSchema,
   repoLabelsListRequestSchema,
   prReviewsRequestSchema,
-  prCommentsRequestSchema,
   prThreadsRequestSchema,
   workItemListRequestSchema,
 ] as const;
@@ -390,7 +381,6 @@ const appliedSchema = z.object({
 });
 
 export const lifecycleReadResultSchemas = [
-  z.object({ op: prCommentsRequestSchema.shape.op, value: prCommentsSchema }),
   z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
   z.object({ op: prThreadsRequestSchema.shape.op, value: prThreadsSchema }),
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),

@@ -33,7 +33,6 @@ const OPS = [
   'pr.merge',
   'checks.rerun',
   'pr.reviews',
-  'pr.comments',
   'pr.threads',
   'pr.thread.reply',
   'pr.thread.resolve',
@@ -139,12 +138,6 @@ else {
 
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
-    if (input.op === 'pr.comments')
-      return {
-        operationId: input.operationId,
-        ok: true,
-        result: { op: input.op, value: { ref: { ...ref, number: ref.number + 1 }, comments: [] } },
-      };
     if (input.op === 'workitem.label.add') return answer(ref, { workitem: subject, labels: [] });
     if (input.op === 'workitem.label.remove')
       return answer(ref, { workitem: subject, labels: [input.name] });
@@ -245,18 +238,6 @@ else {
           rerun: selected.rerun ? { ...selected.rerun, attempt: selected.rerun.attempt + 1 } : null,
         })),
       });
-    if (input.op === 'pr.comments')
-      return {
-        operationId: input.operationId,
-        ok: true,
-        result: {
-          op: input.op,
-          value: {
-            ref,
-            comments: [{ id: '1', url: pr.url, author: null, body: 'private conversation body' }],
-          },
-        },
-      };
     if (input.op === 'pr.reviews')
       return {
         operationId: input.operationId,

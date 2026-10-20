@@ -91,57 +91,6 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
   return remote;
 }
 
-export function headDestination(
-  target: { readonly repo: Repo; readonly head_repo: Repo },
-  operation: 'fetch' | 'push'
-): string {
-  const headRepo = target.head_repo;
-  const remote = sameRepo(headRepo, target.repo) ? remoteFor(headRepo) : findRemote(headRepo);
-  const destination = remote ?? `https://${headRepo.host}/${headRepo.path}.git`;
-  const urls = [destination];
-  if (remote !== undefined) {
-    const helper = git('config', '--get-all', `remote.${remote}.vcs`);
-    if (helper.code === 0) throw new Error('configured remote helpers are unsupported for head operations');
-    if (helper.code !== 1) throw new Error('cannot read head remote helper configuration');
-    const configured = git('config', '--get-all', `remote.${remote}.url`);
-    if (configured.code !== 0) throw new Error('cannot read head remote configuration');
-    urls.push(...configured.stdout.split('\n'));
-  }
-  if (remote === undefined) {
-    // get-url requires a persisted remote; the tab-separated verbose listing
-    // also resolves command-local remotes, including a fork's pushInsteadOf.
-    const name = `archon-head-${crypto.randomUUID()}`;
-    const resolved = git('-c', `remote.${name}.url=${destination}`, 'remote', '-v');
-    if (resolved.code !== 0) throw new Error('cannot resolve head remote transport');
-    for (const line of resolved.stdout.split('\n')) {
-      if (!line.startsWith(`${name}\t`)) continue;
-      const suffix = line.endsWith(' (fetch)') ? ' (fetch)' : ' (push)';
-      if (operation === 'push' || suffix === ' (fetch)') {
-        urls.push(line.slice(name.length + 1, -suffix.length));
-      }
-    }
-  } else {
-    for (const flags of operation === 'push' ? [[], ['--push']] : [[]]) {
-      const resolved = git('remote', 'get-url', '--all', ...flags, remote);
-      if (resolved.code !== 0) throw new Error('cannot resolve head remote transport');
-      urls.push(...resolved.stdout.split('\n'));
-    }
-  }
-  if (
-    urls.some(url => {
-      const transport = /^([a-z0-9][a-z0-9+.-]*)(::|:\/\/)/i.exec(url.trim());
-      return (
-        transport !== null &&
-        (transport[2] === '::' ||
-          !['https', 'ssh', 'git+ssh', 'ssh+git', 'file'].includes(transport[1].toLowerCase()))
-      );
-    })
-  ) {
-    throw new Error('head destination requires encrypted transport; use HTTPS or SSH');
-  }
-  return destination;
-}
-
 /**
  * Fetch the head of the repository's default branch, as its remote reports it, into
  * the remote-tracking ref, whatever branch the checkout sits on.

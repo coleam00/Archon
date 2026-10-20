@@ -44,7 +44,6 @@ describe('GitHub outbound producer', () => {
         'pr.merge',
         'checks.rerun',
         'pr.reviews',
-        'pr.comments',
         'pr.threads',
         'pr.thread.reply',
         'pr.thread.resolve',
@@ -287,8 +286,8 @@ test('passes the public read conformance kit for an external-status-only reposit
 
 test.each([
   ['action_required', 'head', true],
-  ['action_required', 'old-head', null],
-  [null, 'head', null],
+  ['action_required', 'old-head', false],
+  [null, 'head', false],
   ['success', 'head', false],
 ] as const)(
   'approval evidence uses explicit workflow conclusions at the current head: %s %s',

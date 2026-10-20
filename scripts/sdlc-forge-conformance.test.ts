@@ -4,13 +4,8 @@
  * the owner it copies: `@archon/forge` for wire types, schemas and error kinds, and
  * `@archon/paths` for the per-host token names.
  */
-import {
-  readWorkflowRuns,
-  workflowApprovalPending,
-  type WorkflowRun,
-} from '../packages/adapters/src/forge/github/workflow-runs';
-import { workflowApprovalClear } from '../.archon/workflows/sdlc/.shared/pr';
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -158,6 +153,22 @@ test('the pack projections of the merge and review operations carry typed eviden
   ).toBe('landed');
 });
 
+test('preflight capabilities cover the forge operations the pack calls', () => {
+  const root = join(import.meta.dir, '../.archon/workflows/sdlc');
+  const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
+    .filter(file => file !== '.shared/forge-check.ts')
+    .map(file => readFileSync(join(root, file), 'utf8'));
+  const used = forgeRequestSchema.options
+    .map(schema => schema.shape.op.value)
+    .filter(op =>
+      sources.some(text =>
+        [`'${op}'`, `"${op}"`, `\`${op}\``, `forge ${op} `].some(token => text.includes(token))
+      )
+    );
+  expect(used).toContain('checks.state');
+  expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
+});
+
 test('the pack reads host responses with credential attribution and metadata intact', () => {
   const metadata = {
     protocol: 1,
@@ -226,119 +237,3 @@ test("forge-check's metadata request conforms to the CLI host input", () => {
   });
   expect(request.host).toBe(PR.repo.host);
 });
-
-const workflowRun = {
-  id: 1,
-  head_sha: 'head',
-  check_suite_id: null,
-  run_attempt: 1,
-  status: 'completed',
-  conclusion: 'success',
-} satisfies WorkflowRun;
-const workflowPage = (runs: unknown[], total = runs.length) => ({
-  total_count: total,
-  workflow_runs: runs,
-});
-
-test.each([
-  { name: 'empty', pages: [workflowPage([])], clear: true },
-  { name: 'completed', pages: [workflowPage([workflowRun])], clear: true },
-  ...['waiting', 'requested', 'pending'].map(status => ({
-    name: status,
-    pages: [workflowPage([{ ...workflowRun, status, conclusion: null }])],
-    clear: false,
-  })),
-  {
-    name: 'approval gated',
-    pages: [workflowPage([{ ...workflowRun, conclusion: 'action_required' }])],
-    clear: false,
-  },
-  {
-    name: 'wrong head',
-    pages: [workflowPage([{ ...workflowRun, head_sha: 'old' }])],
-    clear: false,
-  },
-  {
-    name: 'missing conclusion',
-    pages: [workflowPage([{ ...workflowRun, conclusion: undefined }])],
-    clear: false,
-  },
-  {
-    name: 'empty conclusion',
-    pages: [workflowPage([{ ...workflowRun, conclusion: '' }])],
-    clear: false,
-  },
-  ...[
-    { id: undefined },
-    { id: '' },
-    { id: 1.5 },
-    { id: Number.MAX_SAFE_INTEGER + 1 },
-    { check_suite_id: undefined },
-    { check_suite_id: 1.5 },
-    { run_attempt: 0 },
-    { run_attempt: 1.5 },
-    { status: undefined },
-  ].map(fields => ({
-    name: `malformed metadata ${JSON.stringify(fields)}`,
-    pages: [workflowPage([{ ...workflowRun, ...fields }])],
-    clear: false,
-  })),
-  { name: 'malformed page', pages: [{}], clear: false },
-  { name: 'incomplete', pages: [workflowPage([], 1)], clear: false },
-  { name: 'capped', pages: [workflowPage([], 1001)], clear: false },
-  {
-    name: 'paged clear',
-    pages: [
-      workflowPage(
-        Array.from({ length: 100 }, (_, id) => ({ ...workflowRun, id })),
-        101
-      ),
-      workflowPage([workflowRun], 101),
-    ],
-    clear: true,
-  },
-  {
-    name: 'later approval',
-    pages: [
-      workflowPage(
-        Array.from({ length: 100 }, (_, id) => ({ ...workflowRun, id })),
-        101
-      ),
-      workflowPage([{ ...workflowRun, conclusion: 'action_required' }], 101),
-    ],
-    clear: false,
-  },
-  {
-    name: 'changing total',
-    pages: [
-      workflowPage(
-        Array.from({ length: 100 }, () => workflowRun),
-        101
-      ),
-      workflowPage([workflowRun], 102),
-    ],
-    clear: false,
-  },
-])(
-  'GitHub approval contract agrees across deployment boundaries: $name',
-  async ({ pages, clear }) => {
-    expect(workflowApprovalClear(pages, 'head')).toBe(clear);
-    let next = 0;
-    let adapterClear = false;
-    try {
-      const runs = await readWorkflowRuns(
-        async () =>
-          new Response(JSON.stringify(pages[next++]), {
-            headers: { 'content-type': 'application/json' },
-          }),
-        'token',
-        { host: 'github.com', path: 'owner/repo' },
-        'head'
-      );
-      adapterClear = workflowApprovalPending(runs, 'head') === false;
-    } catch {
-      // An unreadable observation cannot certify clear approval.
-    }
-    expect(adapterClear).toBe(clear);
-  }
-);

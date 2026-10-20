@@ -93,8 +93,8 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
   if (missing.length)
     throw new Error(
-      `ARCHON_SDLC_FORGE=forge needs a plugin with all shared preflight operations; missing: ${missing.join(', ')}. ` +
-        'Install a plugin advertising these capabilities, or use ARCHON_SDLC_FORGE=gh.'
+      `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
+        'The GitHub plugin has every one from v0.12.1. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
     );
 }
 
@@ -173,7 +173,7 @@ async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
  * is enough; a mirror on a host no plugin claims must not refuse a run its canonical
  * remote can serve.
  *
- * Metadata must advertise all shared preflight operations before the read runs. The read
+ * Metadata must advertise every pack operation before the read runs. The read
  * is `pr.view` by head, which answers null when no open PR has that head. Any
  * head therefore proves the
  * plugin, the token and read access. No forge operation reports what the token may

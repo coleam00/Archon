@@ -20,9 +20,9 @@ import {
   parseRemote,
   type Fetch,
 } from './api';
-import { readWorkflowRuns, workflowApprovalPending } from './workflow-runs';
+import { readWorkflowRuns } from './workflow-runs';
 import { handleGithubMutation } from './lifecycle';
-import { handleGithubPrComments, handleGithubPrReviews, handleGithubPrView } from './pull-requests';
+import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
 import {
   handleGithubRepoLabelsList,
   handleGithubWorkItemList,
@@ -59,7 +59,6 @@ export const githubPluginMetadata = {
     'pr.merge',
     'checks.rerun',
     'pr.reviews',
-    'pr.comments',
     'pr.threads',
     'pr.thread.reply',
     'pr.thread.resolve',
@@ -192,8 +191,6 @@ export async function handleGithubOperation(
       return await handleGithubWorkItemList(request, fetchImpl, token);
     if (request.op === 'repo.labels.list')
       return await handleGithubRepoLabelsList(request, fetchImpl, token);
-    if (request.op === 'pr.comments')
-      return await handleGithubPrComments(request, fetchImpl, token);
     if (request.op === 'pr.reviews') return await handleGithubPrReviews(request, fetchImpl, token);
     if (request.op === 'pr.threads') return await handleGithubPrThreads(request, fetchImpl, token);
     if (request.op === 'pr.view') return await handleGithubPrView(request, fetchImpl, token);
@@ -254,9 +251,10 @@ export async function handleGithubOperation(
         value: {
           ref: request.ref,
           revision,
-          approvalPending: units.some(unit => unit.result === 'action_required')
-            ? true
-            : workflowApprovalPending(workflows, revision),
+          approvalPending:
+            workflows.some(
+              run => run.head_sha === revision && run.conclusion === 'action_required'
+            ) || units.some(unit => unit.result === 'action_required'),
           units,
           summary: summarizeChecks(units),
           // The check-runs and statuses APIs enumerate observations but do not say which

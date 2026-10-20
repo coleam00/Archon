@@ -35,9 +35,8 @@ inputs:
     default: ""
     description: >-
       The number of an open pull request this run continues, as the caller
-      resolved it; empty or `null` when it names none. When the route admits
-      delivery, it continues this PR and refuses a different number from triage.
-      Stop outcomes leave the PR untouched.
+      resolved it; empty or `null` when it names none. Delivery finishes it
+      whichever route triage takes; triage naming a different one refuses the run.
   branch:
     default: ""
     description: >-
@@ -115,10 +114,7 @@ nodes:
   - id: continues
     script: continues
     runtime: bun
-    depends_on: [triage, inv, planned]
-    trigger_rule: none_failed_min_one_success
-    # Skipped advisory branches have no output; the predicate short-circuits.
-    when: &delivery_admitted "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
+    depends_on: [triage]
     with:
       caller: "$INPUTS.pull_request"
       triage: { from: "$triage.output.pull_request" }
@@ -127,43 +123,6 @@ nodes:
       properties:
         pull_request: { type: [integer, 'null'] }
       required: [pull_request]
-
-  - id: continuation
-    command: continuation
-    model: small
-    mutates_checkout: false
-    depends_on: [forge, triage, continues]
-    when: "$continues.output.pull_request != ''"
-    with:
-      pull_request: "$continues.output.pull_request"
-      target: "$INPUTS.target"
-      source: "$forge.output.source"
-    output_format:
-      type: object
-      properties:
-        repo:
-          type: object
-          properties:
-            host: { type: string, minLength: 1 }
-            path: { type: string, minLength: 1 }
-          required: [host, path]
-        number: { type: integer, minimum: 1 }
-      required: [repo, number]
-
-  - id: checkout
-    script: checkout
-    runtime: bun
-    depends_on: [continues, continuation]
-    trigger_rule: none_failed_min_one_success
-    when: *delivery_admitted
-    with:
-      pull_request: "$continues.output.pull_request"
-      ref: { from: "$continuation.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        head: { type: [string, 'null'] }
-      required: [head]
 
   - id: deliver
     include: archon-deliver-block
@@ -183,9 +142,10 @@ nodes:
     # One join into delivery: the direct or continue route, a rooted investigation,
     # or a ready plan. A negative judgment skips delivery; a failed producer fails
     # the run.
-    depends_on: [triage, continues, continuation, checkout, inv, planned]
+    depends_on: [triage, continues, inv, planned]
     trigger_rule: none_failed_min_one_success
-    when: *delivery_admitted
+    # `&&` short-circuits, so a skipped producer's output is never read.
+    when: "$triage.output.route == 'deliver' || $triage.output.route == 'continue' || $triage.output.route == 'investigate' && $inv.output.verdict == 'rooted' || $triage.output.route == 'plan' && $planned.output.ready == true"
 
   # The result of every legitimate ending, relayed by `report`. Negative advisory verdicts
   # complete with the report that explains them; a delivery is reported from the
