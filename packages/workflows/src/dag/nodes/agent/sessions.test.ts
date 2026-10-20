@@ -1793,99 +1793,130 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     ]);
   });
 
-  for (const source of ['prompt', 'command'] as const) {
-    for (const feedback of [false, true]) {
-      it(`forks each interactive same-body ${source} source after its own approval (feedback: ${feedback})`, async () => {
-        const nodes = sameBodyWorkflow(false);
-        const group = nodes[0];
-        if (group?.kind !== 'loop_group') throw new Error('missing group');
-        if (source === 'command') {
-          const commandsDir = join(testDir, '.archon', 'commands');
-          await mkdir(commandsDir, { recursive: true });
-          await writeFile(join(commandsDir, 'source.md'), 'a');
-        }
-        group.loop_group.nodes[0] = dagNodeSchema.parse({
-          id: 'a',
-          loop: {
-            ...(source === 'prompt' ? { prompt: 'a' } : { command: 'source' }),
-            max_iterations: 2,
-            until: 'DONE',
-            interactive: true,
-            gate_message: 'Continue?',
-          },
-        });
-        let aRuns = 0;
-        let bRuns = 0;
-        mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
-          const sessionId = prompt === 'b' ? `B${++bRuns}` : (session ?? `A${++aRuns}`);
-          yield { type: 'agent_message_chunk', text: prompt === 'b' ? sessionId : 'DONE' };
-          yield { type: 'result', sessionId, ...(session ? { resumed: true } : {}) };
-        });
-        let store = createEscalationStore('addressable-run');
-        await runAddressableWorkflow(nodes, store);
-        async function approve(feedbackGiven = false): Promise<void> {
-          const metadata = JSON.parse(JSON.stringify(store.getState().metadata));
-          metadata.approval.resolved = 'approved';
-          metadata.loop_feedback_given = feedbackGiven;
-          metadata.loop_user_input = feedbackGiven ? 'Refine it.' : '';
-          store = createEscalationStore('addressable-run');
-          await executeDagWorkflow(
-            dagOptions({
-              deps: createMockDeps(store),
-              cwd: testDir,
-              workflow: { name: 'addressable', nodes },
-              workflowRun: makeWorkflowRun('addressable-run', { metadata }),
-            })
-          );
-        }
-        expect(store.getState().status).toBe('paused');
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(sameBodyConsumerCalls()).toEqual([]);
-        expect(persistedEvents(store)).not.toContainEqual(
-          expect.objectContaining({ event_type: 'node_completed', step_name: 'group' })
-        );
-        const firstApproval = store.getState().metadata.approval;
-        expect(firstApproval).toMatchObject({
-          iteration: 1,
-          sessionId: 'A1',
-          execution: { invocation: { loopPath: [{ groupId: 'group', iteration: 1 }] } },
-          bodySessionCursorAncestry: { [JSON.stringify(['group', []])]: {} },
-        });
-        await approve(feedback);
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(store.getState().status).toBe('paused');
-        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-        expect(aRuns).toBe(2);
-        expect(mockSendQueryDag.mock.calls.filter(c => c[0] !== 'b').map(c => c[2])).toEqual(
-          feedback ? [undefined, 'A1', undefined] : [undefined, undefined]
-        );
-        expect(sameBodyConsumerCalls()).toEqual([['A1', true]]);
-        expect(store.getState().metadata.approval).toMatchObject({
-          iteration: 1,
-          sessionId: 'A2',
-          execution: { invocation: { loopPath: [{ groupId: 'group', iteration: 2 }] } },
-        });
-        await approve();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        expect(store.completeWorkflowRun).toHaveBeenCalled();
-        expect(aRuns).toBe(2);
-        expect(sameBodyConsumerCalls()).toEqual([
-          ['A1', true],
-          ['A2', true],
-        ]);
-        expect(persistedEvents(store)).toContainEqual(
-          expect.objectContaining({
-            event_type: 'node_completed',
-            step_name: 'group.a',
-            data: expect.objectContaining({
-              invocation: expect.objectContaining({
-                loopPath: [{ groupId: 'group', iteration: 2 }],
-              }),
-            }),
+  for (const { source, feedback, nested } of [
+    { source: 'prompt', feedback: false, nested: false },
+    { source: 'prompt', feedback: true, nested: false },
+    { source: 'command', feedback: false, nested: false },
+    { source: 'command', feedback: true, nested: false },
+    { source: 'prompt', feedback: false, nested: true },
+  ] as const) {
+    it(`forks each interactive same-body ${source} source after its own approval (feedback: ${feedback}, nested: ${nested})`, async () => {
+      const body = sameBodyWorkflow(false);
+      const nodes: DagNode[] = nested
+        ? [
+            {
+              id: 'wrapper',
+              kind: 'loop_group',
+              provider: 'claude',
+              loop_group: {
+                max_iterations: 1,
+                until_bash: 'exit 0',
+                fresh_context: true,
+                nodes: body,
+              },
+            },
+          ]
+        : body;
+      const group = body[0];
+      if (group?.kind !== 'loop_group') throw new Error('missing group');
+      if (source === 'command') {
+        const commandsDir = join(testDir, '.archon', 'commands');
+        await mkdir(commandsDir, { recursive: true });
+        await writeFile(join(commandsDir, 'source.md'), 'a');
+      }
+      group.loop_group.nodes[0] = dagNodeSchema.parse({
+        id: 'a',
+        loop: {
+          ...(source === 'prompt' ? { prompt: 'a' } : { command: 'source' }),
+          max_iterations: 2,
+          until: 'DONE',
+          interactive: true,
+          gate_message: 'Continue?',
+        },
+      });
+      let aRuns = 0;
+      let bRuns = 0;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        const sessionId = prompt === 'b' ? `B${++bRuns}` : (session ?? `A${++aRuns}`);
+        yield { type: 'agent_message_chunk', text: prompt === 'b' ? sessionId : 'DONE' };
+        yield { type: 'result', sessionId, ...(session ? { resumed: true } : {}) };
+      });
+      const loopPath = (iteration: number) => [
+        ...(nested ? [{ groupId: 'wrapper', iteration: 1 }] : []),
+        { groupId: 'group', iteration },
+      ];
+      let store = createEscalationStore('addressable-run');
+      await runAddressableWorkflow(nodes, store);
+      async function approve(feedbackGiven = false): Promise<void> {
+        const metadata = JSON.parse(JSON.stringify(store.getState().metadata));
+        metadata.approval.resolved = 'approved';
+        metadata.loop_feedback_given = feedbackGiven;
+        metadata.loop_user_input = feedbackGiven ? 'Refine it.' : '';
+        store = createEscalationStore('addressable-run');
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow: { name: 'addressable', nodes },
+            workflowRun: makeWorkflowRun('addressable-run', { metadata }),
           })
         );
+      }
+      expect(store.getState().status).toBe('paused');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(sameBodyConsumerCalls()).toEqual([]);
+      expect(persistedEvents(store)).not.toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_completed',
+          step_name: nested ? 'wrapper.group' : 'group',
+        })
+      );
+      const firstApproval = store.getState().metadata.approval;
+      expect(firstApproval).toMatchObject({
+        iteration: 1,
+        sessionId: 'A1',
+        execution: { invocation: { loopPath: loopPath(1) } },
+        bodySessionCursorAncestry: nested
+          ? {
+              [JSON.stringify(['wrapper', []])]: {},
+              [JSON.stringify(['wrapper.group', [{ groupId: 'wrapper', iteration: 1 }]])]: {},
+            }
+          : { [JSON.stringify(['group', []])]: {} },
       });
-    }
+      await approve(feedback);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getState().status).toBe('paused');
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(aRuns).toBe(2);
+      expect(mockSendQueryDag.mock.calls.filter(c => c[0] !== 'b').map(c => c[2])).toEqual(
+        feedback ? [undefined, 'A1', undefined] : [undefined, undefined]
+      );
+      expect(sameBodyConsumerCalls()).toEqual([['A1', true]]);
+      expect(store.getState().metadata.approval).toMatchObject({
+        iteration: 1,
+        sessionId: 'A2',
+        execution: { invocation: { loopPath: loopPath(2) } },
+      });
+      await approve();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(aRuns).toBe(2);
+      expect(sameBodyConsumerCalls()).toEqual([
+        ['A1', true],
+        ['A2', true],
+      ]);
+      expect(persistedEvents(store)).toContainEqual(
+        expect.objectContaining({
+          event_type: 'node_completed',
+          step_name: nested ? 'wrapper.group.a' : 'group.a',
+          data: expect.objectContaining({
+            invocation: expect.objectContaining({
+              loopPath: loopPath(2),
+            }),
+          }),
+        })
+      );
+    });
   }
 
   it('restores same-body ancestry across terminal duration waits in both iterations', async () => {
