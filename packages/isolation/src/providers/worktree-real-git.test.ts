@@ -582,17 +582,14 @@ describe('WorktreeProvider against real git', () => {
   )(
     'remote destruction preserves endpoint identity (force=$force, kind=$kind)',
     async ({ force, kind }) => {
-      const intended = join(
-        root,
-        kind === 'whitespace'
-          ? 'push.git '
-          : kind === 'embedded-whitespace'
-            ? 'push one.git'
-            : kind === 'equals'
-              ? 'push=one.git'
-              : 'push.git'
-      );
-      const unrelated = join(root, kind === 'whitespace' ? 'push.git' : 'other.git');
+      const filenames = new Map<string, [string, string]>([
+        ['whitespace', ['push.git ', 'push.git']],
+        ['embedded-whitespace', ['push one.git', 'other.git']],
+        ['equals', ['push=one.git', 'other.git']],
+      ]);
+      const [intendedName, unrelatedName] = filenames.get(kind) ?? ['push.git', 'other.git'];
+      const intended = join(root, intendedName);
+      const unrelated = join(root, unrelatedName);
       for (const destination of [intended, unrelated])
         await git(root, 'init', '--bare', '-q', destination);
       await git(repoPath, 'remote', 'add', 'origin', repoPath);
@@ -610,13 +607,16 @@ describe('WorktreeProvider against real git', () => {
       for (const destination of [intended, unrelated])
         await git(repoPath, 'push', '-q', destination, created.branchName);
       const published = await git(root, 'ls-remote', intended, ref);
-      if (kind === 'whitespace' || kind === 'embedded-whitespace' || kind === 'equals') {
+      const alias = new Map([
+        ['alias-insteadOf', 'insteadOf'],
+        ['alias-pushInsteadOf', 'pushInsteadOf'],
+        ['alias-pushInsteadOf-pushurl', 'pushInsteadOf'],
+      ]).get(kind);
+      if (filenames.has(kind)) {
         await git(repoPath, 'remote', 'set-url', '--push', 'origin', intended);
-      } else if (kind.startsWith('alias-')) {
+      } else if (alias) {
         await git(repoPath, 'config', '--unset-all', 'remote.origin.url');
-        const rewrite =
-          kind === 'alias-pushInsteadOf-pushurl' ? 'pushInsteadOf' : kind.slice('alias-'.length);
-        await git(repoPath, 'config', `url.${intended}.${rewrite}`, 'origin');
+        await git(repoPath, 'config', `url.${intended}.${alias}`, 'origin');
         if (kind === 'alias-pushInsteadOf-pushurl') {
           await git(repoPath, 'config', 'remote.origin.pushurl', unrelated);
           expect(await git(repoPath, 'remote', 'get-url', '--push', '--all', 'origin')).toBe(

@@ -30,11 +30,9 @@ export async function resolvePushDestinations(repoPath: string, remote: string):
     if (rewritten) destinations.push(rewritten);
     else destinations.length = 0;
   }
-  if (!destinations.length) {
-    for (const url of urls.length ? urls : [remote])
-      destinations.push(rewriteUrl(url, insteadOf) ?? url);
-  }
-  return destinations;
+  if (destinations.length) return destinations;
+  const fallbackUrls = urls.length ? urls : [remote];
+  return fallbackUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
 }
 
 type GitSetting = { key: string; value: string | undefined };
