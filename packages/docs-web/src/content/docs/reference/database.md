@@ -135,10 +135,10 @@ safely be repeated. A later failure rolls back registration retirement and is re
 to the caller.
 
 Cleanup holds registration exclusion through local checkout and branch removal.
-Remote branch deletion runs after the claim commits, so network operations do not
-hold the SQLite writer. A failed remote cleanup is logged as a warning; local removal
-and registration retirement can still complete. Archon cannot retry remote deletion
-for that retired registration; see [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
+Completion and merged cleanup retain remote branches with a warning, including
+with force, because registration ownership cannot be proved after the claim
+commits. No remote deletion runs under the SQLite writer. Enable GitHub's
+**Automatically delete head branches** setting for merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

@@ -1567,7 +1567,8 @@ run's `terminal_record.worktree_disposition` says what happened and why (see
 
 Cleanup and completion retain remote refs because ownership cannot be proved after
 registration retirement. Retrying either command cannot delete a retired
-registration's remote branch.
+registration's remote branch. On GitHub, enable **Automatically delete head branches**
+in the repository settings if you want merged pull requests' branches removed automatically.
 
 If the ref belongs to a replacement registration or ownership is uncertain, leave
 it alone. To remove a ref manually, first ensure no one is reusing or publishing
@@ -1579,15 +1580,31 @@ and the branch reported by cleanup. Inspect the push destinations:
 git remote get-url --push --all <remote>
 ```
 
-For each destination you intend to clean, use that exact URL as `<push-url>` for
-both commands below. Inspect its advertised OID and verify that commit belongs to
-the completed work before entering it as `<verified-oid>`. An empty result means
-the ref is already absent.
+For each destination you intend to clean, copy its exact URL, including any
+leading or trailing spaces, into `push_url`. Run these commands in Bash:
 
 ```bash
-git ls-remote --refs -- <push-url> refs/heads/<branch>
-git push --force-with-lease=refs/heads/<branch>:<verified-oid> -- <push-url> :refs/heads/<branch>
+push_url='<push-url>'
+branch='<branch>'
+endpoint="archon-cleanup-$$-$RANDOM:"
+git -c "url.${push_url}.insteadOf=$endpoint" \
+    -c "url.${push_url}.pushInsteadOf=$endpoint" \
+    ls-remote --refs -- "$endpoint" "refs/heads/$branch"
 ```
+
+Inspect the advertised OID and verify that commit belongs to the completed work.
+An empty result means the ref is already absent. Keep the same `push_url`, `branch`
+and `endpoint`, then enter the verified OID:
+
+```bash
+verified_oid='<verified-oid>'
+git -c "url.${push_url}.insteadOf=$endpoint" \
+    -c "url.${push_url}.pushInsteadOf=$endpoint" \
+    push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
+```
+
+The temporary alias maps directly to the resolved URL for both commands, preventing
+another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
 
 The explicit lease refuses deletion if the tip changes after inspection. It cannot
 detect a same-commit republish, so delete only while no one is reusing or publishing

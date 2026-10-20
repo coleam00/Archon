@@ -774,17 +774,36 @@ checkout that the branch still belongs to the completed work and is no longer in
 use. Leave replacement refs alone. Use the configured `worktree.remote` (default:
 `origin`) and branch reported by cleanup. Inspect the push destinations with
 `git remote get-url --push --all <remote>`. For each intended destination, use
-that exact URL as `<push-url>` in both commands:
+the following procedure in Bash. Copy the exact URL, including any leading or
+trailing spaces, into `push_url`:
 
 ```bash
-git ls-remote --refs -- <push-url> refs/heads/<branch>
-git push --force-with-lease=refs/heads/<branch>:<verified-oid> -- <push-url> :refs/heads/<branch>
+push_url='<push-url>'
+branch='<branch>'
+endpoint="archon-cleanup-$$-$RANDOM:"
+git -c "url.${push_url}.insteadOf=$endpoint" \
+    -c "url.${push_url}.pushInsteadOf=$endpoint" \
+    ls-remote --refs -- "$endpoint" "refs/heads/$branch"
 ```
 
-Verify the advertised commit belongs to the completed work before entering its
-OID as `<verified-oid>`; an empty result means the ref is absent. The lease refuses
-a changed tip but cannot detect a same-commit republish. Delete only while no one
-is reusing or publishing that branch; leave it alone if ownership is uncertain.
+Inspect the advertised OID and verify that commit belongs to the completed work.
+An empty result means the ref is already absent. Keep the same `push_url`, `branch`
+and `endpoint`, then enter the verified OID:
+
+```bash
+verified_oid='<verified-oid>'
+git -c "url.${push_url}.insteadOf=$endpoint" \
+    -c "url.${push_url}.pushInsteadOf=$endpoint" \
+    push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
+```
+
+The temporary alias maps directly to the resolved URL for both commands, preventing
+another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
+
+The lease refuses a changed tip but cannot detect a same-commit republish. Delete
+only while no one is reusing or publishing that branch; leave it alone if ownership
+is uncertain. On GitHub, enable **Automatically delete head branches** in repository
+settings to have GitHub remove merged pull requests' branches automatically.
 
 A worktree with uncommitted changes, a run
 that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`

@@ -3,7 +3,7 @@
  * request needs into a new locked worktree, and deleting branches on destroy.
  */
 
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 import {
   execFileAsync,
@@ -452,14 +452,14 @@ export async function deleteBranchTracked(
 
 /** Read the exact advertised ref; an empty value means the branch is absent. */
 async function readRemoteBranchOid(
-  repoPath: string,
+  gitArgs: string[],
   branchName: string,
   remote: string
 ): Promise<string> {
   const ref = `refs/heads/${branchName}`;
   const { stdout } = await execFileAsync(
     'git',
-    ['-C', repoPath, 'ls-remote', '--refs', '--', remote, ref],
+    [...gitArgs, 'ls-remote', '--refs', '--', remote, ref],
     { timeout: GIT_OPERATION_TIMEOUT_MS }
   );
   for (const line of stdout.trim().split('\n')) {
@@ -486,7 +486,7 @@ export async function deleteRemoteBranchTracked(
       ['-C', repoPath, 'remote', 'get-url', '--push', '--all', remote],
       { timeout: GIT_OPERATION_TIMEOUT_MS }
     );
-    const destinations = stdout.trim().split('\n').filter(Boolean);
+    const destinations = stdout.split('\n').filter(destination => destination !== '');
     if (!destinations.length) throw new Error('No push destination');
     let deleted = true;
     for (const destination of destinations) {
@@ -507,18 +507,28 @@ async function deleteRemoteBranchAtDestination(
   repoPath: string,
   branchName: string,
   result: DestroyResult,
-  remote: string
+  destination: string
 ): Promise<boolean> {
+  // Git rewrites URLs once. Map a fresh alias directly to the resolved destination
+  // for both operations, so insteadOf/pushInsteadOf cannot rewrite it again.
+  const endpoint = `archon-cleanup-${randomUUID()}:`;
+  const gitArgs = [
+    '-C',
+    repoPath,
+    '-c',
+    `url.${destination}.insteadOf=${endpoint}`,
+    '-c',
+    `url.${destination}.pushInsteadOf=${endpoint}`,
+  ];
   try {
-    const oid = await readRemoteBranchOid(repoPath, branchName, remote);
+    const oid = await readRemoteBranchOid(gitArgs, branchName, endpoint);
     if (!oid) return true;
     await execFileAsync(
       'git',
       [
-        '-C',
-        repoPath,
+        ...gitArgs,
         'push',
-        remote,
+        endpoint,
         `--force-with-lease=refs/heads/${branchName}:${oid}`,
         `:refs/heads/${branchName}`,
       ],
@@ -530,7 +540,7 @@ async function deleteRemoteBranchAtDestination(
     return true;
   } catch {
     try {
-      if (!(await remoteBranchExists(repoPath, remote, branchName))) return true;
+      if (!(await readRemoteBranchOid(gitArgs, branchName, endpoint))) return true;
     } catch {
       getLog().warn({ repoPath, branchName }, 'remote_branch_delete_inspection_failed');
     }

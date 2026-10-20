@@ -324,14 +324,15 @@ archon isolation cleanup [days] (default: 7)
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
 │ provider.destroy() → remove worktree and local branch           │
-│ → commit registration retirement, then attempt remote deletion │
+│ → commit registration retirement; retain remote branch         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-A remote deletion failure can leave the remote branch behind even after
-local removal and registration retirement complete. The failure is logged, but the
-merged-cleanup report does not include the warning. Archon does not retry remote
-deletion for retired registrations; see [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
+Completion and merged cleanup retain remote branches, including with force,
+because registration ownership cannot be proved after retirement. Retention is
+logged as a warning; completion displays it, while the merged-cleanup report does
+not include it. Enable GitHub's **Automatically delete head branches** setting for
+merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or

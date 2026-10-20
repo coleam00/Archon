@@ -144,14 +144,14 @@ describe('ownership and removal', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      [
+      expect.arrayContaining([
         '-C',
         '/workspace/repo',
         'push',
-        '/remote.git',
+        expect.stringMatching(/^archon-cleanup-/),
         `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
         ':refs/heads/feature-branch',
-      ],
+      ]),
       expect.any(Object)
     );
     expect(result).toEqual({
@@ -189,14 +189,14 @@ describe('ownership and removal', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      [
+      expect.arrayContaining([
         '-C',
         '/metadata/repository',
         'push',
-        '/remote.git',
+        expect.stringMatching(/^archon-cleanup-/),
         `--force-with-lease=refs/heads/${branchName}:${'a'.repeat(40)}`,
         `:refs/heads/${branchName}`,
-      ],
+      ]),
       expect.any(Object)
     );
     expect(result.branchDeleted).toBe(true);
@@ -293,14 +293,14 @@ describe('a checkout that is already gone', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      [
+      expect.arrayContaining([
         '-C',
         '/workspace/repo',
         'push',
-        '/remote.git',
+        expect.stringMatching(/^archon-cleanup-/),
         `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
         ':refs/heads/feature-branch',
-      ],
+      ]),
       expect.any(Object)
     );
     expect(result.worktreeRemoved).toBe(true); // Already gone counts as removed
@@ -464,14 +464,14 @@ describe('branch cleanup', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      [
+      expect.arrayContaining([
         '-C',
         '/workspace/repo',
         'push',
-        '/remote.git',
+        expect.stringMatching(/^archon-cleanup-/),
         `--force-with-lease=refs/heads/archon/issue-42:${'a'.repeat(40)}`,
         ':refs/heads/archon/issue-42',
-      ],
+      ]),
       expect.any(Object)
     );
   });

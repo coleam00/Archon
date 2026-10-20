@@ -508,7 +508,7 @@ describe('WorktreeProvider against real git', () => {
 
   test.each(
     [false, true].flatMap(force =>
-      ['deleted', 'rejected', 'multiple'].map(outcome => ({ force, outcome }))
+      ['deleted', 'rejected', 'multiple', 'mixed'].map(outcome => ({ force, outcome }))
     )
   )(
     'remote destruction uses push destinations (force=$force, outcome=$outcome)',
@@ -522,7 +522,7 @@ describe('WorktreeProvider against real git', () => {
       await git(fetchPath, 'symbolic-ref', 'HEAD', 'refs/heads/main');
       await git(repoPath, 'remote', 'add', 'origin', fetchPath);
       await git(repoPath, 'remote', 'set-url', '--push', 'origin', '../push.git');
-      if (outcome === 'multiple')
+      if (outcome === 'multiple' || outcome === 'mixed')
         await git(repoPath, 'remote', 'set-url', '--add', '--push', 'origin', otherPush);
       const created = await provider.create({
         ...request,
@@ -539,7 +539,8 @@ describe('WorktreeProvider against real git', () => {
       const published = await git(repoPath, 'ls-remote', pushPath, ref);
       expect(published).toContain(ref);
       expect(await git(repoPath, 'ls-remote', fetchPath, ref)).toBe('');
-      if (outcome === 'rejected') await git(pushPath, 'config', 'receive.denyDeletes', 'true');
+      if (outcome === 'rejected' || outcome === 'mixed')
+        await git(pushPath, 'config', 'receive.denyDeletes', 'true');
       const result = await provider.destroy(created.workingPath, {
         canonicalRepoPath: request.canonicalRepoPath,
         creationId: created.metadata.creationId,
@@ -548,12 +549,66 @@ describe('WorktreeProvider against real git', () => {
         deleteRemoteBranch: true,
       });
       expect(result.worktreeRemoved).toBe(true);
-      expect(result.remoteBranchDeleted).toBe(outcome !== 'rejected');
-      expect(await git(repoPath, 'ls-remote', pushPath, ref)).toBe(
-        outcome === 'rejected' ? published : ''
+      const rejected = outcome === 'rejected' || outcome === 'mixed';
+      expect(result.remoteBranchDeleted).toBe(!rejected);
+      expect(await git(root, 'ls-remote', pushPath, ref)).toBe(rejected ? published : '');
+      if (outcome === 'multiple' || outcome === 'mixed')
+        expect(await git(root, 'ls-remote', otherPush, ref)).toBe('');
+      expect(result.warnings).toEqual(
+        rejected
+          ? [
+              `Failed to delete remote branch '${created.branchName}': remote inspection or leased deletion failed`,
+            ]
+          : []
       );
-      if (outcome === 'multiple') expect(await git(repoPath, 'ls-remote', otherPush, ref)).toBe('');
-      expect(result.warnings.length).toBe(outcome === 'rejected' ? 1 : 0);
+    }
+  );
+
+  test.each(
+    [false, true].flatMap(force =>
+      ['whitespace', 'pushInsteadOf', 'insteadOf'].map(kind => ({ force, kind }))
+    )
+  )(
+    'remote destruction preserves endpoint identity (force=$force, kind=$kind)',
+    async ({ force, kind }) => {
+      const intended = join(root, kind === 'whitespace' ? 'push.git ' : 'push.git');
+      const unrelated = join(root, kind === 'whitespace' ? 'push.git' : 'other.git');
+      for (const destination of [intended, unrelated])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      const ref = `refs/heads/${created.branchName}`;
+      for (const destination of [intended, unrelated])
+        await git(repoPath, 'push', '-q', destination, created.branchName);
+      const published = await git(root, 'ls-remote', intended, ref);
+      if (kind === 'whitespace') {
+        await git(repoPath, 'remote', 'set-url', '--push', 'origin', intended);
+      } else {
+        await git(repoPath, 'remote', 'set-url', 'origin', 'cleanup-source:');
+        await git(repoPath, 'config', `url.${intended}.${kind}`, 'cleanup-source:');
+        await git(repoPath, 'config', `url.${unrelated}.${kind}`, intended);
+      }
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.remoteBranchDeleted).toBe(true);
+      expect(result.warnings).toEqual([]);
+      expect(await git(root, 'ls-remote', intended, ref)).toBe('');
+      expect(await git(root, 'ls-remote', unrelated, ref)).toBe(published);
     }
   );
 
