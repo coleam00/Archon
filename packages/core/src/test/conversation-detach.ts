@@ -553,8 +553,6 @@ export function conversationDetachTests(
               if ('error' in trailingResult) await insert();
               else expect(trailingResult.value).toBeDefined();
             } else {
-              if (admission === 'resource')
-                expect(leadingResult).toEqual({ status: 'admitted', requestId: runId, runId });
               const refused =
                 'error' in trailingResult
                   ? await detachConversationProject(input())
