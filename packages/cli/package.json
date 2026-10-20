@@ -114,6 +114,9 @@
       "src/commands/setup-exit.test.ts"
     ],
     [
+      "src/commands/setup-spawn.test.ts"
+    ],
+    [
       "src/commands/isolation.test.ts"
     ],
     [

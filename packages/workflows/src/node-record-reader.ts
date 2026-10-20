@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
+  nodeExecutionMetadataPayloadSchema,
   type NodeExecutionMetadata,
   type NodeInvocation,
 } from './schemas/node-execution';
@@ -34,15 +35,10 @@ export interface ReadNodeRecordEvent {
 
 const eventDataSchema = z.record(z.string(), z.unknown());
 const eventTypes = new Set<string>(NODE_STATE_EVENT_TYPES);
-const metadataKeys = [
-  'node',
-  'invocation',
-  'attempt',
-  'binding',
-  'timing',
-  'spend',
-  'accounting',
-] as const;
+const metadataKeys = Object.keys(nodeExecutionMetadataPayloadSchema.shape);
+const requiredMetadataKeys = Object.entries(nodeExecutionMetadataPayloadSchema.shape)
+  .filter(([, schema]) => !schema.isOptional())
+  .map(([key]) => key);
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
@@ -122,25 +118,17 @@ export function readNodeRecordEvent(
     eventType === 'node_failed' ||
     eventType === 'node_skipped' ||
     eventType === 'node_suspended';
-  const presentMetadataKeys = isExecutionEvent
-    ? metadataKeys.filter(key => Object.hasOwn(raw, key))
-    : [];
+  const hasMetadata = isExecutionEvent && metadataKeys.some(key => Object.hasOwn(raw, key));
   let metadata: NodeExecutionMetadata | undefined;
-  if (presentMetadataKeys.length > 0) {
-    if (presentMetadataKeys.length !== metadataKeys.length)
+  if (hasMetadata) {
+    if (requiredMetadataKeys.some(key => !Object.hasOwn(raw, key)))
       throw new Error('Node execution metadata is incomplete');
     const lifecycle = lifecycleFor(eventType, data);
     if (lifecycle === undefined) throw new Error('Node execution lifecycle is invalid');
     metadata = nodeExecutionMetadataSchema.parse({
+      ...raw,
       runId: envelope.workflow_run_id,
       path: envelope.step_name,
-      node: raw.node,
-      invocation: raw.invocation,
-      attempt: raw.attempt,
-      binding: raw.binding,
-      timing: raw.timing,
-      spend: raw.spend,
-      accounting: raw.accounting,
       lifecycle,
     });
   }

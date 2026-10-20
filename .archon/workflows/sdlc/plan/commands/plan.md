@@ -38,7 +38,7 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
 
 A call is a person's only when one of these holds, and you name which:
 

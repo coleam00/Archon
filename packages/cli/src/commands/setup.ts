@@ -64,7 +64,7 @@ import {
   collectSlackConfig,
   collectTelegramConfig,
 } from './setup-platforms';
-import { spawnTerminalWithSetup } from './setup-spawn';
+import { setupLaunchCommand, spawnTerminalWithSetup } from './setup-spawn';
 import { createPlatformSelection, platformNames } from './setup-platform-selection';
 
 // =============================================================================
@@ -147,7 +147,7 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
 
 async function runSetup(options: SetupOptions): Promise<void> {
   if (options.spawn) {
-    openSetupTerminal(options);
+    await openSetupTerminal(options);
     return;
   }
 
@@ -192,23 +192,30 @@ async function runSetup(options: SetupOptions): Promise<void> {
   await finishSetup();
 }
 
-function openSetupTerminal(options: SetupOptions): void {
+async function openSetupTerminal(options: SetupOptions): Promise<void> {
   console.log('Opening setup wizard in a new terminal window...');
-  const result = spawnTerminalWithSetup(options.repoPath, options.providers);
+  const result = await spawnTerminalWithSetup(options);
 
   if (result.success) {
     console.log('Setup wizard opened. Complete the setup in the new terminal window.');
   } else {
-    console.log('');
-    console.log('Next step: run the setup wizard in a separate terminal.');
+    const changeDirectory =
+      process.platform === 'win32'
+        ? `cd /d "${options.repoPath}"`
+        : `cd '${options.repoPath.replaceAll("'", "'\"'\"'")}'`;
     console.log('');
     console.log(
-      `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
+      process.platform === 'win32'
+        ? 'Next step: run the setup wizard in Command Prompt (cmd.exe).'
+        : 'Next step: run the setup wizard in a separate terminal.'
     );
+    console.log('');
+    console.log(`    ${changeDirectory} && ${setupLaunchCommand(options)}`);
     console.log('');
     console.log(
       'Come back here and let me know when you finish so I can verify your configuration.'
     );
+    exitSetup(1);
   }
 }
 
