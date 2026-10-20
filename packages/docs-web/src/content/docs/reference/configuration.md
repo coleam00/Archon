@@ -503,8 +503,9 @@ run output; use the project working directory for changes that should pass throu
 overlay diff and write-back gate.
 
 Collection creates regular host files owned by the canonical root's owner. Linked parents
-are refused; engine writes replace leaf links without truncating their targets. A refused
-write or transfer fails the run. Final collection is checkpointed in the existing exchange
+are refused, and a refused transfer fails the node. Collection never freezes the container:
+it is write-safe, but a file still being written by a parallel node is read best-effort and
+collected again when that node's invocation ends. Final collection is checkpointed in the existing exchange
 metadata before volume removal, so failed teardown can retry without recollecting deleted
 output. Once checkpointed, the environment can only finish destruction.
 

@@ -42,12 +42,6 @@ function fixture(
         };
       case 'volume':
         return { stdout: options.missingVolume ? '' : target.volume, stderr: '' };
-      case 'pause':
-        state = 'paused';
-        break;
-      case 'unpause':
-        state = 'running';
-        break;
       case 'create':
         helperExists = true;
         return { stdout: 'helper-id\n', stderr: '' };
@@ -70,19 +64,10 @@ function verbs(calls: string[][]) {
 }
 
 describe('ContainerArtifactExchange', () => {
-  test('freezes the producer until the helper has exited and been removed', async () => {
+  test('collects from a running producer without freezing it and removes the helper', async () => {
     const f = fixture();
     await f.exchange.collect();
-    expect(verbs(f.calls)).toEqual([
-      'container',
-      'pause',
-      'volume',
-      'create',
-      'start',
-      'wait',
-      'rm',
-      'unpause',
-    ]);
+    expect(verbs(f.calls)).toEqual(['container', 'volume', 'create', 'start', 'wait', 'rm']);
     expect(f.state()).toBe('running');
   });
 
@@ -128,36 +113,25 @@ describe('ContainerArtifactExchange', () => {
     const lifecycle = f.exchange.serialize(async () => {
       f.calls.push(['lifecycle']);
     });
-    expect(verbs(f.calls)).toEqual(['container', 'pause', 'volume', 'create', 'start', 'wait']);
+    expect(verbs(f.calls)).toEqual(['container', 'volume', 'create', 'start', 'wait']);
     release?.();
     await Promise.all([first, second, lifecycle]);
     expect(verbs(f.calls)).toEqual([
       'container',
-      'pause',
       'volume',
       'create',
       'start',
       'wait',
       'rm',
-      'unpause',
       'container',
-      'pause',
       'volume',
       'create',
       'start',
       'wait',
       'rm',
-      'unpause',
       'container',
       'lifecycle',
     ]);
-  });
-
-  test('starts no helper if freezing fails', async () => {
-    const failure = new Error('pause failed');
-    const f = fixture({ fail: args => (args[0] === 'pause' ? failure : undefined) });
-    await expect(f.exchange.collect()).rejects.toThrow();
-    expect(verbs(f.calls)).toEqual(['container', 'pause']);
   });
 
   test('does not infer stopped ownership from an inspection failure', async () => {
@@ -166,7 +140,6 @@ describe('ContainerArtifactExchange', () => {
     });
     await expect(f.exchange.collect()).rejects.toThrow();
     expect(verbs(f.calls).includes('create')).toBe(false);
-    expect(verbs(f.calls).includes('unpause')).toBe(false);
   });
 
   test.each(['paused', 'restarting', 'removing', 'unknown'])(
@@ -182,7 +155,7 @@ describe('ContainerArtifactExchange', () => {
   test('refuses an existing helper without claiming or removing it', async () => {
     const f = fixture({ helperExists: true });
     await expect(f.exchange.collect()).rejects.toThrow();
-    expect(verbs(f.calls)).toEqual(['container', 'container']);
+    expect(verbs(f.calls)).toEqual(['container']);
   });
 
   test.each(['missing', 'exited', 'created', 'dead'])(
@@ -209,15 +182,15 @@ describe('ContainerArtifactExchange', () => {
     async direction => {
       const f = fixture({ missingVolume: true });
       await expect(f.exchange[direction]()).rejects.toThrow();
-      expect(verbs(f.calls)).toEqual(['container', 'pause', 'volume', 'unpause']);
+      expect(verbs(f.calls)).toEqual(['container', 'volume']);
     }
   );
 
-  test('preserves helper and unpause failures', async () => {
-    const unpauseFailure = new Error('unpause failed');
+  test('preserves helper and helper-removal failures', async () => {
+    const removalFailure = new Error('rm failed');
     const f = fixture({
       exitCode: '1',
-      fail: args => (args[0] === 'unpause' ? unpauseFailure : undefined),
+      fail: args => (args[0] === 'rm' ? removalFailure : undefined),
     });
     try {
       await f.exchange.collect();
@@ -227,40 +200,14 @@ describe('ContainerArtifactExchange', () => {
       const failures = (error as AggregateError).errors;
       expect(failures).toHaveLength(2);
       expect(failures[0].message).toContain('refused');
-      expect(failures[1]).toBe(unpauseFailure);
+      expect(failures[1]).toBe(removalFailure);
     }
-    expect(verbs(f.calls).slice(-2)).toEqual(['rm', 'unpause']);
   });
 
-  test('removes a timed-out helper before unfreezing the producer', async () => {
+  test('removes a timed-out helper', async () => {
     const f = fixture({ fail: args => (args[0] === 'wait' ? new Error('timeout') : undefined) });
     await expect(f.exchange.collect()).rejects.toThrow();
-    expect(verbs(f.calls).slice(-2)).toEqual(['rm', 'unpause']);
-  });
-
-  test('leaves producer paused when helper completion cannot be confirmed', async () => {
-    const f = fixture({
-      fail: args => (['wait', 'rm'].includes(args[0]) ? new Error('daemon lost') : undefined),
-    });
-    await expect(f.exchange.collect()).rejects.toThrow();
-    expect(f.state()).toBe('paused');
-    expect(verbs(f.calls)).not.toContain('unpause');
-    expect(verbs(f.calls).at(-1)).toBe('container');
-  });
-
-  test('does not reclaim a helper after losing its creation acknowledgement', async () => {
-    let inspections = 0;
-    const f = fixture({
-      fail: args => {
-        if (args[0] === 'create') return new Error('reply lost');
-        if (args[0] === 'container' && ++inspections > 1) return new Error('inspection lost');
-        return undefined;
-      },
-    });
-    await expect(f.exchange.collect()).rejects.toThrow();
-    expect(f.state()).toBe('paused');
-    expect(verbs(f.calls)).not.toContain('rm');
-    expect(verbs(f.calls)).not.toContain('unpause');
+    expect(verbs(f.calls).at(-1)).toBe('rm');
   });
 
   test('lifecycle operations can collect while holding the shared queue', async () => {
@@ -302,9 +249,9 @@ describe('ContainerArtifactExchange', () => {
     let failed = false;
     const f = fixture({
       fail: args => {
-        if (args[0] === 'pause' && !failed) {
+        if (args[0] === 'volume' && !failed) {
           failed = true;
-          return new Error('pause unavailable');
+          return new Error('volume listing unavailable');
         }
         return undefined;
       },

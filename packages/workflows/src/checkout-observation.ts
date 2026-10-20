@@ -1,4 +1,3 @@
-import { coordinateContainerCommand } from '@archon/provider-contract/container-exec';
 /**
  * Read-only checkout observation (#3305, #3375).
  *
@@ -133,9 +132,7 @@ async function probeContainerMarker(
   args.push(execContext.containerId, 'sh', '-c', CONTAINER_MARKER_PROBE);
   let stdout: string;
   try {
-    ({ stdout } = await coordinateContainerCommand(execContext.containerId, () =>
-      execFileAsync('docker', args, { timeout: GIT_TIMEOUT_MS })
-    ));
+    ({ stdout } = await execFileAsync('docker', args, { timeout: GIT_TIMEOUT_MS }));
   } catch {
     // A non-zero exit, a spawn error, or a timeout kill is a failed probe, never an answer.
     return 'failed';

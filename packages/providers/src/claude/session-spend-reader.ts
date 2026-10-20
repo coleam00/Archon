@@ -1,4 +1,3 @@
-import { coordinateContainerCommand } from '@archon/provider-contract/container-exec';
 import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -70,23 +69,19 @@ export async function readSessionSpendBaseline(
         input.env,
         sessionId
       );
-      transcript = await coordinateContainerCommand(
-        input.execContext.containerId,
-        () =>
-          new Promise<string>((resolve, reject) => {
-            execFile(
-              'docker',
-              args,
-              {
-                timeout: 60_000,
-                // Match the host readFile path: long transcripts routinely exceed a fixed cap.
-                maxBuffer: Infinity,
-                signal: input.signal,
-              },
-              (error, stdout) => (error ? reject(error) : resolve(stdout))
-            );
-          })
-      );
+      transcript = await new Promise<string>((resolve, reject) => {
+        execFile(
+          'docker',
+          args,
+          {
+            timeout: 60_000,
+            // Match the host readFile path: long transcripts routinely exceed a fixed cap.
+            maxBuffer: Infinity,
+            signal: input.signal,
+          },
+          (error, stdout) => (error ? reject(error) : resolve(stdout))
+        );
+      });
     } else {
       // Mirrors SDK getSessionInfo's no-dir lookup, including custom/long project slugs.
       const home =

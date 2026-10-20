@@ -23,7 +23,6 @@ interface ContainerDescription {
 }
 
 export class ContainerArtifactExchange implements ArtifactExchange {
-  private admissionFailure: Error | undefined;
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -50,16 +49,8 @@ export class ContainerArtifactExchange implements ArtifactExchange {
     });
   }
 
-  failAdmission(error: Error): void {
-    this.admissionFailure = error;
-  }
-
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
-    const checked = (): Promise<T> => {
-      if (this.admissionFailure) throw this.admissionFailure;
-      return run();
-    };
-    const next = this.tail.then(checked, checked);
+    const next = this.tail.then(run, run);
     this.tail = next;
     return next;
   }
@@ -115,43 +106,13 @@ export class ContainerArtifactExchange implements ArtifactExchange {
     }
   }
 
+  // No producer freeze: canonical storage is never mounted into the producer, so a
+  // concurrent writer can only change what this collect reads, never where it writes.
+  // Collect is write-safe; its snapshot of a still-running producer is best-effort.
   private async transfer(direction: TransferDirection): Promise<void> {
     const { container, helper, root, volume, image } = this.target;
     const failures: unknown[] = [];
-    let pausedId: string | undefined;
     let helperId: string | undefined;
-    let helperAbsent = false;
-    const restoreProducer = async (): Promise<void> => {
-      if (helperId) {
-        try {
-          await this.docker(['rm', '-f', helperId]);
-          helperAbsent = true;
-        } catch (cause) {
-          failures.push(cause);
-        }
-      }
-      if (!helperAbsent) {
-        try {
-          helperAbsent = !(await this.containers()).some(entry => entry.name === helper);
-        } catch (cause) {
-          failures.push(cause);
-        }
-      }
-      if (pausedId && helperAbsent) {
-        try {
-          await this.docker(['unpause', pausedId]);
-        } catch (cause) {
-          failures.push(cause);
-        }
-      } else if (pausedId) {
-        failures.push(
-          new Error(
-            `Producer '${container}' left paused: helper '${helper}' completion is unknown. ` +
-              'Inspect both containers before explicit recovery; the output volume is preserved.'
-          )
-        );
-      }
-    };
     try {
       const containers = await this.containers();
       if (containers.some(entry => entry.name === helper)) {
@@ -159,18 +120,13 @@ export class ContainerArtifactExchange implements ArtifactExchange {
           `Artifact helper '${helper}' already exists; inspect it before explicit recovery`
         );
       }
-      helperAbsent = true;
       const producer = containers.find(entry => entry.name === container || entry.id === container);
-      if (producer?.state === 'running') {
-        await this.docker(['pause', producer.id]);
-        pausedId = producer.id;
-      } else if (producer && !['exited', 'dead', 'created'].includes(producer.state)) {
+      if (producer && !['running', 'exited', 'dead', 'created'].includes(producer.state)) {
         throw new Error(
           `Artifact producer '${container}' is ${producer.state}; inspect ownership before explicit recovery`
         );
-      } else if (direction === 'publish') {
-        return;
       }
+      if (producer?.state !== 'running' && direction === 'publish') return;
       const volumes = await this.docker(['volume', 'ls', '--format', '{{.Name}}']);
       if (!volumes.stdout.split('\n').includes(volume)) {
         throw new Error(
@@ -178,8 +134,6 @@ export class ContainerArtifactExchange implements ArtifactExchange {
         );
       }
       const program = buildArtifactTransferProgram(direction, '/canonical', '/output', root);
-      // A failed create can have reached the daemon even when its reply was lost.
-      helperAbsent = false;
       const created = await this.docker([
         'create',
         '--name',
@@ -212,7 +166,7 @@ export class ContainerArtifactExchange implements ArtifactExchange {
     } catch (cause) {
       failures.push(cause);
     } finally {
-      await restoreProducer();
+      if (helperId) await this.docker(['rm', '-f', helperId]).catch(cause => failures.push(cause));
     }
     if (failures.length) {
       log.error(

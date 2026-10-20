@@ -60,7 +60,9 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   cancellation. Host creation/update/deletion visibility is delayed until collection.
   Engine namespaces stay host-authoritative; container copies never write back.
 
-  Transfers freeze the producer and serialize against suspension/destruction.
+  Transfers serialize against suspension/destruction but do not freeze the
+  producer: collect is write-safe because canonical storage is never mounted into
+  the producer, and its reads of files still being written are best-effort.
   Helpers have no network, workspace/source mounts, SYS_ADMIN or privilege escalation.
   Publish mounts canonical storage read-only; collect mounts output read-only.
   Collection produces real directories and independent regular bytes with ordinary
@@ -74,9 +76,8 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   checkpoints final collection before deleting volumes. Collection failure preserves
   volumes and the environment record; teardown retries after the checkpoint do not
   require deleted output storage, and resume is refused.
-  An interrupted helper or unexplained paused producer requires explicit ownership
-  inspection using the identifiers in the error, before removing the helper or
-  unpausing. Ambiguous helper completion never authorizes unfreezing the producer.
+  An interrupted helper or a producer in an unexpected state requires explicit
+  ownership inspection using the identifiers in the error before removing the helper.
 
   **Legacy environments without `artifactExchange` metadata retain the writable
   canonical bind and its symlink-write exposure until they end.** Resume does not

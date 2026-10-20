@@ -966,51 +966,6 @@
         }
       ]
     },
-    "ProviderContainerExecAcquire": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "required": [
-        "sessionId"
-      ]
-    },
-    "ProviderContainerExecLease": {
-      "type": "object",
-      "properties": {
-        "leaseId": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "required": [
-        "leaseId"
-      ]
-    },
-    "ProviderContainerExecRelease": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "leaseId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "failedAdmission": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "sessionId",
-        "leaseId",
-        "failedAdmission"
-      ]
-    },
     "ProviderPluginDescriptor": {
       "type": "object",
       "properties": {
@@ -1289,10 +1244,6 @@
               ]
             }
           ]
-        },
-        "containerExecCoordination": {
-          "type": "boolean",
-          "const": true
         },
         "nativeTools": {
           "type": "array",

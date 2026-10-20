@@ -1,10 +1,3 @@
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
-import {
-  admitContainerCommand,
-  coordinateContainerCommand,
-  getContainerExecGate,
-} from '@archon/provider-contract/container-exec';
 /**
  * Claude-in-container spawn hook.
  *
@@ -19,7 +12,7 @@ import {
  * signalling: `child.kill()` signals the LOCAL `docker exec` client, which does
  * NOT forward the signal to the process inside the container (docker/cli#2607).
  * So `kill()` is overridden to signal the in-container Claude process directly
- * via a second `docker exec` using its per-invocation pidfile.
+ * via a second `docker exec ... pkill`.
  *
  * v1 is Claude-only. Codex/Pi/community providers latch on here by implementing
  * their own `ExecutionContext`-aware spawn/transport (see the provider support
@@ -80,14 +73,13 @@ function pidFilePath(): string {
 export function buildDockerExecArgs(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   options: SpawnOptions,
-  pidFile: string,
-  admissionMarker = ''
+  pidFile: string
 ): string[] {
   return [
     ...buildDockerExecPrefix(execContext, options.cwd, options.env),
     'sh',
     '-c',
-    `echo $$ > ${pidFile}${admissionMarker ? ' || exit' : ''}; ${admissionMarker ? `printf '${admissionMarker}' >&2; ` : ''}exec ${CONTAINER_CLAUDE_BIN} "$@"`,
+    `echo $$ > ${pidFile}; exec ${CONTAINER_CLAUDE_BIN} "$@"`,
     CONTAINER_CLAUDE_BIN, // $0 (cosmetic — "$@" starts at the real SDK args below)
     ...options.args,
   ];
@@ -168,19 +160,6 @@ function toPosixSignal(signal: NodeJS.Signals): string {
   return signal.replace(/^SIG/, '');
 }
 
-function containerSignalArgs(
-  containerId: string,
-  signal: NodeJS.Signals,
-  pidFile: string
-): string[] {
-  const posix = toPosixSignal(signal);
-  const script =
-    `pid=$(cat ${pidFile} 2>/dev/null); ` +
-    `[ -n "$pid" ] && { kill -${posix} -"$pid" 2>/dev/null; kill -${posix} "$pid" 2>/dev/null; }; ` +
-    'true';
-  return ['exec', containerId, 'sh', '-c', script];
-}
-
 /**
  * Kill exactly THIS invocation's in-container Claude via its pidfile (not sibling
  * Claude nodes — the old `pkill -f claude` killed every Claude in the container).
@@ -195,9 +174,11 @@ function killInContainer(
   pidFile: string
 ): void {
   const posix = toPosixSignal(signal);
-  const killer = spawnFn('docker', containerSignalArgs(containerId, signal, pidFile), {
-    stdio: 'ignore',
-  });
+  const script =
+    `pid=$(cat ${pidFile} 2>/dev/null); ` +
+    `[ -n "$pid" ] && { kill -${posix} -"$pid" 2>/dev/null; kill -${posix} "$pid" 2>/dev/null; }; ` +
+    'true';
+  const killer = spawnFn('docker', ['exec', containerId, 'sh', '-c', script], { stdio: 'ignore' });
   killer.on('error', err => {
     getLog().warn({ containerId, signal: posix, err }, 'claude.container_kill_failed');
   });
@@ -220,9 +201,6 @@ export function buildContainerSpawn(
   return (options: SpawnOptions): SpawnedProcess => {
     // Per-invocation pidfile so kill() targets only this Claude, not siblings.
     const pidFile = pidFilePath();
-    if (getContainerExecGate(execContext.containerId)) {
-      return spawnCoordinated(execContext, options, spawnFn, pidFile);
-    }
     const dockerArgs = buildDockerExecArgs(execContext, options, pidFile);
     getLog().debug(
       { containerId: execContext.containerId, argc: options.args.length },
@@ -281,124 +259,5 @@ export function buildContainerSpawn(
     };
 
     return wrapped;
-  };
-}
-
-/** The SDK requires a synchronous handle; buffer stdio while admission is queued. */
-function spawnCoordinated(
-  context: Extract<ExecutionContext, { kind: 'container' }>,
-  options: SpawnOptions,
-  spawnFn: Spawner,
-  pidFile: string
-): SpawnedProcess {
-  const events = new EventEmitter();
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  let child: ChildProcess | undefined;
-  let requestedSignal: NodeJS.Signals | undefined;
-  let exitCode: number | null = null;
-  let ended = false;
-  const signal = (value: NodeJS.Signals = 'SIGTERM'): boolean => {
-    requestedSignal = value;
-    if (!child || ended) return true;
-    const current = child;
-    void coordinateContainerCommand(context.containerId, () =>
-      new Promise<void>((resolve, reject) => {
-        const killer = spawnFn('docker', containerSignalArgs(context.containerId, value, pidFile), {
-          stdio: 'ignore',
-        });
-        killer.once('error', reject);
-        killer.once('close', code =>
-          code === 0
-            ? resolve()
-            : reject(new Error(`Container signal command exited with code ${String(code)}`))
-        );
-      }).catch(error => {
-        getContainerExecGate(context.containerId)?.failAdmission(
-          new Error('Container signal delivery is unconfirmed; inspect before explicit recovery')
-        );
-        throw error;
-      })
-    ).then(
-      () => current.kill(value),
-      error => {
-        getLog().warn(
-          { containerId: context.containerId, err: error },
-          'claude.container_kill_failed'
-        );
-        events.emit('error', error);
-      }
-    );
-    return true;
-  };
-  const onAbort = (): void => {
-    signal('SIGKILL');
-  };
-  if (options.signal?.aborted) requestedSignal = 'SIGKILL';
-  else options.signal?.addEventListener('abort', onAbort, { once: true });
-  void admitContainerCommand(
-    context.containerId,
-    marker => buildDockerExecArgs(context, options, pidFile, marker),
-    (args, observe) =>
-      new Promise<void>((resolve, reject) => {
-        if (requestedSignal) {
-          observe?.(undefined);
-          ended = true;
-          stdin.destroy();
-          stdout.end();
-          events.emit('exit', null, requestedSignal);
-          resolve();
-          return;
-        }
-        child = spawnFn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] });
-        if (!child.stdin || !child.stdout || !child.stderr) {
-          child.kill();
-          reject(new Error('docker exec child is missing piped stdio'));
-          return;
-        }
-        observe?.(child);
-        stdin.pipe(child.stdin);
-        child.stdin.on('error', error => stdin.emit('error', error));
-        child.stdout.pipe(stdout);
-        child.once('error', reject);
-        child.once('exit', (code, value) => {
-          ended = true;
-          exitCode = code;
-          events.emit('exit', code, value);
-        });
-        child.once('close', () => resolve());
-      }),
-    chunk => {
-      process.stderr.write(chunk);
-    }
-  )
-    .catch(error => {
-      stdin.destroy();
-      stdout.end();
-      events.emit('error', error);
-    })
-    .finally(() => {
-      ended = true;
-      options.signal?.removeEventListener('abort', onAbort);
-    });
-  return {
-    stdin,
-    stdout,
-    get killed() {
-      return requestedSignal !== undefined;
-    },
-    get exitCode() {
-      return exitCode;
-    },
-    kill: signal,
-    on: (event, listener) => {
-      events.on(event, listener);
-    },
-    once: (event, listener) => {
-      events.once(event, listener);
-    },
-    off: (event, listener) => {
-      events.off(event, listener);
-    },
   };
 }

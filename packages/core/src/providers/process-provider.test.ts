@@ -1,4 +1,3 @@
-import { registerContainerExecGate } from '@archon/provider-contract/container-exec';
 import { expect, test, spyOn } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -602,50 +601,5 @@ test('container credential checks deliver only the execution credential bag to t
     ).toEqual({ state: 'usable', source: 'native' });
   } finally {
     delete process.env.PROCESS_HOST_CANARY;
-  }
-});
-
-test('a real provider subprocess coordinates container commands with the host transfer gate', async () => {
-  let entered!: () => void;
-  let release!: () => void;
-  const atGate = new Promise<void>(resolve => {
-    entered = resolve;
-  });
-  const waiting = new Promise<void>(resolve => {
-    release = resolve;
-  });
-  let operations = 0;
-  const failures: Error[] = [];
-  const unregister = registerContainerExecGate('process-container', {
-    async run(operation) {
-      entered();
-      await waiting;
-      operations++;
-      return operation();
-    },
-    failAdmission(error) {
-      failures.push(error);
-    },
-  });
-  try {
-    let settled = false;
-    const result = collect(
-      provider('container-coordination').sendQuery('turn', tmpdir(), undefined, {
-        execContext: { kind: 'container', containerId: 'process-container' },
-      })
-    ).then(chunks => {
-      settled = true;
-      return chunks;
-    });
-    await atGate;
-    expect(settled).toBe(false);
-    expect(operations).toBe(0);
-    release();
-    expect(await result).toEqual([{ type: 'result', text: 'coordinated' }, { type: 'settled' }]);
-    expect(operations).toBe(1);
-    expect(failures).toEqual([]);
-  } finally {
-    release();
-    unregister();
   }
 });

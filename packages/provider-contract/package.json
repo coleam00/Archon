@@ -6,7 +6,6 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./container-exec": "./src/container-exec.ts",
     "./conformance": "./src/conformance.ts",
     "./effort": "./src/effort.ts",
     "./plugin": "./src/plugin/index.ts",

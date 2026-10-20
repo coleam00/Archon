@@ -1,7 +1,3 @@
-import {
-  registerContainerExecGate,
-  type ContainerExecGate,
-} from '@archon/provider-contract/container-exec';
 import { describe, test, expect } from 'bun:test';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
@@ -28,7 +24,6 @@ function fakeChild(): ChildProcess & { killSignals: string[] } {
   return Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
-    stderr: new PassThrough(),
     killed: false,
     exitCode: null,
     killSignals,
@@ -40,7 +35,7 @@ function fakeChild(): ChildProcess & { killSignals: string[] } {
 }
 
 /** Recording spawner returning a fresh fake child per call. */
-function recordingSpawner(onSpawn?: (index: number) => void): Spawner & {
+function recordingSpawner(): Spawner & {
   calls: { command: string; args: string[] }[];
   children: ChildProcess[];
 } {
@@ -50,7 +45,6 @@ function recordingSpawner(onSpawn?: (index: number) => void): Spawner & {
     calls.push({ command, args });
     const child = fakeChild();
     children.push(child);
-    onSpawn?.(children.length);
     return child;
   }) as unknown as Spawner & { calls: typeof calls; children: ChildProcess[] };
   fn.calls = calls;
@@ -145,168 +139,4 @@ describe('buildContainerSpawn — SpawnedProcess contract', () => {
     const killCall = spawner.calls.find(c => c.args.some(a => a.includes('kill -KILL')));
     expect(killCall).toBeDefined();
   });
-});
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>(yes => {
-    resolve = yes;
-  });
-  return { promise, resolve };
-}
-
-function gateFixture() {
-  let tail: Promise<unknown> = Promise.resolve();
-  let failure: Error | undefined;
-  const gate: ContainerExecGate = {
-    run(operation) {
-      const result = tail
-        .catch(() => undefined)
-        .then(() => {
-          if (failure) throw failure;
-          return operation();
-        });
-      tail = result;
-      return result;
-    },
-    failAdmission(error) {
-      failure = error;
-    },
-  };
-  return gate;
-}
-
-describe('coordinated SDK spawn', () => {
-  test.each(['kill', 'abort'] as const)(
-    '%s waits through transfers and signals inside before killing the local client',
-    async mode => {
-      const context = { kind: 'container' as const, containerId: 'coordinated-sdk-' + mode };
-      const gate = gateFixture();
-      const unregister = registerContainerExecGate(context.containerId, gate);
-      const started = deferred();
-      const killerStarted = deferred();
-      const spawner = recordingSpawner(index => {
-        if (index === 1) started.resolve();
-        else killerStarted.resolve();
-      });
-      const abort = new AbortController();
-      const frozen = deferred();
-      const thaw = deferred();
-      try {
-        const proc = buildContainerSpawn(
-          context,
-          spawner
-        )(makeSpawnOptions({ signal: abort.signal }));
-        const exiting = deferred();
-        proc.on('exit', () => exiting.resolve());
-        // stdin may be written before the queued spawn starts.
-        proc.stdin.write('sdk payload');
-        await started.promise;
-        const child = spawner.children[0]!;
-        const inputRead = new Promise<string>(resolve =>
-          child.stdin?.once('data', chunk => resolve(String(chunk)))
-        );
-        expect(await inputRead).toBe('sdk payload');
-        child.stdout?.emit('data', Buffer.from('sdk output'));
-        expect(proc.stdout.read()?.toString()).toBe('sdk output');
-        const script = spawner.calls[0]!.args.find(arg => arg.includes('printf'))!;
-        expect(script.indexOf('echo $$')).toBeLessThan(script.indexOf('printf'));
-        const marker = script.slice(script.indexOf("printf '") + 8, script.indexOf("' >&2"));
-        const transfer = gate.run(async () => {
-          frozen.resolve();
-          await thaw.promise;
-        });
-        child.emit('spawn');
-        await Promise.resolve();
-        expect(spawner.calls).toHaveLength(1);
-        child.stderr?.emit('data', Buffer.from(marker));
-        await frozen.promise;
-        if (mode === 'kill') proc.kill('SIGTERM');
-        else abort.abort();
-        expect(spawner.calls).toHaveLength(1);
-        expect((child as ChildProcess & { killSignals: string[] }).killSignals).toEqual([]);
-        thaw.resolve();
-        await transfer;
-        await killerStarted.promise;
-        expect(spawner.calls).toHaveLength(2);
-        const posix = mode === 'kill' ? 'TERM' : 'KILL';
-        expect(spawner.calls[1]!.args.at(-1)).toContain(`kill -${posix}`);
-        expect((child as ChildProcess & { killSignals: string[] }).killSignals).toEqual([]);
-        spawner.children[1]!.emit('close', 0);
-        await gate.run(async () => {});
-        await Promise.resolve();
-        expect((child as ChildProcess & { killSignals: string[] }).killSignals).toEqual([
-          'SIG' + posix,
-        ]);
-        child.emit('exit', 0, null);
-        child.emit('close', 0, null);
-        await exiting.promise;
-      } finally {
-        thaw.resolve();
-        unregister();
-      }
-    }
-  );
-
-  test('cancelling a queued spawn does not start a Docker exec', async () => {
-    const gate = gateFixture();
-    const context = { kind: 'container' as const, containerId: 'cancel-queued-sdk' };
-    const unregister = registerContainerExecGate(context.containerId, gate);
-    const frozen = deferred();
-    const thaw = deferred();
-    const transfer = gate.run(async () => {
-      frozen.resolve();
-      await thaw.promise;
-    });
-    await frozen.promise;
-    const spawner = recordingSpawner();
-    const proc = buildContainerSpawn(context, spawner)(makeSpawnOptions());
-    const exited = deferred();
-    proc.once('exit', () => exited.resolve());
-    proc.kill('SIGTERM');
-    try {
-      thaw.resolve();
-      await Promise.all([transfer, exited.promise]);
-      expect(spawner.calls).toHaveLength(0);
-    } finally {
-      thaw.resolve();
-      unregister();
-    }
-  });
-});
-
-test('an unconfirmed cancellation refuses subsequent transfers and retains the local client', async () => {
-  const context = { kind: 'container' as const, containerId: 'failed-control-sdk' };
-  const gate = gateFixture();
-  const unregister = registerContainerExecGate(context.containerId, gate);
-  const started = deferred();
-  const killerStarted = deferred();
-  const spawner = recordingSpawner(index => {
-    if (index === 1) started.resolve();
-    else killerStarted.resolve();
-  });
-  const proc = buildContainerSpawn(context, spawner)(makeSpawnOptions());
-  const failed = new Promise<unknown>(resolve => proc.on('error', resolve));
-  try {
-    await started.promise;
-    const script = spawner.calls[0]!.args.find(arg => arg.includes('printf'))!;
-    spawner.children[0]!.stderr?.emit(
-      'data',
-      Buffer.from(script.slice(script.indexOf("printf '") + 8, script.indexOf("' >&2")))
-    );
-    await gate.run(async () => {});
-    proc.kill('SIGKILL');
-    await killerStarted.promise;
-    const error = new Error('Docker signal client lost');
-    spawner.children[1]!.emit('error', error);
-    expect(await failed).toBe(error);
-    await expect(gate.run(async () => {})).rejects.toThrow('signal delivery is unconfirmed');
-    expect((spawner.children[0] as ChildProcess & { killSignals: string[] }).killSignals).toEqual(
-      []
-    );
-  } finally {
-    spawner.children[0]?.emit('exit', 0, null);
-    spawner.children[0]?.emit('close', 0, null);
-    unregister();
-  }
 });

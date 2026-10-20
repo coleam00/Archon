@@ -1,7 +1,3 @@
-import {
-  coordinateContainerCommand,
-  getContainerExecGate,
-} from '@archon/provider-contract/container-exec';
 import { closeSync, writeSync, existsSync, writeFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import { spawn } from 'node:child_process';
@@ -141,20 +137,6 @@ await serveProvider(
         return request.model ?? 'openai/native-model';
       },
       async *sendQuery(prompt, _cwd, resume, options): AsyncGenerator<ProviderChunk> {
-        if (mode === 'container-coordination') {
-          if (
-            options?.execContext?.kind !== 'container' ||
-            !getContainerExecGate(options.execContext.containerId)
-          )
-            throw new Error('Missing container coordination');
-          const text = await coordinateContainerCommand(
-            options.execContext.containerId,
-            async () => 'coordinated'
-          );
-          yield { type: 'result', text };
-          yield { type: 'settled' };
-          return;
-        }
         if (mode === 'pi-gated') {
           writeFileSync(`${process.argv[3]}.${prompt}.pid`, String(process.pid));
           yield { type: 'agent_message_chunk', text: 'started' };

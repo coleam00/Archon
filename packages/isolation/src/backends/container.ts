@@ -1,4 +1,3 @@
-import { registerContainerExecGate } from '@archon/provider-contract/container-exec';
 /**
  * Folder-project execution on a read-only workspace lower and a durable overlay upper.
  * Logical paths stay identical across host and container. New environments exchange
@@ -200,7 +199,6 @@ export class ContainerBackend implements IIsolationBackend {
   private readonly store: IIsolationStore;
   private readonly config: ContainerBackendConfig;
   private readonly docker: DockerRunner;
-  private readonly execRegistrations = new Map<string, () => void>();
   private readonly exchanges = new Map<string, ContainerArtifactExchange>();
 
   constructor(deps: ContainerBackendDeps) {
@@ -368,8 +366,6 @@ export class ContainerBackend implements IIsolationBackend {
           if (failure) throw new Error(`Failed to remove isolation volume '${volume}': ${failure}`);
         }
         await this.store.updateStatus(envId, 'destroyed');
-        this.execRegistrations.get(envId)?.();
-        this.execRegistrations.delete(envId);
       });
       return;
     }
@@ -739,16 +735,6 @@ export class ContainerBackend implements IIsolationBackend {
     meta: StoredContainerMetadata
   ): PreparedEnv {
     const artifactExchange = this.exchangeFor(envId, meta);
-    if (artifactExchange) {
-      this.execRegistrations.get(envId)?.();
-      this.execRegistrations.set(
-        envId,
-        registerContainerExecGate(containerId, {
-          run: operation => artifactExchange.serialize(operation),
-          failAdmission: error => artifactExchange.failAdmission(error),
-        })
-      );
-    }
     return {
       cwd,
       execContext: { kind: 'container', containerId },

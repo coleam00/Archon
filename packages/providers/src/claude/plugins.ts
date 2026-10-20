@@ -1,4 +1,3 @@
-import { coordinateContainerCommand } from '@archon/provider-contract/container-exec';
 /**
  * Plugin scoping for Claude workflow nodes.
  *
@@ -39,7 +38,6 @@ const pluginListSchema = z.array(z.object({ id: z.string().min(1) }));
 /** How to run `claude plugin list --json` in the same place the session will run. */
 export interface PluginListCommand {
   command: string;
-  containerId?: string;
   args: string[];
   /** Host directory to spawn in; undefined for a container run, whose cwd is a path inside the container. */
   cwd: string | undefined;
@@ -89,7 +87,6 @@ export function buildPluginListCommand(input: {
   if (execContext?.kind === 'container') {
     return {
       command: 'docker',
-      containerId: execContext.containerId,
       args: buildDockerExecCommandArgs(execContext, cwd, env, PLUGIN_LIST_ARGS),
       cwd: undefined,
       env: process.env,
@@ -111,44 +108,34 @@ export function buildPluginListCommand(input: {
  * command's own output as evidence, so the node fails before its session starts.
  */
 export async function readClaudePluginIds(cmd: PluginListCommand): Promise<string[]> {
-  const read = () =>
-    new Promise<string>((resolve, reject) => {
-      execFile(
-        cmd.command,
-        cmd.args,
-        {
-          cwd: cmd.cwd,
-          env: cmd.env,
-          timeout: PLUGIN_LIST_TIMEOUT_MS,
-          maxBuffer: 16 * 1024 * 1024,
-        },
-        (error, out, err) => {
-          if (error) {
-            // Not error.message: it repeats the full argv, which for a container run
-            // carries the session env (credentials included) as `-e KEY=VALUE`.
-            const detail =
-              err.trim() ||
-              (error.signal
-                ? `killed by ${error.signal}`
-                : typeof error.code === 'number'
-                  ? `exited with code ${error.code}`
-                  : String(error.code));
-            reject(
-              new ClassifiedProviderError(
-                'misconfigured',
-                `Cannot list Claude plugins (\`claude plugin list --json\` via ${cmd.command} failed): ${detail}`
-              )
-            );
-            return;
-          }
-          resolve(out);
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(
+      cmd.command,
+      cmd.args,
+      { cwd: cmd.cwd, env: cmd.env, timeout: PLUGIN_LIST_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      (error, out, err) => {
+        if (error) {
+          // Not error.message: it repeats the full argv, which for a container run
+          // carries the session env (credentials included) as `-e KEY=VALUE`.
+          const detail =
+            err.trim() ||
+            (error.signal
+              ? `killed by ${error.signal}`
+              : typeof error.code === 'number'
+                ? `exited with code ${error.code}`
+                : String(error.code));
+          reject(
+            new ClassifiedProviderError(
+              'misconfigured',
+              `Cannot list Claude plugins (\`claude plugin list --json\` via ${cmd.command} failed): ${detail}`
+            )
+          );
+          return;
         }
-      );
-    });
-
-  const stdout = await (cmd.containerId
-    ? coordinateContainerCommand(cmd.containerId, read)
-    : read());
+        resolve(out);
+      }
+    );
+  });
 
   let json: unknown;
   try {

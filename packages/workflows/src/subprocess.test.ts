@@ -1,4 +1,3 @@
-import { withContainerExecGate } from '@archon/provider-contract/container-exec';
 // @archon-test-isolated
 import { describe, expect, it, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -562,59 +561,3 @@ describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
     expect(joined).toContain('KEEP=1'); // non-denylisted keys still forwarded
   });
 });
-
-for (const code of [0, 7]) {
-  posixOnly(
-    `coordinated Docker transport preserves stdin and strips admission diagnostics (exit ${code})`,
-    async () => {
-      const id = 'coordinated-subprocess';
-      const failures: Error[] = [];
-      const directory = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-docker-admission-')));
-      writeFileSync(
-        join(directory, 'docker'),
-        `#!/bin/sh
-while [ "$1" != '${id}' ]; do shift; done
-shift
-exec "$@"
-`,
-        { mode: 0o755 }
-      );
-      const originalPath = process.env.PATH;
-      process.env.PATH = directory + ':' + originalPath;
-      try {
-        const pending = withContainerExecGate(
-          id,
-          {
-            run: operation => operation(),
-            failAdmission: error => {
-              failures.push(error);
-            },
-          },
-          () =>
-            runSubprocess(
-              { kind: 'container', containerId: id },
-              'sh',
-              ['-c', `cat; echo diagnostic >&2; exit ${code}`],
-              {
-                cwd: '/workspace',
-                env: {},
-                input: 'payload\n',
-                retention: { standalone: true },
-              }
-            )
-        );
-        if (code === 0)
-          expect(await pending).toMatchObject({ stdout: 'payload\n', stderr: 'diagnostic\n' });
-        else
-          await expect(pending).rejects.toMatchObject({
-            code: 7,
-            stdout: 'payload\n',
-            stderr: 'diagnostic\n',
-          });
-        expect(failures).toEqual([]);
-      } finally {
-        process.env.PATH = originalPath;
-      }
-    }
-  );
-}

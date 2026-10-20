@@ -1,4 +1,3 @@
-import { withRemoteContainerExecGate } from './container-exec';
 import { z } from 'zod';
 import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { Readable, Writable } from 'node:stream';
@@ -87,19 +86,12 @@ export async function serveProvider(
     const params = promptRequestSchema.parse(raw);
     const session = sessions.get(params.sessionId);
     if (!session || session.active) throw new Error('Unknown or active provider session');
-    const {
-      prompt,
-      cwd,
-      resumeSessionId,
-      nativeTools,
-      containerExecCoordination,
-      ...requestOptions
-    } = session.request;
+    const { prompt, cwd, resumeSessionId, nativeTools, ...requestOptions } = session.request;
     if (params.prompt[0].text !== prompt)
       throw new Error('session/prompt disagrees with Archon request');
     session.active = true;
     let reason: ProviderStopReason | undefined;
-    const invoke = async (): Promise<{ stopReason: ProviderStopReason }> => {
+    try {
       for await (const chunk of options.create(log).sendQuery(prompt, cwd, resumeSessionId, {
         ...requestOptions,
         env: requestOptions.execContext?.kind === 'container' ? requestOptions.env : env,
@@ -125,19 +117,6 @@ export async function serveProvider(
         await rpc.notify('_archon/chunk', { sessionId: params.sessionId, chunk });
       }
       return { stopReason: acpStopReason(reason, session.abort.signal.aborted) };
-    };
-    try {
-      if (containerExecCoordination) {
-        if (requestOptions.execContext?.kind !== 'container')
-          throw new Error('Container exec coordination requires a container');
-        return await withRemoteContainerExecGate(
-          rpc,
-          params.sessionId,
-          requestOptions.execContext.containerId,
-          invoke
-        );
-      }
-      return await invoke();
     } finally {
       sessions.delete(params.sessionId);
     }

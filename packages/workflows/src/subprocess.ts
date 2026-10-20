@@ -1,7 +1,3 @@
-import {
-  admitContainerCommand,
-  type ContainerExecCommand,
-} from '@archon/provider-contract/container-exec';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
@@ -31,14 +27,15 @@ export function containerCommandName(cmd: string): string {
  * Build the `docker exec` argv for a deterministic subprocess (bash/script) in a
  * container. Env is delivered ONLY via `-e` flags (never merged with the docker
  * CLI's own env / host process.env — the isolation invariant); the command name
- * is normalized to the in-container binary.
+ * is normalized to the in-container binary. Exported for the env-isolation
+ * enforcement test.
  */
-function buildSubprocessDockerInvocation(
+export function buildSubprocessDockerArgs(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   cmd: string,
   args: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; input?: string }
-): ContainerExecCommand {
+): string[] {
   const dockerArgs = ['exec', '-w', options.cwd];
   if (options.input !== undefined) dockerArgs.push('-i');
   if (execContext.execUser) dockerArgs.push('-u', execContext.execUser);
@@ -48,15 +45,8 @@ function buildSubprocessDockerInvocation(
     if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
     dockerArgs.push('-e', `${key}=${value}`);
   }
-  dockerArgs.push(execContext.containerId);
-  return { prefix: dockerArgs, command: [containerCommandName(cmd), ...args] };
-}
-
-export function buildSubprocessDockerArgs(
-  ...input: Parameters<typeof buildSubprocessDockerInvocation>
-): string[] {
-  const { prefix, command } = buildSubprocessDockerInvocation(...input);
-  return [...prefix, ...command];
+  dockerArgs.push(execContext.containerId, containerCommandName(cmd), ...args);
+  return dockerArgs;
 }
 
 /** Subprocess failure evidence, including execFile timeout and exit fields. */
@@ -317,32 +307,14 @@ export async function runSubprocess(
   try {
     const result =
       execContext.kind === 'container'
-        ? await admitContainerCommand(
-            execContext.containerId,
-            buildSubprocessDockerInvocation(execContext, cmd, args, {
+        ? await execFileAsync(
+            'docker',
+            buildSubprocessDockerArgs(execContext, cmd, args, {
               cwd: options.cwd,
               env: options.env,
               input: options.input,
             }),
-            async (dockerArgs, onSpawn, clean) => {
-              try {
-                const result = await execFileAsync('docker', dockerArgs, {
-                  timeout: options.timeout,
-                  input: options.input,
-                  ...(onSpawn ? { onSpawn } : {}),
-                });
-                return { ...result, stderr: clean(result.stderr) };
-              } catch (cause) {
-                if (
-                  cause instanceof Error &&
-                  'stderr' in cause &&
-                  typeof cause.stderr === 'string'
-                ) {
-                  cause.stderr = clean(cause.stderr);
-                }
-                throw cause;
-              }
-            }
+            { timeout: options.timeout, input: options.input }
           )
         : options.ownProcessGroup
           ? await execOwnedProcessGroup(cmd, args, {

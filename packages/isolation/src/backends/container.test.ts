@@ -1,8 +1,3 @@
-import {
-  admitContainerCommand,
-  coordinateContainerCommand,
-  getContainerExecGate,
-} from '@archon/provider-contract/container-exec';
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { join } from 'path';
 import { readFileSync } from 'node:fs';
@@ -1577,9 +1572,7 @@ describe('ContainerBackend separated artifact storage', () => {
                 : 'false';
         return { stdout, stderr: '' };
       }
-      if (args[0] === 'pause') state = 'paused';
-      if (args[0] === 'unpause' || (args[0] === 'start' && args[1] !== 'helper-id'))
-        state = 'running';
+      if (args[0] === 'start' && args[1] !== 'helper-id') state = 'running';
       if (args[0] === 'stop') state = 'exited';
       if (args[0] === 'create') {
         helper = args[args.indexOf('--name') + 1];
@@ -2045,101 +2038,32 @@ describe('ContainerBackend separated artifact storage', () => {
       ).toBe(false);
       release?.();
       await Promise.all([publish, lifecycle]);
-      const unpause = f.docker.calls.findIndex(args => args[0] === 'unpause');
+      const helperRemoved = f.docker.calls.findIndex(
+        args => args[0] === 'rm' && args.at(-1) === 'helper-id'
+      );
       const shutdown = f.docker.calls.findIndex(
         args =>
           args.at(-1) === 'archon-res-1' && args[0] === (operation === 'suspend' ? 'stop' : 'rm')
       );
-      expect(shutdown).toBeGreaterThan(unpause);
+      expect(shutdown).toBeGreaterThan(helperRemoved);
     }
   );
 
-  test.each(['command', 'admission'] as const)(
-    '%s waits through the prepared environment transfer gate',
+  test.each(['publish', 'collect', 'suspend', 'destroy'] as const)(
+    'refuses %s after an unconfirmed helper removal without starting another operation',
     async operation => {
       const f = environment();
       const prepared = await f.backend.resumeEnv(f.row.id);
-      if (prepared.execContext.kind !== 'container') throw new Error('Expected container context');
-      const id = prepared.execContext.containerId;
-      let release!: () => void;
-      let arrived!: () => void;
-      const waiting = new Promise<void>(resolve => {
-        release = resolve;
-      });
-      const atWait = new Promise<void>(resolve => {
-        arrived = resolve;
-      });
-      f.setWait(async () => {
-        arrived();
-        await waiting;
-      });
-      const transfer = prepared.artifactExchange!.collect();
-      await atWait;
-      let started = false;
-      const command =
-        operation === 'command'
-          ? coordinateContainerCommand(id, async () => {
-              started = true;
-            })
-          : admitContainerCommand(
-              id,
-              { prefix: ['exec', id], command: ['true'] },
-              async (_args, observe) => {
-                started = true;
-                observe?.(undefined);
-              }
-            );
-      try {
-        await Promise.resolve();
-        expect(started).toBe(false);
-        release();
-        await Promise.all([transfer, command]);
-        expect(started).toBe(true);
-        await f.backend.destroy(f.row.id);
-        expect(getContainerExecGate(id)).toBeUndefined();
-      } finally {
-        release();
-      }
-    }
-  );
-
-  test.each(
-    (['publish', 'collect', 'command', 'admission', 'suspend', 'destroy'] as const).flatMap(
-      operation => (['helper', 'admission'] as const).map(cause => [operation, cause] as const)
-    )
-  )(
-    'refuses %s after unconfirmed %s without starting another operation',
-    async (operation, cause) => {
-      const f = environment();
-      const prepared = await f.backend.resumeEnv(f.row.id);
-      if (prepared.execContext.kind !== 'container') throw new Error('Expected container context');
-      const id = prepared.execContext.containerId;
       f.setFailure(args =>
         args[0] === 'rm' && args.at(-1) === 'helper-id' ? new Error('daemon lost') : undefined
       );
-      if (cause === 'helper') await expect(prepared.artifactExchange!.collect()).rejects.toThrow();
-      else getContainerExecGate(id)!.failAdmission(new Error('Unconfirmed exec admission'));
+      await expect(prepared.artifactExchange!.collect()).rejects.toThrow();
       const before = f.docker.calls.length;
-      let started = false;
       const refused =
-        operation === 'command'
-          ? coordinateContainerCommand(id, async () => {
-              started = true;
-            })
-          : operation === 'admission'
-            ? admitContainerCommand(
-                id,
-                { prefix: ['exec', id], command: ['true'] },
-                async (_args, observe) => {
-                  started = true;
-                  observe?.(undefined);
-                }
-              )
-            : operation === 'publish' || operation === 'collect'
-              ? prepared.artifactExchange![operation]()
-              : f.backend[operation](f.row.id);
+        operation === 'publish' || operation === 'collect'
+          ? prepared.artifactExchange![operation]()
+          : f.backend[operation](f.row.id);
       await expect(refused).rejects.toThrow();
-      expect(started).toBe(false);
       expect(f.docker.calls.slice(before).every(args => args[0] === 'container')).toBe(true);
     }
   );

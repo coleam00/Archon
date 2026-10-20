@@ -1,4 +1,3 @@
-import { registerContainerExecGate } from '../container-exec';
 import { expect, test } from 'bun:test';
 import { z } from 'zod';
 import type { ProviderChunk } from '../events';
@@ -270,36 +269,6 @@ test('a field newer than the pinned plugin fails instead of being dropped', asyn
     expect(error).toBeInstanceOf(PluginRemoteError);
     expect(error).toMatchObject({ code: -32602 });
   } finally {
-    await client.close();
-    await agent.close();
-  }
-});
-
-test('a pinned plugin refuses required container coordination before dispatch', async () => {
-  const pair = streamPair();
-  const { agent } = pinnedPlugin(pair.provider);
-  const client = await connectProvider(pair.host);
-  let acquired = false;
-  const unregister = registerContainerExecGate('pinned-container', {
-    async run(operation) {
-      acquired = true;
-      return operation();
-    },
-    failAdmission: error => {
-      throw error;
-    },
-  });
-  try {
-    await expect(
-      client
-        .sendQuery('turn', '/workspace', undefined, {
-          execContext: { kind: 'container', containerId: 'pinned-container' },
-        })
-        .next()
-    ).rejects.toMatchObject({ code: -32602 });
-    expect(acquired).toBe(false);
-  } finally {
-    unregister();
     await client.close();
     await agent.close();
   }
