@@ -44,6 +44,16 @@ function namedEnvironment(passage: string): string[] {
   return [...promised.matchAll(/`([A-Z_]+)`/g)].map(match => match[1]);
 }
 
+/** Every variable the copies treat as user-controlled: the substituted names and their env forms. */
+function userControlledVariables(passages: readonly { text: string }[]): string[] {
+  const names = new Set<string>();
+  for (const { text } of passages) {
+    for (const name of namedVariables(text)) names.add(name);
+    for (const name of namedEnvironment(text)) names.add(name);
+  }
+  return [...names];
+}
+
 describe('the user-controlled variable rule', () => {
   const passages = COPIES.flatMap(file => rulePassages(file).map(text => ({ file, text })));
 
@@ -74,7 +84,7 @@ describe('the user-controlled variable rule', () => {
   test('no shipped copy promises a warning for a literal user-controlled variable', () => {
     // The whole copy, not only the rule passages: a promise of the removed warning
     // reads the same wherever it stands.
-    const variables = userControlledVariables();
+    const variables = userControlledVariables(passages);
     for (const file of COPIES) {
       for (const line of readFileSync(join(REPO, file), 'utf8').split('\n')) {
         const named = variables.filter(variable => line.includes(`$${variable}`));
@@ -84,14 +94,4 @@ describe('the user-controlled variable rule', () => {
       }
     }
   });
-
-  /** Every variable the copies treat as user-controlled: the substituted names and their env forms. */
-  function userControlledVariables(): string[] {
-    const names = new Set<string>();
-    for (const { text } of passages) {
-      for (const name of namedVariables(text)) names.add(name);
-      for (const name of namedEnvironment(text)) names.add(name);
-    }
-    return [...names];
-  }
 });
