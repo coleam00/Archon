@@ -864,16 +864,9 @@ Suspension and failure have different recovery rules:
   cursor. The next iteration continues each owner even with `fresh_context: true`.
   Missing or invalid owner state fails restoration. A wait that suspends again retains
   the same snapshot.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): execution
-  records identify the interrupted iteration and its enclosing loop invocation.
-  Completed body nodes in that iteration can reuse their outputs; failed or
-  unfinished nodes run again. `always_run: true` forces a fresh execution, and
-  changed dependencies invalidate cached results. Include gates are checked before
-  reusing a cached entry or descendant. `$LOOP_PREV.*` reads the preceding iteration,
-  and named owner sessions retain their private cursors. Legacy outputs without
-  invocation records still restart the group at iteration 1. Older records whose
-  preceding iteration used mutable output spills also restart: those files cannot
-  recover a reliable historical value.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
+  no persisted iteration cursor — the loop_group node restarts from
+  **iteration 1**. Per-body-node resume granularity is not supported in v1.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -884,6 +877,7 @@ Suspension and failure have different recovery rules:
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
   cursor governed by `fresh_context`, or explicit named owner cursors described above.
+- Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
 

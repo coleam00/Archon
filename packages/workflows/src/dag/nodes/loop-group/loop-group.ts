@@ -20,7 +20,6 @@ import {
   restoreLoopPrevOutputs,
   resumeTerminalWait,
 } from './resume';
-import { restoreInterruptedIteration } from './interrupted-iteration';
 import { runLoopGroupIteration } from './iteration';
 
 /**
@@ -204,18 +203,11 @@ async function executeLoopGroupBody(
     const waiting = await resumeTerminalWait(run);
     if (waiting !== undefined) return waiting;
   }
-  run.interruptedIteration = await restoreInterruptedIteration(run);
-  if (run.interruptedIteration) resume.startIteration = run.interruptedIteration.iteration;
-  const loopPrevOutputs = resume.isLoopResume
-    ? restoreLoopPrevOutputs(run)
-    : run.interruptedIteration?.previous;
+  const loopPrevOutputs = resume.isLoopResume ? restoreLoopPrevOutputs(run) : undefined;
   const resumedCompletion = await completeEscalatedResume(run, loopPrevOutputs);
   if (resumedCompletion !== undefined) return resumedCompletion;
 
   const state = initialLoopGroupState(run, loopPrevOutputs);
-  if (run.interruptedIteration && !group.fresh_context) {
-    state.lastSequentialSession = run.interruptedIteration.previousSequentialSession;
-  }
   const { startIteration, iterationLimit } = resume;
   for (let i = startIteration; i <= iterationLimit; i++) {
     const result = await runLoopGroupIteration(run, state, i);

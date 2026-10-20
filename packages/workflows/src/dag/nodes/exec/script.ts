@@ -381,7 +381,7 @@ export async function executeScriptNode(
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
 
-  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir);
+  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
 
   return recordNodeState(
     { store: deps.store, logDir },

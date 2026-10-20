@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   createMockStore,
@@ -178,7 +178,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(result).toContain('all tests green now');
   });
 
-  it("retains each iteration's full output in its own persisted spill", async () => {
+  it('overwrites the persisted-output spill file per iteration, keyed by the shared step_name (#2726)', async () => {
+    // A loop_group body node's step_name is the SAME across every iteration
+    // (stepNamePrefix + node.id, no iteration suffix) -- formatPersistedNodeOutput's
+    // spill file is therefore keyed identically each iteration too, by design (see its
+    // doc comment). This test proves that design empirically: each iteration's own DB
+    // row keeps ITS OWN preview text frozen at write time, but the shared spill file on
+    // disk ends the run holding only the LATEST iteration's full bytes -- which is
+    // correct, because getDagResumeSnapshot's completedNodeOutputs map is itself
+    // last-write-wins per step_name, so only the latest row (and therefore the latest
+    // spill content) is ever actually consulted on resume.
     const counterFile = join(testDir, 'lg-spill-counter');
     const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
     const artifactsDir = join(testDir, 'artifacts');
@@ -233,17 +242,17 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const [iter1, iter2] = emitEvents.map(
       call => (call[0] as { data: { node_output: string; node_output_spill_path: string } }).data
     );
+    // Each row's OWN preview reflects its OWN iteration's content -- frozen at write time.
     expect(iter1.node_output.startsWith('a')).toBe(true);
     expect(iter2.node_output.startsWith('b')).toBe(true);
-    expect(iter1.node_output_spill_path).not.toBe(iter2.node_output_spill_path);
-    for (const output of [iter1, iter2]) {
-      expect(dirname(output.node_output_spill_path)).toBe(
-        join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
-      );
-      expect(output.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
-    }
-    expect(await readFile(iter1.node_output_spill_path, 'utf8')).toBe('a'.repeat(40_000));
-    expect(await readFile(iter2.node_output_spill_path, 'utf8')).toBe('b'.repeat(40_000));
+    // Both rows point at the SAME spill path, by design.
+    expect(iter1.node_output_spill_path).toBe(iter2.node_output_spill_path);
+    expect(iter1.node_output_spill_path).toBe(
+      join(artifactsDir, '.archon', 'node-output-spills', 'persisted', 'group.emit.nodeoutput')
+    );
+    // The file on disk, after the run, holds only the LATEST iteration's content.
+    const finalSpillContent = await readFile(iter1.node_output_spill_path, 'utf8');
+    expect(finalSpillContent).toBe('b'.repeat(40_000));
   });
 
   it("until_bash observes the typed artifacts its own iteration's body published", async () => {

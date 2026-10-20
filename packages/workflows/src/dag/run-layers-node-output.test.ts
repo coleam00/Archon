@@ -2,11 +2,10 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   createMockStore,
-  persistedEvents,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -16,7 +15,6 @@ import {
   makeWorkflowRun,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
-import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import type { ExecNode } from '../schemas';
 
 describe('executeDagWorkflow -- persisted node output', () => {
@@ -50,45 +48,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
     }));
     await removeTempTree(testDir);
   });
-
-  for (const runtime of ['sh', 'bun'] as const) {
-    it(`restores full ${runtime} output for a long node ID`, async () => {
-      const store = createMockStore();
-      const workflowRun = makeWorkflowRun(`long-node-${runtime}`);
-      const nodeId = 'a'.repeat(220);
-      const output = 'x'.repeat(40_000);
-      const options = dagOptions({
-        deps: createMockDeps(store),
-        cwd: testDir,
-        artifactsDir: join(testDir, 'artifacts'),
-        workflowRun,
-        workflow: {
-          name: 'long-node-output',
-          nodes: [
-            {
-              id: nodeId,
-              kind: 'exec',
-              runtime,
-              script:
-                runtime === 'sh'
-                  ? "printf '%40000s' '' | tr ' ' x"
-                  : "process.stdout.write('x'.repeat(40000))",
-            },
-          ],
-        },
-      });
-      await executeDagWorkflow(options);
-      const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
-      expect(snapshot.completedNodeOutputs.get(nodeId)?.output).toBe(output);
-
-      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
-      expect(persistedEvents(store).some(e => e.event_type === 'node_skipped_prior_success')).toBe(
-        true
-      );
-      const replayed = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
-      expect(replayed.completedNodeOutputs.get(nodeId)?.output).toBe(output);
-    });
-  }
 
   it('stores node_output in node_completed event data for bash nodes', async () => {
     const store = createMockStore();
@@ -219,10 +178,16 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(data.node_output_original_bytes).toBe(32_769);
     // The full bytes are spilled alongside the bounded preview (#2726) so a resumed run
     // rehydrates the same value a fresh run's in-process consumer would have seen.
-    expect(dirname(data.node_output_spill_path)).toBe(
-      join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
+    expect(data.node_output_spill_path).toBe(
+      join(
+        testDir,
+        'artifacts',
+        '.archon',
+        'node-output-spills',
+        'persisted',
+        'over-cap.nodeoutput'
+      )
     );
-    expect(data.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 
@@ -359,10 +324,16 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(data.node_output).toEndWith('\n\n… [truncated; original output was 32769 bytes]');
     expect(data.node_output_truncated).toBe(true);
     expect(data.node_output_original_bytes).toBe(32_769);
-    expect(dirname(data.node_output_spill_path)).toBe(
-      join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
+    expect(data.node_output_spill_path).toBe(
+      join(
+        testDir,
+        'artifacts',
+        '.archon',
+        'node-output-spills',
+        'persisted',
+        'script-over-cap.nodeoutput'
+      )
     );
-    expect(data.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 

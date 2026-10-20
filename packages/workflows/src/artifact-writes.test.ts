@@ -136,7 +136,7 @@ describe('in a container-mounted artifacts directory', () => {
   test('a refused persisted spill keeps the bounded preview without a spill path', async () => {
     await mkdir(join(root, engineDir('node-output-spills')), { recursive: true });
     await symlink(outside, join(root, engineDir('node-output-spills', 'persisted')));
-    const persisted = contained(() => formatPersistedNodeOutput(large, root));
+    const persisted = contained(() => formatPersistedNodeOutput(large, root, 'probe'));
     expect(persisted.truncated).toBe(true);
     expect(persisted.spillPath).toBeUndefined();
     await expectOutsideUntouched();
