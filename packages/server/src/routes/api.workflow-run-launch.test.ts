@@ -768,4 +768,39 @@ describe('POST /api/workflows/:name/run', () => {
     }
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
+
+  test('forwards one JSON continuation run id and refuses an invalid declaration', async () => {
+    mockFindConversationByPlatformId.mockImplementation(async () => null);
+    mockHandleMessage.mockImplementation(async () => {});
+    const { app } = makeApp();
+    const run = async (extra: Record<string, unknown>): Promise<Response> =>
+      app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', ...extra }),
+      });
+
+    expect((await run({ adopt_run_id: 'run-1' })).status).toBe(200);
+    expect((await run({ supersedes_run_id: 'run-2' })).status).toBe(200);
+    const [adoptCtx, supersedeCtx] = mockHandleMessage.mock.calls.map(call => call[3]);
+    expect(adoptCtx).toMatchObject({ workflowAdoptRunId: 'run-1' });
+    expect(adoptCtx).not.toHaveProperty('workflowSupersedesRunId');
+    expect(supersedeCtx).toMatchObject({ workflowSupersedesRunId: 'run-2' });
+    expect(supersedeCtx).not.toHaveProperty('workflowAdoptRunId');
+
+    mockHandleMessage.mockClear();
+    for (const [extra, error] of [
+      [{ adopt_run_id: '' }, 'adopt_run_id must be a non-empty run id'],
+      [{ supersedes_run_id: 7 }, 'supersedes_run_id must be a non-empty run id'],
+      [
+        { adopt_run_id: 'run-1', supersedes_run_id: 'run-2' },
+        'adopt_run_id and supersedes_run_id are mutually exclusive',
+      ],
+    ] as const) {
+      const response = await run(extra);
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe(error);
+    }
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
 });

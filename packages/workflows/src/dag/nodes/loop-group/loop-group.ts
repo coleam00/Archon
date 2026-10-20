@@ -103,30 +103,41 @@ export async function executeLoopGroupNode(
       { workflowId: ctx.workflowRun.id, nodeName: node.id }
     );
   }
+  return recordGroupResult(ctx, execution, result);
+}
+
+async function recordGroupResult(
+  ctx: RunLayersContext,
+  execution: NodeExecutionRecord,
+  result: LoopGroupBodyResult
+): Promise<NodeExecutionResult> {
   if (result.execution?.lifecycle.status === 'suspended') return result;
-  let lifecycle: NodeExecutionRecord['lifecycle'];
-  if (result.state === 'failed') {
-    lifecycle = {
-      status: 'failed',
-      error: result.error,
-      ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
-      ...(result.providerFailure !== undefined ? { providerFailure: result.providerFailure } : {}),
-    };
-  } else if (result.state === 'running') {
-    const suspensionPoint = result.suspensionPoint;
-    // A deferred body gate or terminal wait leaves the group running; keep the spend its
-    // iterations already made.
-    if (suspensionPoint === undefined)
-      return {
-        ...serializeNodeOutput(execution),
-        ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
-        ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
-        ...(result.tokensUnknown ? { tokensUnknown: true } : {}),
+  let lifecycle: Parameters<typeof finishNodeExecution>[1];
+  switch (result.state) {
+    case 'failed':
+      lifecycle = {
+        status: 'failed',
+        error: result.error,
+        ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
+        ...(result.providerFailure !== undefined
+          ? { providerFailure: result.providerFailure }
+          : {}),
       };
-    lifecycle = { status: 'suspended', point: suspensionPoint };
-  } else {
-    lifecycle = { status: 'completed' };
+      break;
+    case 'skipped':
+      lifecycle = { status: 'skipped', reason: 'trigger_rule', cause: result.cause };
+      break;
+    case 'running': {
+      const suspensionPoint = result.suspensionPoint;
+      // A deferred body gate or terminal wait leaves the group running with its usage.
+      if (suspensionPoint === undefined) return runningGroupOutput(execution, result);
+      lifecycle = { status: 'suspended', point: suspensionPoint };
+      break;
+    }
+    default:
+      lifecycle = { status: 'completed' };
   }
+
   return recordNodeState(
     { store: ctx.deps.store, logDir: ctx.logDir },
     finishNodeExecution(execution, lifecycle, {
@@ -140,6 +151,18 @@ export async function executeLoopGroupNode(
       diagnostics: { loopIterations: result.loopIterations },
     })
   );
+}
+
+function runningGroupOutput(
+  execution: NodeExecutionRecord,
+  result: LoopGroupBodyResult
+): NodeExecutionResult {
+  return {
+    ...serializeNodeOutput(execution),
+    ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+    ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+    ...(result.tokensUnknown ? { tokensUnknown: true } : {}),
+  };
 }
 
 async function executeLoopGroupBody(

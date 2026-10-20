@@ -1,10 +1,11 @@
+import { loopBodyAdmission } from '../../interaction-admission';
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
 import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-state';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
-import type { LoopGroupNode, NodeOutput } from '../../schemas';
-import { recordFailed, withResolution, type DryRunContext } from '../context';
+import { canSuspend, type LoopGroupNode, type NodeOutput } from '../../schemas';
+import { recordSkipped, recordFailed, withResolution, type DryRunContext } from '../context';
 import { completionReason, loopIterationCompletes } from '../loop-completion';
 import { simulateNodes } from '../simulate';
 
@@ -40,6 +41,7 @@ export async function simulateLoopGroup(
   // the body sets it — so a spread copy would swallow a pause and let the run continue past
   // it. Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
   // nests correctly when a body contains another loop_group.
+  const outerAdmission = ctx.interactionAdmission;
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
   const outerLoopBodyScopes = ctx.loopBodyScopes;
@@ -55,8 +57,10 @@ export async function simulateLoopGroup(
     ctx.loopPrevOutputs = loopPrevOutputs;
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
+      ctx.interactionAdmission = loopBodyAdmission(outerAdmission);
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
+      ctx.interactionAdmission = outerAdmission;
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
       ctx.loopBodyScopes = outerLoopBodyScopes;
@@ -76,6 +80,18 @@ export async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
+    const origin = outerAdmission?.failure();
+    if (origin !== undefined && canSuspend(node)) {
+      recordSkipped(
+        node,
+        outputs,
+        ctx,
+        'loop body failed',
+        { kind: 'upstream_failed', origin },
+        iteration
+      );
+      return;
+    }
     const groupCompletion = loopIterationCompletes(node.loop_group, { output: iterationOutput });
     if (groupCompletion.kind !== 'incomplete') {
       const output = stripCompletionTags(iterationOutput, node.loop_group.until);
