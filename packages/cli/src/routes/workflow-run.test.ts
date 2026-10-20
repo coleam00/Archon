@@ -1,3 +1,4 @@
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -5,7 +6,6 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as detachedControl from '../utils/detached-run-control';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
@@ -29,25 +29,62 @@ const repo: Codebase = {
   updated_at: new Date(),
 };
 
+type InvocationOptions = {
+  missing?: boolean;
+  lookupError?: boolean;
+  getError?: boolean;
+  detachedStatus?: 'pending' | 'running' | 'completed' | 'failed';
+  json?: boolean;
+  detachedOwner?: boolean;
+  rowWorkflowName?: string;
+  workflowNames?: readonly string[];
+  wrongToken?: boolean;
+  missingToken?: boolean;
+  explicitSource?: boolean;
+};
+
+async function createDetachedRows(host: WorkflowHost, options: InvocationOptions) {
+  const otherLaunch = options.wrongToken
+    ? await host.deps.store.createWorkflowRun({
+        workflow_name: 'probe',
+        user_message: '',
+        metadata: { cli_detached_launch_token: 'launch-token' },
+      })
+    : undefined;
+  const handedOver = options.detachedStatus
+    ? await host.deps.store.createWorkflowRun({
+        workflow_name: options.rowWorkflowName ?? 'probe',
+        user_message: '',
+        metadata: {
+          cli_detached_launch_token: options.wrongToken ? 'another-launch' : 'launch-token',
+        },
+      })
+    : undefined;
+  if (handedOver && options.detachedStatus !== 'pending') {
+    await host.deps.store.claimPendingWorkflowRun(handedOver.id);
+    if (options.detachedStatus === 'completed') {
+      await host.deps.store.completeWorkflowRun(handedOver.id, { duration_ms: 1 });
+    } else if (options.detachedStatus === 'failed') {
+      await host.deps.store.failWorkflowRun(handedOver.id, 'original failure');
+    }
+  }
+  return { otherLaunch, handedOver };
+}
+
 async function invoke(
   values: Record<string, unknown>,
   rows = [repo],
-  options: {
-    missing?: boolean;
-    lookupError?: boolean;
-    getError?: boolean;
-    detachedStatus?: 'pending' | 'running' | 'completed' | 'failed';
-    json?: boolean;
-    detachedOwner?: boolean;
-    ownerClaimError?: boolean;
-    rowWorkflowName?: string;
-    workflowNames?: readonly string[];
-  } = {}
+  options: InvocationOptions = {}
 ) {
   const home = mkdtempSync(join(tmpdir(), 'archon-project-route-'));
   roots.push(home);
   if (options.workflowNames) {
-    const workflows = join(home, '.archon', 'workflows');
+    const workflows = join(
+      home,
+      ...(options.explicitSource ? ['source'] : []),
+      '.archon',
+      'workflows'
+    );
     mkdirSync(workflows, { recursive: true });
     for (const name of options.workflowNames) {
       writeFileSync(
@@ -67,25 +104,8 @@ async function invoke(
   });
   const result = await captureWorkflowCommand(home, async host => {
     process.env.ARCHON_DETACHED_RUN_OWNER = options.detachedOwner === false ? '' : '1';
-    const claimOwner = spyOn(detachedControl, 'claimDetachedRunProcessOwner').mockImplementation(
-      async () => {
-        if (options.ownerClaimError) throw new Error('not a process owner');
-      }
-    );
-    const handedOver = options.detachedStatus
-      ? await host.deps.store.createWorkflowRun({
-          workflow_name: options.rowWorkflowName ?? 'probe',
-          user_message: '',
-        })
-      : undefined;
-    if (handedOver && options.detachedStatus !== 'pending') {
-      await host.deps.store.claimPendingWorkflowRun(handedOver.id);
-      if (options.detachedStatus === 'completed') {
-        await host.deps.store.completeWorkflowRun(handedOver.id, { duration_ms: 1 });
-      } else if (options.detachedStatus === 'failed') {
-        await host.deps.store.failWorkflowRun(handedOver.id, 'original failure');
-      }
-    }
+    process.env.ARCHON_DETACHED_LAUNCH_TOKEN = options.missingToken ? '' : 'launch-token';
+    const { otherLaunch, handedOver } = await createDetachedRows(host, options);
     const list = spyOn(host.records.codebases, 'listCodebaseClaims').mockImplementation(
       async () => {
         if (options.lookupError) throw new Error('registry unavailable');
@@ -102,21 +122,24 @@ async function invoke(
         commands: { ...commands, workflowRunCommand: run },
         values: {
           ...values,
+          ...(options.explicitSource ? { 'workflow-source': join(home, 'source') } : {}),
           ...(handedOver ? { 'internal-detached-run-id': handedOver.id } : {}),
         },
         positionals: ['workflow', 'run', 'probe', 'message'],
         command: 'workflow',
         subcommand: 'run',
         cwd: '/launch/subdir',
-        effectiveCwd: options.workflowNames ? home : '/launch',
+        effectiveCwd: options.workflowNames && !options.explicitSource ? home : '/launch',
         json: options.json,
         detachedRunConfig: undefined,
         inheritedEnv: {},
         forgeTrustedEnv: {},
       });
       if (handedOver) storedRun = await host.deps.store.getWorkflowRun(handedOver.id);
+      if (otherLaunch) {
+        expect((await host.deps.store.getWorkflowRun(otherLaunch.id))?.status).toBe('pending');
+      }
     } finally {
-      claimOwner.mockRestore();
       list.mockRestore();
       get.mockRestore();
     }
@@ -299,8 +322,8 @@ test.each([...RUN_PROJECT_CONFLICT_FLAGS])(
 
 test.each([
   { name: 'unowned invocation', detachedOwner: false },
-  { name: 'refused process claim', ownerClaimError: true },
-  { name: 'different workflow', rowWorkflowName: 'unrelated' },
+  { name: 'same workflow, different launch', wrongToken: true },
+  { name: 'missing launch identity', missingToken: true },
 ])('project refusal preserves another pending run: $name', async options => {
   const result = await invoke({ project: 'missing' }, [], {
     ...options,
@@ -313,19 +336,21 @@ test.each([
   expect(result.storedRun?.metadata?.error).toBeUndefined();
 });
 
-test.each([
-  { names: ['archon-probe'], expected: 'failed' },
-  { names: ['archon-probe', 'probe'], expected: 'pending' },
-  { names: ['archon-probe', 'other-probe'], expected: 'pending' },
-  { names: [], expected: 'pending' },
-])('validates shorthand against all discovered workflows: $names', async ({ names, expected }) => {
-  const result = await invoke({ project: 'missing' }, [], {
-    detachedStatus: 'pending',
-    rowWorkflowName: 'archon-probe',
-    workflowNames: names,
-  });
-  expect(result.exitCode).toBe(1);
-  expect(result.output).toContain('is not registered');
-  expect(result.run).not.toHaveBeenCalled();
-  expect(result.storedRun?.status).toBe(expected);
-});
+test.each([false, true])(
+  'records project refusal with explicit source: %s',
+  async explicitSource => {
+    const result = await invoke({ project: 'missing' }, [], {
+      detachedStatus: 'pending',
+      rowWorkflowName: 'archon-probe',
+      workflowNames: ['archon-probe'],
+      explicitSource,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('is not registered');
+    expect(result.run).not.toHaveBeenCalled();
+    expect(result.storedRun).toMatchObject({
+      status: 'failed',
+      metadata: { stop_reason: { reason: 'launch_failed' } },
+    });
+  }
+);

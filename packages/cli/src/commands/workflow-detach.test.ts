@@ -127,6 +127,13 @@ describe('workflowRunCommand — detach', () => {
       expect(spawnOptions?.detached).toBe(true);
       expect(spawnOptions?.windowsHide).toBe(true);
       expect(spawnOptions?.env?.ARCHON_DETACHED_RUN_OWNER).toBe('1');
+      const created = (workflowDb.createWorkflowRun as ReturnType<typeof mock>).mock.calls.at(
+        -1
+      )?.[0];
+      expect(spawnOptions?.env?.ARCHON_DETACHED_LAUNCH_TOKEN).toBe(
+        created?.metadata.cli_detached_launch_token
+      );
+      expect(spawnOptions?.env?.ARCHON_DETACHED_LAUNCH_TOKEN).toBeTruthy();
       expect(spawnOptions?.env?.ARCHON_HOME).toBe(testHome);
       const logLine = consoleSpy.mock.calls.find((call: unknown[]) =>
         String(call[0]).startsWith('Child output: ')
@@ -965,18 +972,20 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     status: 'pending',
     working_path: null,
     started_at: new Date(),
-    metadata: {},
+    metadata: { cli_detached_launch_token: 'launch-token' },
   };
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     process.env.ARCHON_DETACHED_RUN_OWNER = '1';
+    process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
     mockStartRunLiveOwner.mockClear();
   });
 
   afterEach(() => {
     consoleSpy.mockRestore();
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
+    delete process.env.ARCHON_DETACHED_LAUNCH_TOKEN;
   });
 
   it('executes the launcher’s row and files its capture under that id', async () => {
@@ -1006,7 +1015,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     );
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       ...preCreatedRow,
-      metadata: { ai_configuration: snapshot },
+      metadata: { ...preCreatedRow.metadata, ai_configuration: snapshot },
     });
     (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
     (executeWorkflow as ReturnType<typeof mock>).mockClear();
@@ -1111,6 +1120,27 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     ).rejects.toThrow(/set by a detached launch for its own child/);
   });
 
+  it.each(['', 'another-launch'])(
+    'refuses a same-workflow row from another handoff: %s',
+    async token => {
+      process.env.ARCHON_DETACHED_LAUNCH_TOKEN = token;
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
+      (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockClear();
+      (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+          detachedRunId: preCreatedRow.id,
+        })
+      ).rejects.toThrow('detached launch identity does not match');
+      expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+      expect(prepareWorkflowSource).not.toHaveBeenCalled();
+      expect(executeWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses a row that is not awaiting its first execution', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -1146,12 +1176,12 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     ).rejects.toThrow(/belongs to workflow 'something-else', not 'plan'/);
   });
 
-  it.each(['unowned', 'claim refused', 'different workflow', 'owned'] as const)(
+  it.each(['unowned', 'claim refused', 'different launch', 'owned'] as const)(
     'checks the handoff after a pre-admission error: %s',
     async mode => {
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
-      if (mode === 'owned') {
+      if (mode === 'owned' || mode === 'claim refused') {
         (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce(
           'pending'
         );
@@ -1159,10 +1189,14 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       if (mode === 'unowned') delete process.env.ARCHON_DETACHED_RUN_OWNER;
       if (mode === 'claim refused') {
         mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error('claim refused'));
-      } else if (mode !== 'unowned') {
+      }
+      if (mode !== 'unowned') {
         (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
           ...preCreatedRow,
-          workflow_name: mode === 'different workflow' ? 'other' : 'plan',
+          metadata: {
+            cli_detached_launch_token:
+              mode === 'different launch' ? 'another-launch' : 'launch-token',
+          },
         });
       }
       await expect(
@@ -1171,7 +1205,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
           modelAssignments: ['invalid-assignment'],
         })
       ).rejects.toThrow();
-      if (mode === 'owned') {
+      if (mode === 'owned' || mode === 'claim refused') {
         expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
           preCreatedRow.id,
           expect.stringContaining('Detached run failed to start'),

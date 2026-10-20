@@ -3,6 +3,7 @@ import { withCapturedSource } from '@archon/workflows/run-source';
 import {
   claimDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
+  DETACHED_LAUNCH_TOKEN_ENV,
 } from '../utils/detached-run-control';
 import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
@@ -92,22 +93,26 @@ export async function workflowRunCommand(
   const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
   if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
 
+  const launchToken = process.env[DETACHED_LAUNCH_TOKEN_ENV];
+  Reflect.deleteProperty(process.env, DETACHED_LAUNCH_TOKEN_ENV);
+
   const notifyResumeAccepted = consumeDetachedResumeReceiptRequest((runId, error) => {
     getLog().warn({ err: error, runId }, 'cli.detached_resume_receipt_failed');
   });
 
-  if (detachedProcessOwner) await claimDetachedRunProcessOwner();
-
+  const processClaim = detachedProcessOwner ? claimDetachedRunProcessOwner() : undefined;
   let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
     try {
+      await processClaim;
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource({
           host,
           owner,
           ...attempt,
           detachedProcessOwner,
+          launchToken,
           notifyResumeAccepted,
         })
       );
@@ -117,8 +122,7 @@ export async function workflowRunCommand(
         {
           detachedRunId: options.detachedRunId,
           detachedProcessOwner,
-          workflowName,
-          discoveryCwd: options.discoveryCwd ?? cwd,
+          launchToken,
         },
         error as Error
       );

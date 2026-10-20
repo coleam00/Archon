@@ -133,16 +133,11 @@ export const mockStartRunLiveOwner = mock(
     })
 );
 
-mock.module(
-  '../utils/detached-run-control',
-  (): {
-    claimDetachedRunProcessOwner: typeof mockClaimDetachedRunProcessOwner;
-    DETACHED_RUN_OWNER_ENV: string;
-  } => ({
-    claimDetachedRunProcessOwner: mockClaimDetachedRunProcessOwner,
-    DETACHED_RUN_OWNER_ENV: 'ARCHON_DETACHED_RUN_OWNER',
-  })
-);
+const realDetachedControl = { ...(await import('../utils/detached-run-control')) };
+mock.module('../utils/detached-run-control', () => ({
+  ...realDetachedControl,
+  claimDetachedRunProcessOwner: mockClaimDetachedRunProcessOwner,
+}));
 
 // Capture the real class before mock.module replaces the module, so the mock
 // can re-export it without a hand-declared copy that would silently drift.
