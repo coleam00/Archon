@@ -279,6 +279,39 @@ describe('in a container-mounted artifacts directory', () => {
     }
   );
 
+  test('metadata handle read errors preserve the first producer and close the handle', async () => {
+    await contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a.b' }, 'first'));
+    const path = join(root, 'nodes', 'a_b.meta.json');
+    const originalMetadata = await readFile(path, 'utf8');
+    const failure = Object.assign(new Error('metadata read failed'), { code: 'EIO' });
+    const realOpen = fsPromises.open;
+    let assertReadAndClosed: () => void = () => {
+      throw new Error('metadata was not opened');
+    };
+    const intercepted = spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === path) {
+        const read = spyOn(handle, 'readFile').mockRejectedValue(failure);
+        const closed = spyOn(handle, 'close');
+        assertReadAndClosed = () => {
+          expect(read).toHaveBeenCalledTimes(1);
+          expect(closed).toHaveBeenCalledTimes(1);
+        };
+      }
+      return handle;
+    });
+    try {
+      await expect(
+        contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a_b' }, 'second'))
+      ).rejects.toBe(failure);
+      expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('first');
+      expect(await readFile(path, 'utf8')).toBe(originalMetadata);
+      assertReadAndClosed();
+    } finally {
+      intercepted.mockRestore();
+    }
+  });
+
   test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     "unreadable regular metadata rejects without replacing another producer's output",
     async () => {
