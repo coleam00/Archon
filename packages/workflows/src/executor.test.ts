@@ -5061,7 +5061,7 @@ describe('finally backstop', () => {
         }),
       });
       const originalWarn = mockLogger.warn;
-      const warn = mock((_data: unknown, _message?: string): void => undefined);
+      const warn = mock((_data?: unknown, _message?: string): void => undefined);
       mockLogger.warn = warn;
       try {
         const result = await executeWorkflow(
