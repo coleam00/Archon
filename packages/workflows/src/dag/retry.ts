@@ -18,7 +18,7 @@ import { persistNodeEvent } from '../node-event-write';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import type { RunLayersContext } from './run-context';
 import { shouldContinueStreamingForStatus, waitForNodeRetry } from './run-control';
-import { sumTokenUsage } from './usage';
+import { sumTokenUsage, sumReportedCost } from './usage';
 import { getLog } from './log';
 
 /** Default DAG node retry for TRANSIENT errors */
@@ -176,12 +176,7 @@ export async function runNodeRetryLoop(
       }
     }
     output = await run();
-    if (output.costUsd !== undefined) {
-      accumulatedCostUsd =
-        accumulatedCostUsd === null || output.costUsd === null
-          ? null
-          : (accumulatedCostUsd ?? 0) + output.costUsd;
-    }
+    accumulatedCostUsd = sumReportedCost([{ costUsd: accumulatedCostUsd }, output]);
     accumulatedTokensUnknown ||= output.tokensUnknown === true;
     if (accumulatedTokensUnknown) {
       accumulatedTokens = undefined;

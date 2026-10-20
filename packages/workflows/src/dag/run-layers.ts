@@ -22,7 +22,7 @@ import { evaluateCondition } from '../condition-evaluator';
 import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
-import { sumTokenUsage } from './usage';
+import { sumTokenUsage, sumReportedCost } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
 import {
   beginExecution,
@@ -557,21 +557,13 @@ async function aggregateLayerResults(
       // row's persisted totals and the transcript. Per-node cost/tokens must be
       // summed here and ONLY here. Terminal telemetry does not read this: it
       // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (output.costUsd === null || ctx.totalCostUsd === null) {
-          ctx.totalCostUsd = null;
-        } else if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
+      if (typeof output.costUsd === 'number' && !Number.isFinite(output.costUsd)) {
+        getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
       }
+      ctx.totalCostUsd = sumReportedCost([
+        { costUsd: ctx.totalCostUsd },
+        { costUsd: output.costUsd },
+      ]);
       ctx.totalTokensUnknown ||= output.tokensUnknown === true;
       if (ctx.totalTokensUnknown) {
         ctx.totalTokens = undefined;

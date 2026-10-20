@@ -140,11 +140,12 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd:
-      usage.total_cost_usd === null || typeof usage.total_cost_usd === 'number'
-        ? usage.total_cost_usd
-        : undefined,
+    costUsd: readChildCost(usage.total_cost_usd),
     ...(usage.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
+}
+
+function readChildCost(value: unknown): number | null | undefined {
+  return value === null || typeof value === 'number' ? value : undefined;
 }
