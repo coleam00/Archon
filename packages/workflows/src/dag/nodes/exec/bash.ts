@@ -36,7 +36,7 @@ export async function executeBashNode(
   node: ExecNode
 ): Promise<NodeExecutionResult> {
   const { envVars, protectedEnvKeys, protectedCredentialValues } = ctx.config;
-  const { stepNamePrefix, bodyLoopUserInput: loopUserInput = '' } = ctx;
+  const { bodyLoopUserInput: loopUserInput = '' } = ctx;
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   const {
     deps,
@@ -54,8 +54,6 @@ export async function executeBashNode(
   } = ctx;
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
-  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
-  const stepName = stepNamePrefix + node.id;
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
     diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
