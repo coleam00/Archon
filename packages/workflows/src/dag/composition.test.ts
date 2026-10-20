@@ -909,6 +909,94 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
+  for (const attestation of ['no-session', 'no-provider', 'attested'] as const) {
+    it(`restores only the cached iteration's session (${attestation})`, async () => {
+      mockSendQueryDag.mockClear();
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      let leads = 0;
+      let follows = 0;
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
+        if (prompt === 'lead') leads++;
+        if (prompt === 'follow' && ++follows === 2) throw new Error('interrupted iteration');
+        yield {
+          type: 'agent_message_chunk',
+          text: prompt === 'follow' && follows === 3 ? 'DONE' : 'continue',
+        };
+        yield {
+          type: 'result',
+          ...(session ? { resumed: true } : {}),
+          ...(prompt === 'lead' && !(leads === 2 && attestation === 'no-session')
+            ? { sessionId: leads === 1 ? 'OLD' : 'CURRENT' }
+            : {}),
+        };
+      });
+      const workflow = resolveTestWorkflow(
+        buildWf('cached-session', [
+          {
+            id: 'cycle',
+            loop_group: {
+              fresh_context: true,
+              max_iterations: 2,
+              until: 'DONE',
+              nodes: [
+                { id: 'lead', prompt: 'lead' },
+                { id: 'follow', prompt: 'follow', depends_on: ['lead'] },
+              ],
+            },
+          },
+        ])
+      );
+      const deps = createMockDeps();
+      const workflowRun = makeWorkflowRun(`cached-session-${attestation}`);
+      const options = dagOptions({ deps, cwd: testDir, workflow, workflowRun });
+      await executeDagWorkflow(options);
+      const rows = persistedEvents(deps.store);
+      expect(rows.some(e => e.event_type === 'node_failed' && e.step_name === 'cycle.follow')).toBe(
+        true
+      );
+      const completions = rows.filter(
+        e => e.event_type === 'node_completed' && e.step_name === 'cycle.lead'
+      );
+      expect(completions).toHaveLength(2);
+      if (attestation === 'no-provider') {
+        const data = completions[1]?.data;
+        if (!data || typeof data.binding !== 'object' || data.binding === null)
+          throw new Error('expected completion binding');
+        Reflect.deleteProperty(data.binding, 'provider');
+      }
+      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        rows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      const before = rows.length;
+      const callCount = mockSendQueryDag.mock.calls.length;
+      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
+      const resumed = persistedEvents(deps.store).slice(before);
+      expect(
+        resumed.some(
+          e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'cycle.lead'
+        )
+      ).toBe(true);
+      expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      const calls = mockSendQueryDag.mock.calls.slice(callCount);
+      expect(calls.map(c => c[0])).toEqual(['follow']);
+      expect(calls[0]?.[2]).toBe(attestation === 'attested' ? 'CURRENT' : undefined);
+    });
+  }
+
   it('rejects a loop reference in an include boundary without loop context', () => {
     const when = "$LOOP_PREV.work.output == 'go'";
     const workflow = loopGatedWorkflow(when);

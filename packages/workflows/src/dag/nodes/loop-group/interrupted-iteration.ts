@@ -22,7 +22,7 @@ export interface InterruptedIteration {
   iteration: number;
   completed: Map<string, PersistedNodeOutput>;
   previous: Map<string, NodeOutput>;
-  sessions: Map<string, SessionCursor>;
+  sessions: ReadonlyMap<string, SessionCursor | undefined>;
   previousSequentialSession?: SessionCursor;
 }
 
@@ -92,7 +92,7 @@ export async function restoreInterruptedIteration(
     iteration,
     completed,
     previous: previousOutputs,
-    sessions,
+    sessions: completedSessions.get(iteration) ?? new Map(),
     previousSequentialSession: restoreSequentialSession(
       run,
       iteration,
