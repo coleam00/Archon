@@ -591,7 +591,7 @@ archon workflow runs --limit 50        # cap rows (default 20)
 archon workflow runs --all             # list across all projects (ignore cwd scope)
 ```
 
-If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one.
+If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 The run-list JSON uses the same `active_nodes` contract as `workflow status`. The retained singular
 fields are compatibility fields: `current_step_name` and `current_step_status` are populated only
@@ -1173,6 +1173,24 @@ operation as `abandon`. Cancelling a parent therefore attempts descendant cancel
 [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count)
 and can report the same cascade failures or blocked parent described below.
 
+On Windows a detached owner runs in a Job Object that every process it starts inherits, so
+cancel and abandon stop and confirm the whole tree even when an intermediate process has
+already exited. An owner started by an Archon version without this reports no job, and its
+tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
+process and its descendants yourself, then use `workflow abandon`.
+
+A detached run that a node launches with `workflow run`, `resume`, `approve`, `reject`,
+or `respond` and `--detach` starts outside the launching run's job and owns its own.
+Cancelling the launching run leaves it running; stop it with its own `cancel`.
+The broker and relayed CLI ignore
+`BUN_OPTIONS` and `bunfig.toml` startup hooks, which would execute outside the owner's job.
+On POSIX a detached run starts its own process group, so the same holds.
+
+The job grants no other way out: a tool in the run that asks Windows to start a process
+outside its job fails to start it. A run that a node starts through `archon trigger` stays
+in the launching run's job. Cancelling the launching run kills that run's processes, and
+its row stays `running` with no owner until you `workflow abandon` it.
+
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and
 leaves the run's state unchanged, even though the owner process has stopped. With
@@ -1304,7 +1322,9 @@ In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode th
 wrong-status, missing-context, `child_workflow`-blocked, already-resolved, or
 no-working-path run is refused synchronously and nothing is spawned. The parent then
 hands the whole command to a detached child that owns all state mutation in its own
-process group. A shell that dies mid-flight can no longer wedge the run.
+process group on POSIX or Job Object on Windows. When launched inside a Windows run,
+the child escapes the launching run's job, so cancelling the launcher leaves the child
+running and independently owned. A shell that dies mid-flight can no longer wedge the run.
 
 For `resume`, the parent waits for the child's engine admission receipt before
 acknowledging success, rather than waiting for workflow completion. Even a run that

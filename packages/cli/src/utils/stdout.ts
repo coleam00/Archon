@@ -55,7 +55,7 @@ export function writeStdout(text: string | Uint8Array): Promise<void> {
  * @param text - Exact bytes to emit (include any trailing newline yourself).
  * @throws The underlying stream error if the write fails (e.g. EPIPE).
  */
-export function writeStderr(text: string): Promise<void> {
+export function writeStderr(text: string | Uint8Array): Promise<void> {
   return writeStream(process.stderr, text);
 }
 

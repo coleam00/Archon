@@ -30,7 +30,9 @@ function isReached(
   ctx: DryRunContext,
   iteration?: number
 ): boolean {
-  const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs);
+  const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
+    loopBodyScopes: ctx.loopBodyScopes,
+  });
   if (boundaryDecision.decision === 'skip') {
     recordSkipped(node, outputs, ctx, 'trigger_rule', boundaryDecision.cause, iteration);
     return false;

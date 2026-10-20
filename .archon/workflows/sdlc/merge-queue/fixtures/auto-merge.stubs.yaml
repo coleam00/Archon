@@ -1,5 +1,5 @@
 # Dry-run fixture, a clear auto-merge: a small bug fix whose gate passes. The sweep
-# merges it through the gate, the default branch stays green, and nothing is asked.
+# merges it through the gate, the default branch is green, and nothing is asked.
 # The queue's scripts reach the state store and the forge, so they are stubbed here
 # and proved by .archon/scripts/__tests__/merge-queue.test.ts.
 facts:
@@ -11,16 +11,13 @@ facts:
       url: "https://github.com/example/repo/pull/42"
       facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
-      prior_report: "/stub/merge/42/review/report.md"
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
 sweep:
   decisions:
-    - { number: 42, action: merged, class: clear, head: "1111111", synced: false, reran: false, reason: "stub: a bug fix with its test; the gate passed", brief: "", attention: null }
-  review_url: ""
-  review_prior: ""
-  dev: { state: green, rerun: none, summary: "stub: dev green after the batch", attention: null }
+    - { number: 42, action: merged, class: clear, head: "1111111", reran: false, reason: "stub: a bug fix with its test; the gate passed", brief: "", attention: null }
+  base: { summary: "stub: dev is green", reran: false, attention: null }
   summary: "stub: merged PR 42"
 record:
   merged: [42]

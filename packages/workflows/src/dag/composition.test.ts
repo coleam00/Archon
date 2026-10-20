@@ -28,6 +28,9 @@ import {
   makeWorkflowRun,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
+import { checkComposedBlockBoundaries } from './trigger-rule';
+import { resolvedBodyNodes } from '../graph-plan';
+import { loopBodyScope } from './loop-scope';
 import { dryRunWorkflow } from '../dry-run';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import type {
@@ -36,6 +39,7 @@ import type {
   SkipCause,
   WorkflowDefinition,
   ResolvedWorkflow,
+  NodeOutput,
 } from '../schemas';
 import { dagNodeSchema, skipCauseSchema } from '../schemas';
 import { discoverWorkflows } from '../workflow-discovery';
@@ -334,6 +338,259 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     if (typeof output === 'object') throw new Error('Unexpected source release');
     return { events: eventList(mockDeps), output };
   }
+
+  function loopGatedWorkflow(when: string): ResolvedWorkflow {
+    const block = buildWf('block', [
+      { id: 'entry', bash: 'echo entry' },
+      { id: 'tail', bash: 'echo tail', depends_on: ['entry'], trigger_rule: 'all_done' },
+    ]);
+    const parent = buildWf('loop-gated', [
+      {
+        id: 'cycle',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'work', bash: 'echo go' },
+            { id: 'inc', include: 'block', depends_on: ['work'], when },
+            {
+              id: 'end',
+              bash: 'echo DONE',
+              when: "$LOOP_PREV.work.output == 'go'",
+              depends_on: ['inc'],
+              trigger_rule: 'all_done',
+            },
+          ],
+        },
+      },
+    ]);
+    const expanded = expandWorkflowIncludes(
+      new Map([
+        ['block', block],
+        ['loop-gated', parent],
+      ])
+    );
+    expect(expanded.errors).toEqual([]);
+    const workflow = expanded.workflows.get('loop-gated');
+    if (!workflow) throw new Error('loop-gated did not expand');
+    return workflow;
+  }
+
+  for (const value of ['go', '']) {
+    it(`shares loop scope across include entries and descendants for previous value '${value}'`, async () => {
+      const when = `$LOOP_PREV.work.output == '${value}'`;
+      const workflow = loopGatedWorkflow(when);
+      const { events } = await executeExpanded([...workflow.nodes], `loop-gated-${value}`);
+      const dryRun = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: testDir,
+        stubs: { work: 'go', inc__entry: 'entry', inc__tail: 'tail', end: 'DONE' },
+      });
+      expect(dryRun.outcome).toBe('completed');
+      for (const id of ['entry', 'tail']) {
+        const expected: Array<'skipped' | 'completed'> =
+          value === 'go' ? ['skipped', 'completed'] : ['completed', 'skipped'];
+        const nodeEvents = events.filter(
+          event =>
+            event.step_name === `cycle.inc__${id}` &&
+            ['node_completed', 'node_skipped'].includes(event.event_type)
+        );
+        expect(nodeEvents.map(event => event.event_type.replace('node_', ''))).toEqual(expected);
+        expect(nodeEvents.find(event => event.event_type === 'node_skipped')?.data?.cause).toEqual({
+          kind: 'condition',
+          expr: when,
+        });
+        const trace = dryRun.trace.filter(entry => entry.nodeId === `inc__${id}`);
+        expect(trace.map(entry => entry.state)).toEqual(
+          expected.map(state => (state === 'completed' ? 'stubbed' : state))
+        );
+        expect(trace.find(entry => entry.state === 'skipped')?.cause).toEqual({
+          kind: 'condition',
+          expr: when,
+        });
+      }
+    });
+  }
+
+  for (const value of ['go', '']) {
+    it(`retains an inherited gate's outer scope inside a nested loop for '${value}'`, async () => {
+      const leaf = buildWf('leaf', [
+        { id: 'entry', bash: 'echo entry' },
+        { id: 'tail', bash: 'echo tail', depends_on: ['entry'], trigger_rule: 'all_done' },
+      ]);
+      const block = buildWf('nested-block', [
+        {
+          id: 'inner',
+          loop_group: {
+            max_iterations: 2,
+            until: 'FIN',
+            nodes: [
+              { id: 'innerWork', bash: 'echo inner' },
+              {
+                id: 'local',
+                include: 'leaf',
+                when: "$LOOP_PREV.innerWork.output == 'inner'",
+                depends_on: ['innerWork'],
+              },
+              {
+                id: 'finish',
+                bash: 'echo FIN',
+                when: "$LOOP_PREV.innerWork.output == 'inner'",
+                depends_on: ['local'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
+        },
+      ]);
+      const when = `$LOOP_PREV.work.output == '${value}'`;
+      const parent = buildWf('nested-parent', [
+        {
+          id: 'outer',
+          loop_group: {
+            max_iterations: 2,
+            until: 'DONE',
+            nodes: [
+              { id: 'work', bash: 'echo go' },
+              { id: 'inc', include: 'nested-block', when, depends_on: ['work'] },
+              {
+                id: 'end',
+                bash: 'echo DONE',
+                when: "$LOOP_PREV.work.output == 'go'",
+                depends_on: ['inc'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
+        },
+      ]);
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['leaf', leaf],
+          ['nested-block', block],
+          ['nested-parent', parent],
+        ])
+      );
+      expect(expanded.errors).toEqual([]);
+      const workflow = expanded.workflows.get('nested-parent')!;
+      const outer = workflow.nodes[0];
+      if (outer?.kind !== 'loop_group') throw new Error('expected outer loop group');
+      const outerBody = resolvedBodyNodes(outer.loop_group);
+      const inner = outerBody.find(node => node.id === 'inc__inner');
+      if (inner?.kind !== 'loop_group') throw new Error('expected inner loop group');
+      const innerBody = resolvedBodyNodes(inner.loop_group);
+      const outerPrevious = new Map<string, NodeOutput>([
+        ['work', { state: 'completed', output: value }],
+      ]);
+      const innerPrevious = new Map<string, NodeOutput>([
+        ['work', { state: 'completed', output: 'wrong scope' }],
+        ['innerWork', { state: 'completed', output: 'inner' }],
+      ]);
+      const loopBodyScopes = [
+        loopBodyScope(outerBody, outerPrevious, '', testDir),
+        loopBodyScope(innerBody, innerPrevious, '', testDir),
+      ];
+      const outputs = new Map<string, NodeOutput>([
+        ['work', { state: 'completed', output: 'current' }],
+        ['innerWork', { state: 'completed', output: 'current' }],
+      ]);
+      for (const node of innerBody.filter(node => node.id.startsWith('local__'))) {
+        const options = { evaluateEntryBoundary: true, loopBodyScopes };
+        expect(checkComposedBlockBoundaries(node, outputs, undefined, options)).toEqual({
+          decision: 'run',
+        });
+        outerPrevious.set('work', { state: 'completed', output: 'stop' });
+        expect(checkComposedBlockBoundaries(node, outputs, undefined, options)).toEqual({
+          decision: 'skip',
+          cause: { kind: 'condition', expr: when },
+        });
+        outerPrevious.set('work', { state: 'completed', output: value });
+      }
+      const { events } = await executeExpanded([...workflow.nodes], `nested-${value}`);
+      expect(events.filter(e => e.event_type === 'node_failed')).toEqual([]);
+      const dryRun = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: testDir,
+        stubs: {
+          work: 'go',
+          innerWork: 'inner',
+          local__entry: 'entry',
+          local__tail: 'tail',
+          finish: 'FIN',
+          end: 'DONE',
+        },
+      });
+      expect(dryRun.outcome).toBe('completed');
+      for (const id of ['entry', 'tail']) {
+        const leafEvents = events.filter(
+          e =>
+            e.step_name === `outer.inc__inner.local__${id}` &&
+            ['node_completed', 'node_skipped'].includes(e.event_type)
+        );
+        expect(leafEvents.map(e => e.event_type)).toEqual(['node_skipped', 'node_completed']);
+        expect(leafEvents[0]?.data?.cause).toEqual({
+          kind: 'condition',
+          expr: "$LOOP_PREV.innerWork.output == 'inner'",
+        });
+        expect(dryRun.trace.filter(e => e.nodeId === `local__${id}`).map(e => e.state)).toEqual([
+          'skipped',
+          'stubbed',
+        ]);
+      }
+    });
+  }
+
+  it.each(['', 'go', 'stop'])(
+    'checks cached include entries against their owning previous output %j',
+    previous => {
+      const when = "$LOOP_PREV.work.output == 'go'";
+      const group = loopGatedWorkflow(when).nodes[0];
+      if (group?.kind !== 'loop_group') throw new Error('expected loop group');
+      const body = resolvedBodyNodes(group.loop_group);
+      const previousOutputs = new Map<string, NodeOutput>(
+        previous ? [['work', { state: 'completed', output: previous }]] : []
+      );
+      const scope = loopBodyScope(body, previousOutputs, '', testDir);
+      // Current output deliberately disagrees with the preceding iteration.
+      const outputs = new Map<string, NodeOutput>([
+        ['work', { state: 'completed', output: previous === 'go' ? 'stop' : 'go' }],
+      ]);
+      for (const id of ['inc__entry', 'inc__tail']) {
+        const node = body.find(node => node.id === id);
+        if (!node) throw new Error(`expected expanded ${id}`);
+        expect(
+          checkComposedBlockBoundaries(node, outputs, undefined, {
+            evaluateEntryBoundary: true,
+            loopBodyScopes: [scope],
+          })
+        ).toEqual(
+          previous === 'go'
+            ? { decision: 'run' }
+            : { decision: 'skip', cause: { kind: 'condition', expr: when } }
+        );
+      }
+    }
+  );
+
+  it('rejects a loop reference in an include boundary without loop context', () => {
+    const when = "$LOOP_PREV.work.output == 'go'";
+    const workflow = loopGatedWorkflow(when);
+    const group = workflow.nodes[0];
+    if (group?.kind !== 'loop_group') throw new Error('expected loop group');
+    const entry = resolvedBodyNodes(group.loop_group).find(node => node.id === 'inc__entry');
+    if (!entry) throw new Error('expected expanded entry');
+    const outputs = new Map([['work', { state: 'completed' as const, output: 'current' }]]);
+    expect(
+      checkComposedBlockBoundaries(entry, outputs, undefined, {
+        evaluateEntryBoundary: true,
+      })
+    ).toEqual({
+      decision: 'skip',
+      cause: { kind: 'condition_parse_error', expr: when },
+    });
+  });
 
   it('skips every composed node when the include condition is false', async () => {
     const { events } = await executeExpanded(

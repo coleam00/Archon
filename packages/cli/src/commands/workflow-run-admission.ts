@@ -250,7 +250,7 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
  * The flag names a run row this process will execute AS, so three things are checked.
  * Be precise about which one carries the weight, because it is not the first.
  *
- * The owner marker plus `assertDetachedRunProcessOwner` (called by `workflowRunCommand`
+ * The owner marker plus `claimDetachedRunProcessOwner` (called by `workflowRunCommand`
  * before it reaches this function) raise the bar, they do not prove provenance: a plain
  * scripted process is not its own process-group leader,
  * so cron, CI, and wrapper scripts are blocked — but a foreground command under a real

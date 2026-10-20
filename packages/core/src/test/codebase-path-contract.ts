@@ -56,7 +56,6 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     () => codebases.findCodebaseByName(project.name),
     () => codebases.findCodebaseByRepoUrl('https://example.test/repo'),
     () => codebases.findCodebaseByDefaultCwd('projects/repo'),
-    () => codebases.findCodebaseByPathPrefix(absolutePath),
     () => codebases.listCodebases(),
     () => environments.findStaleEnvironments(7),
     () => environments.findActiveByBranchName('path-contract'),
@@ -64,6 +63,7 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
   ]) {
     await expect(read()).rejects.toBeInstanceOf(codebases.InvalidCodebaseDefaultCwdError);
   }
+  expect(await codebases.findCodebaseByPathPrefix(absolutePath)).toBeNull();
   expect(await codebases.listCodebaseRegistrations()).toEqual([
     {
       id: project.id,

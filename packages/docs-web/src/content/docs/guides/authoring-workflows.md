@@ -289,7 +289,9 @@ running host `bash:` and `script:` nodes and `until_bash` checks within about a 
 records the node failed as cancelled. Other runs' processes are not touched. A process that
 left the node's group with `setsid` escapes. On Windows, background work whose node process
 already exited is not reached. A container node's command is not reached.
-Cancelling a detached run ends its owner's process group, nodes included.
+Cancelling a detached run ends its owner's process group on macOS and Linux, nodes included.
+On Windows it ends the owner's Job Object, which also holds node processes whose parent
+already exited.
 
 ### Addressable session ancestry
 
@@ -318,7 +320,10 @@ nodes:
     depends_on: [lens-a, lens-b]
 ```
 
-`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source must complete before entry into the group: name an enclosing command, prompt, or plain `loop:` ancestor, never a same-body node. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source takes one of two forms:
+
+- **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
+- **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body wait moves on to the next iteration once answered. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
 
@@ -590,9 +595,9 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   output; referencing the failed producer's own output fails the condition's node loudly
   (see [Reading across a skipped branch](#reading-across-a-skipped-branch))
 
-:::danger[You cannot compare a whole AI output to a literal]
-A `when:` that compares the **entire output** of a `prompt:` or `command:` node with no
-`output_format` — or of any `loop:`/`loop_group:` node — against a literal is
+:::danger[Current-node whole AI output comparisons are rejected]
+A `when:` that uses `$nodeId.output` to compare the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
+`output_format`, or of any `loop_group:` node, against a literal is
 **rejected at load time**:
 
 ```yaml
@@ -603,6 +608,8 @@ A `when:` that compares the **entire output** of a `prompt:` or `command:` node 
   depends_on: [analyze]
   when: "$analyze.output == 'BUG'"
 ```
+
+This loader rule does not reject previous-iteration `$LOOP_PREV.<nodeId>.output` comparisons.
 
 The model writes `This is a BUG.` and the byte-for-byte comparison is false, so the node
 is skipped with no error and the run finishes looking successful having quietly done less
@@ -1786,9 +1793,13 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   included command cannot start a fresh execution because its references cannot be proven safe.
   Command nodes fail composition immediately; loop commands retain a private compilation error
   so a paused loop can still resume from its persisted, validated prompt snapshot.
-  The include node's own `depends_on` / `when` / `trigger_rule` attach to the block's
-  **entry** nodes (those with no upstream inside the block). If both the include and an entry
-  define `when:` and either condition contains `||`, loading fails because the grammar cannot
+  The include node's `depends_on` and default `trigger_rule` wire the block's
+  **entry** nodes (those with no upstream inside the block). The include's `when:`
+  gates the **whole block**, including descendants. Cached nodes on resume are checked
+  against the gate again. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the
+  loop containing the include, even when a descendant runs inside a nested loop.
+  If both the include and an entry define `when:` and either condition contains `||`,
+  loading fails because the grammar cannot
   group them without changing precedence; put the gate only on the include or inside the block.
 - **Sink asymmetry (a downstream node depending on the include).** A `depends_on:
   [<includeId>]` on a downstream node fans out to **all** of the block's sink nodes (every
@@ -2249,7 +2260,7 @@ sub-pipeline.**
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
-  detached run ends its owner's process group.
+  detached run ends its owner's process group (macOS and Linux) or Job Object (Windows).
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its

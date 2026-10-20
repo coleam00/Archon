@@ -76,7 +76,7 @@ export async function resolveAttentionProject(
 export async function attentionProjectForCwd(
   codebases: Pick<
     IWorkflowHostStore['codebases'],
-    'findCodebaseByDefaultCwd' | 'findCodebaseByPathPrefix' | 'listCodebases'
+    'findCodebaseByDefaultCwd' | 'findCodebaseByPathPrefix' | 'listCodebaseClaims'
   >,
   cwd: string
 ): Promise<ProjectRef> {

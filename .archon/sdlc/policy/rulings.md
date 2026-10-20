@@ -20,3 +20,7 @@ them before they stop for a person, and a question one of them answers is settle
   configuration choose the model a node runs on; a pack file, a node field or a plan
   never does ([`AGENTS.md`](../../../AGENTS.md): "Provider capabilities normally belong
   in provider config, tiers, or aliases").
+- **Agent judgment is checked by its outcome.** Ruled 2026-10-20. Agent judgment in a
+  pack prompt is evaluated by its outcome
+  ([`CONSTITUTION.md`](../../workflows/sdlc/CONSTITUTION.md) §13). A review does not
+  require a pack fixture or test that pins which decision a prompt makes.

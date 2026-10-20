@@ -115,7 +115,7 @@ export const mockRequestDetachedRunStop = mock<typeof RunOwnerStop.requestDetach
   Promise.resolve({ pid: 4242, stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
 );
 export const mockRunLiveOwnerClose = mock((): Promise<void> => Promise.resolve());
-export const mockAssertDetachedRunProcessOwner = mock((): undefined => undefined);
+export const mockClaimDetachedRunProcessOwner = mock((): Promise<void> => Promise.resolve());
 let mockDetachedStopRequested = false;
 export function setMockDetachedStopRequested(value: boolean): void {
   mockDetachedStopRequested = value;
@@ -136,10 +136,10 @@ export const mockStartRunLiveOwner = mock(
 mock.module(
   '../utils/detached-run-control',
   (): {
-    assertDetachedRunProcessOwner: typeof mockAssertDetachedRunProcessOwner;
+    claimDetachedRunProcessOwner: typeof mockClaimDetachedRunProcessOwner;
     DETACHED_RUN_OWNER_ENV: string;
   } => ({
-    assertDetachedRunProcessOwner: mockAssertDetachedRunProcessOwner,
+    claimDetachedRunProcessOwner: mockClaimDetachedRunProcessOwner,
     DETACHED_RUN_OWNER_ENV: 'ARCHON_DETACHED_RUN_OWNER',
   })
 );
@@ -578,7 +578,7 @@ mock.module('@archon/core/db/conversations', () => ({
 
 mock.module('@archon/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: mock(() => Promise.resolve(null)),
-  listCodebases: mock(() => Promise.resolve([])),
+  listCodebaseClaims: mock(() => Promise.resolve([])),
   findCodebaseByPathPrefix: mock(() => Promise.resolve(null)),
   getCodebase: mock(() => Promise.resolve(null)),
 }));

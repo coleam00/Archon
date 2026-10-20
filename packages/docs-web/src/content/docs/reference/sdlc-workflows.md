@@ -15,7 +15,7 @@ The queues move work forward without you:
 
 1. `archon-intake` triages each new issue and labels its route.
 2. `archon-build-queue` claims a ready issue, writes the brief and runs `archon-ship` on it until its pull request is reviewed Ready.
-3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict, CI and open threads, syncing only those that conflict or reshape code first.
+3. `archon-merge-queue` merges the clear ready pull requests through a gate on the review verdict and CI at the head and a base branch that is not red, judges open review threads itself, and sends back to the build queue the ones that conflict.
 4. `archon-discoveries` files, tracks or drops what runs noticed outside their own task.
 
 Anything unclear pauses as one attention item with a recommendation. The pack binds no trigger by default: start the queues by hand, or add the bindings its README shows.
@@ -119,7 +119,7 @@ The stage after intake, started by a schedule binding. Each run claims one triag
 
 #### `archon-merge-queue`
 
-The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges a Ready, green pull request that merges cleanly into the base branch directly, merges the base branch into any that conflicts or reshapes code across a package before it merges, sends a pull request to a delta review when new code reached it after its review (a conflict the sync resolved, or anyone else's push; a clean sync keeps the verdict), hands back what the build queue can fix, and merges what policy allows one at a time. Every merge goes through a gate script that refuses unless the review verdict says Ready, CI is green at the head and the head contains the base branch or merges into it cleanly (open review threads are the sweep's judgment), and merges pinned to that head. After a batch it checks the base branch's CI, which judges the combined result. An unclear pull request, such as a schema or workflow-language change, or a red base branch pauses as one attention item with the agent's recommendation and declared choices.
+The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges each Ready, green pull request that merges cleanly into the base branch, hands back to the build queue what it can fix (a conflict, a stale or missing verdict, a review thread that raises a defect, red the change caused), and never pushes or waits for CI itself. Every merge goes through a gate script that refuses unless the review verdict says Ready for the head, CI is green there, the base branch's CI is not red and the head contains the base branch or merges into it cleanly (open review threads are the sweep's judgment), and merges pinned to that head. The base branch's CI on a merge is the next sweep's first fact. An unclear pull request, such as a schema or workflow-language change, is asked as soon as its review is Ready; it and a red base branch each pause as one attention item with the agent's recommendation and declared choices.
 
 **When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack installs no binding; the SDLC pack README's "Merge queue" section shows the one to add.
 
@@ -280,7 +280,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
-| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | Yes (merges the base into a PR that conflicts or reshapes code before it merges) |
+| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
