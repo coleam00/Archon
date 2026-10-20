@@ -40,8 +40,7 @@ import { COPILOT_CAPABILITIES } from './capabilities';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
 import { clampEffort } from '@archon/provider-contract';
 import { resolveCopilotBinaryPath } from './binary-resolver';
-import { bridgeSession, mcpServerStatusOf } from './event-bridge';
-import { readMcpStatuses, requireMcpConnections } from '../../mcp/readiness';
+import { bridgeSession } from './event-bridge';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
@@ -602,14 +601,17 @@ export class CopilotProvider implements IAgentProvider {
         'copilot.session_started'
       );
 
-      yield* prepareMcp(session, sessionConfig, requestOptions);
       bridgeStarted = true;
       yield* closeOpenToolCalls(
         bridgeSession(
           session,
           effectivePrompt,
           requestOptions?.abortSignal,
-          wantsStructured ? outputFormat.schema : undefined
+          wantsStructured ? outputFormat.schema : undefined,
+          {
+            names: Object.keys(sessionConfig.mcpServers ?? {}),
+            requireMcpConnections: requestOptions?.requireMcpConnections,
+          }
         ),
         { resultEndsTurn: true }
       );
@@ -631,33 +633,6 @@ export class CopilotProvider implements IAgentProvider {
       await stopCopilotClient(client);
     }
   }
-}
-
-async function* prepareMcp(
-  session: CopilotSession,
-  sessionConfig: SessionConfig,
-  requestOptions: SendQueryOptions | undefined
-): AsyncGenerator<MessageChunk> {
-  const names = Object.keys(sessionConfig.mcpServers ?? {});
-  const readStatuses = async () =>
-    (await session.rpc.mcp.list()).servers
-      .filter(server => names.includes(server.name))
-      .map(server => mcpServerStatusOf(server.name, server.status, server.error));
-  if (requestOptions?.requireMcpConnections) {
-    yield* requireMcpConnections(names, readStatuses, requestOptions.abortSignal);
-  } else if (names.length > 0) {
-    try {
-      yield* await readMcpStatuses(readStatuses, requestOptions?.abortSignal);
-    } catch (error) {
-      requestOptions?.abortSignal?.throwIfAborted();
-      yield {
-        type: 'warning',
-        code: 'copilot.mcp_status_unavailable',
-        message: `Could not observe optional MCP connections: ${error instanceof Error ? error.message : safeErrorString(error)}`,
-      };
-    }
-  }
-  requestOptions?.abortSignal?.throwIfAborted();
 }
 
 async function stopCopilotClient(client: CopilotClient): Promise<void> {

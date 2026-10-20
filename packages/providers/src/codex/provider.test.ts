@@ -2232,3 +2232,60 @@ for (const continuation of ['fresh', 'resume', 'fork'] as const) {
     );
   });
 }
+
+for (const [name, definition] of [
+  ['declared', {}],
+  ['declared', { unknown: 'ignored' }],
+  ['declared', { command: null }],
+  ['', {}],
+] as const) {
+  for (const required of [true, false]) {
+    test(`untranslatable ${required ? 'required' : 'optional'} MCP server ${JSON.stringify(name)}: ${JSON.stringify(definition)}`, async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-empty-')));
+      const mcp = join(dir, 'mcp.json');
+      await writeFile(mcp, JSON.stringify({ [name]: definition }));
+      const { provider, server } = providerWith({});
+      const chunks = await run(provider, {
+        ...(required ? { requireMcpConnections: true } : {}),
+        nodeConfig: { nodeId: 'test', mcp },
+      });
+      expect(paramsOf(server, 'turn/start') !== undefined).toBe(!required);
+      if (required)
+        expect(resultOf(chunks).failure).toEqual({
+          class: 'misconfigured',
+          evidence: expect.stringContaining(`Required MCP server "${name}"`),
+        });
+    });
+  }
+}
+
+test('an empty required MCP file map admits a turn', async () => {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-empty-map-')));
+  const mcp = join(dir, 'mcp.json');
+  await writeFile(mcp, '{}');
+  const { provider, server } = providerWith({});
+  const chunks = await run(provider, {
+    requireMcpConnections: true,
+    nodeConfig: { nodeId: 'test', mcp },
+  });
+  expect(paramsOf(server, 'turn/start')).toBeDefined();
+  expect(resultOf(chunks).isError).not.toBe(true);
+});
+
+test('a dropped MCP name cannot be supplied by Object.prototype beside a valid server', async () => {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-own-name-')));
+  const mcp = join(dir, 'mcp.json');
+  await writeFile(mcp, JSON.stringify({ constructor: {}, declared: { command: 'fixture' } }));
+  const { provider, server } = providerWith({
+    mcpStatusPages: [[{ name: 'declared', pluginId: null, runtimeStatus: 'connected' }]],
+  });
+  const chunks = await run(provider, {
+    requireMcpConnections: true,
+    nodeConfig: { nodeId: 'test', mcp },
+  });
+  expect(paramsOf(server, 'turn/start')).toBeUndefined();
+  expect(resultOf(chunks).failure).toEqual({
+    class: 'misconfigured',
+    evidence: expect.stringContaining('constructor'),
+  });
+});

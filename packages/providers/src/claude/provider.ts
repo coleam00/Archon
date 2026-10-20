@@ -50,6 +50,7 @@ import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import { checkClaudeNativeAuth } from './native-auth';
 import { resolveClaudeBinaryPath, resolveClaudeBinaryWithSource } from './binary-resolver';
+import { ClassifiedProviderError } from '../shared/failure';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { readSessionSpendBaseline } from './session-spend-reader';
 import { createLogger } from '@archon/paths';
@@ -515,13 +516,18 @@ async function* buildQueryOptions(
 
 /**
  * Register in-process native tools (e.g. manage_run) as an archon MCP server,
- * mirroring the file-based mcp branch. Merge so a nodeConfig mcp config and
- * native tools can coexist.
+ * alongside the file-based MCP servers. The internal name cannot replace a file server.
  */
 function registerNativeTools(
   options: Options,
   nativeTools: NonNullable<SendQueryOptions['nativeTools']>
 ): void {
+  if (options.mcpServers?.[ARCHON_TOOL_SERVER]) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `MCP server "${ARCHON_TOOL_SERVER}" conflicts with Archon's native tool server`
+    );
+  }
   const server = buildArchonMcpServer(nativeTools);
   options.mcpServers = { ...(options.mcpServers ?? {}), [ARCHON_TOOL_SERVER]: server };
   options.allowedTools = [...(options.allowedTools ?? []), `mcp__${ARCHON_TOOL_SERVER}__*`];

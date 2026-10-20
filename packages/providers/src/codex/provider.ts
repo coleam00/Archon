@@ -141,7 +141,12 @@ async function* nodeMcpServers(
 ): AsyncGenerator<MessageChunk, CodexConfig | undefined> {
   const mcpPath = requestOptions?.nodeConfig?.mcp;
   if (titleRequest || !mcpPath) return undefined;
-  const { mcpServers, warnings } = await loadNodeMcpServers(mcpPath, cwd, requestOptions.env);
+  const { mcpServers, warnings } = await loadNodeMcpServers(
+    mcpPath,
+    cwd,
+    requestOptions.env,
+    requestOptions.requireMcpConnections
+  );
   for (const warning of warnings) {
     yield { type: 'warning', ...warning };
   }

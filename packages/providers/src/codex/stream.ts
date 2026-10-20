@@ -6,7 +6,13 @@
 import { requireMcpConnections, type McpStatus } from '../mcp/readiness';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
-import type { MessageChunk, ProviderEvent, ResultChunk, TokenUsage } from '../types';
+import type {
+  MessageChunk,
+  ProviderEvent,
+  ResultChunk,
+  SendQueryOptions,
+  TokenUsage,
+} from '../types';
 import { ClassifiedProviderError, failureResult } from '../shared/failure';
 import type { AppServerConnection, ParamsOf } from './app-server';
 import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
@@ -224,8 +230,7 @@ function codexHomeOf(initializeResponse: unknown): string {
   return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
 }
 
-export interface TurnRequest {
-  requireMcpConnections?: true;
+export interface TurnRequest extends Pick<SendQueryOptions, 'requireMcpConnections'> {
   abortSignal: AbortSignal | undefined;
   tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;

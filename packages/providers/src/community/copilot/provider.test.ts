@@ -865,3 +865,50 @@ test('a resumed Copilot session waits for its declared MCP connection before sen
   ]);
   expect(session.prompt).toBe('hi');
 });
+
+for (const required of [true, false]) {
+  test(`Copilot retains a ${required ? 'required' : 'optional'} failure after its snapshot`, async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'copilot-mcp-gap-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    const session = makeFakeSession();
+    session.rpc.mcp.list = async () => ({ servers: [{ name: 'declared', status: 'connected' }] });
+    session.resolveSend();
+    nextCreateSessionResult = session;
+    const chunks = [];
+    for await (const chunk of new CopilotProvider().sendQuery('hi', dir, undefined, {
+      nodeConfig: { mcp },
+      ...(required ? { requireMcpConnections: true } : {}),
+    })) {
+      chunks.push(chunk);
+      if (chunk.type === 'mcp_server_status' && chunk.status === 'connected') {
+        session.fire({
+          id: 'failure',
+          ephemeral: true,
+          timestamp: new Date().toISOString(),
+          parentId: null,
+          type: 'session.mcp_server_status_changed',
+          data: { serverName: 'declared', status: 'failed', error: 'lost connection' },
+        });
+      }
+    }
+    expect(chunks).toContainEqual({
+      type: 'mcp_server_status',
+      server: 'declared',
+      status: 'failed',
+      error: 'lost connection',
+    });
+    expect(session.prompt).toBe(required ? undefined : 'hi');
+    expect(session.disconnected).toBe(true);
+    expect(chunks).toContainEqual(
+      expect.objectContaining(
+        required
+          ? {
+              type: 'result',
+              failure: { class: 'misconfigured', evidence: expect.stringContaining('declared') },
+            }
+          : { type: 'result', sessionId: 'sess-1' }
+      )
+    );
+  });
+}

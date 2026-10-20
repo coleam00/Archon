@@ -59,7 +59,7 @@ function requireServerStatus(name: string, statuses: readonly McpStatus[]): McpS
   return status;
 }
 
-function assertMcpUsable(status: McpStatus): void {
+export function assertMcpUsable(status: McpStatus): void {
   if (status.status !== 'connected' && status.status !== 'pending') {
     throw new ClassifiedProviderError(
       'misconfigured',

@@ -96,3 +96,19 @@ test('abort interrupts a blocked native status read', async () => {
   controller.abort();
   await expect(next).rejects.toMatchObject({ name: 'AbortError' });
 });
+
+test('every declared server must connect before admission', async () => {
+  const controller = new AbortController();
+  const stream = requireMcpConnections(
+    ['declared', 'second'],
+    async () => [status('connected'), { ...status('pending'), server: 'second' }],
+    controller.signal
+  );
+  expect((await stream.next()).value).toEqual(status('connected'));
+  expect((await stream.next()).value).toEqual({ ...status('pending'), server: 'second' });
+  const admission = stream.next();
+  // Abort on the next task, after the generator has evaluated both observations.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  controller.abort();
+  await expect(admission).rejects.toMatchObject({ name: 'AbortError' });
+});

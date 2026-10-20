@@ -23,9 +23,12 @@ rl.on('line', line => {
 });
 `;
 
-for (const broken of [true, false]) {
+for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as const) {
+  const broken = mode !== 'delayed';
+  const collision = mode === 'collision' || mode === 'optional-collision';
+  const name = collision ? 'archon' : 'declared';
   test(
-    `native Claude ${broken ? 'blocks failed MCP before input' : 'waits for delayed MCP before input'}`,
+    `native Claude MCP admission: ${mode}`,
     async () => {
       const root = await mkdtemp(join(tmpdir(), 'claude-mcp-boundary-'));
       let modelCalls = 0;
@@ -38,7 +41,7 @@ for (const broken of [true, false]) {
             modelCalls++;
             expect(observations).toContainEqual({
               type: 'mcp_server_status',
-              server: 'declared',
+              server: name,
               status: 'connected',
             });
           }
@@ -58,7 +61,7 @@ for (const broken of [true, false]) {
         await writeFile(
           mcp,
           JSON.stringify({
-            declared: broken
+            [name]: broken
               ? { command: join(root, 'missing-executable') }
               : { command: process.execPath, args: [stub, release] },
           })
@@ -68,7 +71,19 @@ for (const broken of [true, false]) {
           root,
           undefined,
           {
-            requireMcpConnections: true,
+            ...(mode === 'optional-collision' ? {} : { requireMcpConnections: true }),
+            ...(collision
+              ? {
+                  nativeTools: [
+                    {
+                      name: 'inspect',
+                      description: 'Inspect',
+                      inputSchema: { properties: {}, required: [] },
+                      handler: async () => 'unused',
+                    },
+                  ],
+                }
+              : {}),
             abortSignal: AbortSignal.timeout(20_000),
             model: 'claude-sonnet-4-6',
             nodeConfig: { nodeId: 'readiness', mcp, settingSources: [] },
@@ -95,7 +110,7 @@ for (const broken of [true, false]) {
               type: 'result',
               failure: {
                 class: 'misconfigured',
-                evidence: expect.stringContaining('declared'),
+                evidence: expect.stringContaining(name),
               },
             })
           );
