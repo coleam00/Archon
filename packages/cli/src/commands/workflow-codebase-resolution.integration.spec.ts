@@ -165,71 +165,84 @@ test('nested repo registers independently and its worktree retains the child own
   }
 }, 120_000);
 
-test('healthy subdirectory resolves beside an unrelated legacy registration', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'archon-unrelated-legacy-'));
-  roots.push(root);
-  const home = join(root, 'home');
-  const repo = join(root, 'healthy');
-  initRepo(repo, join(root, 'remote.git'), 'probe.txt');
-  const initial = await captureWorkflowCommand(home, host =>
-    workflowRunCommand(host, repo, 'probe', 'initial', { noWorktree: true })
-  );
-  expect(initial.status, initial.output).toBe(0);
-  const db = new Database(join(home, 'archon.db'));
-  try {
-    const project = db
-      .query<CodebaseRow, []>('SELECT id, default_cwd FROM remote_agent_codebases')
-      .get();
-    if (!project) throw new Error('Missing healthy registration');
-    const legacyId = crypto.randomUUID();
-    db.run(
-      `INSERT INTO remote_agent_codebases (id, name, default_cwd)
-       VALUES (?, 'legacy', 'projects/legacy')`,
-      [legacyId]
+test.each(['primary', 'external linked worktree'])(
+  'healthy %s subdirectory resolves beside an unrelated legacy registration',
+  async checkout => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-unrelated-legacy-'));
+    roots.push(root);
+    const home = join(root, 'home');
+    const repo = join(root, 'healthy');
+    initRepo(repo, join(root, 'remote.git'), 'probe.txt');
+    const initial = await captureWorkflowCommand(home, host =>
+      workflowRunCommand(host, repo, 'probe', 'initial', { noWorktree: true })
     );
-    const cwd = join(repo, 'subdir');
-    const resolved = await captureWorkflowCommand(home, async host => {
-      expect((await resolveRunCodebase(host, cwd, {})).codebase?.id).toBe(project.id);
-      await expect(resolveRunCodebase(host, cwd, { codebaseId: legacyId })).rejects.toThrow(
-        '/register-project "legacy" <absolute-path>'
-      );
-      expect(await listCodebaseRegistrations()).toContainEqual({
-        id: legacyId,
-        name: 'legacy',
-        kind: 'repo',
-        stored_default_cwd: 'projects/legacy',
-      });
-    });
-    expect(resolved.status, resolved.output).toBe(0);
-    const launched = spawnSync(
-      process.execPath,
-      [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'probe', '--no-worktree'],
-      {
-        cwd,
-        encoding: 'utf8',
-        timeout: 30_000,
-        env: {
-          ...process.env,
-          ARCHON_HOME: home,
-          DATABASE_URL: '',
-          ARCHON_TELEMETRY_DISABLED: '1',
-        },
-      }
-    );
-    if (launched.error) throw launched.error;
-    expect(launched.status, launched.stdout + launched.stderr).toBe(0);
-    const runs = db
-      .query<RunRow, []>('SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs')
-      .all();
-    expect(runs).toHaveLength(2);
-    for (const run of runs) {
-      expect(run).toMatchObject({ codebase_id: project.id, status: 'completed' });
+    expect(initial.status, initial.output).toBe(0);
+    let checkoutPath = repo;
+    if (checkout === 'external linked worktree') {
+      git(repo, ['init', '--separate-git-dir', join(root, 'metadata')]);
+      checkoutPath = join(root, 'linked');
+      git(repo, ['worktree', 'add', '-qb', 'linked', checkoutPath]);
+      mkdirSync(join(checkoutPath, 'subdir'));
     }
-    expect(db.query('SELECT id FROM remote_agent_codebases').all()).toHaveLength(2);
-  } finally {
-    db.close();
-  }
-}, 60_000);
+    const db = new Database(join(home, 'archon.db'));
+    try {
+      const project = db
+        .query<CodebaseRow, []>('SELECT id, default_cwd FROM remote_agent_codebases')
+        .get();
+      if (!project) throw new Error('Missing healthy registration');
+      const legacyId = crypto.randomUUID();
+      db.run(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd)
+       VALUES (?, 'legacy', 'projects/legacy')`,
+        [legacyId]
+      );
+      const cwd = join(checkoutPath, 'subdir');
+      const resolved = await captureWorkflowCommand(home, async host => {
+        expect((await resolveRunCodebase(host, cwd, {})).codebase?.id).toBe(project.id);
+        await expect(resolveRunCodebase(host, cwd, { codebaseId: legacyId })).rejects.toThrow(
+          '/register-project "legacy" <absolute-path>'
+        );
+        expect(await listCodebaseRegistrations()).toContainEqual({
+          id: legacyId,
+          name: 'legacy',
+          kind: 'repo',
+          stored_default_cwd: 'projects/legacy',
+        });
+      });
+      expect(resolved.status, resolved.output).toBe(0);
+      const launched = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'probe', '--no-worktree'],
+        {
+          cwd,
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        }
+      );
+      if (launched.error) throw launched.error;
+      expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+      const runs = db
+        .query<RunRow, []>(
+          'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs'
+        )
+        .all();
+      expect(runs).toHaveLength(2);
+      for (const run of runs) {
+        expect(run).toMatchObject({ codebase_id: project.id, status: 'completed' });
+      }
+      expect(db.query('SELECT id FROM remote_agent_codebases').all()).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  },
+  60_000
+);
 
 test('legacy relative registration fails with recovery guidance', () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));
