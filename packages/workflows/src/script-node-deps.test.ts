@@ -2,15 +2,16 @@
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
- * These tests mock @archon/git's execFileAsync to verify command construction
+ * These tests mock subprocess transports to verify command construction
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
 import { providerRegistry } from '@archon/providers';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
-import { mkdir, rm } from 'fs/promises';
+import { mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -437,22 +438,15 @@ describe('script node deps field — command construction', () => {
     mockExecFileAsync.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
-    // On Windows a script node runs through the owned process group so its deadline can end
-    // the whole tree; route that path into the same mock.
-    if (process.platform === 'win32')
-      ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
-        (cmd, args, options) => mockExecFileAsync(cmd, args, options)
-      );
+    ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+      (cmd, args, options) => mockExecFileAsync(cmd, args, options)
+    );
   });
 
   afterEach(async () => {
     ownedGroupSpy?.mockRestore();
     ownedGroupSpy = undefined;
-    try {
-      await rm(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   it('uv inline with deps uses uv run --with flags', async () => {
