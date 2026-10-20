@@ -262,6 +262,30 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 0 failed, 1 not found');
   });
 
+  it('counts a lookup failure and continues completing the remaining branches', async () => {
+    mockFindActiveByBranchName
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValueOnce(mockEnv);
+    mockRemoveEnvironment.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      warnings: [],
+    });
+
+    await isolationCompleteCommand(['lookup-fails', 'feature-branch'], { force: true });
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '  Failed: lookup-fails — DB lookup error: database unavailable'
+    );
+    expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
+    expect(mockRemoveEnvironment).toHaveBeenCalledWith('env-123', {
+      force: true,
+      deleteRemoteBranch: true,
+    });
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 0 not found');
+  });
+
   it('does not query status for an absent checkout', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockWorktreeExists.mockResolvedValueOnce(false);
