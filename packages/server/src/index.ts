@@ -353,7 +353,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   if (!opts.skipPlatformAdapters) {
     for (const notice of retiredAdapterNotices(process.env, installedChatIds)) {
       getLog().warn(
-        { platform: notice.id, hint: `Install its plugin: ${notice.command}` },
+        { platform: notice.id, hint: `${notice.guidance} Manual install: ${notice.command}` },
         'chat.bundled_adapter_retired'
       );
     }

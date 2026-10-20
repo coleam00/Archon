@@ -5,12 +5,19 @@
  * carry the retired configuration.
  */
 const RETIRED_ADAPTERS = [
-  { id: 'slack', envVar: 'SLACK_BOT_TOKEN', installSource: 'coleam00/Archon/plugins/chat-slack' },
+  {
+    id: 'slack',
+    envVar: 'SLACK_BOT_TOKEN',
+    installSource: 'coleam00/Archon/plugins/chat-slack',
+    guidance:
+      'Docker images provision Slack offline when SLACK_BOT_TOKEN is set. Check provisioning logs and restart with a current image. Outside Docker, install the plugin and restart.',
+  },
 ] as const;
 
 export interface RetiredAdapterNotice {
   id: string;
   command: string;
+  guidance: string;
 }
 
 export function retiredAdapterNotices(
@@ -19,5 +26,9 @@ export function retiredAdapterNotices(
 ): RetiredAdapterNotice[] {
   return RETIRED_ADAPTERS.filter(
     adapter => env[adapter.envVar] && !installedChatIds.has(adapter.id)
-  ).map(adapter => ({ id: adapter.id, command: `archon plugin add ${adapter.installSource}` }));
+  ).map(adapter => ({
+    id: adapter.id,
+    command: `archon plugin add ${adapter.installSource}`,
+    guidance: adapter.guidance,
+  }));
 }

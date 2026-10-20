@@ -594,7 +594,7 @@ Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https
 
 In GitHub App mode (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. An incomplete App configuration leaves the PAT helper in place. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
 
-The entrypoint decides the mode from the container environment (`env_file: .env` or `environment:` in compose), not from `/.archon/.env`, which only the server loads. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the container environment. If they are set only in `/.archon/.env`, the server and the entrypoint disagree on the mode: in App mode the PAT helper stays and clones keep using the old PAT.
+The entrypoint decides the mode from the container environment (`env_file: .env` or `environment:` in compose), not from `/.archon/.env`, which the Git credential setup does not load. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the container environment. If they are set only in `/.archon/.env`, the server and the entrypoint disagree on the mode: in App mode the PAT helper stays and clones keep using the old PAT.
 
 ### Plugins
 
@@ -604,13 +604,11 @@ Install plugins inside the running container. The GitHub forge plugin:
 docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github
 ```
 
-The Slack chat plugin, with `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the compose `.env` (see [Slack](/adapters/slack/)):
+The image ships a verified Slack chat plugin outside the data volume. A nonempty `SLACK_BOT_TOKEN` in the container environment or an effective Archon env file (`/.archon/.env`, then `/app/.archon/.env`) declares installation. Before starting the server, the entrypoint provisions it offline into `/.archon/plugins` and logs the release and commit without printing tokens. Existing token-configured deployments need no manual plugin-add step after upgrading. Both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are still required to connect to Slack (see [Slack](/adapters/slack/)).
 
-```bash
-docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/chat-slack
-```
+A valid installed Slack plugin is retained, including an operator's pinned release from another source. The image does not automatically update it. Broken receipts, missing or changed executables, and ownership conflicts stop provisioning with an error; inspect the boot logs and repair the installation before restarting.
 
-The image does not ship the Slack plugin yet ([#4674](https://github.com/coleam00/Archon/issues/4674)). Install it with this command, then restart the container. The plugin is kept in the `/.archon` volume.
+**Turning Slack off:** remove its tokens from every effective source, remove the plugin with `docker compose exec -u appuser app bun run cli plugin remove coleam00/Archon/plugins/chat-slack` (use the actual installed id if different), then restart. Removing the plugin while `SLACK_BOT_TOKEN` remains configured reinstalls the image-provided release on the next boot. Removing tokens alone leaves the receipt installed; the plugin will report missing credentials.
 
 A workflow pack, from a public GitHub repository that publishes one:
 
@@ -695,23 +693,26 @@ changing between inspection and deployment.
 
 ## Building the Image
 
-The Dockerfile uses three main stages, fed by two helper stages (**manifests** and **sources**) that derive the workspace layout from `packages/`, so adding a package needs no Dockerfile edit:
+The Dockerfile uses four main stages, fed by two helper stages (**manifests** and **sources**) that derive the workspace layout from `packages/`, so adding a package needs no Dockerfile edit:
 
 1. **deps** — Installs all dependencies (including devDependencies for the web build)
-2. **web-build** — Builds the React web UI with Vite
-3. **production** — Production image with only production dependencies + pre-built web assets
+2. **image-plugins** — Downloads a pinned Slack release, checks its resolved commit and checksum, initializes it and records its verified receipt
+3. **web-build** — Builds the React web UI with Vite
+4. **production** — Production image with only production dependencies + pre-built web assets
 
 ```bash
 docker build -t archon .
-docker run --env-file .env -p 3000:3000 archon
+docker run --env-file .env -e ARCHON_DOCKER=true -p 3000:3000 archon
 ```
+
+The image's Slack release is pinned independently of the Archon source version. Build args `SLACK_PLUGIN_TAG` (default `v0.12.1`) and `SLACK_PLUGIN_COMMIT` (default `5f2b4841aaca38180c0abbd32bc6345593292019`) must name the same published release. Override both to ship another release; the build rejects a tag resolving to a different commit. Release downloads happen only during the build. Once built, provisioning needs no network; connecting to Slack still does.
 
 **What's in the image:**
 
 - **Runtime**: Bun (runs TypeScript directly, no compile step)
 - **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
 - **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (installed as a plugin). The `sources` stage lists the exclusions.
+- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (its verified release executable and receipt ship separately under `/opt/archon/image-plugins`). The `sources` stage lists the exclusions.
 - **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
 

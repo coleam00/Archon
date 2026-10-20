@@ -4,7 +4,13 @@ import { retiredAdapterNotices } from './retired-adapters';
 describe('retiredAdapterNotices', () => {
   test('a configured Slack token without an installed plugin names the install command', () => {
     expect(retiredAdapterNotices({ SLACK_BOT_TOKEN: 'xoxb-x' }, new Set())).toEqual([
-      { id: 'slack', command: 'archon plugin add coleam00/Archon/plugins/chat-slack' },
+      {
+        id: 'slack',
+        command: 'archon plugin add coleam00/Archon/plugins/chat-slack',
+        guidance: expect.stringContaining(
+          'Docker images provision Slack offline when SLACK_BOT_TOKEN is set'
+        ),
+      },
     ]);
   });
 

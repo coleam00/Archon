@@ -30,7 +30,7 @@ async function fixture(uid = '1001') {
     mkdir: 'exit 0',
     find: 'exit 0',
     id: 'printf "%s\\n" "$TEST_UID"',
-    bun: 'printf "entrypoint-test: %s\\n" "$*"',
+    bun: 'if [ "$2" = "scripts/provision-docker-plugins.ts" ] && [ "$FAIL_PROVISION" = "1" ]; then exit 42; fi\nprintf "entrypoint-test: %s\\n" "$*"',
     gosu: 'printf "%s:%s\\n" "$1" "$2" >> "$RUNNER_LOG"\nshift\nexec "$@"',
   })) {
     await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
@@ -48,6 +48,9 @@ async function fixture(uid = '1001') {
     GITHUB_TOKEN: '',
     WEBHOOK_SECRET: '',
     GH_TOKEN: '',
+    SLACK_BOT_TOKEN: '',
+    SLACK_APP_TOKEN: '',
+    FAIL_PROVISION: '',
     ARCHON_HOME: '',
     ARCHON_DATA: '',
     ARCHON_ALLOW_ROOT_FALLBACK: '',
@@ -80,7 +83,9 @@ async function fixture(uid = '1001') {
   function start(overrides: NodeJS.ProcessEnv = {}) {
     const result = run(['bash', entrypoint], overrides);
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toBe('entrypoint-test: run setup-auth\nentrypoint-test: run start\n');
+    expect(result.stdout).toBe(
+      'entrypoint-test: run scripts/provision-docker-plugins.ts\nentrypoint-test: run setup-auth\nentrypoint-test: run start\n'
+    );
     expect(result.stderr).toBe('');
     expect(result.stdout).not.toContain(patToken);
     expect(result.stdout).not.toContain(appToken);
@@ -145,10 +150,13 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
         'appuser:git',
         'appuser:bun',
         'appuser:bun',
+        'appuser:bun',
         'appuser:git',
         'appuser:bun',
         'appuser:bun',
+        'appuser:bun',
         'appuser:git',
+        'appuser:bun',
         'appuser:bun',
         'appuser:bun',
       ]);
@@ -224,3 +232,13 @@ describe.skipIf(process.platform === 'win32')('Docker entrypoint Git credentials
     expect(result.stdout).not.toContain('entrypoint-test:');
   });
 });
+
+test.skipIf(process.platform === 'win32')(
+  'provisioning failure prevents auth setup and server start',
+  async () => {
+    const f = await fixture();
+    const result = f.run(['bash', entrypoint], { FAIL_PROVISION: '1' });
+    expect(result.exitCode).toBe(42);
+    expect(result.stdout).toBe('');
+  }
+);
