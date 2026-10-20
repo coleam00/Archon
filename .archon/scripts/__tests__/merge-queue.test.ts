@@ -639,15 +639,26 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
-  test("an own pull request's ask offers no way back to the build queue: its `other` parks", () => {
+  test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const attention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention })]);
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]);
     const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { asked: { attention: { choices: { id: string; effect: string }[] } } };
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
+  }, 60_000);
+
+  test('an own pull request is never handed to the build queue: a return waits for the next sweep instead', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
+    const inputs = recordInputs([decision({ action: 'return', brief: 'fix the red test', reason: 'CI red in its own test' })]);
+    ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own }));
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('no build round owns an own pull request');
+    expect(buildWaits(doc)).toBe(false);
   }, 60_000);
 
   test('a red default branch takes the run\'s one question, and the pull request\'s ask waits for the next sweep', () => {

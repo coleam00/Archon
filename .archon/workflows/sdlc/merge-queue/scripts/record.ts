@@ -7,7 +7,8 @@
  * show fails the record, but only after every decision is written: that pull request is
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
- * back to the build queue with its brief. A run raises at most one attention item: the
+ * back to the build queue with its brief; on an own pull request, which no build round
+ * owns, it waits for the next sweep instead. A run raises at most one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
  * while the run waits;
@@ -47,10 +48,13 @@ const OWN_PR_OTHER =
 
 /**
  * `other` hands the item back to the build queue with the person's text as the ruling.
- * No build round owns an own pull request, so there it parks with the text recorded.
+ * No build round owns an own pull request, so there a declared `return` choice is
+ * dropped and `other` parks with the text recorded.
  */
 function withQueueOther(attention: MergeAttention, item: Item): MergeAttention {
-  return item.own_pr === true ? withOther(attention, 'park', OWN_PR_OTHER) : withOther(attention, 'return');
+  if (item.own_pr !== true) return withOther(attention, 'return');
+  const choices = attention.choices.filter(choice => choice.effect !== 'return');
+  return withOther({ ...attention, choices }, 'park', OWN_PR_OTHER);
 }
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -103,8 +107,18 @@ function decide(items: readonly Item[], sweep: Sweep): Decision[] {
     note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
   }
   const decided = new Map<number, Decision>();
-  for (const decision of sweep.decisions) {
-    if (!wanted.has(decision.number) || decided.has(decision.number)) continue;
+  for (const declared of sweep.decisions) {
+    if (!wanted.has(declared.number) || decided.has(declared.number)) continue;
+    // A return hands the item to the build queue, and no build round owns an own pull request.
+    const decision =
+      declared.action === 'return' && wanted.get(declared.number)?.own_pr === true
+        ? {
+            ...declared,
+            action: 'wait' as const,
+            brief: '',
+            reason: `${declared.reason} (no build round owns an own pull request, so the next sweep asks instead)`,
+          }
+        : declared;
     // An ask the sweep wrote no item for has nothing to raise; it waits like any other undecided one.
     const asks = decision.action === 'ask' && decision.attention !== null;
     decided.set(decision.number, asks ? decision : { ...decision, action: decision.action === 'ask' ? 'wait' : decision.action, attention: null });

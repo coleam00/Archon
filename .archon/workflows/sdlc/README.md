@@ -600,9 +600,10 @@ then the project's file, whose lines win where the two conflict.
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). No build round
   owns such a pull request, so where another would go back to the build queue (no
-  verdict, a stale one, a conflict, a holding thread) the sweep asks instead, naming
-  what is missing and the command a maintainer can launch. The queue never starts that
-  run itself.
+  verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
+  sweep asks instead, naming what is wrong and the command a maintainer can launch,
+  and its question offers no `return`. The record never hands one to the build queue.
+  The queue never starts that run itself.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
