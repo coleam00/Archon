@@ -83,6 +83,8 @@ const treeOf = (commit: string): string => {
 
 let branch = '';
 let alreadyMerged = false;
+let landSha = sha;
+let note = '';
 const view = run(['gh', 'pr', 'view', prUrl, '--json', 'number,state,headRefOid,headRefName,baseRefName,isCrossRepository']);
 if (view.code !== 0) {
   refusals.push(`could not read the pull request: ${view.err.trim().slice(0, 200)}`);
@@ -106,16 +108,42 @@ if (view.code !== 0) {
     const fetched = run(['git', 'fetch', '--quiet', 'origin', pr.baseRefName, `+refs/pull/${pr.number}/head:refs/remotes/origin/loop-land-${pr.number}`]);
     if (fetched.code !== 0) {
       refusals.push(`could not fetch ${pr.baseRefName}: ${fetched.err.trim().slice(0, 200)}`);
-    } else if (run(['git', 'merge-base', '--is-ancestor', base, sha]).code !== 0) {
-      refusals.push(`${pr.baseRefName} has moved past what was tested; the next lap re-gates on the merge`);
     } else {
+      /** The tree of `commit` merged cleanly with the base, and the files the base brings in; '' on conflict. */
+      const withBaseOf = (commit: string): { tree: string; fromBase: string[] } => {
+        const out = run(['git', 'merge-tree', '--write-tree', commit, base]);
+        const tree = out.code === 0 ? (out.out.split('\n')[0] ?? '').trim() : '';
+        const fromBase = tree === '' ? [] : run(['git', 'diff', '--name-only', treeOf(commit), tree]).out.split('\n').filter(f => f !== '');
+        return { tree, fromBase };
+      };
       // The commit the check tested: its merge with the base, or the head when the merge changed nothing.
       const tested = treeOf(report.merged_with) !== '' ? report.merged_with : report.head;
-      const withBase = run(['git', 'merge-tree', '--write-tree', tested, base]);
-      const withBaseTree = withBase.code === 0 ? (withBase.out.split('\n')[0] ?? '').trim() : '';
-      const fromBase = withBaseTree === '' ? [] : run(['git', 'diff', '--name-only', treeOf(tested), withBaseTree]).out.split('\n').filter(f => f !== '');
-      const untested = untestedMerge({ shaTree: treeOf(sha), testedTree: treeOf(tested), withBaseTree, fromBase, prFiles });
-      if (untested !== null) refusals.push(`${untested}; the next lap checks the new head`);
+      const t = withBaseOf(tested);
+      const untested = untestedMerge({ shaTree: treeOf(sha), testedTree: treeOf(tested), withBaseTree: t.tree, fromBase: t.fromBase, prFiles });
+      const baseMoved = run(['git', 'merge-base', '--is-ancestor', base, sha]).code !== 0;
+      if (untested !== null) {
+        refusals.push(`${untested}; the next lap checks the new head`);
+      } else if (baseMoved) {
+        // The base moved after the review. Throwing the lap away for that costs a whole new lap, so
+        // the gate merges the base in itself when the merge is clean and touches none of this
+        // change's files (what was tested stays exactly what lands, plus commits already on the base).
+        const m = withBaseOf(sha);
+        const shared = m.fromBase.filter(file => prFiles.includes(file));
+        if (pr.isCrossRepository || m.tree === '' || shared.length > 0) {
+          const why = m.tree === '' ? 'and conflicts with it' : shared.length > 0 ? `in ${shared.slice(0, 5).join(', ')}, which this change also changes` : '(a fork branch the gate cannot push to)';
+          refusals.push(`${pr.baseRefName} has moved past what was tested ${why}; the next lap re-checks the merge`);
+        } else {
+          const made = run(['git', 'commit-tree', m.tree, '-p', sha, '-p', base, '-m', `Merge ${pr.baseRefName} into ${pr.headRefName} (merge gate: it touches no file of this change)`]);
+          const commit = made.code === 0 ? made.out.trim() : '';
+          const pushed = commit === '' ? null : run(['git', 'push', '--quiet', 'origin', `${commit}:refs/heads/${pr.headRefName}`]);
+          if (pushed?.code !== 0) {
+            refusals.push(`${pr.baseRefName} has moved past what was tested and the gate could not push the clean merge: ${(pushed?.err ?? made.err).trim().slice(0, 200)}`);
+          } else {
+            landSha = commit;
+            note = ` (the gate merged ${pr.baseRefName} in first: ${m.fromBase.length} file(s) from it, none of this change's)`;
+          }
+        }
+      }
     }
   }
 }
@@ -132,7 +160,7 @@ if (alreadyMerged) {
   comment(`Loop review: not merged (route: ${route}). The merge gate refused the reviewer's merge:\n\n${list}\n\nThe next lap continues this pull request.`);
   emit({ outcome: 'refused', reason: refusals.join('; ') });
 } else {
-  const merged = run(['gh', 'pr', 'merge', prUrl, '--squash', '--match-head-commit', sha]);
+  const merged = run(['gh', 'pr', 'merge', prUrl, '--squash', '--match-head-commit', landSha]);
   if (merged.code !== 0) {
     const why = merged.err.trim().slice(0, 300);
     comment(`Loop review: not merged (route: ${route}). \`gh pr merge\` refused: ${why}`);
@@ -144,7 +172,7 @@ if (alreadyMerged) {
       const state = run(['gh', 'issue', 'view', issue, '--json', 'state', '--jq', '.state']).out.trim();
       if (state === 'OPEN') run(['gh', 'issue', 'close', issue, '--comment', `Delivered by ${prUrl}.`]);
     }
-    comment(`Loop review: merged (route: ${route}) at ${sha} by the merge gate, after the review above.`);
-    emit({ outcome: 'merged', reason: `merged ${sha}` });
+    comment(`Loop review: merged (route: ${route}) at ${landSha} by the merge gate, after the review above${note}.`);
+    emit({ outcome: 'merged', reason: `merged ${landSha}${note}` });
   }
 }

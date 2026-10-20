@@ -63,6 +63,8 @@ Do not open pull requests. Do not push, or comment on a pull request, unless the
 
 If the work is impossible or too ambiguous to build responsibly — it names files that don't exist, a prerequisite is missing, two requirements contradict — say so plainly and stop: declare `done: true, green: false` with the blocker in `summary`, and make no speculative edits. A clear refusal is a good outcome; code built on a broken premise is not.
 
+Stop the same way, as early as you can see it, when the only way to meet the work item needs a decision the work item does not give you: changing what an existing check judges (a lower or re-pinned threshold, a re-recorded or re-pinned reference the check compares against, a new skip or excuse) without an approval or criterion that asks for it, or a visible look the work item leaves open. Put the question and the options you see in `summary`. Finding it after a full build costs a whole run; finding it first costs a minute.
+
 ## Report
 
 No one is watching this run: nothing you print survives unless it lands in this report, a commit, or a declared field, so spend no output narrating progress to a watcher who does not exist. Maintain `$ARTIFACTS_DIR/implementation.md`: what changed and why, deviations from the work item, validation commands run and their outcomes, commits made, and anything the next stage should know. Concise and factual — it is the durable handoff.

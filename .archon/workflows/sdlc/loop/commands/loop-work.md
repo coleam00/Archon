@@ -18,6 +18,8 @@ The move:
 - For `continue`: the pull request, its diff, its CI (`gh pr checks <n>`), every review comment (the latest `Loop review:` comment first) and the builder reports before yours. Fix what they found, with the evidence they gave. A `Loop review: not merged` comment is the merge gate refusing a merge: when its reasons are about the code (a failed line the review marked as this change's, a failed step of the shipping pipeline) fix those; when they are only about the default branch having moved, merge it in; when they are only about the app check's evidence or the review's record, change nothing and say so, and the reviewers check it again.
 - The product's direction and conventions: `engineering.md`, the mission and the product document (look once at the root and in `docs/`; treat a file that is not there as absent).
 
+Ask before you build. When the only way to meet the work item changes what an in-repository check judges (a lower or re-pinned threshold, a re-recorded or re-pinned reference a check compares against, a new skip or excuse) and neither the owner's approval nor a contract criterion asks for it, or needs a look the work item leaves open, that is a decision only the owner can make: treat it as below the moment you see it, before building, not after.
+
 If the move turns out to be wrong (the pull request was already merged, the issue is already done, or a decision only the owner can make blocks it), do not force it: comment what you found, label the item `needs-owner` if it needs a decision, and report `PR: none`.
 
 ## Do it
