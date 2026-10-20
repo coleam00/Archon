@@ -4,7 +4,11 @@ import { ClassifiedProviderError } from '../shared/failure';
 
 export type McpStatus = Extract<MessageChunk, { type: 'mcp_server_status' }>;
 
-/** Observe the same session that will receive input; never probe a separate connection. */
+/**
+ * Wait until every declared MCP server is connected, yielding each status change.
+ * `readStatuses` observes the session that will receive input; a separate probe could
+ * pass while that session's own connection failed.
+ */
 export async function* requireMcpConnections(
   names: readonly string[],
   readStatuses: () => Promise<readonly McpStatus[]>,
@@ -32,7 +36,7 @@ export async function* requireMcpConnections(
   }
 }
 
-export async function readMcpStatuses(
+async function readMcpStatuses(
   read: () => Promise<readonly McpStatus[]>,
   signal?: AbortSignal
 ): Promise<readonly McpStatus[]> {
@@ -59,7 +63,7 @@ function requireServerStatus(name: string, statuses: readonly McpStatus[]): McpS
   return status;
 }
 
-export function assertMcpUsable(status: McpStatus): void {
+function assertMcpUsable(status: McpStatus): void {
   if (status.status !== 'connected' && status.status !== 'pending') {
     throw new ClassifiedProviderError(
       'misconfigured',

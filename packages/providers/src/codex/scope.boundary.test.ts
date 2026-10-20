@@ -615,7 +615,7 @@ describe('Codex capability scope on the real binary', () => {
   );
 
   test(
-    'a declared server that fails to start is reported as failed',
+    'a declared server that fails to start fails the node before a model request',
     async () => {
       await writeFile(
         join(repo, 'broken-mcp.json'),
@@ -629,6 +629,11 @@ describe('Codex capability scope on the real binary', () => {
           status: 'failed',
         })
       );
+      expect(modelRequests).toHaveLength(0);
+      expect(resultOf(chunks).failure).toEqual({
+        class: 'misconfigured',
+        evidence: expect.stringContaining('broken_srv'),
+      });
     },
     testTimeout(20_000)
   );
@@ -760,29 +765,3 @@ describe('Codex auth paths keep the user’s own home on the real binary', () =>
     testTimeout(40_000)
   );
 });
-
-for (const required of [true, false]) {
-  test(
-    `a broken declared MCP ${required ? 'blocks input before a model request' : 'allows optional input'}`,
-    async () => {
-      const mcp = join(repo, 'broken.json');
-      await writeFile(
-        mcp,
-        JSON.stringify({ declared: { command: join(root, 'missing-executable') } })
-      );
-      const chunks = await runRequest({
-        nodeConfig: { nodeId: 'readiness', mcp },
-        ...(required ? { requireMcpConnections: true } : {}),
-      });
-      if (required) {
-        expect(modelRequests).toHaveLength(0);
-        expect(resultOf(chunks).failure).toEqual({
-          class: 'misconfigured',
-          evidence: expect.stringContaining('declared'),
-        });
-        expect(resultOf(chunks).failure?.evidence).toContain('failed');
-      } else expect(modelRequests.length).toBeGreaterThan(0);
-    },
-    testTimeout(30_000)
-  );
-}

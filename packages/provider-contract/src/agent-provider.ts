@@ -265,8 +265,6 @@ export interface ProviderAdmissionEvent {
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Require every file-declared MCP server to connect in this session before sending input. */
-  requireMcpConnections?: true;
   /**
    * Codex titles use empty capability declarations and a read-only sandbox.
    * Pi titles without a resume id use in-memory sessions. Other providers may ignore it.

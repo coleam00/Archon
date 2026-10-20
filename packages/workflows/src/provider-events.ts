@@ -155,8 +155,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await sendWarning(`⚠️ ${event.message}`, { code: event.code });
           return;
         case 'mcp_server_status':
-          // Only declared servers surface here. Providers enforce required connection
-          // readiness before delivering input; optional failures remain warnings.
+          // Only the node's declared servers surface. The provider decides whether the
+          // node can run without one: Claude and Codex fail it before the first turn.
           if (
             (event.status === 'failed' || event.status === 'needs_auth') &&
             deps.configuredMcpServers.has(event.server)

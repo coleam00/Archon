@@ -427,7 +427,6 @@ describe('executeDagWorkflow -- skills options', () => {
 
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
     expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBeUndefined();
-    expect(mockSendQueryDag.mock.calls[0][3]?.requireMcpConnections).toBeUndefined();
     const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
       call => call[0] as { event_type: string; data?: Record<string, unknown> }
     );
@@ -1318,12 +1317,7 @@ describe('resolveNodeMcp', () => {
       claude,
       '/nonexistent/cwd'
     );
-    expect(result).toEqual({
-      kind: 'load',
-      path: absolutePath,
-      servers: new Set(['foo', 'bar']),
-      optional: true,
-    });
+    expect(result).toEqual({ kind: 'load', path: absolutePath, servers: new Set(['foo', 'bar']) });
   });
 
   it('loads an optional home config beside its YAML when the checkout has none', async () => {
@@ -1347,7 +1341,6 @@ describe('resolveNodeMcp', () => {
 
     expect(result).toEqual({
       kind: 'load',
-      optional: true,
       path: join(yamlDir, 'servers.json'),
       servers: new Set(['home-server']),
     });
@@ -1382,7 +1375,6 @@ describe('resolveNodeMcp', () => {
     await writeFile(join(testDir, 'broken.json'), '{ not-json');
     expect(await resolveNodeMcp({ path: 'broken.json', optional: true }, claude, testDir)).toEqual({
       kind: 'load',
-      optional: true,
       path: join(testDir, 'broken.json'),
       servers: new Set(),
     });
@@ -1658,8 +1650,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
   async function runWithEvents(
     events: MessageChunk[],
     nodeMcp?: NodeMcp,
-    store: MockWorkflowStore = createMockStore(),
-    withDownstream = false
+    store: MockWorkflowStore = createMockStore()
   ): Promise<IWorkflowPlatform> {
     mockSendQueryDag.mockImplementation(async function* () {
       yield* events;
@@ -1683,16 +1674,6 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
               source: { kind: 'command', name: 'my-cmd' },
               ...(nodeMcp ? { mcp: nodeMcp } : {}),
             },
-            ...(withDownstream
-              ? [
-                  {
-                    id: 'downstream',
-                    kind: 'agent' as const,
-                    source: { kind: 'command' as const, name: 'my-cmd' },
-                    depends_on: ['review'],
-                  },
-                ]
-              : []),
           ],
         },
         workflowRun: makeWorkflowRun(),
@@ -1729,7 +1710,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
         { type: 'mcp_server_status', server: 'telegram', status: 'failed' },
         { type: 'mcp_server_status', server: 'workflow-server', status: 'connected' },
       ],
-      { path: 'mcp.json', optional: true }
+      'mcp.json'
     );
 
     expect(mcpMessages(platform)).toEqual([
@@ -1746,49 +1727,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     await runWithEvents([], mcp, store);
 
     expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBe(join(testDir, 'mcp.json'));
-    expect(mockSendQueryDag.mock.calls[0][3]?.requireMcpConnections).toBe(
-      _label === 'required' ? true : undefined
-    );
     expect(nodeRows(store).every(row => row.data?.mcp_unavailable === undefined)).toBe(true);
-  });
-
-  it('fails a required node on the provider preflight failure without successful output', async () => {
-    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
-    const store = createMockStore();
-    const evidence =
-      'Required MCP server "workflow-server" could not connect (failed): spawn ENOENT';
-    const platform = await runWithEvents(
-      [
-        {
-          type: 'mcp_server_status',
-          server: 'workflow-server',
-          status: 'failed',
-          error: 'spawn ENOENT',
-        },
-        {
-          type: 'result',
-          isError: true,
-          failure: { class: 'misconfigured', evidence },
-          errors: [evidence],
-        },
-        { type: 'settled' },
-      ],
-      'mcp.json',
-      store,
-      true
-    );
-    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-    const rows = nodeRows(store);
-    expect(rows.map(row => row.event_type)).toEqual([
-      'node_started',
-      'node_failed',
-      'node_skipped',
-    ]);
-    expect(rows[1].data?.error).toContain('workflow-server');
-    expect(rows[1].data?.error).toContain('spawn ENOENT');
-    expect(
-      (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls.map(c => c[1])
-    ).not.toContain('ok');
   });
 
   it('runs an optional declaration whose file is missing without it, and records why', async () => {
@@ -1796,7 +1735,6 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     const platform = await runWithEvents([], { path: 'absent.json', optional: true }, store);
 
     expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.mcp).toBeUndefined();
-    expect(mockSendQueryDag.mock.calls[0][3]?.requireMcpConnections).toBeUndefined();
     const rows = nodeRows(store);
     expect(rows.map(row => row.event_type)).toEqual(['node_started', 'node_completed']);
     for (const row of rows) {
@@ -1829,7 +1767,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
     const platform = await runWithEvents(
       [{ type: 'mcp_server_status', server: 'workflow-server', status: 'needs_auth' }],
-      { path: 'mcp.json', optional: true }
+      'mcp.json'
     );
 
     expect(mcpMessages(platform)).toEqual([

@@ -3439,9 +3439,18 @@ describe('sendQuery decomposition behaviors', () => {
     });
 
     test('strict MCP passes exactly the workflow-declared server map', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
+      mockQuery.mockImplementation(() =>
+        Object.assign(
+          (async function* () {
+            yield { type: 'result', session_id: 'sid' };
+          })(),
+          {
+            initializationResult: async () => ({}),
+            mcpServerStatus: async () => [{ name: 'declared', status: 'connected' }],
+            close: () => {},
+          }
+        )
+      );
       const mcpPath = join(workflowCwd, 'mcp.json');
       writeFileSync(
         mcpPath,
@@ -4820,7 +4829,6 @@ describe('required MCP admission', () => {
           root,
           'existing',
           {
-            requireMcpConnections: true,
             nodeConfig: { mcp },
             ...(container
               ? {
@@ -4890,7 +4898,6 @@ for (const mode of ['success', 'abort', 'return'] as const) {
       });
     });
     const stream = new ClaudeProvider().sendQuery('hi', root, undefined, {
-      requireMcpConnections: true,
       nodeConfig: { mcp },
       abortSignal: controller.signal,
       nativeTools: [

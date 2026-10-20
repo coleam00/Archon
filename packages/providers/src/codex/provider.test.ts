@@ -899,7 +899,10 @@ describe('CodexProvider', () => {
         assistantConfig: { webSearchMode: 'live', additionalDirectories: ['/extra'] },
         nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
       };
-      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      const { provider, server } = providerWith({
+        configuredServers: ['posthog'],
+        mcpStatusPages: [[{ name: 'local', pluginId: null, runtimeStatus: 'connected' }]],
+      });
       for await (const _ of provider.sendQuery('p', dir, undefined, options)) {
         // consume
       }
@@ -2169,38 +2172,22 @@ test('Codex diagnostics carry binary resolution and legacy setup posture without
   }
 });
 
-describe('required MCP readiness', () => {
-  test('failure names the server and blocks turn/start; optional still starts', async () => {
-    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-ready-')));
-    const mcp = join(dir, 'mcp.json');
-    await writeFile(mcp, JSON.stringify({ declared: { command: 'missing' } }));
-    for (const required of [true, false]) {
-      const { provider, server } = providerWith({
-        mcpStatusPages: [
-          [
-            {
-              name: 'declared',
-              pluginId: null,
-              runtimeStatus: 'failed',
-              toolsError: 'spawn ENOENT',
-            },
-          ],
-        ],
-      });
-      const chunks = await run(provider, {
-        nodeConfig: { nodeId: 'test', mcp },
-        ...(required ? { requireMcpConnections: true } : {}),
-      });
-      expect(paramsOf(server, 'turn/start') !== undefined).toBe(!required);
-      if (required) {
-        expect(resultOf(chunks).failure).toEqual({
-          class: 'misconfigured',
-          evidence: expect.stringContaining('declared'),
-        });
-        expect(resultOf(chunks).failure?.evidence).toContain('spawn ENOENT');
-      }
-    }
+test('a declared MCP server that fails to connect names the server and blocks turn/start', async () => {
+  const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-ready-')));
+  const mcp = join(dir, 'mcp.json');
+  await writeFile(mcp, JSON.stringify({ declared: { command: 'missing' } }));
+  const { provider, server } = providerWith({
+    mcpStatusPages: [
+      [{ name: 'declared', pluginId: null, runtimeStatus: 'failed', toolsError: 'spawn ENOENT' }],
+    ],
   });
+  const chunks = await run(provider, { nodeConfig: { nodeId: 'test', mcp } });
+  expect(paramsOf(server, 'turn/start')).toBeUndefined();
+  expect(resultOf(chunks).failure).toEqual({
+    class: 'misconfigured',
+    evidence: expect.stringContaining('declared'),
+  });
+  expect(resultOf(chunks).failure?.evidence).toContain('spawn ENOENT');
 });
 
 for (const continuation of ['fresh', 'resume', 'fork'] as const) {
@@ -2214,7 +2201,6 @@ for (const continuation of ['fresh', 'resume', 'fork'] as const) {
     const chunks = await run(
       provider,
       {
-        requireMcpConnections: true,
         nodeConfig: { nodeId: 'test', mcp },
         forkSession: continuation === 'fork',
       },
@@ -2239,24 +2225,18 @@ for (const [name, definition] of [
   ['declared', { command: null }],
   ['', {}],
 ] as const) {
-  for (const required of [true, false]) {
-    test(`untranslatable ${required ? 'required' : 'optional'} MCP server ${JSON.stringify(name)}: ${JSON.stringify(definition)}`, async () => {
-      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-empty-')));
-      const mcp = join(dir, 'mcp.json');
-      await writeFile(mcp, JSON.stringify({ [name]: definition }));
-      const { provider, server } = providerWith({});
-      const chunks = await run(provider, {
-        ...(required ? { requireMcpConnections: true } : {}),
-        nodeConfig: { nodeId: 'test', mcp },
-      });
-      expect(paramsOf(server, 'turn/start') !== undefined).toBe(!required);
-      if (required)
-        expect(resultOf(chunks).failure).toEqual({
-          class: 'misconfigured',
-          evidence: expect.stringContaining(`Required MCP server "${name}"`),
-        });
+  test(`untranslatable MCP server ${JSON.stringify(name)}: ${JSON.stringify(definition)}`, async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-empty-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ [name]: definition }));
+    const { provider, server } = providerWith({});
+    const chunks = await run(provider, { nodeConfig: { nodeId: 'test', mcp } });
+    expect(paramsOf(server, 'turn/start')).toBeUndefined();
+    expect(resultOf(chunks).failure).toEqual({
+      class: 'misconfigured',
+      evidence: expect.stringContaining(`Required MCP server "${name}"`),
     });
-  }
+  });
 }
 
 test('an empty required MCP file map admits a turn', async () => {
@@ -2265,7 +2245,6 @@ test('an empty required MCP file map admits a turn', async () => {
   await writeFile(mcp, '{}');
   const { provider, server } = providerWith({});
   const chunks = await run(provider, {
-    requireMcpConnections: true,
     nodeConfig: { nodeId: 'test', mcp },
   });
   expect(paramsOf(server, 'turn/start')).toBeDefined();
@@ -2280,7 +2259,6 @@ test('a dropped MCP name cannot be supplied by Object.prototype beside a valid s
     mcpStatusPages: [[{ name: 'declared', pluginId: null, runtimeStatus: 'connected' }]],
   });
   const chunks = await run(provider, {
-    requireMcpConnections: true,
     nodeConfig: { nodeId: 'test', mcp },
   });
   expect(paramsOf(server, 'turn/start')).toBeUndefined();

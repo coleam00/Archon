@@ -170,7 +170,6 @@ test('serializable options and container environment survive', async () => {
     maxBudgetUsd: 2,
     fallbackModel: 'fallback',
     forkSession: true,
-    requireMcpConnections: true,
     purpose: 'title-generation',
     nodeConfig: {
       mcp: 'test',

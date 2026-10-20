@@ -63,7 +63,6 @@ export const providerSessionRequestSchema = z.strictObject({
   maxBudgetUsd: z.number().optional(),
   fallbackModel: z.string().optional(),
   forkSession: z.boolean().optional(),
-  requireMcpConnections: z.literal(true).optional(),
   purpose: z.literal('title-generation').optional(),
   nodeConfig: configSchema.optional(),
   assistantConfig: configSchema.optional(),

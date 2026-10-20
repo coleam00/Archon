@@ -6,13 +6,7 @@
 import { requireMcpConnections, type McpStatus } from '../mcp/readiness';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
-import type {
-  MessageChunk,
-  ProviderEvent,
-  ResultChunk,
-  SendQueryOptions,
-  TokenUsage,
-} from '../types';
+import type { MessageChunk, ProviderEvent, ResultChunk, TokenUsage } from '../types';
 import { ClassifiedProviderError, failureResult } from '../shared/failure';
 import type { AppServerConnection, ParamsOf } from './app-server';
 import { withDeliveredCredentialConfig, type CodexLogin, type ThreadParams } from './login';
@@ -24,6 +18,7 @@ import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
 import type { Turn } from './protocol/v2/Turn';
+import type { McpServerConnectionStatus } from './protocol/v2/McpServerConnectionStatus';
 import type { TurnError } from './protocol/v2/TurnError';
 import {
   applyNodeScope,
@@ -230,7 +225,7 @@ function codexHomeOf(initializeResponse: unknown): string {
   return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
 }
 
-export interface TurnRequest extends Pick<SendQueryOptions, 'requireMcpConnections'> {
+export interface TurnRequest {
   abortSignal: AbortSignal | undefined;
   tools: ReturnType<typeof buildCodexNativeTools>;
   connection: AppServerConnection;
@@ -285,6 +280,40 @@ interface TurnObservation {
   retries: number;
 }
 
+const MCP_READINESS = {
+  notStarted: 'pending',
+  starting: 'pending',
+  connected: 'connected',
+  authenticationRequired: 'needs_auth',
+  failed: 'failed',
+  cancelled: 'failed',
+  disabled: 'disabled',
+} as const satisfies Record<McpServerConnectionStatus, McpStatus['status']>;
+
+async function readDeclaredMcpStatuses(
+  connection: AppServerConnection,
+  threadId: string,
+  declared: readonly string[]
+): Promise<McpStatus[]> {
+  const statuses = await readThreadMcpStatuses(connection, threadId);
+  return statuses
+    .filter(server => declared.includes(server.name))
+    .map(server => {
+      if (server.runtimeStatus === null) {
+        throw new ClassifiedProviderError(
+          'misconfigured',
+          `Cannot establish connection readiness for MCP server "${server.name}": unknown runtime status`
+        );
+      }
+      return {
+        type: 'mcp_server_status',
+        server: server.name,
+        status: MCP_READINESS[server.runtimeStatus],
+        ...(server.toolsError !== null ? { error: server.toolsError } : {}),
+      };
+    });
+}
+
 /**
  * Keeps observing background work after the parent completes.
  * Lost observation is thrown for `sendQuery` to classify; it never settles.
@@ -292,42 +321,12 @@ interface TurnObservation {
 export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection } = request;
   const threadId = await openThread(request);
-  if (request.requireMcpConnections) {
-    const names = Object.keys(declaredServers(request.threadParams.config ?? {}));
-    yield* requireMcpConnections(
-      names,
-      async () =>
-        (await readThreadMcpStatuses(connection, threadId))
-          .filter(server => names.includes(server.name))
-          .map(server => {
-            const states = {
-              notStarted: 'pending',
-              starting: 'pending',
-              connected: 'connected',
-              authenticationRequired: 'needs_auth',
-              failed: 'failed',
-              cancelled: 'failed',
-              disabled: 'disabled',
-            } as const satisfies Record<
-              NonNullable<typeof server.runtimeStatus>,
-              McpStatus['status']
-            >;
-            if (server.runtimeStatus === null) {
-              throw new ClassifiedProviderError(
-                'misconfigured',
-                `Cannot establish connection readiness for MCP server "${server.name}": unknown runtime status`
-              );
-            }
-            return {
-              type: 'mcp_server_status' as const,
-              server: server.name,
-              status: states[server.runtimeStatus],
-              ...(server.toolsError !== null ? { error: server.toolsError } : {}),
-            };
-          }),
-      request.abortSignal
-    );
-  }
+  const declared = Object.keys(declaredServers(request.threadParams.config ?? {}));
+  yield* requireMcpConnections(
+    declared,
+    () => readDeclaredMcpStatuses(connection, threadId, declared),
+    request.abortSignal
+  );
   const observation: TurnObservation = {
     parentCompleted: false,
     startedToolIds: new Set(),

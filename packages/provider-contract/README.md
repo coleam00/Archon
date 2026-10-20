@@ -44,23 +44,11 @@ try {
 
 Descriptors declare `PROVIDER_PLUGIN_PROTOCOL` (currently `2`), provider identity/version, capabilities, a static credential catalog and a config JSON Schema. ACP remains version 1; the Archon protocol travels in `_meta.archon.protocol`. Dynamic credential catalogs remain unsupported. Session requests carry native-tool specifications; handlers stay on the host and `_archon/tool_call` invokes them only for live sessions after validating the declared input schema. Credential checks and credential-model resolution use `_archon/check_credential` and `_archon/resolve_credential_model`. Unknown notifications are ignored; unsupported requests receive JSON-RPC `-32601`. This is an Archon extension, not a plain ACP agent adapter.
 
-`SendQueryOptions.requireMcpConnections: true` requires every server loaded from the node's
-MCP file to connect in the same native session before the provider delivers input. Pending
-connections wait; failed, disabled, authentication-required, missing or unknown readiness
-fails with `misconfigured`, naming the server and available vendor cause. Emit status
-observations before failure. Internal native-tool servers are excluded. Without this option,
-connection failures remain warnings and the provider may continue. The workflow engine sets
-it for required loaded MCP declarations, and omits it for optional declarations.
-
 Session requests carry the data fields of `SendQueryOptions`. `abortSignal` becomes `session/cancel`; `onAdmission` stays with the host; `nativeTools` carries specifications only. Container requests carry optional `env` data while the plugin retains its host environment. For host requests, `serveProvider` gives the underlying provider its own process environment. A stream pair does not apply the client's `env` bag to the serving process. The process carrier owns termination when a provider does not respond to cancellation. Closing a connection aborts its provider work.
 
 ## Compatibility
 
 Within a protocol version, changes are additive: every message valid for the version's baseline shape stays valid for the current receiver, and a new field is optional and sent only when it has a value. Plugins keep rejecting fields they do not know, so a newer host's request that uses a field an older plugin of the same version cannot honor fails with `-32602` instead of being dropped. Removing or narrowing a field, making one required, adding an enum value the receiver parses, or changing a field's meaning bumps `PROVIDER_PLUGIN_PROTOCOL`.
-
-An older plugin that does not support `requireMcpConnections` rejects the request before
-calling its provider. Upgrade that plugin to support required MCP readiness; optional and
-non-MCP requests remain compatible.
 
 Version negotiation follows ACP. The host sends its protocol in `initialize`; the plugin always answers with its descriptor, but serves sessions and `_archon/*` requests only when both protocols match. On a mismatch the host fails with `PluginProtocolMismatchError` (a `PluginProtocolError`), whose message and `hostProtocol`/`pluginProtocol` fields name both versions. A peer released before this negotiation existed still rejects a mismatched `initialize` with `-32602`.
 

@@ -508,7 +508,7 @@ async function* buildQueryOptions(
 
   const mcpNames = Object.keys(options.mcpServers ?? {});
   if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
-    if (requestOptions.requireMcpConnections && options.mcpServers?.[ARCHON_TOOL_SERVER]) {
+    if (mcpNames.includes(ARCHON_TOOL_SERVER)) {
       throw new ClassifiedProviderError(
         'misconfigured',
         `MCP server "${ARCHON_TOOL_SERVER}" conflicts with Archon's native tool server`
@@ -688,7 +688,7 @@ export class ClaudeProvider implements IAgentProvider {
       });
       controller.signal.throwIfAborted();
       const rawEvents = query({ prompt: input.messages, options });
-      if (requestOptions?.requireMcpConnections) {
+      if (mcpNames.length > 0) {
         preparedQuery = rawEvents;
         await rawEvents.initializationResult();
         yield* requireMcpConnections(

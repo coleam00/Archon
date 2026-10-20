@@ -264,22 +264,19 @@ export function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryO
 export async function loadNodeMcpServers(
   mcpPath: string,
   cwd: string,
-  requestEnv: Record<string, string> | undefined,
-  requireConnections?: SendQueryOptions['requireMcpConnections']
+  requestEnv: Record<string, string> | undefined
 ): Promise<{ mcpServers: CodexConfig | undefined; warnings: ProviderWarning[] }> {
   const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd, {
     ...process.env,
     ...requestEnv,
   });
   const mcpServers = buildCodexMcpServers(servers);
-  if (requireConnections) {
-    const missing = serverNames.find(name => !Object.hasOwn(mcpServers ?? {}, name));
-    if (missing !== undefined) {
-      throw new ClassifiedProviderError(
-        'misconfigured',
-        `Required MCP server "${missing}" has no supported Codex configuration fields`
-      );
-    }
+  const missing = serverNames.find(name => !Object.hasOwn(mcpServers ?? {}, name));
+  if (missing !== undefined) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Required MCP server "${missing}" has no supported Codex configuration fields`
+    );
   }
   getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
   if (missingVars.length === 0) return { mcpServers, warnings: [] };

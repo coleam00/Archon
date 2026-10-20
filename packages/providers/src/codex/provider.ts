@@ -141,12 +141,7 @@ async function* nodeMcpServers(
 ): AsyncGenerator<MessageChunk, CodexConfig | undefined> {
   const mcpPath = requestOptions?.nodeConfig?.mcp;
   if (titleRequest || !mcpPath) return undefined;
-  const { mcpServers, warnings } = await loadNodeMcpServers(
-    mcpPath,
-    cwd,
-    requestOptions.env,
-    requestOptions.requireMcpConnections
-  );
+  const { mcpServers, warnings } = await loadNodeMcpServers(mcpPath, cwd, requestOptions.env);
   for (const warning of warnings) {
     yield { type: 'warning', ...warning };
   }
@@ -559,7 +554,6 @@ function finalTurnRequestOf(
   return {
     ...request,
     tools: buildCodexNativeTools([]),
-    requireMcpConnections: undefined,
     forkSession: false,
     // The empty title scope: no plugin, app or MCP server, which the thread check enforces.
     nodePlugins: [],
@@ -605,7 +599,6 @@ function turnRequestOf(
     ? { ...inputs.threadConfig, features: { multi_agent: false } }
     : inputs.threadConfig;
   const request: Omit<TurnRequest, 'connection'> = {
-    requireMcpConnections: inputs.titleRequest ? undefined : requestOptions?.requireMcpConnections,
     abortSignal: requestOptions?.abortSignal,
     tools: inputs.tools,
     login: inputs.login,

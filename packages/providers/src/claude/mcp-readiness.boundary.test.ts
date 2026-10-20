@@ -23,9 +23,9 @@ rl.on('line', line => {
 });
 `;
 
-for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as const) {
+for (const mode of ['broken', 'delayed', 'collision'] as const) {
   const broken = mode !== 'delayed';
-  const collision = mode === 'collision' || mode === 'optional-collision';
+  const collision = mode === 'collision';
   const name = collision ? 'archon' : 'declared';
   test(
     `native Claude MCP admission: ${mode}`,
@@ -39,13 +39,11 @@ for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as c
         fetch(request) {
           if (new URL(request.url).pathname.endsWith('/messages')) {
             modelCalls++;
-            if (mode !== 'optional-collision') {
-              expect(observations).toContainEqual({
-                type: 'mcp_server_status',
-                server: name,
-                status: 'connected',
-              });
-            }
+            expect(observations).toContainEqual({
+              type: 'mcp_server_status',
+              server: name,
+              status: 'connected',
+            });
           }
           return Response.json(
             { error: { type: 'invalid_request_error', message: 'local fixture' } },
@@ -73,7 +71,6 @@ for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as c
           root,
           undefined,
           {
-            ...(mode === 'optional-collision' ? {} : { requireMcpConnections: true }),
             ...(collision
               ? {
                   nativeTools: [
@@ -105,9 +102,7 @@ for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as c
           if (chunk.type === 'mcp_server_status' && chunk.status === 'pending')
             await writeFile(release, 'ready');
         }
-        if (mode === 'optional-collision') {
-          expect(modelCalls).toBeGreaterThan(0);
-        } else if (broken) {
+        if (broken) {
           expect(modelCalls).toBe(0);
           expect(observations).toContainEqual(
             expect.objectContaining({
