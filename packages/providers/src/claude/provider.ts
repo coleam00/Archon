@@ -50,6 +50,7 @@ import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import { checkClaudeNativeAuth } from './native-auth';
 import { resolveClaudeBinaryPath, resolveClaudeBinaryWithSource } from './binary-resolver';
+import { ClassifiedProviderError } from '../shared/failure';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { readSessionSpendBaseline } from './session-spend-reader';
 import { createLogger } from '@archon/paths';
@@ -64,6 +65,7 @@ import {
   failureResultChunk,
 } from './failure';
 import { applyNodeConfig, isWorkflowNode } from './node-config';
+import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -177,20 +179,19 @@ function buildFirstEventHangDiagnostics(
 class FirstEventTimeoutError extends Error {}
 
 /**
- * Wraps an async generator so that the first call to .next() must resolve
- * within `timeoutMs`. If it doesn't, aborts the controller and throws.
+ * Resolves `pending` only if it settles within `timeoutMs`. Otherwise aborts the
+ * controller and throws a ClaudeFirstEventTimeoutError: the CLI produced nothing.
  */
-export async function* withFirstMessageTimeout<T>(
-  gen: AsyncGenerator<T>,
+async function withinFirstEventDeadline<T>(
+  pending: Promise<T>,
   controller: AbortController,
   timeoutMs: number,
   diagnostics: Record<string, unknown>
-): AsyncGenerator<T> {
+): Promise<T> {
   let timerId: ReturnType<typeof setTimeout> | undefined;
-  let firstValue: IteratorResult<T>;
   try {
-    firstValue = await Promise.race([
-      gen.next(),
+    return await Promise.race([
+      pending,
       new Promise<never>((_, reject) => {
         timerId = setTimeout(() => {
           reject(new FirstEventTimeoutError());
@@ -213,7 +214,19 @@ export async function* withFirstMessageTimeout<T>(
   } finally {
     clearTimeout(timerId);
   }
+}
 
+/**
+ * Wraps an async generator so that the first call to .next() must resolve
+ * within `timeoutMs`. If it doesn't, aborts the controller and throws.
+ */
+export async function* withFirstMessageTimeout<T>(
+  gen: AsyncGenerator<T>,
+  controller: AbortController,
+  timeoutMs: number,
+  diagnostics: Record<string, unknown>
+): AsyncGenerator<T> {
+  const firstValue = await withinFirstEventDeadline(gen.next(), controller, timeoutMs, diagnostics);
   if (firstValue.done) return;
   yield firstValue.value;
   yield* gen;
@@ -436,7 +449,7 @@ async function* buildQueryOptions(
   resumeSessionId: string | undefined,
   requestOptions: SendQueryOptions | undefined,
   run: QueryRun
-): AsyncGenerator<MessageChunk, { options: Options; env: NodeJS.ProcessEnv }> {
+): AsyncGenerator<MessageChunk, { options: Options; env: NodeJS.ProcessEnv; mcpNames: string[] }> {
   const isContainerRun = requestOptions?.execContext?.kind === 'container';
   const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
@@ -504,17 +517,23 @@ async function* buildQueryOptions(
   }
   options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
+  const mcpNames = Object.keys(options.mcpServers ?? {});
   if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
+    if (mcpNames.includes(ARCHON_TOOL_SERVER)) {
+      throw new ClassifiedProviderError(
+        'misconfigured',
+        `MCP server "${ARCHON_TOOL_SERVER}" conflicts with Archon's native tool server`
+      );
+    }
     registerNativeTools(options, requestOptions.nativeTools);
   }
   setResumeTarget(options, cwd, resumeSessionId, requestOptions?.forkSession);
-  return { options, env };
+  return { options, env, mcpNames };
 }
 
 /**
  * Register in-process native tools (e.g. manage_run) as an archon MCP server,
- * mirroring the file-based mcp branch. Merge so a nodeConfig mcp config and
- * native tools can coexist.
+ * alongside the file-based MCP servers.
  */
 function registerNativeTools(
   options: Options,
@@ -549,6 +568,37 @@ function trackSubtask(
 ): void {
   if (chunk.status === 'started' || chunk.status === 'running') openSubtaskIds.add(chunk.taskId);
   else openSubtaskIds.delete(chunk.taskId);
+}
+
+function createQueryInput(
+  prompt: string,
+  resumeSessionId: string | undefined,
+  signal: AbortSignal
+): {
+  messages: AsyncGenerator<SDKUserMessage>;
+  admit: () => void;
+  close: () => void;
+} {
+  const admission = Promise.withResolvers<boolean>();
+  const closed = Promise.withResolvers<void>();
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    if (!(await admission.promise) || signal.aborted) return;
+    yield {
+      type: 'user',
+      message: { role: 'user', content: prompt },
+      parent_tool_use_id: null,
+      session_id: resumeSessionId ?? '',
+    };
+    await closed.promise;
+  }
+  return {
+    messages: messages(),
+    admit: () => admission.resolve(true),
+    close: () => {
+      admission.resolve(false);
+      closed.resolve();
+    },
+  };
 }
 
 // ─── Claude Provider ───────────────────────────────────────────────────────
@@ -616,11 +666,10 @@ export class ClaudeProvider implements IAgentProvider {
     const onAbort = (): void => {
       controller.abort();
     };
-    if (requestOptions?.abortSignal) {
-      requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
-    }
+    requestOptions?.abortSignal?.addEventListener('abort', onAbort, { once: true });
     let resultReported = false;
     let closeInput: (() => void) | undefined;
+    let preparedQuery: ReturnType<typeof query> | undefined;
     const openSubtaskIds = new Set<string>();
 
     try {
@@ -628,26 +677,20 @@ export class ClaudeProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
       const toolResultQueue: ToolResultEntry[] = [];
-      const { options, env } = yield* buildQueryOptions(cwd, resumeSessionId, requestOptions, {
-        controller,
-        stderrLines,
-        toolResultQueue,
-      });
+      const { options, env, mcpNames } = yield* buildQueryOptions(
+        cwd,
+        resumeSessionId,
+        requestOptions,
+        {
+          controller,
+          stderrLines,
+          toolResultQueue,
+        }
+      );
 
-      const { promise: inputClosed, resolve: finishInput } = Promise.withResolvers<undefined>();
-      closeInput = (): void => {
-        finishInput(undefined);
-      };
+      const input = createQueryInput(prompt, resumeSessionId, controller.signal);
+      closeInput = input.close;
       controller.signal.addEventListener('abort', closeInput, { once: true });
-      async function* input(): AsyncGenerator<SDKUserMessage> {
-        yield {
-          type: 'user',
-          message: { role: 'user', content: prompt },
-          parent_tool_use_id: null,
-          session_id: resumeSessionId ?? '',
-        };
-        await inputClosed;
-      }
       const spendBaseline = await readSessionSpendBaseline(resumeSessionId, {
         cwd,
         env,
@@ -655,18 +698,44 @@ export class ClaudeProvider implements IAgentProvider {
         signal: controller.signal,
       });
       controller.signal.throwIfAborted();
-      const rawEvents = query({ prompt: input(), options });
+      const rawEvents = query({ prompt: input.messages, options });
       const diagnostics = buildFirstEventHangDiagnostics(
         options.env as Record<string, string>,
         options.model
       );
+      const firstEventTimeoutMs = getFirstEventTimeoutMs();
+      if (mcpNames.length > 0) {
+        preparedQuery = rawEvents;
+        // A silent CLI never initializes, so initialization is held to the first-event
+        // deadline. Server readiness is not: a slow server stays pending until the CLI's
+        // own MCP connect timeout resolves it.
+        await withinFirstEventDeadline(
+          rawEvents.initializationResult(),
+          controller,
+          firstEventTimeoutMs,
+          diagnostics
+        );
+        yield* requireMcpConnections(
+          mcpNames,
+          async () =>
+            (await rawEvents.mcpServerStatus()).map(({ name, status, error }) => ({
+              type: 'mcp_server_status' as const,
+              server: name,
+              status: status === 'needs-auth' ? ('needs_auth' as const) : status,
+              ...(error !== undefined ? { error } : {}),
+            })),
+          controller.signal
+        );
+        controller.signal.throwIfAborted();
+      }
+      input.admit();
       const nodeConfig = requestOptions?.nodeConfig;
       const events = withFirstMessageTimeout(
         isWorkflowNode(nodeConfig)
           ? withPluginScopeCheck(rawEvents, nodeConfig.plugins ?? [])
           : rawEvents,
         controller,
-        getFirstEventTimeoutMs(),
+        firstEventTimeoutMs,
         diagnostics
       );
 
@@ -710,6 +779,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
     } finally {
       closeInput?.();
+      preparedQuery?.close();
       if (closeInput) controller.signal.removeEventListener('abort', closeInput);
       requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
     }
