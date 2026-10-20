@@ -140,9 +140,14 @@ export async function checkClaudeNativeAuth(
       if (!subprocessEnv) throw new Error('Claude SDK did not expose its subprocess environment');
       return await checkNativeKeyHelper(session, request, subprocessEnv);
     }
-    const hasCredential = [account.tokenSource, account.apiKeySource].some(
-      source => source && source !== 'none'
-    );
+    const sources = [account.tokenSource, account.apiKeySource].filter(Boolean);
+    // A claude.ai subscription login reports the account but no credential source, while a
+    // logged-out CLI reports tokenSource 'none' and no account. A reported source decides;
+    // without one, the account identity does.
+    const hasCredential =
+      sources.length > 0
+        ? sources.some(source => source !== 'none')
+        : Boolean(account.email || account.subscriptionType);
     return { state: hasCredential ? 'usable' : 'not_connected', source: 'native' };
   } catch (error) {
     request.signal.throwIfAborted();
