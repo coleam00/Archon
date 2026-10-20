@@ -189,13 +189,13 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
     provider: 'worktree',
     created_by_platform: 'cli',
     created_by_user_id: null,
-    metadata: {},
+    metadata: { worktree_creation_id: 'checkout-proof' },
     created_at: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   };
 }
 
-const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
+const mockEnv = makeEnvironment();
 
 describe('isolationCompleteCommand', () => {
   let consoleLogSpy: ReturnType<typeof spyOn>;
