@@ -1,3 +1,4 @@
+import type { FanOutSetupFailure } from '../../../schemas/node-execution';
 import type { WorkflowDeps } from '../../../deps';
 import type { WorkflowNode, WorkflowRun } from '../../../schemas';
 import { readSubrunMetadata, isTerminalRunStatus } from '../../../schemas';
@@ -234,9 +235,12 @@ export interface FanOutChildState {
  */
 export function classifyExistingChildren(
   existingByIndex: ReadonlyMap<number, WorkflowRun>,
-  continuing: boolean
+  continuing: boolean,
+  setupFailures: readonly FanOutSetupFailure[] = []
 ): FanOutChildState {
-  const settledByIndex = new Map<number, ChildWorkflowOutcome>();
+  const settledByIndex = new Map<number, ChildWorkflowOutcome>(
+    setupFailures.map(({ index, error }) => [index, { childRunId: '', status: 'failed', error }])
+  );
   const heldByIndex = new Map<number, string>();
   for (const [index, child] of existingByIndex) {
     switch (child.status) {

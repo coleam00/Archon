@@ -10,6 +10,7 @@ import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
   executionBindingSchema,
+  fanOutSetupFailureSchema,
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
@@ -54,6 +55,7 @@ export const serializedNodeDataSchema = z.object({
   cause: skipCauseSchema.optional(),
   expr: z.string().optional(),
   suspend_point: z.string().optional(),
+  fan_out_setup_failures: z.array(fanOutSetupFailureSchema).optional(),
   node_output: z.string().optional(),
   node_output_truncated: z.boolean().optional(),
   node_output_original_bytes: z.number().optional(),
@@ -284,7 +286,12 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(lifecycle.status === 'skipped'
         ? { reason: lifecycle.reason, cause: lifecycle.cause }
         : {}),
-      ...(lifecycle.status === 'suspended' ? { suspend_point: lifecycle.point } : {}),
+      ...(lifecycle.status === 'suspended'
+        ? {
+            suspend_point: lifecycle.point,
+            fan_out_setup_failures: lifecycle.fanOutSetupFailures,
+          }
+        : {}),
       ...(record.output !== undefined ? outputFields(record.output) : {}),
       ...(d?.iteration !== undefined ? { iteration: d.iteration } : {}),
       ...(d?.command !== undefined ? { command: d.command } : {}),

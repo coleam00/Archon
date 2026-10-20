@@ -209,7 +209,15 @@ async function suspendOnHeldChildren(
     '. Answer each paused sub-run by its own run id; this run continues when they finish.';
   const suspended = finishNodeExecution(
     execution,
-    { status: 'suspended', point: 'fan_out' },
+    {
+      status: 'suspended',
+      point: 'fan_out',
+      fanOutSetupFailures: [...state.settledByIndex].flatMap(([index, outcome]) =>
+        outcome.childRunId === '' && outcome.status === 'failed' && outcome.error !== undefined
+          ? [{ index, error: outcome.error }]
+          : []
+      ),
+    },
     { output: { text: '' }, diagnostics: { fanOut: true } }
   );
   const paused = await pauseGateRespectingExternalTransition(
@@ -404,7 +412,11 @@ export async function executeFanOutWorkflowNode(
     );
     return failResult(ambiguous.message, 'unknown', undefined, undefined, ambiguous.child.id);
   }
-  const state = classifyExistingChildren(existingByIndex, continuing);
+  const state = classifyExistingChildren(
+    existingByIndex,
+    continuing,
+    continuing ? prior.fanOutSetupFailures : undefined
+  );
   const paidChildren = new Map<number, ChildWorkflowStatusReadError['usage']>(
     [...existingByIndex].map(([index, child]) => [index, childUsageFromRun(child)])
   );

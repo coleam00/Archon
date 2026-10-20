@@ -4558,6 +4558,10 @@ export interface components {
               point:
                 | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
                 | 'wait';
+              fanOutSetupFailures?: {
+                index: number;
+                error: string;
+              }[];
             };
       };
       timestamp: number;
@@ -5967,6 +5971,10 @@ export interface components {
                 point:
                   | ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow' | 'fan_out')
                   | 'wait';
+                fanOutSetupFailures?: {
+                  index: number;
+                  error: string;
+                }[];
               };
         };
         commandSnapshot?: string | null;

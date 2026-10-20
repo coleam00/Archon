@@ -135,6 +135,13 @@ export const nodeFailureKindSchema = z.enum([
 ]);
 export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
 
+/** Settled setup failures have no child row from which continuation could recover them. */
+export const fanOutSetupFailureSchema = z.object({
+  index: z.number().int().min(0),
+  error: z.string(),
+});
+export type FanOutSetupFailure = z.infer<typeof fanOutSetupFailureSchema>;
+
 export const executionLifecycleSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('started') }),
   z.object({ status: z.literal('completed') }),
@@ -150,6 +157,7 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('suspended'),
     point: z.union([suspendReasonSchema, z.literal('wait')]),
+    fanOutSetupFailures: z.array(fanOutSetupFailureSchema).optional(),
   }),
 ]);
 

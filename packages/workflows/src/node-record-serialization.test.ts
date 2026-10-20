@@ -128,6 +128,27 @@ describe('node record serializers', () => {
     expect(restored?.data.provider_failure).toEqual(failure);
   });
 
+  it('round trips rowless fan-out failures in the suspended lifecycle', () => {
+    const source = finishNodeExecution(record(), {
+      status: 'suspended',
+      point: 'fan_out',
+      fanOutSetupFailures: [{ index: 0, error: 'setup unavailable' }],
+    });
+    const event = serializeNodeStateRecord(source);
+    expect(
+      readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) })?.metadata?.lifecycle
+    ).toEqual(source.lifecycle);
+    expect(() =>
+      readNodeRecordEvent({
+        ...event,
+        data: {
+          ...event.data,
+          fan_out_setup_failures: [{ index: -1, error: 'invalid' }],
+        },
+      })
+    ).toThrow();
+  });
+
   it('reads the cost scope the durable row marks, with or without its accounting', () => {
     for (const accounting of nodeExecutionMetadataSchema.shape.accounting.options) {
       const { data } = serializeNodeStateRecord({ ...record(), accounting });

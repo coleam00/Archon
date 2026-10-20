@@ -45,6 +45,10 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   const projected: Record<string, unknown> = {};
   for (const [key, schema] of Object.entries(serializedNodeDataSchema.shape)) {
     if (!Object.hasOwn(raw, key)) continue;
+    if (key === 'fan_out_setup_failures') {
+      projected[key] = serializedNodeDataSchema.shape.fan_out_setup_failures.parse(raw[key]);
+      continue;
+    }
     if (key === 'declared_output_paths') {
       projected[key] = serializedNodeDataSchema.shape.declared_output_paths
         .unwrap()
@@ -93,7 +97,13 @@ function lifecycleFor(
       const point = nodeExecutionMetadataSchema.shape.lifecycle.options[4].shape.point.safeParse(
         data.suspend_point
       );
-      return point.success ? { status: 'suspended', point: point.data } : undefined;
+      return point.success
+        ? {
+            status: 'suspended',
+            point: point.data,
+            fanOutSetupFailures: data.fan_out_setup_failures,
+          }
+        : undefined;
     }
     case 'node_skipped_prior_success':
     case 'node_always_run_reset':
