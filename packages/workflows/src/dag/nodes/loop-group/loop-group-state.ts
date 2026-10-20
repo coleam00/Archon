@@ -1,3 +1,4 @@
+import type { CachedLoopIteration } from './cached-iteration';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import type {
@@ -85,6 +86,7 @@ export interface LoopGroupRun {
   workflowTier: TierName | undefined;
   workflowPreset: ModelAliasPreset | undefined;
   resume: LoopGroupResume;
+  cachedIteration?: CachedLoopIteration;
 }
 
 /** What a loop group carries from one iteration to the next. */

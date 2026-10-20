@@ -28,6 +28,7 @@ import {
   makeWorkflowRun,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { checkComposedBlockBoundaries } from './trigger-rule';
 import { resolvedBodyNodes } from '../graph-plan';
 import { dryRunWorkflow } from '../dry-run';
@@ -314,6 +315,26 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     );
   }
 
+  function restorePersistedHistory(store: MockWorkflowStore, deps: WorkflowDeps, runId: string) {
+    store.getDagResumeSnapshot = mock(async () => foldDagResumeSnapshot(eventList(deps), runId));
+    store.listEventsForRuns = mock(
+      async () =>
+        new Map([
+          [
+            runId,
+            eventList(deps).map((event, index) => ({
+              ...event,
+              id: String(index),
+              workflow_run_id: runId,
+              step_index: null,
+              data: event.data ?? {},
+              created_at: new Date(0).toISOString(),
+            })),
+          ],
+        ])
+    );
+  }
+
   async function executeExpanded(
     nodes: DagNode[],
     runId: string,
@@ -507,29 +528,183 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
-  for (const previous of ['go', 'stop', '']) {
-    it(`checks cached entries and descendants against the owning loop's previous '${previous}' output`, () => {
-      const when = "$LOOP_PREV.work.output == 'go'";
-      const workflow = loopGatedWorkflow(when);
-      const group = workflow.nodes[0];
-      if (group?.kind !== 'loop_group') throw new Error('expected loop group');
-      const outputs = new Map([['work', { state: 'completed' as const, output: 'go' }]]);
-      const loopPrevOutputs = new Map(
-        previous ? [['work', { state: 'completed' as const, output: previous }]] : []
-      );
-      for (const id of ['inc__entry', 'inc__tail']) {
-        const node = resolvedBodyNodes(group.loop_group).find(node => node.id === id);
-        if (!node) throw new Error(`expected expanded ${id}`);
-        expect(
-          checkComposedBlockBoundaries(node, outputs, undefined, {
-            evaluateEntryBoundary: true,
-            loopBodyScopes: [{ loopPrevOutputs }],
+  for (const { nested, active, advance } of [
+    { nested: false, active: true, advance: false },
+    { nested: false, active: false, advance: false },
+    { nested: true, active: true, advance: false },
+    { nested: true, active: false, advance: false },
+    { nested: false, active: true, advance: true },
+  ]) {
+    it(`resumes a cached loop include with its preceding snapshot (nested=${nested}, active=${active}, advance=${advance})`, async () => {
+      const runId = `cached-loop-${nested}-${active}`;
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun(runId);
+      const workflow = (when: string, finishing = false): TestWorkflowDefinition => {
+        const expanded = loopGatedWorkflow(when);
+        const cycle = expanded.nodes[0];
+        if (cycle?.kind !== 'loop_group') throw new Error('expected group');
+        const nodes = resolvedBodyNodes(cycle.loop_group).map(node => {
+          if (node.kind !== 'exec') return node;
+          if (node.id === 'work')
+            return {
+              ...node,
+              script: 'if [ -z $LOOP_PREV.work.output ]; then echo go; else echo current; fi',
+            };
+          if (node.id === 'end')
+            return {
+              ...node,
+              when: "$LOOP_PREV.work.output != ''",
+              script:
+                advance && finishing
+                  ? "if [ $LOOP_PREV.work.output = 'go' ]; then echo AGAIN; else echo DONE; fi"
+                  : 'test -f allow-completion && echo DONE',
+            };
+          return node;
+        });
+        const group = {
+          ...cycle,
+          loop_group: { ...cycle.loop_group, max_iterations: advance ? 3 : 2, nodes },
+        };
+        return {
+          name: 'cached-loop',
+          nodes: nested
+            ? [
+                {
+                  id: 'outer',
+                  kind: 'loop_group',
+                  loop_group: {
+                    max_iterations: 1,
+                    fresh_context: true,
+                    until: 'DONE',
+                    nodes: [group],
+                  },
+                },
+              ]
+            : [group],
+        };
+      };
+      const run = async (
+        when: string,
+        priorCompletedNodes?: Map<string, PersistedNodeOutput>,
+        finishing = false
+      ) =>
+        executeDagWorkflow(
+          dagOptions({
+            deps,
+            platform,
+            cwd: testDir,
+            workflow: workflow(when, finishing),
+            workflowRun,
+            priorCompletedNodes,
           })
-        ).toEqual(
-          previous === 'go'
-            ? { decision: 'run' }
-            : { decision: 'skip', cause: { kind: 'condition', expr: when } }
         );
+      const originalWhen = "$LOOP_PREV.work.output == 'go'";
+      await run(originalWhen);
+      const prefix = nested ? 'outer.cycle.' : 'cycle.';
+      expect(
+        eventList(deps).filter(
+          event =>
+            event.step_name === `${prefix}inc__entry` && event.event_type === 'node_completed'
+        )
+      ).toHaveLength(1);
+      expect(
+        eventList(deps).some(
+          event => event.step_name === `${prefix}end` && event.event_type === 'node_failed'
+        )
+      ).toBe(true);
+
+      const snapshot = await foldDagResumeSnapshot(eventList(deps), runId);
+      expect(snapshot.completedNodeOutputs.get(`${prefix}work`)?.output).toBe('current');
+      restorePersistedHistory(store, deps, runId);
+      // A failed second pass also verifies that replay rows retain iteration ownership.
+      await run(originalWhen, snapshot.completedNodeOutputs);
+      const second = await store.getDagResumeSnapshot(runId);
+      const before = eventList(deps).length;
+      await writeFile(join(testDir, 'allow-completion'), '');
+      const when = active ? originalWhen : "$LOOP_PREV.work.output == 'stop'";
+      await run(when, second.completedNodeOutputs, true);
+      const resumed = eventList(deps).slice(before);
+      expect(resumed.filter(event => event.event_type === 'node_failed')).toEqual([]);
+      expect(
+        resumed.filter(
+          event => event.step_name === `${prefix}work` && event.event_type === 'node_started'
+        )
+      ).toHaveLength(advance ? 1 : 0);
+      for (const id of ['entry', 'tail']) {
+        const events = resumed.filter(event => event.step_name === `${prefix}inc__${id}`);
+        expect(events.map(event => event.event_type)).toEqual([
+          active ? 'node_skipped_prior_success' : 'node_skipped',
+          ...(advance ? ['node_skipped'] : []),
+        ]);
+        if (advance) expect(events[1]?.data?.cause).toEqual({ kind: 'condition', expr: when });
+        if (!active) expect(events[0]?.data?.cause).toEqual({ kind: 'condition', expr: when });
+      }
+      expect(
+        resumed
+          .filter(
+            event =>
+              event.event_type === 'loop_iteration_started' &&
+              event.step_name === prefix.slice(0, -1)
+          )
+          .map(event => event.data?.iteration)
+      ).toEqual(advance ? [2, 3] : [2]);
+    });
+  }
+
+  for (const force of ['always_run', 'changed_dependency'] as const) {
+    it(`reexecutes a completed loop body after ${force}`, async () => {
+      const runId = `completed-loop-${force}`;
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const nodes = (resumed: boolean): DagNode[] => {
+        const group = loopGatedWorkflow("$LOOP_PREV.work.output == 'go'").nodes[0];
+        if (group?.kind !== 'loop_group') throw new Error('expected group');
+        return [
+          {
+            id: 'upstream',
+            kind: 'exec',
+            runtime: 'sh',
+            always_run: true,
+            script: resumed ? 'echo new' : 'echo old',
+          },
+          { ...group, depends_on: ['upstream'], always_run: force === 'always_run' },
+        ];
+      };
+      const options = dagOptions({
+        deps,
+        platform,
+        cwd: testDir,
+        workflow: { name: 'completed-loop', nodes: nodes(false) },
+        workflowRun: makeWorkflowRun(runId),
+      });
+      await executeDagWorkflow(options);
+      const snapshot = await foldDagResumeSnapshot(eventList(deps), runId);
+      expect(snapshot.completedNodeOutputs.has('cycle')).toBe(true);
+      restorePersistedHistory(store, deps, runId);
+      const before = eventList(deps).length;
+      await executeDagWorkflow({
+        ...options,
+        workflow: ready({ name: 'completed-loop', nodes: nodes(true) }),
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+      });
+      const resumed = eventList(deps).slice(before);
+      expect(resumed.filter(event => event.event_type === 'node_failed')).toEqual([]);
+      for (const id of ['entry', 'tail']) {
+        expect(
+          resumed.filter(
+            event => event.step_name === `cycle.inc__${id}` && event.event_type === 'node_completed'
+          )
+        ).toHaveLength(1);
+        expect(
+          resumed.filter(
+            event =>
+              event.step_name === `cycle.inc__${id}` &&
+              event.event_type === 'node_skipped_prior_success'
+          )
+        ).toEqual([]);
       }
     });
   }

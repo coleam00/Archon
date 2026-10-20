@@ -38,6 +38,7 @@ import {
   type LoopGroupRun,
   type LoopGroupState,
 } from './loop-group-state';
+import { cachedBodyOutputs } from './cached-iteration';
 import { runGroupUntilBash } from './until-bash';
 
 /** One iteration's body run: its scoped outputs and the context it ran in. */
@@ -231,6 +232,13 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   // upstream outputs so body nodes can reference outer context via $nodeId.output if
   // needed (the body is sealed against depends_on, but prompt refs remain valid).
   const scopedNodeOutputs = new Map<string, NodeOutput>(ctx.nodeOutputs);
+  const priorCompletedNodes =
+    run.cachedIteration?.iteration === i ? run.cachedIteration.completedNodes : undefined;
+  if (priorCompletedNodes) {
+    for (const [id, output] of cachedBodyOutputs(run, priorCompletedNodes)) {
+      scopedNodeOutputs.set(id, output);
+    }
+  }
 
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   const iterCtx: RunLayersContext = {
@@ -289,7 +297,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     layers: iterBodyLayers,
     interactionAdmission: loopBodyAdmission(ctx.interactionAdmission),
     nodeOutputs: scopedNodeOutputs,
-    priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
+    priorCompletedNodes,
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,
     // Thread the loop-level session cursor: fresh_context (or the loop's true first
     // iteration) starts fresh; otherwise carry the prior iteration's last sequential

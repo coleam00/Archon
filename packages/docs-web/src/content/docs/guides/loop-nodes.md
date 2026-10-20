@@ -774,9 +774,8 @@ This is a condition reference, not text substitution. On iteration 1 it resolves
 `''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
 An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
-entire block. Loop bodies rerun in full on resume; completed body nodes are not
-reused as cached entries. A false gate skips the whole block; when true, each node still follows its own conditions and
-trigger rule. If the block contains a nested loop, the include's gate
+entire block, including cached entries on resume. A false gate skips the whole
+block; when true, each node still follows its own conditions and trigger rule. If the block contains a nested loop, the include's gate
 still reads the previous iteration of the loop containing that include.
 
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
@@ -864,9 +863,14 @@ Suspension and failure have different recovery rules:
   cursor. The next iteration continues each owner even with `fresh_context: true`.
   Missing or invalid owner state fails restoration. A wait that suspends again retains
   the same snapshot.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
-  no persisted iteration cursor — the loop_group node restarts from
-  **iteration 1**. Per-body-node resume granularity is not supported in v1.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): existing
+  execution records identify the interrupted iteration and its enclosing loop lineage.
+  That iteration restores completed body nodes separately from the preceding
+  iteration's `$LOOP_PREV` snapshot. Cached includes must still pass their owning
+  loop's gate; `always_run` and changed dependencies retain their ordinary cache
+  invalidation rules. Later iterations start with an empty cache. This does not
+  restore provider session cursors from failures. Historical runs without execution
+  lineage restart from iteration 1 and replay the whole body.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -877,7 +881,6 @@ Suspension and failure have different recovery rules:
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
   cursor governed by `fresh_context`, or explicit named owner cursors described above.
-- Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
 

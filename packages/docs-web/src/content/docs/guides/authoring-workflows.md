@@ -1789,10 +1789,11 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   so a paused loop can still resume from its persisted, validated prompt snapshot.
   The include node's `depends_on` and default `trigger_rule` wire the block's
   **entry** nodes (those with no upstream inside the block). The include's `when:`
-  gates the **whole block**, including descendants. Top-level cached nodes on resume
-  are checked against the gate again; loop bodies rerun in full rather than reusing
-  completed body nodes. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the loop containing the
-  include, even when a descendant runs inside a nested loop.
+  gates the **whole block**, including descendants. Cached nodes on resume are checked
+  against the gate again. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the
+  loop containing the include, even when a descendant runs inside a nested loop.
+  An interrupted iteration restores its completed nodes and preceding output snapshot
+  together, so a cached entry uses the same gate as the rest of its block.
   If both the include and an entry define `when:` and either condition contains `||`,
   loading fails because the grammar cannot
   group them without changing precedence; put the gate only on the include or inside the block.
