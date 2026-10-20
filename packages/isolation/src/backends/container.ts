@@ -325,7 +325,7 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
     return async () => {
-      const handle = meta.containerName ?? meta.containerId;
+      const handle = expectedContainerId ?? meta.containerName ?? meta.containerId;
       if (!handle) {
         log.warn({ envId }, 'isolation.container_suspend_no_handle');
         return;

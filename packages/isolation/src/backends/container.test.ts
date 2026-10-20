@@ -817,7 +817,15 @@ describe('ContainerBackend.suspend', () => {
         await expect(stop()).rejects.toThrow('Failed to suspend');
         expect(calls.map(call => call.args[0])).toEqual(['exec', 'stop', 'container']);
         expect(calls.map(call => call.timeout)).toEqual([2_000, 2_000, 2_000]);
-        expect(calls[1]?.args).toEqual(['stop', '--time', '1', 'archon-res-1']);
+        expect(calls[0]?.args).toEqual([
+          'exec',
+          'cid-orig',
+          'chown',
+          '-R',
+          '1000:1000',
+          '/artifacts',
+        ]);
+        expect(calls[1]?.args).toEqual(['stop', '--time', '1', 'cid-orig']);
         expect(calls.reduce((total, call) => total + (call.timeout ?? 60_000), 0)).toBeLessThan(
           10_000
         );
@@ -837,7 +845,7 @@ describe('ContainerBackend.suspend', () => {
     expect(stop).toEqual(['stop', 'archon-res-1']);
   });
 
-  test('prepares metadata once and repeats the action without store access', async () => {
+  test('keeps the execution ID across replacement and repeats without store access', async () => {
     const store = fakeStore();
     seedContainerRow(store);
     const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
@@ -846,6 +854,7 @@ describe('ContainerBackend.suspend', () => {
     const stop = await backend.prepareSuspend('env-c', 'cid-orig');
     expect(read).toHaveBeenCalledTimes(1);
     expect(docker.calls).toEqual([]);
+    await store.updateMetadata('env-c', { containerId: 'cid-replacement' });
     read.mockImplementation(async () => {
       throw new Error('store access inside transition');
     });
@@ -853,13 +862,34 @@ describe('ContainerBackend.suspend', () => {
       await stop();
       await stop();
       expect(docker.calls.filter(c => c[0] === 'stop')).toEqual([
-        ['stop', 'archon-res-1'],
-        ['stop', 'archon-res-1'],
+        ['stop', 'cid-orig'],
+        ['stop', 'cid-orig'],
       ]);
       expect(read).toHaveBeenCalledTimes(1);
     } finally {
       read.mockRestore();
     }
+  });
+
+  test('a missing execution container ignores a running replacement under the same name', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(args => {
+      if (args[0] === 'container') {
+        return { stdout: 'cid-replacement\tarchon-res-1\trunning\n', stderr: '' };
+      }
+      throw new Error('execution container is gone');
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const stop = await backend.prepareSuspend('env-c', 'cid-orig', 2_000);
+    await store.updateMetadata('env-c', { containerId: 'cid-replacement' });
+    await expect(stop()).resolves.toBeUndefined();
+    expect(docker.calls.find(args => args[0] === 'stop')).toEqual([
+      'stop',
+      '--time',
+      '1',
+      'cid-orig',
+    ]);
   });
 
   test('is idempotent when the container is already gone', async () => {
