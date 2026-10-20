@@ -67,11 +67,11 @@ export type RawSubprocessRejection = Error & {
   /** The owned group deadline expired, independent of the eventual exit code. */
   timedOut?: boolean;
   /**
-   * A node's deadline expired but its process tree could not be ended. That is a failure,
+   * The owned process tree could not be confirmed ended. That is a failure,
    * never a timeout `on_timeout: skip` could pass over while the tree may still run.
    */
   treeSurvived?: true;
-  /** The node's run stopped and its tree was ended for it; never a timeout. */
+  /** The node's run requested a stop; never a timeout. Check treeSurvived for stop failure. */
   cancelled?: true;
   /** Terminal signal, also present when a command terminates itself. */
   signal?: string | null;
@@ -419,14 +419,17 @@ async function runContainerSubprocess(
   let termination: Promise<void> | undefined;
   let terminationError: unknown;
   const abort = (): void => {
-    termination = control(`pid=$(cat ${pidFile}) && kill -KILL -"$pid"`)
-      .then(
-        () => undefined,
-        (error: unknown) => {
-          terminationError = error;
-        }
-      )
-      .finally(() => local.abort());
+    // Docker may not have started the remote shell yet. Keep its client alive until
+    // PID publication and the remote kill; killing only the client can orphan startup.
+    termination = control(
+      `while [ ! -s ${pidFile} ]; do sleep 0.02; done; pid=$(cat ${pidFile}) && kill -KILL -"$pid"`
+    ).then(
+      () => undefined,
+      (error: unknown) => {
+        terminationError = error;
+        local.abort();
+      }
+    );
   };
   const pending = execOwnedProcessGroup(
     'docker',
@@ -467,17 +470,22 @@ async function runContainerSubprocess(
     if (options.abortSignal.aborted && error instanceof Error) {
       error.message = 'Command cancelled';
       Object.assign(error, { cancelled: true });
-      if (terminationError) Object.assign(error, { treeSurvived: true, cause: terminationError });
+      if (terminationError) {
+        error.message += `; could not terminate in-container process group (PID file ${pidFile})`;
+        Object.assign(error, { treeSurvived: true, cause: terminationError });
+      }
     }
     throw error;
   } finally {
     options.abortSignal.removeEventListener('abort', abort);
-    await control(`rm -f ${pidFile}`).catch((error: unknown) => {
-      createLogger('workflow.subprocess').warn(
-        { err: error },
-        'subprocess.container_pid_cleanup_failed'
-      );
-    });
+    if (!terminationError) {
+      await control(`rm -f ${pidFile}`).catch((error: unknown) => {
+        createLogger('workflow.subprocess').warn(
+          { err: error },
+          'subprocess.container_pid_cleanup_failed'
+        );
+      });
+    }
   }
 }
 
