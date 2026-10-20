@@ -103,7 +103,7 @@ const changedFields = {
   metadata: { nested: { left: 2, right: [null, true, 'value'] } },
 } satisfies IsolationEnvironmentRow;
 
-for (const token of [undefined, 'original', '']) {
+for (const token of [undefined, 'original', '', '1', 'true']) {
   const tokened = typeof token === 'string';
   const observed: IsolationEnvironmentRow = {
     ...row,
@@ -123,6 +123,11 @@ for (const token of [undefined, 'original', '']) {
       { ...observed, metadata: { ...observed.metadata, worktree_registration_id: 'replacement' } },
     ],
     ['token removed', { ...observed, metadata: row.metadata }],
+    ['numeric token', { ...observed, metadata: { ...row.metadata, worktree_registration_id: 1 } }],
+    [
+      'boolean token',
+      { ...observed, metadata: { ...row.metadata, worktree_registration_id: true } },
+    ],
     ['null token', { ...observed, metadata: { ...row.metadata, worktree_registration_id: null } }],
     ...Object.entries(changedFields).map(([key, value]): [string, IsolationEnvironmentRow] => [
       key,
@@ -182,6 +187,8 @@ for (const token of [undefined, 'original', '']) {
               'registration token',
               'token removed',
               'null token',
+              'numeric token',
+              'boolean token',
               'provider',
             ].includes(name)
           : ['unchanged', 'metadata key order', 'token removed', 'status'].includes(name);
