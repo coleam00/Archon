@@ -5,6 +5,7 @@ import { observeCheckout } from '../checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from '../node-execution';
 import type { NodeExecutionMetadata } from '../schemas/node-execution';
 import {
+  canSuspend,
   isAgentNode,
   isExecNode,
   isLoopNode,
@@ -126,6 +127,18 @@ export async function simulateNodes(
   for (const layer of plan.layers) {
     for (const node of layer) {
       if (ctx.halted) return;
+      const origin = ctx.loopBodyFailure?.();
+      if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+        recordSkipped(
+          node,
+          outputs,
+          ctx,
+          'loop body failed',
+          { kind: 'upstream_failed', origin },
+          iteration
+        );
+        continue;
+      }
       const execution = await simulatedExecution(node, ctx);
       await simulateNode(node, outputs, ctx, iteration, execution);
       const result = outputs.get(node.id);

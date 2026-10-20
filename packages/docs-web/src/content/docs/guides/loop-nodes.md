@@ -602,7 +602,11 @@ warning.
   event data. Nested groups compose the prefix.
 - A body node that **fails** fails the whole group immediately with that node's
   error (no further iterations run) — same semantics as a failed node in a
-  top-level DAG.
+  top-level DAG. Runnable cleanup still runs, including independent branches inside
+  nested groups. After a body failure, gates, waits, and interactive loops are
+  skipped, even with `trigger_rule: all_done`. Nested groups containing interactions
+  run their body once, then skip their interaction and further iterations. This applies at any depth
+  and preserves the original failure without creating an attention item.
 - `$fix-loop.output` (visible to the outer DAG) is the **final iteration's
   output**: the first completed, non-empty output among the body's terminal nodes,
   in body order. A terminal pause is read past, as described next.

@@ -180,6 +180,8 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: GraphPlan['layers'];
+  /** A settled enclosing body failure prevents later interactions, including nested ones. */
+  loopBodyFailure?: () => string | undefined;
   /** Shared node-output map (caller owns; runLayers writes node results here). */
   nodeOutputs: Map<string, NodeOutput>;
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */

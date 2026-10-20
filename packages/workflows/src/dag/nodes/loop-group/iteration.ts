@@ -11,7 +11,7 @@ import { recordDerivedExecution } from '../../../node-event-write';
 import { spellWorkflowCommand } from '../../../deps';
 import { gateOccurrence } from '../../../schemas/workflow-run';
 import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../schemas';
-import { isGateNode, isWorkflowWaitContext } from '../../../schemas';
+import { canSuspend, isGateNode, isWorkflowWaitContext } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
@@ -103,6 +103,17 @@ export async function runLoopGroupIteration(
     (await failedBody(run, state, i, body)) ??
     (await suspendedBody(run, state, i, body, postBodyStatus));
   if (halted !== undefined) return halted;
+
+  const origin = ctx.loopBodyFailure?.();
+  if (origin !== undefined && canSuspend(node)) {
+    return {
+      state: 'skipped',
+      output: '',
+      cause: { kind: 'upstream_failed', origin },
+      ...run.progress.usage,
+      loopIterations: i,
+    };
+  }
 
   // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
   state.loopPrevOutputs = new Map(body.scopedNodeOutputs);
@@ -275,6 +286,13 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
+    loopBodyFailure: () =>
+      ctx.loopBodyFailure?.() ??
+      bodyNodes.find(n => {
+        const output = scopedNodeOutputs.get(n.id);
+        // Inherited entries retain their identity until a local execution replaces them.
+        return output?.state === 'failed' && output !== ctx.nodeOutputs.get(n.id);
+      })?.id,
     nodeOutputs: scopedNodeOutputs,
     priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,
