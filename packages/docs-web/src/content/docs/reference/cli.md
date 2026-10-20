@@ -1770,6 +1770,8 @@ for recovery details.
 
 ## Environment
 
+For project-scoped by-ID run management, prefix the command with `ARCHON_WORKFLOW_CODEBASE_ID=<registered-project-id>`, for example `ARCHON_WORKFLOW_CODEBASE_ID=<id> archon workflow get <run-id> --json`. This requires every full ID or prefix to match exactly one run in that project before reading or changing it. Chat's CLI guidance supplies the selected project's ID. Without this variable, full run IDs retain their install-wide operator behavior; short prefixes resolve from the current project. This scopes run lookup, not process permissions.
+
 At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 
 On startup, the CLI:

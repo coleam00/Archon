@@ -285,8 +285,9 @@ const FULL_RUN_ID_RE =
  * prefix resolution (getScopedRun): the lookup is scoped to the cwd's
  * codebase, a unique match resolves, and an ambiguous prefix errors.
  *
- * Full UUIDs skip resolution entirely — exact lookup is global, so full ids
- * keep working from any directory. A caller that already resolved a project can
+ * ARCHON_WORKFLOW_CODEBASE_ID requires a unique project-scoped match for every ID.
+ * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
+ * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise project lookup preserves an exact checkout
  * registration, then falls back to a linked worktree's canonical checkout. By
  * default, an omitted or unregistered cwd and an unmatched prefix pass through
@@ -300,6 +301,8 @@ export async function resolveRunIdArg(
   requirePrefixMatch = false,
   codebaseId?: string
 ): Promise<string> {
+  const scope = process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+  if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (FULL_RUN_ID_RE.test(runId)) return runId;
   if (cwd === undefined && codebaseId === undefined) {
     if (requirePrefixMatch) {
@@ -330,6 +333,19 @@ export async function resolveRunIdArg(
       throw new Error(`No workflow run matches prefix '${runId}' in this project.`);
     }
     return runId;
+  }
+  return matches[0].id;
+}
+
+async function resolveProjectScopedRunId(
+  host: WorkflowHost,
+  runId: string,
+  codebaseId: string
+): Promise<string> {
+  if (!codebaseId) throw new Error('ARCHON_WORKFLOW_CODEBASE_ID must name a registered project.');
+  const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
+  if (matches.length !== 1 || (FULL_RUN_ID_RE.test(runId) && matches[0]?.id !== runId)) {
+    throw new Error(`Run id '${runId}' does not identify exactly one run in the selected project.`);
   }
   return matches[0].id;
 }

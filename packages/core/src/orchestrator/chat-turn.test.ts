@@ -61,6 +61,56 @@ describe('stale session ID clearing on error_during_execution', () => {
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
   });
 
+  for (const mode of ['stream', 'batch'] as const) {
+    for (const status of ['failed', 'cancelled'] as const) {
+      test(`${mode}: reports an unanswered ${status} tool without leaking output`, async () => {
+        mockCaptureChatTurn.mockClear();
+        mockSendQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'tool_call_update',
+            toolCallId: 'shell',
+            status,
+            output: 'private tool output',
+          };
+        });
+        const platform = makePlatform();
+        (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('A tool failed or was cancelled')
+        );
+        expect(
+          JSON.stringify((platform.sendMessage as ReturnType<typeof mock>).mock.calls)
+        ).not.toContain('private tool output');
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: 'failed' })
+        );
+      });
+
+      test(`${mode}: assistant recovery takes precedence over a ${status} tool`, async () => {
+        mockCaptureChatTurn.mockClear();
+        mockSendQuery.mockImplementationOnce(async function* () {
+          yield { type: 'tool_call_update', toolCallId: 'shell', status };
+          yield {
+            type: 'agent_message_chunk',
+            text: 'The launch failed; please correct the workflow input.',
+          };
+        });
+        const platform = makePlatform();
+        (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          'The launch failed; please correct the workflow input.'
+        );
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: 'completed' })
+        );
+      });
+    }
+  }
+
   test('handleStreamMode: clears session ID on error_during_execution result', async () => {
     // Simulate AI returning error_during_execution with a stale session ID
     mockSendQuery.mockImplementationOnce(async function* () {

@@ -1,5 +1,5 @@
 /**
- * Workflow Router - detects workflow invocation and resolves workflow names
+ * Workflow name lookup and resolution
  */
 import type { WorkflowDefinition } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -9,69 +9,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.router');
   return cachedLog;
-}
-
-/**
- * Result of parsing a message for workflow invocation
- */
-export interface WorkflowInvocation {
-  workflowName: string | null;
-  remainingMessage: string;
-  /** Error message when workflow name was detected but didn't match */
-  error?: string;
-}
-
-/**
- * Parse a message to detect /invoke-workflow command
- */
-export function parseWorkflowInvocation(
-  message: string,
-  workflows: readonly WorkflowDefinition[]
-): WorkflowInvocation {
-  const trimmed = message.trim();
-
-  // Check for /invoke-workflow pattern (at start of any line)
-  // Uses multiline flag ('m') because AI models sometimes add analysis text before the command
-  // despite instructions to only output the command. This ensures routing still works.
-  const match = /^\/invoke-workflow\s+(\S+)/im.exec(trimmed);
-
-  if (match) {
-    const workflowName = match[1];
-
-    // Exact match
-    const workflow = workflows.find(w => w.name === workflowName);
-    if (workflow) {
-      // Use match.index to handle multiline matches where command isn't at position 0
-      const remainingMessage = trimmed.slice(match.index + match[0].length).trim();
-      return { workflowName, remainingMessage };
-    }
-
-    // Case-insensitive match
-    const caseMatch = workflows.find(w => w.name.toLowerCase() === workflowName.toLowerCase());
-    if (caseMatch) {
-      getLog().info(
-        { requested: workflowName, matched: caseMatch.name },
-        'workflow.invoke_case_insensitive_match'
-      );
-      const remainingMessage = trimmed.slice(match.index + match[0].length).trim();
-      return { workflowName: caseMatch.name, remainingMessage };
-    }
-
-    // No match - build helpful error
-    const available = workflows.map(w => w.name);
-    getLog().warn({ workflowName, available }, 'workflow.invoke_unknown');
-
-    return {
-      workflowName: null,
-      remainingMessage: message,
-      error: `Unknown workflow: \`${workflowName}\`. Available: ${available.map(n => `\`${n}\``).join(', ')}`,
-    };
-  }
-
-  return {
-    workflowName: null,
-    remainingMessage: message,
-  };
 }
 
 /**

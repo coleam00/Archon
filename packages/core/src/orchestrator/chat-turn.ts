@@ -199,6 +199,21 @@ async function completeChatTurn(
   });
 }
 
+async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> {
+  const { platform, conversationId, aiClient, requestOptions, turn } = input;
+  await platform.sendMessage(
+    conversationId,
+    'A tool failed or was cancelled, and the assistant returned no reply. The requested action may not have completed. Check the run status before retrying.'
+  );
+  reportChatTurn(turn, {
+    platform: platform.getPlatformType(),
+    provider: aiClient.getType(),
+    model: requestOptions.model,
+    durationMs: Date.now() - turn.startedAt,
+    outcome: 'failed',
+  });
+}
+
 // ─── Streaming Mode ─────────────────────────────────────────────────────────
 
 /**
@@ -209,6 +224,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let turnResult: TurnResult | undefined;
+  let toolFailed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -217,6 +233,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
     input.requestOptions
   )) {
     if (msg.type === 'agent_message_chunk') {
+      if (msg.text.trim()) toolFailed = false;
       allMessages.push(msg.text);
       await platform.sendMessage(conversationId, msg.text);
     } else if (msg.type === 'tool_call') {
@@ -228,6 +245,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
         await platform.sendStructuredEvent(conversationId, msg);
       }
     } else if (msg.type === 'tool_call_update') {
+      toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
       if (platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
@@ -249,6 +267,8 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
   }
+
+  if (toolFailed) return reportUnansweredToolFailure(input);
 
   if (allMessages.length === 0) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
@@ -276,6 +296,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let turnResult: TurnResult | undefined;
+  let toolFailed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -284,6 +305,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
     input.requestOptions
   )) {
     if (msg.type === 'agent_message_chunk') {
+      if (msg.text.trim()) toolFailed = false;
       allChunks.push({ type: 'assistant', content: msg.text });
       assistantMessages.push(msg);
       if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
@@ -294,6 +316,8 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
       const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
       allChunks.push({ type: 'tool', content: toolMessage });
       getLog().debug({ toolName: msg.name }, 'tool_call');
+    } else if (msg.type === 'tool_call_update') {
+      toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
     } else if (msg.type === 'warning') {
       // A warning surfaces as it arrives, not batched into the reply.
       await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
@@ -335,6 +359,8 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
 
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
+
+  if (toolFailed) return reportUnansweredToolFailure(input);
 
   if (!finalMessage) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is

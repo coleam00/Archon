@@ -822,7 +822,7 @@ DISCORD_STREAMING_MODE=stream
 
 ### Batch Mode
 
-The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive unless an orchestrator command prefix has already been detected.
+The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive.
 
 Filtering operates on provider text blocks, including continuations split by an immediate warning. Adapters may split long replies into multiple platform messages or comments.
 

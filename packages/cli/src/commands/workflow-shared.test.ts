@@ -8,15 +8,23 @@ import {
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowEventEmitCommand } from './workflow';
 import {
   workflowAbandonCommand,
+  workflowCancelCommand,
+  workflowRespondCommand,
+  workflowAnswerCommand,
   workflowApproveCommand,
   workflowRejectCommand,
   workflowResumeCommand,
 } from './workflow-control';
-import { workflowGetCommand } from './workflow-query';
+import { workflowGetCommand, workflowLogsCommand, workflowWaitCommand } from './workflow-query';
+import { resolveRunIdArg } from './workflow-shared';
+import { workflowArtifactsCommand } from './workflow-artifacts';
+import { resolveAttentionRunId } from './workflow-attention';
+import { resolveContinuationDeclaration } from './workflow-run-preflight';
 import { workflowRunCommand } from './workflow-run-owned';
 
 describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
@@ -42,6 +50,90 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  it('requires a project match for full and short IDs in scoped chat CLI commands', async () => {
+    const previous = process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+    process.env.ARCHON_WORKFLOW_CODEBASE_ID = 'cb-1';
+    const host = createTestWorkflowHost();
+    const find = spyOn(host.deps.store, 'findWorkflowRunsByIdPrefix');
+    const run: WorkflowRun = {
+      id: FULL_ID,
+      origin: null,
+      workflow_name: 'implement',
+      conversation_id: null,
+      parent_conversation_id: null,
+      codebase_id: 'cb-1',
+      status: 'completed',
+      outcome: null,
+      user_message: 'task',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: '/repo',
+      user_id: null,
+      parent_run_id: null,
+      adopted_from_run_id: null,
+      output_root: null,
+      checkout_baseline: null,
+    };
+    try {
+      for (const id of [FULL_ID, FULL_ID.replaceAll('-', ''), '0b1ee8da']) {
+        const matchedId = id.length === 32 ? id : FULL_ID;
+        find.mockResolvedValueOnce([{ ...run, id: matchedId }]);
+        expect(await resolveRunIdArg(host, id, '/repo')).toBe(matchedId);
+        expect(find).toHaveBeenLastCalledWith(id, 'cb-1');
+      }
+      find.mockResolvedValue([]);
+      const refused = [
+        () => workflowGetCommand(host, FULL_ID, true, undefined, '/repo'),
+        () => workflowLogsCommand(host, FULL_ID, false, '/repo'),
+        () => workflowWaitCommand(host, FULL_ID, true, '/repo'),
+        () => workflowArtifactsCommand(host, [FULL_ID], { json: true, cwd: '/repo' }),
+        () => workflowAnswerCommand(host, FULL_ID, 'occurrence', [], 'answer', true, '/repo'),
+        () => workflowResumeCommand(host, FULL_ID, true, '/repo'),
+        () => workflowCancelCommand(host, FULL_ID, true, '/repo'),
+        () => workflowAbandonCommand(host, FULL_ID, true, '/repo'),
+        () => workflowApproveCommand(host, FULL_ID, undefined, true, '/repo'),
+        () => workflowRejectCommand(host, FULL_ID, undefined, true, '/repo'),
+        () => workflowRespondCommand(host, FULL_ID, 'revise', undefined, true, '/repo'),
+      ];
+      for (const command of refused) expect(await command()).toBe(1);
+      await expect(
+        workflowEventEmitCommand(host, FULL_ID, 'workflow_completed', {}, '/repo')
+      ).rejects.toThrow('selected project');
+      await expect(resolveAttentionRunId(host, FULL_ID, '/repo')).rejects.toThrow(
+        'selected project'
+      );
+      for (const options of [{ adoptRunId: FULL_ID }, { supersedesRunId: FULL_ID }]) {
+        await expect(
+          resolveContinuationDeclaration(host, '/repo', options, {
+            ...CODEBASE,
+            kind: 'repo',
+            repository_url: null,
+            default_branch: null,
+            commands: {},
+            ai_assistant_type: 'claude',
+            created_at: new Date(),
+            updated_at: new Date(),
+          })
+        ).rejects.toThrow('selected project');
+      }
+      expect(host.deps.store.getWorkflowRun).not.toHaveBeenCalled();
+      find.mockResolvedValueOnce([run, { ...run, id: FULL_ID + '-other' }]);
+      await expect(resolveRunIdArg(host, '0b1ee8da', '/repo')).rejects.toThrow('selected project');
+      process.env.ARCHON_WORKFLOW_CODEBASE_ID = '';
+      await expect(resolveRunIdArg(host, FULL_ID, '/repo')).rejects.toThrow(
+        'must name a registered project'
+      );
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockPersistWorkflowEvent).not.toHaveBeenCalled();
+    } finally {
+      find.mockRestore();
+      if (previous === undefined) delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      else process.env.ARCHON_WORKFLOW_CODEBASE_ID = previous;
+    }
   });
 
   it('resolves a unique short prefix to the full run id (get)', async () => {

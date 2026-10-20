@@ -29,7 +29,7 @@ OpenCode and GitHub Copilot are deprecated and will be removed in the next minor
 
 In chat, run management uses native `invoke_workflow`, `register_project` and scoped `manage_run` tools on Claude, Codex and Pi. Copilot and OpenCode instead use the existing `archon workflow` CLI after project selection. Their launches use `archon workflow run <workflow> "<message>" --detach` in the registered project directory and return a run ID for inspection. These runs are headless: they use CLI identity, carry no originating-chat provenance, and deliver no progress or results back to that chat.
 
-Projectless conversations can still answer questions. Submit `/setproject <name>` in the conversation or thread to select a registered project before CLI launch or run management. For a new local project, submit `/register-project [--folder] <name> <path>`, then `/setproject <name>`; registration alone does not bind the conversation. Assistant command examples are plain text and have no side effects.
+Projectless conversations can still answer questions. Submit `/setproject <name>` in the conversation or thread to select a registered project before CLI launch or run management. For a new local project, submit `/register-project [--folder] <name> <path>`, then `/setproject <name>`; registration alone does not bind the conversation. On Slack, post these commands with an @mention in the target thread, for example `@your-bot /setproject <name>`; `/archon` starts a new thread. Assistant command examples are plain text and have no side effects.
 
 If you need one of them after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 

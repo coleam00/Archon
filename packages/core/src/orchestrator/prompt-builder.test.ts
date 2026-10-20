@@ -16,6 +16,14 @@ import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 const invoked = (p: string): string[] => [...p.matchAll(/workflow: "([^"]+)"/g)].map(m => m[1]);
 
 describe('buildRoutingRulesWithProject', () => {
+  test.each(['tools', 'cli'] as const)('%s gives useful options when no workflow fits', channel => {
+    const rules = buildRoutingRulesWithProject(channel);
+    expect(rules).toContain('If no listed workflow fits');
+    expect(rules).toContain('closest available option and its limits');
+    expect(rules).toContain('author a workflow for repeatable work');
+    expect(rules).toContain('coding agent directly for one-off work');
+  });
+
   test('CLI launches use complete tasks, inputs and headless semantics once scoped', () => {
     const rules = buildRoutingRulesWithProject('cli', 'my-project');
     expect(rules).toContain('archon workflow run <workflow> "<message>" --detach');
@@ -237,6 +245,7 @@ describe('buildOrchestratorSystemAppend', () => {
       'cli'
     );
     expect(scoped.split('## Managing Workflow Runs')).toHaveLength(2);
+    expect(scoped).toContain('ARCHON_WORKFLOW_CODEBASE_ID=cb-1');
     const native = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,
