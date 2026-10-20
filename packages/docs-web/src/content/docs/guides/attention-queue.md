@@ -115,7 +115,7 @@ they cannot disagree about what a run needs.
 
 ## Several items from one workflow
 
-A workflow can [fan out one child per question](/guides/authoring-workflows/#several-independent-questions)
+A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions)
 with `max_parallel: all`. Every child pauses at an ordinary attention wait, with its own
 question, declared choices and occurrence. A recommendation belongs in the message,
 for example `Accept the first proposal? Recommended accept.`

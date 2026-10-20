@@ -282,7 +282,7 @@ The optional `name` uses the same exact, case-insensitive, suffix, and substring
 | `--json` | Output machine-readable JSON instead of formatted text |
 | `--full` | Return exact authored descriptions; combine with `name` for one workflow's full detail |
 
-With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Each workflow has a `description` and `descriptionTruncated` boolean. `--full` returns the exact authored description and sets `descriptionTruncated` to `false`. Optional fields (`provider`, `model`, `effort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. A workflow written with the deprecated `modelReasoningEffort:` reports its value as `effort`, which is what it is translated to at load — unless it also declares `effort:`, which wins. Each `parseWarnings` entry is a full warning message naming a key the engine dropped or deprecated, the workflow or node where it was found, and what to write instead — see [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected). Discovery errors remain in the top-level `errors` array when a name filters the workflow list. If the named workflow is missing or ambiguous, the failure envelope is `{ "ok": false, "error": "...", "errors": [...] }`, retaining errors found during the same discovery.
+With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Each workflow has a `description` and `descriptionTruncated` boolean. `--full` returns the exact authored description and sets `descriptionTruncated` to `false`. Optional fields (`provider`, `model`, `effort`, `webSearchMode`, `parseWarnings`) are omitted when not set on a workflow. A workflow written with the deprecated `modelReasoningEffort:` reports its value as `effort`, which is what it is translated to at load — unless it also declares `effort:`, which wins. Each `parseWarnings` entry is a full warning message naming a key the engine dropped or deprecated, the workflow or node where it was found, and what to write instead — see [Unknown keys](/reference/workflow-language/#unknown-keys-are-reported-not-rejected). Discovery errors remain in the top-level `errors` array when a name filters the workflow list. If the named workflow is missing or ambiguous, the failure envelope is `{ "ok": false, "error": "...", "errors": [...] }`, retaining errors found during the same discovery.
 
 ### `workflow run <name> [message]`
 
@@ -317,7 +317,7 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 
 If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--detach --json` callers: `--json` silences all logging, so stderr is the only channel left, and it keeps stdout to exactly the JSON payload.
 
-Note that a real `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe a plain real `run --json` into a parser. The side-effect-free `--dry-run --json` mode below is the other exception: it emits exactly one complete trace document. See [Unknown keys](/guides/authoring-workflows/#unknown-keys-are-reported-not-rejected).
+Note that a real `run` emits a JSON payload **only** under `--detach`. Without it, `--json` suppresses logs but the command still prints human progress to stdout (`Running workflow: …`), so do not pipe a plain real `run --json` into a parser. The side-effect-free `--dry-run --json` mode below is the other exception: it emits exactly one complete trace document. See [Unknown keys](/reference/workflow-language/#unknown-keys-are-reported-not-rejected).
 
 **Flags:**
 
@@ -332,7 +332,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--folder` | Register the current directory (with or without git) as a folder project (first use) and run in place -- no worktree. Rejects `--branch`/`--from`/`--base`. |
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
-| `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/guides/authoring-workflows/#running-a-workflow-that-declares-inputs). |
+| `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/reference/workflow-language/#running-a-workflow-that-declares-inputs). |
 | `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
 | `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`, and rejected with `--resume`. Works with `--detach`. |
@@ -347,7 +347,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
 | `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, a missing reachable stub remains an error unless the node declares `trigger_rule: all_done`. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
-| `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/guides/authoring-workflows/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
+| `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/reference/workflow-language/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
 
 Fresh CLI runs do not create a chat conversation, message history, or title. Execution output stays in stdout and the run's transcript, events, and artifacts. Resuming a run with an existing chat origin keeps recording into that conversation.
 
@@ -502,7 +502,7 @@ is unavailable: `$BASE_BRANCH` stays unresolved rather than guessing from curren
 A fresh shared-checkout child (`isolation: inherit` or omitted) inherits the parent's
 resolved `$BASE_BRANCH`, including a parent `--base` override. Existing child runs keep
 their recorded base on resume. See [Choosing the child's
-checkout](/guides/authoring-workflows/#choosing-the-childs-checkout-with-isolation).
+checkout](/reference/workflow-language/#choosing-the-childs-checkout-with-isolation).
 
 **Driving cut-from and PR target separately.** `--from` overrides only the
 cut-from, so pairing the two flags splits them:
@@ -952,7 +952,7 @@ shows "Running · owner unknown". Neither is shown as live progress.
 
 Two pauses deliberately do **not** wake a waiter, because neither is owed a response: a
 gate or attention wait that has already been answered and is awaiting continuation, and a
-[`wait:` node](/guides/authoring-workflows/) whose timer or event has not fired.
+[`wait:` node](/reference/workflow-language/) whose timer or event has not fired.
 
 Once the wait is watching, it says so once on **stderr** — one plain sentence, or the
 same envelope with `"result": "waiting"` and the status it attached on under `--json`:
@@ -1170,7 +1170,7 @@ cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
 operation as `abandon`. Cancelling a parent therefore attempts descendant cancellation within the
-[500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count)
+[500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count)
 and can report the same cascade failures or blocked parent described below.
 
 On Windows a detached owner runs in a Job Object that every process it starts inherits, so
@@ -1256,7 +1256,7 @@ Successful `--json` responses include an optional `cleanupWarnings` array of war
 strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
-**Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+**Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
 ### `workflow respond`
 
@@ -1268,7 +1268,7 @@ or `reject`.
 
 ### `workflow answer`
 
-Answer a paused [attention wait](/guides/authoring-workflows/#attention-waits) in the form
+Answer a paused [attention wait](/reference/workflow-language/#attention-waits) in the form
 it declares. `--occurrence` is required: pass the `occurrence` that `workflow wait --json`
 or `workflow get` reports, and an answer meant for an earlier pause is refused, naming
 the current one.
@@ -1890,4 +1890,4 @@ and `--install` selects install scope. The writer is recorded as
 
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.
-See [Durable state documents](/guides/authoring-workflows/#durable-state-documents).
+See [Durable state documents](/reference/workflow-language/#durable-state-documents).

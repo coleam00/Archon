@@ -38,12 +38,13 @@ const foldedPageRedirects = {
   '/book/isolation/': '/guides/worktrees/',
   '/book/first-command/': '/getting-started/first-workflow/',
   '/book/first-workflow/': '/getting-started/first-workflow/',
-  '/book/dag-workflows/': '/guides/authoring-workflows/',
+  '/book/dag-workflows/': '/reference/workflow-language/',
   '/book/hooks-and-quality/': '/guides/hooks/',
   '/book/quick-reference/': '/reference/cli/',
   '/getting-started/what-archon-is-not/': '/getting-started/why-archon/',
   '/getting-started/concepts/': '/getting-started/why-archon/',
   '/getting-started/overview/': '/getting-started/quick-start/',
+  '/guides/authoring-workflows/': '/reference/workflow-language/',
 };
 
 export default defineConfig({
@@ -172,7 +173,7 @@ export default defineConfig({
           ],
 
           // Control ordering - essentials first
-          promote: ['index', 'getting-started/**', 'guides/authoring-workflows'],
+          promote: ['index', 'getting-started/**', 'reference/workflow-language'],
           demote: ['contributing/**'],
 
           // Aggressive minification for small version

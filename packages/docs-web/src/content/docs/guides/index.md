@@ -13,7 +13,8 @@ How-to guides for building and running AI coding workflows with Archon.
 
 ## Workflow Authoring
 
-- [Authoring Workflows](/guides/authoring-workflows/) — Create multi-step YAML workflows with DAG nodes, conditional branching, and parallel execution
+- [Build your first workflow](/getting-started/first-workflow/) — Build, validate, dry-run and test a workflow with an approval gate
+- [Workflow language](/reference/workflow-language/) — Every workflow field, node type and engine behavior
 - [Authoring Commands](/guides/authoring-commands/) — Write prompt templates that serve as building blocks for workflow nodes
 
 ## Node Types

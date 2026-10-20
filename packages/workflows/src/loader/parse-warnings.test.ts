@@ -81,7 +81,7 @@ nodes:
       expect(advisories[0]).toContain("Node 'join'");
       expect(advisories[0]).toContain("'a'");
       expect(advisories[0]).toContain('all_done');
-      expect(advisories[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
+      expect(advisories[0]).toContain('/reference/workflow-language/#trigger_rule-values');
     }
   });
 

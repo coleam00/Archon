@@ -17,7 +17,7 @@ and the result is available downstream as `$nodeId.output`.
 Use script nodes for deterministic work that needs a real programming language:
 parsing JSON, transforming data between upstream AI nodes, calling HTTP APIs
 with typed clients, or computing values that a shell one-liner would mangle.
-If a plain shell command is enough, use a [`bash:` node](/guides/authoring-workflows/#node-fields)
+If a plain shell command is enough, use a [`bash:` node](/reference/workflow-language/#node-fields)
 instead.
 
 ## Quick Start
@@ -85,7 +85,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    its absence with an `if_skipped` binding.
 5. **Retain.** Regardless of outcome, capped and credential-redacted tails of
    both streams are written to the run transcript as an `exec_output` row — see
-   [Retained subprocess evidence](/guides/authoring-workflows#retained-subprocess-evidence).
+   [Retained subprocess evidence](/reference/workflow-language#retained-subprocess-evidence).
    That retention is evidence only; it never caps `$nodeId.output`.
 
 ## YAML Schema
@@ -120,7 +120,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Milliseconds before Archon sends `SIGTERM` to the node. Omitted: no timeout, the node runs until it exits |
-| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout`. See [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts) for what a timeout ends |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout`. See [Bash and script node timeouts](/reference/workflow-language/#bash-and-script-node-timeouts) for what a timeout ends |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
@@ -312,7 +312,7 @@ That is the same contract an AI node's `output_format` carries, so a script and
 an agent are interchangeable as the producer behind a `returns:` node. What that
 buys a caller — through an `include:` alias, a `workflow:` sub-run, a fan-out, or
 an artifact pointer — is described once in
-[Authoring workflows → Result contracts](/guides/authoring-workflows/#result-contracts).
+[Workflow language → Result contracts](/reference/workflow-language/#result-contracts).
 
 A schemaless script is unchanged: stdout stays raw text, trimmed only of its trailing
 newline as before.
@@ -479,13 +479,13 @@ Then reference it by name from any repo's workflow:
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.
 - **Cancelling mid-execution** — there is no cooperative cancellation signal.
   Cancelling the run ends a running script's process tree instead; see
-  [Bash and script node timeouts](/guides/authoring-workflows/#bash-and-script-node-timeouts)
+  [Bash and script node timeouts](/reference/workflow-language/#bash-and-script-node-timeouts)
   for what it reaches. Without a `timeout`, a script that hangs runs until it is
   cancelled.
 
 ## See Also
 
-- [Authoring Workflows](/guides/authoring-workflows/) — full workflow reference
+- [Workflow language](/reference/workflow-language/): the full workflow reference
 - [Global Workflows, Commands, and Scripts](/guides/global-workflows/) — home-scoped `~/.archon/scripts/`
 - [Security Model](/reference/security/#target-repo-env-isolation) — env isolation details
 - [Variables Reference](/reference/variables/) — substitution rules
