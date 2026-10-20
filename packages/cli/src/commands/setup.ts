@@ -146,7 +146,7 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
 
 async function runSetup(options: SetupOptions): Promise<void> {
   if (options.spawn) {
-    openSetupTerminal(options);
+    await openSetupTerminal(options);
     return;
   }
 
@@ -191,9 +191,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   await finishSetup();
 }
 
-function openSetupTerminal(options: SetupOptions): void {
+async function openSetupTerminal(options: SetupOptions): Promise<void> {
   console.log('Opening setup wizard in a new terminal window...');
-  const result = spawnTerminalWithSetup(options.repoPath, options.providers);
+  const result = await spawnTerminalWithSetup(options.repoPath, options.providers);
 
   if (result.success) {
     console.log('Setup wizard opened. Complete the setup in the new terminal window.');

@@ -2,7 +2,7 @@
  * The `--spawn` path of `archon setup`: opening the wizard in a new terminal
  * window on Windows, macOS or Linux.
  */
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn } from 'child_process';
 import { isMaintainedProvider } from '@archon/provider-contract';
 
 interface SpawnResult {
@@ -10,23 +10,20 @@ interface SpawnResult {
   error?: string;
 }
 
-/**
- * Try to spawn a process, catching both sync and async errors
- * Returns true if spawn succeeded, false if it failed
- */
-function trySpawn(
+async function trySpawn(
   command: string,
   args: string[],
   options: { detached: boolean; stdio: 'ignore' }
-): boolean {
+): Promise<boolean> {
   try {
-    const child: ChildProcess = spawn(command, args, options);
-    // Check if spawn failed immediately (child.pid will be undefined)
-    if (!child.pid) {
-      return false;
-    }
-    child.unref();
-    return true;
+    return await new Promise<boolean>(resolve => {
+      const child = spawn(command, args, options);
+      child.once('error', () => resolve(false));
+      child.once('spawn', () => {
+        child.unref();
+        resolve(true);
+      });
+    });
   } catch {
     return false;
   }
@@ -36,10 +33,10 @@ function trySpawn(
  * Spawn a new terminal window with the setup command on Windows
  * Tries: Windows Terminal -> cmd.exe with start
  */
-function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
+async function spawnWindowsTerminal(repoPath: string, command: string): Promise<SpawnResult> {
   // Try Windows Terminal first (modern Windows 10/11)
   if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
+    await trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -49,7 +46,7 @@ function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
 
   // Fallback to cmd.exe with start command (works on all Windows)
   if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
+    await trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
     })
@@ -64,12 +61,12 @@ function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
  * Spawn terminal on macOS
  * Uses osascript to open Terminal.app (works with default terminal)
  */
-function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
+async function spawnMacTerminal(repoPath: string, command: string): Promise<SpawnResult> {
   // Escape single quotes in path for AppleScript
   const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
   const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
 
-  if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
+  if (await trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
     return { success: true };
   }
 
@@ -80,12 +77,12 @@ function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
  * Spawn terminal on Linux
  * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
  */
-function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
+async function spawnLinuxTerminal(repoPath: string, command: string): Promise<SpawnResult> {
   const setupCmd = `${command}; exec bash`;
 
   // Try x-terminal-emulator first (Debian/Ubuntu default)
   if (
-    trySpawn(
+    await trySpawn(
       'x-terminal-emulator',
       ['--working-directory=' + repoPath, '-e', `bash -c "${setupCmd}"`],
       {
@@ -99,17 +96,21 @@ function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
 
   // Try gnome-terminal (GNOME)
   if (
-    trySpawn('gnome-terminal', ['--working-directory=' + repoPath, '--', 'bash', '-c', setupCmd], {
-      detached: true,
-      stdio: 'ignore',
-    })
+    await trySpawn(
+      'gnome-terminal',
+      ['--working-directory=' + repoPath, '--', 'bash', '-c', setupCmd],
+      {
+        detached: true,
+        stdio: 'ignore',
+      }
+    )
   ) {
     return { success: true };
   }
 
   // Try konsole (KDE)
   if (
-    trySpawn('konsole', ['--workdir', repoPath, '-e', 'bash', '-c', setupCmd], {
+    await trySpawn('konsole', ['--workdir', repoPath, '-e', 'bash', '-c', setupCmd], {
       detached: true,
       stdio: 'ignore',
     })
@@ -119,7 +120,7 @@ function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
 
   // Try xterm (fallback, available on most systems)
   if (
-    trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
+    await trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
       detached: true,
       stdio: 'ignore',
     })
@@ -136,10 +137,10 @@ function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
 /**
  * Spawn a new terminal window with archon setup
  */
-export function spawnTerminalWithSetup(
+export async function spawnTerminalWithSetup(
   repoPath: string,
   providers?: readonly string[]
-): SpawnResult {
+): Promise<SpawnResult> {
   if (providers?.some(id => !isMaintainedProvider(id)))
     throw new Error('Invalid setup provider selection');
   const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
