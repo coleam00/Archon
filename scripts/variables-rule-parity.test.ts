@@ -3,12 +3,14 @@
  * `archon-cli` skill and on the docs site. Both copies reach users — the skill is
  * written to every install by `archon skill add` — so an edit to one that misses the
  * other ships a false promise. This compares the two copies' statements of the rule:
- * the variables they name, the environment variables they promise for them, and
- * whether either still promises a warning the engine no longer emits.
+ * the variables they name, the environment variables they promise for them, whether
+ * every one of those is a variable the exec node delivers, and whether either still
+ * promises a warning the engine no longer emits.
  */
 import { describe, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 
 const REPO = join(import.meta.dir, '..');
 const COPIES = [
@@ -81,6 +83,18 @@ describe('the user-controlled variable rule', () => {
         throw new Error(
           `${file} promises the environment variables ${names.join(', ')} where the other copies promise ${expected.join(', ')}`
         );
+      }
+    }
+  });
+
+  test('every environment variable a shipped copy promises is one the exec node delivers', () => {
+    for (const { file, text } of passages) {
+      for (const name of namedEnvironment(text)) {
+        if (!EXEC_NODE_ENVIRONMENT_NAMES.has(name)) {
+          throw new Error(
+            `${file} promises the environment variable ${name}, which the exec node does not deliver`
+          );
+        }
       }
     }
   });
