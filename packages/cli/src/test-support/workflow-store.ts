@@ -127,7 +127,8 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
   };
 }
 
-type InMemoryWorkflowStore = IWorkflowStore & Pick<WorkflowStoreHarness, 'backdate'>;
+type InMemoryWorkflowStore = IWorkflowStore &
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -219,6 +220,12 @@ export function createInMemoryWorkflowStore(
         const run = runs.get(id);
         if (!run) throw new Error(`Run missing: ${id}`);
         Object.assign(run, structuredClone(dates));
+      }),
+    seedPersistedWait: (id, wait) =>
+      serialize(async () => {
+        const run = runs.get(id);
+        if (!run) throw new Error(`Run missing: ${id}`);
+        run.metadata.wait = structuredClone(wait);
       }),
     getCodebase,
     getCodebaseEnvVars: async () => ({}),

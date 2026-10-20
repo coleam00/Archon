@@ -2,7 +2,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   attentionForm,
-  isWorkflowWaitContext,
+  readWorkflowWaitContext,
   pausedAttentionWait,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -35,7 +35,7 @@ export async function signalWorkflowWait(
 ): Promise<{ signaled: boolean }> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_signal_lookup_failed');
   await ctx.assertMayAct(run, actor, 'signal');
-  const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
+  const wait = readWorkflowWaitContext(run.metadata?.wait);
   const { event, occurrence, resumeAt, payload } = signalWorkflowWaitRequestSchema.parse(request);
   if (
     wait?.kind !== 'event' ||

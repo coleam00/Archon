@@ -3,7 +3,11 @@
  * compare-and-swap writes that resolve or cancel its gate. Re-exported from the
  * `./workflows` entry.
  */
-import type { ApprovalContext, ExpectedApprovalGate } from '@archon/workflows/schemas/workflow-run';
+import {
+  validateWorkflowWaitMetadata,
+  type ApprovalContext,
+  type ExpectedApprovalGate,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   PAUSE_CAUSE_METADATA_KEY,
   pauseCauseOfApproval,
@@ -65,10 +69,14 @@ function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string
 function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: number): string {
   const merge = `$${String(mergeParamIndex)}`;
   const approval = `$${String(approvalParamIndex)}`;
-  const withoutWait = getDialect().jsonRemove('metadata', 'wait');
+  const merged =
+    getDatabaseType() === 'postgresql'
+      ? `(metadata || ${merge}::jsonb)`
+      : `json_patch(metadata, ${merge})`;
+  const withoutWait = getDialect().jsonRemove(merged, 'wait');
   return getDatabaseType() === 'postgresql'
-    ? `jsonb_set((${withoutWait}) || ${merge}::jsonb, '{approval}', ${approval}::jsonb, true)`
-    : `json_set(json_patch(${withoutWait}, ${merge}), '$.approval', json(${approval}))`;
+    ? `jsonb_set(${withoutWait}, '{approval}', ${approval}::jsonb, true)`
+    : `json_set(${withoutWait}, '$.approval', json(${approval}))`;
 }
 
 /**
@@ -105,6 +113,7 @@ export async function resolveApprovalGate(
   events: GateResolutionEvent[],
   expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
+  validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {

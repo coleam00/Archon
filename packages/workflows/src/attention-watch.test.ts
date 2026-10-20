@@ -704,7 +704,7 @@ describe('watchAttentionQueue', () => {
           data: {},
         });
         await store.updateWorkflowRun(runId, {
-          metadata: { wait: undefined, approval: undefined },
+          metadata: { approval: undefined },
         });
       }
     };
