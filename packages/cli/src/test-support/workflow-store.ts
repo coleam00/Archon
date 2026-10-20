@@ -187,7 +187,16 @@ export function createInMemoryWorkflowStore(
     serialize(() => apply(call));
   const admission = createInMemoryResourceStartStore(
     input => apply(view => view.createWorkflowRun(input)),
-    async id => structuredClone(runs.get(id) ?? null)
+    async id => structuredClone(runs.get(id) ?? null),
+    () => [...runs.values()],
+    async () =>
+      (await records.isolation.listActive())
+        .filter(row => row.workflow_type === 'task')
+        .map(row => ({
+          codebaseId: row.codebase_id,
+          branch: row.workflow_id,
+          workingPath: row.working_path,
+        }))
   );
   const admit =
     <Args extends unknown[], Result>(

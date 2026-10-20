@@ -4,6 +4,9 @@ import {
   capacityWaiters,
   drainableStarts,
   heldCheckouts,
+  foreignHeldCheckouts,
+  compareCodeUnits,
+  type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
   ResourceSlotCapacityConflictError,
@@ -26,7 +29,9 @@ import {
 
 export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
-  getRun: IWorkflowStore['getWorkflowRun']
+  getRun: IWorkflowStore['getWorkflowRun'],
+  listRuns: () => WorkflowRun[],
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>
 ): IResourceStartStore & {
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
@@ -80,6 +85,24 @@ export function createInMemoryResourceStartStore(
         request => request.resource === resource && request.status === 'queued'
       ),
       heldCheckouts: heldCheckouts(live),
+      foreignHeldCheckouts: foreignHeldCheckouts(
+        listRuns()
+          .filter(
+            run => !isTerminalRunStatus(run.status) && !live.some(local => local.id === run.id)
+          )
+          .sort(
+            (a, b) =>
+              a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
+          )
+          .map(run => ({
+            ...run,
+            launch:
+              requests.get(run.id)?.status === 'admitted'
+                ? requests.get(run.id)?.launch
+                : undefined,
+          })),
+        await listReusableCheckouts()
+      ),
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {

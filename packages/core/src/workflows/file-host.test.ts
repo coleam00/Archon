@@ -1,3 +1,4 @@
+import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { afterEach, expect, expectTypeOf, spyOn, test } from 'bun:test';
 import type { z } from 'zod';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
@@ -498,5 +499,89 @@ for (const persistent of [false, true]) {
       await recovered.records.isolation.findActiveByWorkflow('cb', 'task', 'run')
     ).toMatchObject({ working_path: checkout });
     expect((await fs.stat(checkout)).isDirectory()).toBe(true);
+  });
+}
+
+for (const late of [false, true]) {
+  test(`manual reusable-checkout holders block explicit branches, registration late=${String(late)}`, async () => {
+    const home = roots(await mkdtemp(join(tmpdir(), 'file-host-admission-')));
+    process.env.ARCHON_HOME = home;
+    process.env.DATABASE_URL = '';
+    const host = await createFileWorkflowHost(join(home, 'store'));
+    const store = host.deps.store;
+    const codebaseId = (
+      await host.records.codebases.createCodebase({
+        name: 'project',
+        default_cwd: home,
+        kind: 'folder',
+      })
+    ).id;
+    const workingPath = join(home, 'checkout');
+    const makeLaunch = (): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        codebase_id: codebaseId,
+        workflow_name: 'test',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: home, conversationId: 'conversation', isolation: { kind: 'in-place' } },
+    });
+    const register = () =>
+      host.records.isolation.create({
+        codebase_id: codebaseId,
+        workflow_type: 'task',
+        workflow_id: 'reusable',
+        working_path: workingPath,
+        branch_name: toBranchName('different-git-branch'),
+      });
+    const input = (launch: PreparedWorkflowLaunch, capacity = late ? 1 : 4) => ({
+      resource: 'registered',
+      capacity,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch,
+    });
+    const capacity = makeLaunch();
+    if (late) await store.admitResourceStart(input(capacity));
+    else await register();
+    const incoming = makeLaunch();
+    incoming.execution.isolation = { kind: 'worktree', branch: 'reusable' };
+    if (late)
+      expect(await store.admitResourceStart(input(incoming))).toMatchObject({ status: 'queued' });
+    const manual = await store.createWorkflowRun(makeLaunch().run);
+    await store.claimPendingWorkflowRun(manual.id, workingPath);
+    if (late) {
+      await register();
+      await store.cancelWorkflowRun(capacity.run.id);
+    } else {
+      expect(await store.admitResourceStart(input(incoming))).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: manual.id },
+      });
+      const skip = makeLaunch();
+      skip.execution.isolation = incoming.execution.isolation;
+      expect(await store.admitResourceStart({ ...input(skip), overlap: 'skip' })).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'run', id: manual.id },
+      });
+      for (const isolation of [
+        { kind: 'worktree' as const },
+        { kind: 'worktree' as const, branch: 'different-git-branch' },
+      ]) {
+        const independent = makeLaunch();
+        independent.execution.isolation = isolation;
+        expect(await store.admitResourceStart(input(independent))).toMatchObject({
+          status: 'admitted',
+        });
+      }
+    }
+    const drain = () => store.drainResourceStarts({ resource: 'registered', hostId: 'host' });
+    expect(await drain()).toEqual([]);
+    expect(await store.getWorkflowRun(incoming.run.id)).toBeNull();
+    expect((await store.getWorkflowRun(manual.id))?.status).toBe('running');
+    await store.completeWorkflowRun(manual.id, { duration_ms: 1 });
+    expect(await drain()).toMatchObject([{ runId: incoming.run.id }]);
   });
 }

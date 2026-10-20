@@ -74,6 +74,17 @@ export const preparedWorkflowLaunchSchema = z.union([
 ]);
 export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchV2Schema>;
 
+export const ADMISSION_CHECKOUT_GUARD_METADATA_KEY = 'admission_checkout_guard';
+
+/** Older writers did not record the declaration, so their launches remain guarded. */
+export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): boolean {
+  const value = launch.run.metadata[ADMISSION_CHECKOUT_GUARD_METADATA_KEY];
+  if (value === undefined || value === null) return true;
+  if (typeof value !== 'boolean')
+    throw new Error(`Invalid ${ADMISSION_CHECKOUT_GUARD_METADATA_KEY}: expected a boolean`);
+  return value;
+}
+
 /** Run metadata key naming the receipt binding that requested a resource start. */
 export const RESOURCE_START_METADATA_KEY = 'resource_start';
 export interface ResourceStartRunMetadata {

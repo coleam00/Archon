@@ -39,6 +39,7 @@ import {
 } from '@archon/workflows/run-config';
 import {
   RESOURCE_START_METADATA_KEY,
+  ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
   type ResourceStartDisposition,
@@ -207,6 +208,7 @@ async function prepareBinding(
       [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
       [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
       [RESOURCE_START_METADATA_KEY]: { ...origin },
+      [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
       // Persist only authored inputs; defaults stay derived from the frozen workflow.
       ...(Object.keys(inputs).length > 0
         ? {

@@ -1,5 +1,5 @@
 import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
-import { resumeRefusal } from '../resource-start-store';
+import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   WorkflowResourceBusyError,
@@ -47,6 +47,8 @@ export interface FileWorkflowStoreOptions {
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
   getCodebaseEnvVars?: IWorkflowStore['getCodebaseEnvVars'];
+  /** Called under the commit lock; must not enter store recovery or call this store. */
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   isCheckoutReleased?: (run: WorkflowRun, workingPath?: string) => Promise<boolean>;
 }
 export async function createFileWorkflowStore(
@@ -102,7 +104,7 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const admission = createAdmissionTransaction(root);
+      const admission = createAdmissionTransaction(root, options.listReusableCheckouts);
       const result = await call(createTransactionView(runs, events, getCodebase), admission);
       const next = byRun(events);
       const nextIds = new Set(events.map(event => event.id));
@@ -435,7 +437,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root),
+    ...createFileAdmissionStore(root, options.listReusableCheckouts),
     ...createFileStateDocumentStore(root),
   };
   return store;

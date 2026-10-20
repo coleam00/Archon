@@ -2,6 +2,8 @@ import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
   heldCheckouts,
+  foreignHeldCheckouts,
+  type ReusableCheckout,
   type ResourceSlotOccupancy,
 } from '@archon/workflows/resource-start-store';
 import {
@@ -220,12 +222,12 @@ export async function resourceStartOccupancy(
     metadata: unknown;
     working_path: string | null;
     launch: unknown;
+    resource_key: string | null;
   }>(
-    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
-       JOIN remote_agent_resource_start_requests q ON q.id = w.id
-      WHERE q.resource_key = $1 AND q.status = 'admitted'
-        AND w.status NOT IN (${terminalList})`,
-    [resource]
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key FROM remote_agent_workflow_runs w
+       LEFT JOIN remote_agent_resource_start_requests q ON q.id = w.id AND q.status = 'admitted'
+      WHERE w.status NOT IN (${terminalList})
+      ORDER BY w.started_at, w.id`
   );
   const queued = await query<{ id: string; host_id: string; launch: unknown }>(
     `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
@@ -233,13 +235,26 @@ export async function resourceStartOccupancy(
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
   );
-  const liveRuns = live.rows.map(row => ({
-    id: String(row.id),
-    status: row.status,
-    metadata: parseJsonObject(row.metadata) ?? {},
-    working_path: row.working_path,
-    launch: parseLaunch(row.launch),
-  }));
+  const liveRuns = live.rows
+    .filter(row => row.resource_key === resource)
+    .map(row => ({
+      id: String(row.id),
+      status: row.status,
+      metadata: parseJsonObject(row.metadata) ?? {},
+      working_path: row.working_path,
+      launch: parseLaunch(row.launch),
+    }));
+  const reusable = await query<ReusableCheckout>(
+    `SELECT codebase_id AS "codebaseId", workflow_id AS branch, working_path AS "workingPath"
+       FROM remote_agent_isolation_environments WHERE status = 'active' AND workflow_type = 'task'`
+  );
+  const foreign = live.rows
+    .filter(row => row.resource_key !== resource)
+    .map(row => ({
+      id: String(row.id),
+      working_path: row.working_path,
+      launch: row.launch === null ? undefined : parseLaunch(row.launch),
+    }));
   return {
     capacity,
     holders,
@@ -250,6 +265,7 @@ export async function resourceStartOccupancy(
       launch: parseLaunch(row.launch),
     })),
     heldCheckouts: heldCheckouts(liveRuns),
+    foreignHeldCheckouts: foreignHeldCheckouts(foreign, reusable.rows),
   };
 }
 

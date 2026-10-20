@@ -295,9 +295,67 @@ test('admission listings order mixed-case keys by code unit', async () => {
     'a',
   ]);
   for (const resource of ['a', 'B'])
-    for (let i = 0; i < 2; i++) await store.admitResourceStart({ ...intent(), resource });
+    for (let i = 0; i < 2; i++) {
+      const start = intent();
+      start.launch.execution.cwd = `/test/${resource}`;
+      await store.admitResourceStart({ ...start, resource });
+    }
   expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.resource)).toEqual([
     'B',
     'a',
   ]);
 });
+
+for (const version of [1, 2] as const) {
+  for (const guard of [undefined, false]) {
+    test(`stored v${version} guard ${String(guard)} survives reopen and foreign-holder drain`, async () => {
+      const { root, store } = await fixture();
+      const capacity = intent().launch;
+      capacity.execution.cwd = '/capacity';
+      const queued = intent().launch;
+      queued.run.origin = { conversationId: 'conversation', userId: 'operator' };
+      const rootPath = queued.execution.cwd;
+      const input = (launch: ResourceStartIntent['launch']) => ({ ...intent(), launch });
+      queued.run.metadata = {
+        source: { anchor: 'captured' },
+        subrun_inputs: { name: 'value' },
+        ...(guard === undefined ? {} : { admission_checkout_guard: guard }),
+      };
+      await store.admitResourceStart(input(capacity));
+      expect(await store.admitResourceStart(input(queued))).toMatchObject({ status: 'queued' });
+      const { origin, ...run } = queued.run;
+      const stored =
+        version === 2
+          ? queued
+          : {
+              ...queued,
+              version: 1,
+              run: { ...run, conversation_id: origin?.conversationId, user_id: origin?.userId },
+            };
+      const directory = join(root, 'resource', 'requests');
+      for (const name of await readdir(directory)) {
+        const path = join(directory, name);
+        const request = JSON.parse(await readFile(path, 'utf8'));
+        if (request.id === queued.run.id)
+          await writeFile(path, JSON.stringify({ ...request, launch: stored }));
+      }
+      const manual = await store.createWorkflowRun({ ...queued.run, id: crypto.randomUUID() });
+      await store.claimPendingWorkflowRun(manual.id, rootPath);
+      await store.cancelWorkflowRun(capacity.run.id);
+      const reopened = await createFileWorkflowStore({ root });
+      expect((await reopened.getResourceStartRequest(queued.run.id))?.launch).toEqual(queued);
+      const drain = () =>
+        reopened.drainResourceStarts({ resource: input(queued).resource, hostId: 'host' });
+      if (guard === undefined) {
+        expect(await drain()).toEqual([]);
+        expect(await reopened.getWorkflowRun(queued.run.id)).toBeNull();
+        await reopened.cancelWorkflowRun(manual.id);
+      }
+      expect(await drain()).toMatchObject([{ status: 'admitted', runId: queued.run.id }]);
+      expect(await reopened.getWorkflowRun(queued.run.id)).toMatchObject({
+        metadata: queued.run.metadata,
+        origin: queued.run.origin,
+      });
+    });
+  }
+}

@@ -1,3 +1,4 @@
+import { readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
@@ -139,6 +140,8 @@ function compareCapacityWaiters(a: CapacityWaiter, b: CapacityWaiter): number {
 }
 
 const checkoutPath = (path: string): string => JSON.stringify(['path', path]);
+const checkoutBranch = (codebaseId: string, branch: string): string =>
+  JSON.stringify(['branch', codebaseId, branch]);
 
 /**
  * The checkout a launch locks, when admission can know it before execution starts: the
@@ -150,7 +153,7 @@ function launchCheckout(launch: PreparedWorkflowLaunch): string | undefined {
   if (isolation.kind === 'in-place') return checkoutPath(cwd);
   return isolation.branch === undefined
     ? undefined
-    : JSON.stringify(['branch', launch.run.codebase_id, isolation.branch]);
+    : checkoutBranch(launch.run.codebase_id, isolation.branch);
 }
 
 /**
@@ -175,6 +178,31 @@ export function heldCheckouts(
   return held;
 }
 
+export interface ReusableCheckout {
+  codebaseId: string;
+  branch: string;
+  workingPath: string;
+}
+
+/** Oldest-first foreign holders contribute physical paths and current reusable branch aliases. */
+export function foreignHeldCheckouts(
+  live: Iterable<{ id: string; working_path?: string | null; launch?: PreparedWorkflowLaunch }>,
+  reusable: readonly ReusableCheckout[]
+): Map<string, string> {
+  const held = new Map<string, string>();
+  for (const run of live) {
+    const keys = [
+      run.launch ? launchCheckout(run.launch) : undefined,
+      run.working_path ? checkoutPath(run.working_path) : undefined,
+      ...reusable
+        .filter(checkout => checkout.workingPath === run.working_path)
+        .map(checkout => checkoutBranch(checkout.codebaseId, checkout.branch)),
+    ];
+    for (const key of keys) if (key !== undefined && !held.has(key)) held.set(key, run.id);
+  }
+  return held;
+}
+
 /** A queued start request with what admission needs to decide it. */
 export interface QueuedStart {
   id: string;
@@ -195,15 +223,20 @@ export interface ResourceSlotOccupancy {
   queue: readonly QueuedStart[];
   /** `heldCheckouts` of the live runs admitted on the resource. */
   heldCheckouts: ReadonlyMap<string, string>;
+  foreignHeldCheckouts: ReadonlyMap<string, string>;
 }
 
 /** The run whose checkout `launch` would fail to lock. */
 function checkoutHolder(
-  held: ReadonlyMap<string, string>,
+  slot: Pick<ResourceSlotOccupancy, 'heldCheckouts' | 'foreignHeldCheckouts'>,
   launch: PreparedWorkflowLaunch
 ): string | undefined {
   const checkout = launchCheckout(launch);
-  return checkout === undefined ? undefined : held.get(checkout);
+  if (checkout === undefined) return undefined;
+  return (
+    slot.heldCheckouts.get(checkout) ??
+    (readAdmissionCheckoutGuard(launch) ? slot.foreignHeldCheckouts.get(checkout) : undefined)
+  );
 }
 
 /**
@@ -212,7 +245,7 @@ function checkoutHolder(
  * per checkout and the slot goes to the next request that can run.
  */
 function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
-  return slot.queue.filter(start => checkoutHolder(slot.heldCheckouts, start.launch) === undefined);
+  return slot.queue.filter(start => checkoutHolder(slot, start.launch) === undefined);
 }
 
 /** What keeps a new start request for `launch` from being admitted now. */
@@ -223,7 +256,7 @@ export function resourceStartBlocker(
   // An older request that could run keeps FIFO even when a slot is free.
   const older = runnableQueue(slot)[0];
   if (older) return { kind: 'request', id: older.id };
-  const holder = checkoutHolder(slot.heldCheckouts, launch);
+  const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };
   const first = slot.holders[0] ?? slot.waiters[0];
   return first && slot.holders.length + slot.waiters.length >= slot.capacity
@@ -242,7 +275,7 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
   const admitted: QueuedStart[] = [];
   for (const start of slot.queue) {
     if (admitted.length >= free) break;
-    if (checkoutHolder(held, start.launch) !== undefined) continue;
+    if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
     if (start.hostId !== hostId) break;
     admitted.push(start);
     const checkout = launchCheckout(start.launch);

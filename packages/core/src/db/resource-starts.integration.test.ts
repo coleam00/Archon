@@ -1,3 +1,5 @@
+import { create as createIsolationEnvironment } from './isolation-environments';
+import { toBranchName } from '@archon/git';
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -338,6 +340,127 @@ describe('durable resource starts', () => {
     });
   });
 
+  for (const version of [1, 2] as const) {
+    for (const guard of [undefined, false]) {
+      test(`stored v${version} guard ${String(guard)} survives reopen and foreign-holder drain`, async () => {
+        const store = createWorkflowStore();
+        const capacity = launch(crypto.randomUUID());
+        const queued = launch(crypto.randomUUID());
+        const rootPath = '/upgrade/checkout';
+        queued.execution.cwd = rootPath;
+        const input = (launch: PreparedWorkflowLaunch) => ({
+          resource: 'upgrade',
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue' as const,
+          launch,
+        });
+        queued.run.metadata = {
+          source: { anchor: 'captured' },
+          subrun_inputs: { name: 'value' },
+          ...(guard === undefined ? {} : { admission_checkout_guard: guard }),
+        };
+        await store.admitResourceStart(input(capacity));
+        expect(await store.admitResourceStart(input(queued))).toMatchObject({ status: 'queued' });
+        const { origin, ...run } = queued.run;
+        const stored =
+          version === 2
+            ? queued
+            : {
+                ...queued,
+                version: 1,
+                run: { ...run, conversation_id: origin?.conversationId, user_id: origin?.userId },
+              };
+        await getDatabase().query(
+          'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+          [JSON.stringify(stored), queued.run.id]
+        );
+        const manual = await store.createWorkflowRun({ ...queued.run, id: crypto.randomUUID() });
+        await store.claimPendingWorkflowRun(manual.id, rootPath);
+        await store.cancelWorkflowRun(capacity.run.id);
+        await closeDatabase();
+        resetDatabase();
+        const reopened = createWorkflowStore();
+        expect((await reopened.getResourceStartRequest(queued.run.id))?.launch).toEqual(queued);
+        const drain = () =>
+          reopened.drainResourceStarts({ resource: input(queued).resource, hostId: 'host' });
+        if (guard === undefined) {
+          expect(await drain()).toEqual([]);
+          expect(await reopened.getWorkflowRun(queued.run.id)).toBeNull();
+          await reopened.cancelWorkflowRun(manual.id);
+        }
+        expect(await drain()).toMatchObject([{ status: 'admitted', runId: queued.run.id }]);
+        expect(await reopened.getWorkflowRun(queued.run.id)).toMatchObject({
+          metadata: queued.run.metadata,
+          origin: queued.run.origin,
+        });
+      });
+    }
+  }
+
+  for (const late of [false, true]) {
+    test(`manual reusable-checkout holders block explicit branches, registration late=${String(late)}`, async () => {
+      const store = createWorkflowStore();
+      const codebaseId = CODEBASE_ID;
+      const workingPath = '/registered/checkout';
+      const makeLaunch = () => launch(crypto.randomUUID());
+      const register = () =>
+        createIsolationEnvironment({
+          codebase_id: codebaseId,
+          workflow_type: 'task',
+          workflow_id: 'reusable',
+          working_path: workingPath,
+          branch_name: toBranchName('different-git-branch'),
+        });
+      const input = (launch: PreparedWorkflowLaunch, capacity = late ? 1 : 4) => ({
+        resource: 'registered',
+        capacity,
+        hostId: 'host',
+        overlap: 'queue' as const,
+        launch,
+      });
+      const capacity = makeLaunch();
+      if (late) await store.admitResourceStart(input(capacity));
+      else await register();
+      const incoming = makeLaunch();
+      incoming.execution.isolation = { kind: 'worktree', branch: 'reusable' };
+      if (late)
+        expect(await store.admitResourceStart(input(incoming))).toMatchObject({ status: 'queued' });
+      const manual = await store.createWorkflowRun(makeLaunch().run);
+      await store.claimPendingWorkflowRun(manual.id, workingPath);
+      if (late) {
+        await register();
+        await store.cancelWorkflowRun(capacity.run.id);
+      } else {
+        expect(await store.admitResourceStart(input(incoming))).toMatchObject({
+          status: 'queued',
+          blocker: { kind: 'run', id: manual.id },
+        });
+        const skip = makeLaunch();
+        skip.execution.isolation = incoming.execution.isolation;
+        expect(await store.admitResourceStart({ ...input(skip), overlap: 'skip' })).toMatchObject({
+          status: 'skipped',
+          blocker: { kind: 'run', id: manual.id },
+        });
+        for (const isolation of [
+          { kind: 'worktree' as const },
+          { kind: 'worktree' as const, branch: 'different-git-branch' },
+        ]) {
+          const independent = makeLaunch();
+          independent.execution.isolation = isolation;
+          expect(await store.admitResourceStart(input(independent))).toMatchObject({
+            status: 'admitted',
+          });
+        }
+      }
+      const drain = () => store.drainResourceStarts({ resource: 'registered', hostId: 'host' });
+      expect(await drain()).toEqual([]);
+      expect(await store.getWorkflowRun(incoming.run.id)).toBeNull();
+      expect((await store.getWorkflowRun(manual.id))?.status).toBe('running');
+      await store.completeWorkflowRun(manual.id, { duration_ms: 1 });
+      expect(await drain()).toMatchObject([{ runId: incoming.run.id }]);
+    });
+  }
   test('preparation, request, run and holder roll back together when run insertion fails', async () => {
     const store = createWorkflowStore();
     const receiptId = crypto.randomUUID();

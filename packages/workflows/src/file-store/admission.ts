@@ -24,6 +24,8 @@ import {
   capacityWaiters,
   drainableStarts,
   heldCheckouts,
+  foreignHeldCheckouts,
+  type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
   type QueuedStart,
@@ -135,7 +137,10 @@ interface AdmissionTransaction {
 }
 
 // Used only inside commit: all holder reads and document changes share the run's lock.
-export function createAdmissionTransaction(root: string): AdmissionTransaction {
+export function createAdmissionTransaction(
+  root: string,
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => []
+): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
   const slots = new Map<string, Slot>();
   const receipts = new Map<string, z.infer<typeof receiptSchema>>();
@@ -182,11 +187,20 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
     const admittedRuns: (WorkflowRun & { launch: Request['launch'] })[] = [];
-    for (const run of await listRunSnapshots(root)) {
+    const foreign: (WorkflowRun & { launch?: Request['launch'] })[] = [];
+    const runs = (await listRunSnapshots(root)).sort(
+      (a, b) => a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
+    );
+    for (const run of runs) {
       if (isTerminalRunStatus(run.status)) continue;
       const admitted = await request(run.id);
       if (admitted?.status === 'admitted' && admitted.resource === resource)
         admittedRuns.push({ ...run, launch: admitted.launch });
+      else
+        foreign.push({
+          ...run,
+          launch: admitted?.status === 'admitted' ? admitted.launch : undefined,
+        });
     }
     const queue: QueuedStart[] = [];
     for (const id of row.queue) {
@@ -202,6 +216,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
       ),
       queue,
       heldCheckouts: heldCheckouts(admittedRuns),
+      foreignHeldCheckouts: foreignHeldCheckouts(foreign, await listReusableCheckouts()),
     };
   }
   async function admitExisting(
@@ -322,13 +337,16 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   };
 }
 
-export function createFileAdmissionStore(root: string): IResourceStartStore {
+export function createFileAdmissionStore(
+  root: string,
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+): IResourceStartStore {
   type Transaction = ReturnType<typeof createAdmissionTransaction>;
   const write = <T>(
     call: (tx: Transaction, runs: Map<string, WorkflowRun>) => Promise<T>
   ): Promise<T> =>
     commit(root, [], async runs => {
-      const tx = createAdmissionTransaction(root);
+      const tx = createAdmissionTransaction(root, listReusableCheckouts);
       const result = await call(tx, runs);
       return {
         result,
@@ -340,7 +358,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
     });
   async function query<T>(call: (tx: Transaction) => Promise<T>): Promise<T> {
     await recoverBeforeRead(root);
-    return call(createAdmissionTransaction(root));
+    return call(createAdmissionTransaction(root, listReusableCheckouts));
   }
   async function list<S extends z.ZodType>(kind: string, schema: S): Promise<z.output<S>[]> {
     let names: string[];

@@ -154,7 +154,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           metadata: {},
         },
         execution: {
-          cwd: '/conformance',
+          cwd: `/conformance/${id}`,
           conversationId: id,
           isolation: { kind: 'in-place' as const },
         },
