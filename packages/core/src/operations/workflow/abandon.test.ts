@@ -508,6 +508,7 @@ describe('abandonWorkflow', () => {
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', {
       cancel_reason: 'operator',
       reason: 'Owner cleanup warning',
+      warnings: ['Owner cleanup warning'],
     });
   });
 
@@ -1024,9 +1025,121 @@ describe('abandon owned worktrees', () => {
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', {
           cancel_reason: 'operator',
           reason: 'Output is still held; inspect checkout',
+          warnings: ownerWarnings,
         });
+      if (mode === 'root') {
+        const details = mockCancelWorkflowRun.mock.calls[0]?.[1];
+        expect(
+          toRunEvent({
+            id: 'fresh-cancel',
+            workflow_run_id: 'run-1',
+            event_type: 'workflow_cancelled',
+            step_index: null,
+            step_name: null,
+            created_at: '2026-10-21T00:00:00Z',
+            data: { ...details },
+          })
+        ).toMatchObject({ kind: 'text', content: expect.stringContaining(ownerWarnings[0]) });
+      }
     }
   );
+
+  test.each(['fresh', 'retry'] as const)(
+    'checks a separately resumed child owner before releasing its descendants on %s abandon',
+    async mode => {
+      const root = owned('run-1', { status: mode === 'retry' ? 'cancelled' : 'paused' });
+      const child = owned('child', { status: mode === 'retry' ? 'cancelled' : 'running' });
+      child.metadata.execution_owner = { host: hostname(), pid: 5252, uid: process.getuid?.() };
+      const sibling = owned('sibling', { status: mode === 'retry' ? 'cancelled' : 'running' });
+      const grandchild = owned('grandchild', {
+        status: mode === 'retry' ? 'cancelled' : 'running',
+        metadata: {
+          ...owned('grandchild').metadata,
+          execution_owner: child.metadata.execution_owner,
+        },
+      });
+      mockGetWorkflowRun.mockResolvedValue(root);
+      mockFindChildRuns.mockImplementation(async id =>
+        id === root.id ? [child, sibling] : id === child.id ? [grandchild] : []
+      );
+      mockRequestDetachedRunStop.mockImplementation(async id => {
+        if (id !== child.id)
+          throw new DetachedRunOwnerUnavailableError(id, 'ENOENT', 'unreachable');
+        return {
+          pid: 5252,
+          stop: async () => ({ warnings: ['Held output from child owner'] }),
+          release: () => undefined,
+        };
+      });
+
+      const result = await operations.abandonWorkflow(root.id, operator);
+
+      expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(['sibling']);
+      expect(result.cleanupWarnings).toContain('Held output from child owner');
+      expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+        workflow_run_id: grandchild.id,
+        event_type: 'workflow_cleanup_warning',
+        data: { warnings: ['Held output from child owner'] },
+      });
+    }
+  );
+
+  test.each(['retry', 'descendant'] as const)(
+    '%s abandon returns a warning when its cleanup event cannot be written',
+    async mode => {
+      mockGetWorkflowRun.mockResolvedValue(
+        owned('run-1', {
+          status: mode === 'retry' ? 'cancelled' : 'paused',
+        })
+      );
+      if (mode === 'descendant') {
+        mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [owned('child')] : []));
+        mockRequestDetachedRunStop.mockRejectedValueOnce(
+          new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+        );
+      }
+      mockRequestDetachedRunStop.mockResolvedValue({
+        pid: 4242,
+        stop: async () => ({ warnings: ['Held output'] }),
+        release: () => undefined,
+      });
+      mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('event storage unavailable'));
+
+      const result = await operations.abandonWorkflow('run-1', operator);
+
+      expect(result.cleanupWarnings?.join(' ')).toContain('event storage unavailable');
+      expect(result.cleanupWarnings).toContain('Held output');
+      expect(reclaim).not.toHaveBeenCalled();
+    }
+  );
+
+  test('reset continues independent cleanup when a warning event cannot be written', async () => {
+    const foreign = owned('foreign');
+    foreign.metadata.execution_owner = { host: 'foreign-host', pid: 4242 };
+    const local = owned('local', {
+      metadata: {
+        ...owned('local').metadata,
+        isolation: 'container',
+        isolation_env_id: 'local-container',
+      },
+    });
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([foreign, local]);
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('event storage unavailable'));
+    mockLogger.warn.mockClear();
+    mockReclaimContainerEnv.mockClear();
+
+    const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
+
+    expect(result.abandoned).toBe(2);
+    expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(['local']);
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('local-container', isolationStore);
+    expect(result.cleanupWarnings?.join(' ')).toContain('event storage unavailable');
+    expect(result.cleanupWarnings?.join(' ')).toContain('foreign');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'foreign', err: expect.any(Error) }),
+      'operations.workflow_cleanup_warning_persist_failed'
+    );
+  });
 
   test.each(['root-first', 'child-first'] as const)(
     'reset retains every checkout sharing a warned owner, %s',

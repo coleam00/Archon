@@ -641,6 +641,7 @@ export const FAN_OUT_CANCEL_REASONS = [
 export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 
 export interface WorkflowCancellationEventDetails {
+  warnings?: string[];
   step_name?: string;
   reason?: string;
   /** Categorical cause, reported to telemetry; `reason` is free text and never is. */

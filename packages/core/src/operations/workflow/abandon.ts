@@ -107,12 +107,12 @@ async function recordAbandonment(
   // A cancelled run reaches here only with creation proof: the retry finishes a
   // worktree release that an earlier abandonment reported as failed.
   if (run.status === 'cancelled') {
-    await persistCleanupWarnings(ctx, run, stopWarnings);
+    const persistenceWarnings = await persistCleanupWarnings(ctx, run, stopWarnings);
     const tree = await collectAbandonmentTree(ctx, run);
     return {
       run,
       cancelled: false,
-      cleanupWarnings: stopWarnings,
+      cleanupWarnings: [...stopWarnings, ...persistenceWarnings],
       cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
       cascadeFailures: tree.failures,
       blockedParentRunId: null,
@@ -140,7 +140,13 @@ async function releaseAbandonedWorktrees(
   const releasedWorktrees: ReleasedWorktree[] = [];
   const released = new Set<string>();
   let unsafeDescendant = false;
-  for (const row of [...result.cancelledRuns].reverse().concat(run)) {
+  const ownerChecks = await checkBatchWorktreeOwners(
+    ctx,
+    [run, ...result.cancelledRuns],
+    run,
+    owner
+  );
+  for (const { run: row, ...ownerCheck } of ownerChecks.reverse()) {
     const proof = readOwnedWorktree(row.metadata);
     if (proof && released.has(proof.envId)) continue;
     if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
@@ -149,8 +155,7 @@ async function releaseAbandonedWorktrees(
       );
       continue;
     }
-    const ownerCheck = await checkWorktreeOwner(ctx, row, run, owner);
-    await persistCleanupWarnings(ctx, row, ownerCheck.warnings);
+    warnings.push(...(await persistCleanupWarnings(ctx, row, ownerCheck.warnings)));
     warnings.push(...ownerCheck.warnings);
     if (!ownerCheck.safe) {
       unsafeDescendant = true;
@@ -235,13 +240,21 @@ async function persistCleanupWarnings(
   ctx: OperationContext,
   run: WorkflowRun,
   warnings: string[]
-): Promise<void> {
-  if (warnings.length)
+): Promise<string[]> {
+  if (!warnings.length) return [];
+  try {
     await ctx.store.persistWorkflowEvent({
       workflow_run_id: run.id,
       event_type: 'workflow_cleanup_warning',
       data: { warnings },
     });
+    return [];
+  } catch (err) {
+    getLog().warn({ err, runId: run.id }, 'operations.workflow_cleanup_warning_persist_failed');
+    return [
+      `Could not persist cleanup warnings for run ${run.id}: ${(err as Error).message}. The run remains cancelled.`,
+    ];
+  }
 }
 
 /** Why abandon cannot account for `row`'s execution owner from here, or undefined when it can. */
@@ -316,7 +329,7 @@ export async function abandonResumableRunsForConversation(
   const releasedWorktrees: ReleasedWorktree[] = [];
   const ownerChecks = await checkBatchWorktreeOwners(ctx, runs);
   for (const { run, ...ownerCheck } of ownerChecks) {
-    await persistCleanupWarnings(ctx, run, ownerCheck.warnings);
+    cleanupWarnings.push(...(await persistCleanupWarnings(ctx, run, ownerCheck.warnings)));
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
     cleanupWarnings.push(...ownerCheck.warnings);
     if (ownerCheck.safe) {
@@ -341,7 +354,12 @@ export async function abandonResumableRunsForConversation(
   };
 }
 
-async function checkBatchWorktreeOwners(ctx: OperationContext, runs: WorkflowRun[]) {
+async function checkBatchWorktreeOwners(
+  ctx: OperationContext,
+  runs: WorkflowRun[],
+  root?: WorkflowRun,
+  rootOutcome?: AbandonOwnerOutcome
+) {
   const ownerChecks: {
     run: WorkflowRun;
     owner: ExecutionOwnerRecord | undefined;
@@ -352,7 +370,7 @@ async function checkBatchWorktreeOwners(ctx: OperationContext, runs: WorkflowRun
     ownerChecks.push({
       run,
       owner,
-      check: await checkWorktreeOwner(ctx, run),
+      check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
   }
   return ownerChecks.map(({ run, owner, check }) => {

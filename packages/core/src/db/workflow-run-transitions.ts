@@ -410,6 +410,7 @@ export async function cancelWorkflowRun(
           step_name: event?.step_name,
           data: {
             ...(event?.reason === undefined ? {} : { reason: event.reason }),
+            ...(event?.warnings === undefined ? {} : { warnings: event.warnings }),
             ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
           },
         });

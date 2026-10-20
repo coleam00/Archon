@@ -374,7 +374,7 @@ export function cancelByOperator(
 ): Promise<{ cancelled: boolean }> {
   return ctx.store.cancelWorkflowRun(runId, {
     cancel_reason: 'operator',
-    ...(warnings.length ? { reason: warnings.join('\n') } : {}),
+    ...(warnings.length ? { reason: warnings.join('\n'), warnings } : {}),
   });
 }
 

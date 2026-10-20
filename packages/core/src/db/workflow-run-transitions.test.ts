@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { toRunEvent } from '../../../web/src/experiments/console/primitives/event';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
@@ -506,6 +507,33 @@ describe('workflow run transitions', () => {
         reason: 'operator requested',
         terminal_record: expect.any(Object),
       });
+    });
+
+    test('cancellation warnings reach the visible timeline without truncation', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockTerminalSnapshot('cancelled');
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const warnings = [`${'Held output. '.repeat(30)}Use lsof on the checkout.`];
+      await cancelWorkflowRun('workflow-run-123', {
+        cancel_reason: 'operator',
+        reason: warnings.join('\n'),
+        warnings,
+      });
+      const params = mockQuery.mock.calls[3]?.[1];
+      if (!Array.isArray(params)) throw new Error('Missing cancellation event');
+      const data: Record<string, unknown> = JSON.parse(String(params[5]));
+      expect(data.reason).toBe(warnings[0]);
+      expect(
+        toRunEvent({
+          id: 'cancel-event',
+          workflow_run_id: 'workflow-run-123',
+          event_type: String(params[2]),
+          step_index: null,
+          step_name: null,
+          created_at: '2026-10-21T00:00:00Z',
+          data,
+        })
+      ).toMatchObject({ kind: 'text', content: `⚠️ Workflow cleanup warnings:\n- ${warnings[0]}` });
     });
 
     test('reports { cancelled: false } when the run is already terminal (no throw)', async () => {

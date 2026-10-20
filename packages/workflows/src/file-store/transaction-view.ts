@@ -682,6 +682,7 @@ export function createTransactionView(
           data: {
             cancel_reason: 'approval_rejected',
             ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+            ...(cancellation.warnings === undefined ? {} : { warnings: cancellation.warnings }),
           },
         },
         gateEvents.map(event => ({ ...event, workflow_run_id: id }))
@@ -715,14 +716,12 @@ export function createTransactionView(
       if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = details ?? {};
       await terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
-        step_name: details?.step_name,
-        data: {
-          ...(details?.reason === undefined ? {} : { reason: details.reason }),
-          ...(details?.cancel_reason === undefined ? {} : { cancel_reason: details.cancel_reason }),
-        },
+        step_name,
+        data,
       });
       return { cancelled: true };
     },

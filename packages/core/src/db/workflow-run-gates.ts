@@ -193,6 +193,7 @@ export async function resolveAndCancelApprovalGate(
           data: {
             cancel_reason: 'approval_rejected',
             ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+            ...(cancellation.warnings === undefined ? {} : { warnings: cancellation.warnings }),
           },
         });
       }

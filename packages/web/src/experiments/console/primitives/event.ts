@@ -160,11 +160,14 @@ const NODE_TRANSITION_BY_EVENT = new Map<string, NodeTransitionEvent['transition
   ['node_skipped_prior_success', 'skipped'],
 ]);
 
-/**
- * Best-effort normalizer from a raw workflow_events row to a typed RunEvent.
- * Unknown event types fall through as text events with the raw payload —
- * the spike surfaces them rather than silently dropping.
- */
+function isCleanupWarning(eventType: string, warnings: unknown): boolean {
+  return (
+    eventType === 'workflow_cleanup_warning' ||
+    (eventType === 'workflow_cancelled' && warnings !== undefined)
+  );
+}
+
+/** Normalize stored events; unknown payloads remain available behind the System toggle. */
 export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   const base = {
     id: raw.id,
@@ -357,7 +360,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  if (et === 'workflow_cleanup_warning') {
+  if (isCleanupWarning(et, data.warnings)) {
     if (
       !Array.isArray(data.warnings) ||
       data.warnings.length === 0 ||
@@ -366,8 +369,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       return {
         ...base,
         kind: 'text',
-        content:
-          'Invalid workflow_cleanup_warning payload: expected a nonempty string array in warnings. Inspect the stored run event before removing its checkout.',
+        content: `Invalid ${et} payload: expected a nonempty string array in warnings. Inspect the stored run event before removing its checkout.`,
       };
     }
     return {
