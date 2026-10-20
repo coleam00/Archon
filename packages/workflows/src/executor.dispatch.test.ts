@@ -12,13 +12,14 @@ import {
   mockExecuteDagWorkflow,
   mockGetDefaultBranch,
   repoCodebase,
+  recordedEvents,
   resetExecutorMocks,
   resumeOf,
   sentMessages,
   startWorkflow,
 } from './executor/test-utils';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { chmod, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'path';
@@ -29,6 +30,8 @@ import {
   readRunDispatchMetadata,
   workflowDefinitionSchema,
 } from './schemas';
+import * as sourceLoader from './workflow-source/load';
+import { WorkflowSourceUnavailableError } from './workflow-source';
 import { keepAwake } from './utils/keep-awake';
 
 /** What a run resolves before it starts: refusals, the container guard, $BASE_BRANCH and $DOCS_DIR. */
@@ -39,6 +42,26 @@ const parsedWorkflow = (definition: object) =>
   resolveWorkflow(workflowDefinitionSchema.parse(definition));
 
 describe('refusals before any side effect', () => {
+  it.each([{}, { preCreatedRun: makeRun({ status: 'pending' }) }, resumeOf(makeRun())])(
+    'rejects a container execution without a backend before admission: %j',
+    async options => {
+      const store = makeStore();
+      await expect(
+        startWorkflow({
+          store,
+          options: {
+            ...options,
+            execContext: { kind: 'container', containerId: 'cid' },
+          },
+        })
+      ).rejects.toThrow('Container execution requires a container backend context');
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+      expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+      expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a structurally valid but semantically invalid outcome declaration', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
@@ -90,7 +113,11 @@ describe('refusals before any side effect', () => {
           description: 'unsupported durable wait in container isolation',
           nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
         }),
-        options: { ...options, execContext: { kind: 'container', containerId: 'cid' } },
+        options: {
+          ...options,
+          execContext: { kind: 'container', containerId: 'cid' },
+          container: { envId: 'env', writeBack: 'approve', backend: containerBackend() },
+        },
       })
     ).rejects.toThrow('durable wait, which is not supported in container isolation');
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
@@ -123,6 +150,83 @@ describe('container resume guard', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  describe.each([undefined, { kind: 'host' }] as const)(
+    'container backend with execution context %j',
+    execContext => {
+      it.each(['fresh', 'pending', 'resumed'] as const)(
+        'rejects a %s dispatch before admission or source release',
+        async phase => {
+          const store = makeStore();
+          const run = containerRun('inconsistent', {
+            status: phase === 'pending' ? 'pending' : 'running',
+          });
+          await expect(
+            startWorkflow({
+              store,
+              options: {
+                ...(phase === 'resumed'
+                  ? resumeOf(run)
+                  : phase === 'pending'
+                    ? { preCreatedRun: run }
+                    : {}),
+                container: inContainer().container,
+                execContext,
+              },
+            })
+          ).rejects.toThrow('Container backend requires a container execution context');
+          expect(store.createWorkflowRun).not.toHaveBeenCalled();
+          expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+          expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+          expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        }
+      );
+    }
+  );
+
+  it.each([
+    { isolation: 'container', isolation_env_id: 'different-env' },
+    { isolation: 'container' },
+    { isolation: 'container', isolation_env_id: '' },
+    { isolation: 'container', isolation_env_id: 42 },
+    { isolation: 'host', isolation_env_id: 'env-x' },
+    {},
+  ])(
+    'rejects resumed container identity inconsistent with %j before source access',
+    async metadata => {
+      const store = makeStore();
+      const container = {
+        envId: 'env-x',
+        writeBack: 'approve' as const,
+        backend: containerBackend(),
+      };
+      const source = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
+        new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+      );
+      try {
+        await expect(
+          startWorkflow({
+            store,
+            options: {
+              ...resumeOf(makeRun({ metadata })),
+              ...inContainer(),
+              container,
+            },
+          })
+        ).rejects.toThrow('Execution context does not match the recorded run isolation');
+        expect(source).not.toHaveBeenCalled();
+        expect(store.updateWorkflowRun).not.toHaveBeenCalled();
+        expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+        expect(container.backend.prepareSuspend).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      } finally {
+        source.mockRestore();
+      }
+    }
+  );
+
   it('proceeds when the container context is provided', async () => {
     const result = await startWorkflow({
       cwd: '/tmp/ops',
@@ -136,6 +240,67 @@ describe('container resume guard', () => {
     expect(dagCall()?.priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.5 });
     expect(result.success).toBe(true);
   });
+
+  it.each([true, false])(
+    'unreadable source with matching container=%s preserves its retryable pause',
+    async matches => {
+      const fault = spyOn(sourceLoader, 'resolveRunSourceCapture').mockRejectedValue(
+        new WorkflowSourceUnavailableError('/capture', new Error('read denied'))
+      );
+      const stop = mock(async () => undefined);
+      const backend = {
+        ...containerBackend(),
+        prepareSuspend: mock(async (_envId: string, containerId: string) => {
+          if (containerId !== (matches ? 'cid' : 'other-container')) {
+            throw new Error('Environment does not own execution container');
+          }
+          return stop;
+        }),
+      };
+      const release = mock<import('./store').IWorkflowStore['releaseRunForUnreadableSource']>(
+        async (_id, _release, beforePublish) => {
+          await beforePublish?.();
+          return { released: true };
+        }
+      );
+      const store = makeStore({ releaseRunForUnreadableSource: release });
+      try {
+        const result = await startWorkflow({
+          store,
+          cwd: '/tmp/ops',
+          options: {
+            ...resumeOf(
+              containerRun('source-pause', {
+                metadata: {
+                  workflow_source: {
+                    version: 1,
+                    root: '/capture',
+                    origin: '/source',
+                    captured_at: new Date().toISOString(),
+                    digest: 'unread',
+                    file_count: 0,
+                    byte_count: 0,
+                  },
+                },
+              })
+            ),
+            ...inContainer(),
+            container: { envId: 'env-x', writeBack: 'approve', backend },
+          },
+        });
+        expect(result).toMatchObject({ success: true, paused: true });
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env-x', 'cid', 2_000);
+        expect(stop).toHaveBeenCalledTimes(matches ? 1 : 0);
+        expect(recordedEvents(store, 'container_stopped')).toHaveLength(matches ? 1 : 0);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        fault.mockRestore();
+      }
+    }
+  );
 
   describe.each([
     ['no adoption', undefined],

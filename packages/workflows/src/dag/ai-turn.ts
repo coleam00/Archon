@@ -41,20 +41,29 @@ export function structuredOutputPass(
   return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
 }
 
+export type TurnCutOff =
+  | { kind: 'operator' }
+  | { kind: 'idle_timeout'; timeoutMs: number; lastReset: WatchdogReset | undefined };
+
+export function cutOffClause(): string {
+  return 'was ended by the operator after its tool call or reported work stalled';
+}
+
 /**
  * Why a turn that produced output is not finished: its provider never sent `settled`.
- * An idle timeout says how long the stream was silent; otherwise the stream simply ended.
+ * A cut-off says what ended the stream; otherwise the stream simply ended.
  * The caller names the node or iteration in front of it.
  */
 export function unsettledTurnError(
-  idleTimeoutMs: number | undefined,
-  lastWatchdogReset: WatchdogReset | undefined,
+  cutOff: TurnCutOff | undefined,
   liveTaskIds: readonly string[]
 ): string {
   const cause =
-    idleTimeoutMs !== undefined
-      ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
-      : 'the provider stream ended without signalling that its turn settled.';
+    cutOff?.kind === 'idle_timeout'
+      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
+      : cutOff !== undefined
+        ? `${cutOffClause()}, before the provider signalled that its turn settled.`
+        : 'the provider stream ended without signalling that its turn settled.';
   const tasks =
     liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';
   return `${cause}${tasks} Its work may be incomplete.`;

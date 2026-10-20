@@ -31,6 +31,7 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { matchesDetachedLaunch } from '../utils/detached-run-control';
 import { loadWorkflows } from './workflow-list';
 import { resolveLaunchRunConfig } from './workflow-run-config';
 import type { WorkflowRunOptions } from './workflow-shared';
@@ -59,6 +60,7 @@ export interface OwnedRunRequest {
   readonly userMessage: string;
   readonly options: WorkflowRunOptions;
   readonly detachedProcessOwner: boolean;
+  readonly launchToken?: string;
   readonly notifyResumeAccepted?: (runId: string) => void;
 }
 
@@ -241,31 +243,6 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
   return { continuationRun, resumeLookupError, continuation };
 }
 
-/**
- * The row a detached parent created before forking (#2872). Loaded up front because
- * it decides the run's identity: the capture is filed under its id, the signal
- * handlers own it, and `executeWorkflow` executes it instead of creating a second
- * row.
- *
- * The flag names a run row this process will execute AS, so three things are checked.
- * Be precise about which one carries the weight, because it is not the first.
- *
- * The owner marker plus `claimDetachedRunProcessOwner` (called by `workflowRunCommand`
- * before it reaches this function) raise the bar, they do not prove provenance: a plain
- * scripted process is not its own process-group leader,
- * so cron, CI, and wrapper scripts are blocked — but a foreground command under a real
- * pseudo-tty IS one by default, so a person setting the env var at their own terminal
- * satisfies it. Treat it as a barrier to automated misuse, not as proof that an Archon
- * parent launched this process.
- *
- * The catastrophic outcomes are closed by the other two, which hold no matter how the
- * first is satisfied. `status === 'pending'` is what stops a stale or mistyped id from
- * loading a TERMINAL row, whose DAG the executor would re-run, appending events onto
- * closed evidence. The `workflow_name` match (`assertDetachedRowWorkflow`, once the
- * workflow resolves) is what stops one launch's row being executed as another workflow.
- * Neither is redundant with the process-group check, and removing either reopens its own
- * outcome.
- */
 async function claimDetachedRunRow(request: OwnedRunRequest): Promise<WorkflowRun | undefined> {
   const { host, options } = request;
   if (options.detachedRunId === undefined) return undefined;
@@ -281,6 +258,9 @@ async function claimDetachedRunRow(request: OwnedRunRequest): Promise<WorkflowRu
       `Detached workflow child cannot find the run '${options.detachedRunId}' its launcher created.`
     );
   }
+  if (!matchesDetachedLaunch(row.metadata, request.launchToken)) {
+    throw new Error(`Cannot execute run '${row.id}': detached launch identity does not match.`);
+  }
   if (row.status !== 'pending') {
     throw new Error(
       `Cannot execute run '${row.id}': it is ${row.status}, ` +
@@ -293,9 +273,8 @@ async function claimDetachedRunRow(request: OwnedRunRequest): Promise<WorkflowRu
 /**
  * Second half of the handed-over row's claim check (#2872): the row must belong to the
  * workflow being invoked. Checked after discovery because the row carries the RESOLVED
- * name its launcher selected. It catches an id crossed between two concurrent detached
- * launches, and the narrow window where the child's re-capture resolves a different
- * workflow than the parent did.
+ * name its launcher selected. The child's re-capture may resolve a different workflow
+ * than the parent did.
  */
 function assertDetachedRowWorkflow(row: WorkflowRun | undefined, workflow: ResolvedWorkflow): void {
   if (row && row.workflow_name !== workflow.name) {

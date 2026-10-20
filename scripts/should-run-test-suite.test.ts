@@ -87,7 +87,7 @@ describe('test-suite change decision', () => {
 
   test.each([
     'packages/docs-web/src/content/docs/reference/database.md',
-    'packages/docs-web/src/content/docs/guides/attention-queue.md',
+    'packages/docs-web/src/content/docs/getting-started/operate.md',
     'packages/docs-web/src/content/docs/deployment/docker.md',
     '.archon/architecture.md',
     'packages/providers/src/codex/protocol/README.md',

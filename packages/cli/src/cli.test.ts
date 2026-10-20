@@ -582,6 +582,25 @@ describe('workflow answer flag rejection and command discovery', () => {
     expect(result.status).toBe(1);
   });
 
+  it('routes end-turn to its run lookup', () => {
+    const result = invoke(['end-turn', 'missing-run', '--json']);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      action: 'end_turn',
+      error: 'not_found',
+    });
+  });
+
+  it('requires a run ID for end-turn', () => {
+    const result = invoke(['end-turn', '--json']);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: 'Usage: archon workflow end-turn <run-id>',
+    });
+  });
+
   it('advertises every workflow dispatch route and no others', () => {
     const result = invoke(['unknown-command']);
     expect(result.status).toBe(1);

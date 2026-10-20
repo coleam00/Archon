@@ -10,9 +10,10 @@
 
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
-import type { ContainerRunContext } from './container-context';
+import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
@@ -422,13 +423,20 @@ export async function executeDagWorkflow(
       { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
       'dag.run_released_source_unreadable'
     );
-    const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-      claimId: executionClaim(workflowRun.metadata),
-      nodeId: error.nodeId,
-      ...(error.path !== undefined ? { path: error.path } : {}),
-      error: error.message,
-      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-    });
+    const { released } = await releaseUnreadableRunSource(
+      deps,
+      platform,
+      conversationId,
+      workflowRun.id,
+      {
+        claimId: executionClaim(workflowRun.metadata),
+        nodeId: error.nodeId,
+        ...(error.path !== undefined ? { path: error.path } : {}),
+        error: error.message,
+        retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+      },
+      resolveRunExecutionMode(execContext, containerCtx, workflowRun.metadata)
+    );
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
       return false;
@@ -500,8 +508,12 @@ export async function executeDagWorkflow(
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
-  const sourceReleased =
-    sourceUnreadable !== undefined && (await releaseRunForUnreadableSource(sourceUnreadable));
+  if (sourceUnreadable !== undefined) {
+    return {
+      kind: 'source_release',
+      released: await releaseRunForUnreadableSource(sourceUnreadable),
+    };
+  }
 
   // Container pause economics (Phase C): if a node paused the run (approval /
   // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
@@ -511,31 +523,19 @@ export async function executeDagWorkflow(
   // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
   // suspended. Only 'paused' triggers this.
   if (execContext.kind === 'container' && containerCtx) {
-    try {
-      const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-      if (pausedStatus === 'paused') {
-        await suspendContainerForPause(
-          deps,
-          platform,
-          conversationId,
-          containerCtx,
-          execContext,
-          workflowRun.id
-        );
-        return sourceUnreadable !== undefined
-          ? { kind: 'source_release', released: sourceReleased }
-          : undefined;
-      }
-    } catch (error) {
-      if (sourceUnreadable === undefined) throw error;
-      getLog().error(
-        { err: error, workflowRunId: workflowRun.id },
-        'dag.source_release_container_cleanup_failed'
+    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (pausedStatus === 'paused') {
+      await suspendContainerForPause(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        workflowRun.id
       );
+      return;
     }
   }
-
-  if (sourceUnreadable !== undefined) return { kind: 'source_release', released: sourceReleased };
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
 }

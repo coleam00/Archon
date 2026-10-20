@@ -254,6 +254,15 @@ export async function runWorkflowAbandon(route: WorkflowRoute): Promise<number> 
   );
 }
 
+export async function runWorkflowEndTurn(route: WorkflowRoute): Promise<number> {
+  const endTurnRunId = route.positionals[2];
+  if (!endTurnRunId) {
+    return await fail(route.json, 'Usage: archon workflow end-turn <run-id>');
+  }
+  const { workflowEndTurnCommand } = await import('../commands/workflow-end-turn');
+  return await workflowEndTurnCommand(route.host, endTurnRunId, route.json, route.effectiveCwd);
+}
+
 export async function runWorkflowCancel(route: WorkflowRoute): Promise<number> {
   const cancelRunId = route.positionals[2];
   if (!cancelRunId) {
@@ -496,6 +505,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+    `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
   );
 }

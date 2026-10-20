@@ -235,7 +235,8 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async () => {
+      async (_id, _release, beforePublish) => {
+        await beforePublish?.();
         getWorkflowRunStatus.mockImplementation(async () => 'paused');
         return { released: true };
       }
@@ -307,6 +308,9 @@ export function createMockStore(): MockWorkflowStore {
     resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
       mockWorkflowRun()
+    ),
+    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
+      async () => true
     ),
     updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
       async (_id, _updates) => undefined

@@ -31,6 +31,8 @@ import {
   capturedSourceRoots,
   type WorkflowSourceRoots,
 } from '../../../workflow-source';
+import * as sourceLoader from '../../../workflow-source/load';
+import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { CONTAINER_MARKER_PROBE } from '../../../checkout-observation';
 
 describe('executeDagWorkflow -- script node injection hardening (#2115)', () => {
@@ -549,6 +551,112 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
+
+  const recordedContainer = { isolation: 'container', isolation_env_id: 'env' };
+  const contextRequired = 'Container backend requires a container execution context';
+  const backendRequired = 'Container execution requires a container backend context';
+  const identityMismatch = 'Execution context does not match the recorded run isolation';
+  it.each([
+    [true, true, 'container', recordedContainer, undefined],
+    [false, true, 'container', recordedContainer, undefined],
+    [true, false, 'container', recordedContainer, undefined],
+    [true, true, 'host', recordedContainer, contextRequired],
+    [true, true, 'no-backend', recordedContainer, backendRequired],
+    [
+      true,
+      true,
+      'container',
+      { ...recordedContainer, isolation_env_id: 'other-env' },
+      identityMismatch,
+    ],
+  ] as const)(
+    'container source release won=%s matching container=%s execution=%s metadata=%j',
+    async (released, matches, execution, metadata, expectedError) => {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const marker = join(testDir, 'never-ran');
+      const scripts = join(testDir, '.archon', 'scripts');
+      await mkdir(scripts, { recursive: true });
+      await writeFile(
+        join(scripts, 'check.ts'),
+        `await Bun.write(${JSON.stringify(marker)}, 'ran')`
+      );
+      const capture = await captureWorkflowSource({
+        sourceRoot: testDir,
+        captureRoot: join(testDir, 'capture'),
+      });
+      const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockRejectedValue(
+        new WorkflowSourceUnavailableError(join(testDir, 'capture'), new Error('read denied'))
+      );
+      const stop = mock(async () => undefined);
+      const backend = {
+        prepareSuspend: mock(async (_envId: string, containerId: string) => {
+          if (containerId !== (matches ? 'cid' : 'other-container')) {
+            throw new Error('Environment does not own execution container');
+          }
+          return stop;
+        }),
+        suspend: mock(async () => undefined),
+        finalize: mock(async () => ({ requiresApproval: false })),
+        applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
+        discardChanges: mock(async () => undefined),
+      };
+      mockDeps.store.releaseRunForUnreadableSource.mockImplementation(
+        async (_id, _release, beforePublish) => {
+          if (released) await beforePublish?.();
+          // Even another owner's paused status must not trigger generic suspension.
+          mockDeps.store.getWorkflowRunStatus.mockResolvedValue('paused');
+          return { released };
+        }
+      );
+      try {
+        const executing = executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform,
+            cwd: testDir,
+            workflow: {
+              name: 'unreadable-container',
+              nodes: [{ id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }],
+            },
+            workflowRun: makeWorkflowRun('unreadable-container', {
+              metadata,
+            }),
+            workflowSourceRoots: capturedSourceRoots(capture.anchor),
+            execContext:
+              execution === 'host' ? { kind: 'host' } : { kind: 'container', containerId: 'cid' },
+            containerCtx:
+              execution === 'no-backend'
+                ? undefined
+                : { envId: 'env', writeBack: 'approve', backend },
+          })
+        );
+        if (expectedError) {
+          await expect(executing).rejects.toThrow(expectedError);
+          expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(backend.prepareSuspend).not.toHaveBeenCalled();
+          expect(stop).not.toHaveBeenCalled();
+          expect(backend.suspend).not.toHaveBeenCalled();
+          expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
+          return;
+        }
+        expect(await executing).toEqual({ kind: 'source_release', released });
+        expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 'cid', 2_000);
+        expect(stop).toHaveBeenCalledTimes(released && matches ? 1 : 0);
+        const events = persistedEvents(mockDeps.store);
+        expect(events.some(event => event.event_type === 'container_stopped')).toBe(
+          released && matches
+        );
+        expect(backend.suspend).not.toHaveBeenCalled();
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
+        await expect(readFile(marker)).rejects.toThrow();
+      } finally {
+        fault.mockRestore();
+      }
+    }
+  );
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a source this host cannot read (#4209)',

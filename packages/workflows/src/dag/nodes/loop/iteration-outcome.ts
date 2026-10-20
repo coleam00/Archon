@@ -1,9 +1,8 @@
-import { formatWatchdogResetDiagnostic, unsettledTurnError } from '../../ai-turn';
+import { formatWatchdogResetDiagnostic, cutOffClause, unsettledTurnError } from '../../ai-turn';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { validateStructuredOutput } from '../../../structured-output';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
-import { STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { retryClassOf, getRetryDelayMs, effectiveRetryMaxRetries } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -144,11 +143,11 @@ export async function failedStream(
   attempt: StreamedAttempt,
   scope: { wantsStructured: boolean; iterationStart: number; retry: IterationRetry }
 ): Promise<AttemptVerdict | undefined> {
-  // Cancelled mid-stream (not idle timeout): stop the node before signal
+  // Cancelled mid-stream (not idle timeout or an end-turn request): stop the node before signal
   // detection / until_bash / the interactive gate run against a truncated
   // iteration — mirrors both the AI-node 'Cancelled by user' return and
   // this loop's own between-iteration stop path.
-  if (attempt.abort.signal.aborted && !attempt.idleTimedOut) {
+  if (attempt.abort.signal.aborted && !attempt.cutOff) {
     return failed(await stoppedDuringStream(run, state, i, attempt));
   }
   // A timed-out `output_format` iteration is exempt from both checks below: the
@@ -156,7 +155,7 @@ export async function failedStream(
   // attempt. That mirrors executeAgentNode, where the generic guards are unreachable
   // once `output_format` is set, and mirrors canReask's own idle-timeout exclusion — a
   // retry would spend another full idle_timeout window per attempt for the same answer.
-  if (scope.wantsStructured && attempt.idleTimedOut) return undefined;
+  if (scope.wantsStructured && attempt.cutOff?.kind === 'idle_timeout') return undefined;
   const failure =
     emptyOutputFailure(run, i, attempt, scope.iterationStart) ??
     unsettledFailure(run, i, attempt, scope.iterationStart);
@@ -208,15 +207,18 @@ function emptyOutputFailure(
   if (attempt.fullOutput.trim() !== '' || attempt.structured !== undefined) return undefined;
   const { node } = run;
   const iterationDuration = Date.now() - iterationStart;
-  const emptyError = attempt.idleTimedOut
-    ? `Loop node '${node.id}' iteration ${String(i)} timed out with no output (idle for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min).${formatWatchdogResetDiagnostic(attempt.lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
-    : 'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
+  const emptyError =
+    attempt.cutOff?.kind === 'operator'
+      ? `Loop node '${node.id}' iteration ${String(i)} ${cutOffClause()}, before producing output.`
+      : attempt.cutOff?.kind === 'idle_timeout'
+        ? `Loop node '${node.id}' iteration ${String(i)} timed out with no output (idle for ${String(attempt.cutOff.timeoutMs / 60000)} min).${formatWatchdogResetDiagnostic(attempt.cutOff.lastReset)} Consider increasing idle_timeout or reducing prompt size.`
+        : 'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
   getLog().error(
     { nodeId: node.id, iteration: i, durationMs: iterationDuration },
     'loop_node.iteration_empty_output'
   );
   recordIterationFailed(run, i, emptyError, iterationDuration);
-  return { failureKind: attempt.idleTimedOut ? 'timeout' : 'transient', error: emptyError };
+  return { failureKind: attempt.cutOff ? 'timeout' : 'transient', error: emptyError };
 }
 
 /**
@@ -232,13 +234,12 @@ function unsettledFailure(
   if (attempt.settled) return undefined;
   const { node } = run;
   const unsettledError = unsettledTurnError(
-    attempt.idleTimedOut ? (node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) : undefined,
-    attempt.lastWatchdogReset,
+    attempt.cutOff,
     attempt.providerEvents.liveSubtaskIds()
   );
   getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
   recordIterationFailed(run, i, unsettledError, Date.now() - iterationStart);
-  return { failureKind: attempt.idleTimedOut ? 'timeout' : 'unknown', error: unsettledError };
+  return { failureKind: attempt.cutOff ? 'timeout' : 'unknown', error: unsettledError };
 }
 
 type StructuredVerdict =
@@ -255,10 +256,9 @@ export async function gateStructuredAttempt(
   maxReasks: number
 ): Promise<StructuredVerdict> {
   const { ctx, node } = run;
-  // An idle timeout or a user abort is a genuine failure, not a validation
+  // An idle timeout, operator cutoff or user abort is a genuine failure, not a validation
   // miss — never spend a reask on it (mirrors the agent node's canReask).
-  const canReask =
-    reask.attempt < maxReasks && !attempt.idleTimedOut && !attempt.abort.signal.aborted;
+  const canReask = reask.attempt < maxReasks && !attempt.cutOff && !attempt.abort.signal.aborted;
 
   if (attempt.structured !== undefined) {
     return gateStructuredPayload(run, state, i, attempt.structured, {
@@ -281,11 +281,11 @@ export async function gateStructuredAttempt(
       ctx,
       node.id,
       state,
-      attempt.idleTimedOut
-        ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(attempt.lastWatchdogReset)}`
+      attempt.cutOff?.kind === 'idle_timeout'
+        ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(attempt.cutOff.lastReset)}`
         : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
       {
-        failureKind: attempt.idleTimedOut ? 'timeout' : 'output_contract',
+        failureKind: attempt.cutOff?.kind === 'idle_timeout' ? 'timeout' : 'output_contract',
         output: state.lastOutput,
         ...loopSpend(state),
         loopIterations: i,

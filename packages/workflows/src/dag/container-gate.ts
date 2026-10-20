@@ -83,8 +83,36 @@ export async function suspendContainerForPause(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   runId: string
 ): Promise<void> {
+  let outcome: ContainerSuspendOutcome;
   try {
     await containerCtx.backend.suspend(containerCtx.envId);
+    outcome = { stopped: true };
+  } catch (error) {
+    outcome = { stopped: false, error };
+  }
+  await reportContainerSuspension(
+    deps,
+    platform,
+    conversationId,
+    containerCtx,
+    execContext,
+    runId,
+    outcome
+  );
+}
+
+export type ContainerSuspendOutcome = { stopped: true } | { stopped: false; error: unknown };
+
+export async function reportContainerSuspension(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  containerCtx: ContainerRunContext,
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  runId: string,
+  outcome: ContainerSuspendOutcome
+): Promise<void> {
+  if (outcome.stopped) {
     emitContainerLifecycleEvent(
       deps,
       runId,
@@ -93,16 +121,17 @@ export async function suspendContainerForPause(
       execContext.containerId
     );
     getLog().info({ runId, envId: containerCtx.envId }, 'dag.container_suspended_on_pause');
-  } catch (err) {
+  } else {
+    const err = outcome.error;
     getLog().error(
-      { err: err as Error, runId, envId: containerCtx.envId },
+      { err, runId, envId: containerCtx.envId },
       'dag.container_suspend_on_pause_failed'
     );
     await safeSendMessage(
       platform,
       conversationId,
       `⚠️ Run paused, but its isolation container could not be stopped: ${
-        (err as Error).message
+        err instanceof Error ? err.message : String(err)
       }. It keeps running until resume/teardown reclaims it.`,
       { workflowId: runId }
     );
