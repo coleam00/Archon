@@ -16,6 +16,8 @@
  * - `substituteWorkflowVariables` (`packages/workflows/src/workflow-variables.ts`) says which
  *   names the engine splices into a source, so the user-controlled class — the names it leaves
  *   out — comes from the engine, not from the copies that name it;
+ * - `CONTEXT_VAR_PATTERN_STR` (the same module) is the engine's one context variable with
+ *   three spellings, so a copy may name any of them for that member of the class;
  * - `loopScopeTokens` (`packages/workflows/src/dag/loop-scope.ts`) is the engine's second
  *   substitution channel: a `loop_group` body's `bash:` source receives the loop reply,
  *   shell-quoted, so the guard asks the engine about that channel too;
@@ -41,7 +43,10 @@ import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-envi
 import { type LoopBodyScope, loopScopeTokens } from '../packages/workflows/src/dag/loop-scope';
 import { ENVIRONMENT_READ_PATTERNS } from '../packages/workflows/src/exec-input-validation';
 import { inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
-import { substituteWorkflowVariables } from '../packages/workflows/src/workflow-variables';
+import {
+  CONTEXT_VAR_PATTERN_STR,
+  substituteWorkflowVariables,
+} from '../packages/workflows/src/workflow-variables';
 import { shouldRunTestSuite } from './should-run-test-suite';
 
 const REPO = join(import.meta.dir, '..');
@@ -69,6 +74,13 @@ const BINDING_ROOT = BINDING_PREFIX.replace(/_+$/, '');
 
 /** The names the engine delivers but never splices into an exec node's source. */
 const USER_CONTROLLED = userControlledNames();
+
+/**
+ * The engine's context variable, which has three spellings for one value. The engine
+ * resolves all of them to the same value (`CONTEXT_VAR_PATTERN_STR`), so a copy may name
+ * any one of them for that member of the class.
+ */
+const CONTEXT_FAMILY = contextFamilyNames();
 
 /** A sentence that says the names it lists are environment variables. */
 const PROMISES_ENVIRONMENT = /\b(?:environment variables?|env vars?)\b/i;
@@ -193,8 +205,8 @@ describe('the user-controlled variable rule', () => {
     for (const copy of copies) assertClassNamesArePromised(copy);
   });
 
-  test('the copies agree on the user-controlled class', () => {
-    assertCopiesAgreeOnTheClass(copies);
+  test('the copies name the user-controlled class the engine delivers', () => {
+    assertCopiesNameTheEngineClass(copies);
   });
 
   test('every copy states that the variables are not substituted into the source', () => {
@@ -229,6 +241,16 @@ describe('the user-controlled variable rule', () => {
       ),
     };
     expect(() => assertPromisedNamesAreDelivered(document)).toThrow(/NOT_A_REAL_VAR/);
+  });
+
+  test('the guard rejects a copy that names a class member the engine does not leave out', () => {
+    const document: Document = {
+      file: 'a synthetic copy',
+      statements: statementsOf(
+        'A `script:` node reads the user-controlled variables (`$USER_MESSAGE`, `$LOG_DIR`) as the environment variable `process.env.USER_MESSAGE`.'
+      ),
+    };
+    expect(() => assertClassNamesAreEngineOwned(document)).toThrow(/LOG_DIR/);
   });
 
   test('the guard rejects a copy that claims a variable is substituted when the engine does not', () => {
@@ -308,23 +330,34 @@ function assertClassNamesArePromised(document: Document): void {
   }
 }
 
-/** The copies must name the same user-controlled class, and the engine owns its membership. */
-function assertCopiesAgreeOnTheClass(copies: readonly Document[]): void {
-  const enumerations = copies.flatMap(copy =>
-    ruleStatements(copy)
-      .filter(enumeratesClass)
-      .map(statement => ({ copy, names: classClaim(statement) }))
-  );
-  if (enumerations.length === 0) {
-    throw new Error('No copy names which variables are user-controlled');
-  }
-  const [first, ...rest] = enumerations;
-  for (const { copy, names } of rest) {
-    const listed = [...names].sort().join(', ');
-    const expected = [...first.names].sort().join(', ');
-    if (listed !== expected) {
-      throw new Error(`${copy.file} names ${listed} where ${first.copy.file} names ${expected}`);
+/**
+ * The copies must name the engine's class. The engine owns the class's membership, so a
+ * copy that enumerates it must name every member the engine leaves out of a source. The
+ * context variable has three spellings for one value, so a copy may name any of them.
+ */
+function assertCopiesNameTheEngineClass(copies: readonly Document[]): void {
+  let enumerations = 0;
+  for (const copy of copies) {
+    for (const statement of ruleStatements(copy).filter(enumeratesClass)) {
+      enumerations += 1;
+      const named = classClaim(statement);
+      const missing = [...USER_CONTROLLED].filter(
+        name => !CONTEXT_FAMILY.has(name) && !named.has(name)
+      );
+      if (missing.length > 0) {
+        throw new Error(
+          `${copy.file} names the user-controlled class without ${missing.join(', ')}, which the engine leaves out of a source`
+        );
+      }
+      if (![...named].some(name => CONTEXT_FAMILY.has(name))) {
+        throw new Error(
+          `${copy.file} names the user-controlled class without a context variable, which the engine leaves out of a source`
+        );
+      }
     }
+  }
+  if (enumerations === 0) {
+    throw new Error('No copy names which variables are user-controlled');
   }
 }
 
@@ -536,6 +569,15 @@ function userControlledNames(): Set<string> {
     if (!substitutes(name, true) && substitutes(name, false)) names.add(name);
   }
   return names;
+}
+
+/**
+ * The engine's context variable and its aliases. The engine resolves all of them to the
+ * same value (`CONTEXT_VAR_PATTERN_STR`), so a copy may name any one of them.
+ */
+function contextFamilyNames(): Set<string> {
+  const pattern = new RegExp(CONTEXT_VAR_PATTERN_STR);
+  return new Set([...USER_CONTROLLED].filter(name => pattern.test(`$${name}`)));
 }
 
 /**
