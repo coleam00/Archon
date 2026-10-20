@@ -4319,6 +4319,51 @@ nodes:
       expect(work && 'isolation' in work ? work.isolation : undefined).toBe('worktree');
     });
 
+    it.each([2, 'all'])('accepts explicit workflow fan-out parallelism %s', async parallelism => {
+      const result = await loadOne(
+        'fan-window',
+        `
+name: fan-window
+description: explicit child window
+nodes:
+  - id: list
+    bash: echo '[]'
+  - id: questions
+    workflow: child-wf
+    depends_on: [list]
+    fan_out:
+      items: "$list.output"
+      max_parallel: ${parallelism}
+`
+      );
+      expect(result.errors).toEqual([]);
+      const node = result.workflows.find(w => w.workflow.name === 'fan-window')?.workflow.nodes[1];
+      expect(node && 'fan_out' in node && node.fan_out?.max_parallel).toBe(parallelism);
+    });
+
+    it('rejects max_parallel: all on composed fan-out', async () => {
+      const result = await loadOne(
+        'compose-all',
+        `
+name: compose-all
+description: composed fan-out keeps numeric parallelism
+nodes:
+  - id: list
+    bash: echo '[]'
+  - id: work
+    include: child-block
+    depends_on: [list]
+    fan_out:
+      items: "$list.output"
+      as: item
+      max_parallel: all
+`
+      );
+      expect(result.errors.find(e => e.filename === 'compose-all.yaml')?.error).toContain(
+        'max_parallel'
+      );
+    });
+
     it('does NOT infer isolation from fan_out — an omitted isolation stays omitted', async () => {
       const result = await loadOne(
         'fan-no-iso',

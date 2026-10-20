@@ -5365,7 +5365,7 @@ export interface components {
         items: string;
         as?: string;
         /** @default 5 */
-        max_parallel: number;
+        max_parallel: number | 'all';
         /**
          * @default all_done
          * @enum {string}

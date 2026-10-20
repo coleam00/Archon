@@ -2442,6 +2442,16 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     }
   });
 
+  test.each(['all', 0, 1.5])('compose fan-out rejects max_parallel: %s', max_parallel => {
+    expect(
+      dagNodeSchema.safeParse({
+        id: 'review',
+        include: 'blk',
+        fan_out: { items: '$list.output', as: 'item', max_parallel },
+      }).success
+    ).toBe(false);
+  });
+
   test('compose fan-out requires an explicit item binding', () => {
     const result = dagNodeSchema.safeParse({
       id: 'review',
