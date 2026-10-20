@@ -542,8 +542,9 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
-  for (const nestedConsumer of [false, true]) {
-    it(`preserves a cached sibling completion when a disjoint source reuses its ID (nested consumer=${nestedConsumer})`, async () => {
+  it.each([false, true])(
+    'preserves a cached sibling completion when a disjoint source reuses its ID (nested consumer=%s)',
+    async nestedConsumer => {
       mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, session) {
         yield { type: 'agent_message_chunk', text: 'DONE' };
         yield {
@@ -621,8 +622,8 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
       expect(
         resumed.filter(e => e.step_name === 'second' && e.event_type === 'node_completed')
       ).toHaveLength(1);
-    });
-  }
+    }
+  );
 
   for (const source of ['inline', 'command', 'loop', 'nested-consumer'] as const) {
     it(`reruns a cached same-body ${source} session source after failure`, async () => {
