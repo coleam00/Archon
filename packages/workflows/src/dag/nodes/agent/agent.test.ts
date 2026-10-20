@@ -2461,7 +2461,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
     expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.002 }]);
   });
 
-  it('writes no usage metadata at all when no node yielded cost or tokens', async () => {
+  it('records unknown cost when an AI node reports neither cost nor tokens', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Some output' };
       yield { type: 'result', sessionId: 'sid-no-cost' };
@@ -2485,16 +2485,14 @@ describe('executeDagWorkflow -- cost tracking', () => {
       })
     );
 
-    // A zero must stay ABSENT, not written as 0 — a bash-only workflow reading as a
-    // free AI run is the misleading shape the `> 0` guards exist to prevent.
-    expect(runUsageWrites(store)).toEqual([]);
+    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: null }]);
     const completeCalls = (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>)
       .mock.calls;
     expect(completeCalls.length).toBe(1);
     expect(completeCalls[0][2]).not.toHaveProperty('total_cost_usd');
   });
 
-  it('accumulates finite loop costs and ignores a later non-finite cost', async () => {
+  it('keeps loop cost unknown when a later iteration reports non-finite cost', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
@@ -2539,20 +2537,18 @@ describe('executeDagWorkflow -- cost tracking', () => {
       })
     );
 
-    // The final NaN is omitted without erasing the first three iterations.
-    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.004 }]);
+    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: null }]);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
       )
     ).toBe(true);
 
-    // The loop's own terminal row carries the cumulative total once, and its
-    // per-iteration rows carry duration only (#3508). Nothing on the path restates
-    // the total, so a reader summing the transcript lands on the run total.
+    // Transcript costs are exact-only, including the loop's roll-up row.
     const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
     const terminal = rows.find(row => row.type === 'node_complete' && row.step === 'my-loop');
-    expect(terminal?.cost_usd).toBeCloseTo(0.004, 10);
+    expect(terminal).toBeDefined();
+    expect(terminal).not.toHaveProperty('cost_usd');
     const iterationRows = rows.filter(
       row =>
         row.type === 'node_complete' &&

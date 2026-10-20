@@ -18,7 +18,7 @@ import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
-import { sumTokenUsage } from '../../usage';
+import { sumReportedCost, sumTokenUsage } from '../../usage';
 import { resolveRunInputs, nodeTemplateReferences } from '../../references';
 import { shouldContinueStreamingForStatus, CANCEL_CHECK_INTERVAL_MS } from '../../run-control';
 import { failLoopNode, loopSpend, type LoopRun, type LoopState } from './loop-state';
@@ -94,7 +94,8 @@ export interface StreamedAttempt {
  * their own cost, so an exhausted iteration reports what it spent.
  */
 interface AttemptUsage {
-  cost: number | undefined;
+  providerCalled: boolean;
+  cost: number | null | undefined;
   tokens: TokenUsage | undefined;
   numTurns: number | undefined;
   folded: boolean;
@@ -282,6 +283,7 @@ async function streamIterationAttempt(
   // clean or a prior attempt's prose would leak into this one's output and signal detection.
   const attempt = newAttempt(run);
   const usage: AttemptUsage = {
+    providerCalled: false,
     cost: undefined,
     tokens: undefined,
     numTurns: undefined,
@@ -329,9 +331,10 @@ async function streamIterationAttempt(
 function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: string): void {
   if (usage.folded) return;
   usage.folded = true;
-  if (usage.cost !== undefined) {
-    state.costUsd = state.costUsd === null ? null : (state.costUsd ?? 0) + usage.cost;
-  }
+  state.costUsd = sumReportedCost([
+    { costUsd: state.costUsd },
+    { costUsd: usage.cost === undefined && usage.providerCalled ? null : usage.cost },
+  ]);
   if (!state.tokensUnknown && usage.tokens !== undefined) {
     state.tokens = sumTokenUsage(
       [...(state.tokens !== undefined ? [state.tokens] : []), usage.tokens],
@@ -432,6 +435,7 @@ async function consumeIterationStream(
     scope.position.resumeSessionId,
     false
   );
+  scope.usage.providerCalled = true;
   const generator = run.aiClient.sendQuery(finalPrompt, ctx.cwd, pass.resumeSessionId, {
     ...run.resolvedOptions,
     env: run.iterationEnv,
@@ -597,13 +601,16 @@ function addResultUsage(
   const nodeId = run.node.id;
   if (msg.cost !== undefined) {
     if (Number.isFinite(msg.cost)) {
-      usage.cost = (usage.cost ?? 0) + msg.cost;
+      usage.cost = sumReportedCost([{ costUsd: usage.cost }, { costUsd: msg.cost }]);
     } else {
+      usage.cost = null;
       getLog().warn(
         { nodeId, iteration: i, costUsd: msg.cost },
         'loop_node.usage_cost_non_finite_ignored'
       );
     }
+  } else {
+    usage.cost = null;
   }
   state.tokensUnknown ||= msg.tokensUnknown === true;
   if (state.tokensUnknown) {

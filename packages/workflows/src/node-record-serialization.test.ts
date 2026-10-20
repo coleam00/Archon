@@ -378,9 +378,14 @@ describe('node record serializers', () => {
     expect(
       readDeferredNodeUsageEvent(serializeDeferredNodeUsage(partial))?.rawUsage.costUsd
     ).toBeNull();
-    // With no reported cost at all there is nothing to mark: the cost stays unavailable.
+    // A provider call without a numeric floor still makes the total incomplete.
     const unreported = finishNodeExecution(started, { status: 'completed' }, { costPartial: true });
-    expect(unreported.spend.costUsd).toEqual(started.spend.costUsd);
+    expect(unreported.spend.costUsd).toEqual({ source: 'unavailable', reason: 'incomplete' });
+    expect(serializeNodeOutput(unreported).costUsd).toBeNull();
+    expect(readNodeRecordEvent(serializeNodeStateRecord(unreported))?.rawUsage.costUsd).toBeNull();
+    expect(
+      readDeferredNodeUsageEvent(serializeDeferredNodeUsage(unreported))?.rawUsage.costUsd
+    ).toBeNull();
   });
 });
 

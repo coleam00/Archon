@@ -108,10 +108,9 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
 
-    // #2469 (AC1): the run FAILED, and it still recorded what step1 burned before
-    // step2 died. Before the fix this run's row carried nothing but { error }.
+    // The failed second call has no price; known tokens survive the incomplete cost.
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.02, total_tokens_in: 40, total_tokens_out: 4 },
+      { total_cost_usd: null, total_tokens_in: 40, total_tokens_out: 4 },
     ]);
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
 
@@ -210,7 +209,7 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
           if (axis === 'cost') yield { type: 'result', sessionId: 's1' };
         } else {
           // No assistant output fails step2 after step1's row is durable.
-          yield { type: 'result', sessionId: 's2' };
+          yield { type: 'result', sessionId: 's2', cost: 0 };
         }
       });
       await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
@@ -257,6 +256,51 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
       expect(usage?.total_tokens_out).toBeNull();
       expect(usage?.total_cache_read_tokens).toBeNull();
       expect(usage?.total_cache_write_tokens).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    'keeps priced and unpriced agent totals unknown (unpriced first: %s)',
+    async unpricedFirst => {
+      const store = createMockStore();
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: 'output' };
+        yield {
+          type: 'result',
+          sessionId: `s-${calls}`,
+          cost: (calls === 1) === unpricedFirst ? undefined : 0.2,
+          tokens: { input: 10, output: 1 },
+        };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'mixed-cost',
+            nodes: [
+              { id: 'one', kind: 'agent', source: { kind: 'inline', prompt: 'One' } },
+              {
+                id: 'two',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Two' },
+                depends_on: ['one'],
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('mixed-cost'),
+        })
+      );
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(runUsageWrites(store)).toEqual([
+        {
+          total_cost_usd: null,
+          total_tokens_in: 20,
+          total_tokens_out: 2,
+        },
+      ]);
     }
   );
 

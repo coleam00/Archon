@@ -17,6 +17,7 @@ import {
   mockLogFn,
   mockLogger,
   createMockStore,
+  runUsageWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -928,7 +929,61 @@ describe('loop node execution', () => {
     expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.4);
   });
 
-  it('keeps a finite loop cost when a later result in the same iteration is non-finite', async () => {
+  it.each(['same attempt', 'iterations', 'retry', 'no result'] as const)(
+    'keeps unpriced loop work unknown across %s',
+    async boundary => {
+      const store = createMockStore();
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield { type: 'agent_message_chunk', text: 'working' };
+          if (boundary === 'no result') return;
+          yield {
+            type: 'result',
+            sessionId: 's1',
+            ...(boundary === 'retry'
+              ? {
+                  isError: true,
+                  errors: ['failed'],
+                  failure: { class: 'transient' as const, evidence: 'failed' },
+                }
+              : {}),
+          };
+          if (boundary !== 'same attempt') return;
+        }
+        yield { type: 'agent_message_chunk', text: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 's2', cost: 0.2 };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'loop-mixed-cost',
+            nodes: [
+              {
+                id: 'mixed',
+                kind: 'loop',
+                retry: { max_attempts: 2, delay_ms: 0 },
+                loop: {
+                  prompt: 'Work',
+                  until: 'COMPLETE',
+                  max_iterations: 3,
+                  fresh_context: false,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-mixed-cost'),
+        })
+      );
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+    }
+  );
+
+  it('marks loop cost unknown when a later result in the same iteration is non-finite', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield {
         type: 'subtask',
@@ -974,7 +1029,7 @@ describe('loop node execution', () => {
         (call[0] as { step_name: string }).step_name === 'my-loop'
     );
     expect(completedEvent).toBeDefined();
-    expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.1);
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'loop_node.usage_cost_non_finite_ignored'

@@ -748,10 +748,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ]);
   });
 
-  it("one node reporting a non-finite cost does not erase the whole run's cost", async () => {
-    // NaN > 0 is false, so an unguarded NaN would drop total_cost_usd for EVERY node in
-    // the run, silently — the exact loss this work exists to remove, arriving through a
-    // provider instead of a code path. Tokens have carried this guard; cost had not.
+  it('one node reporting a non-finite cost makes the run cost unknown', async () => {
     let call = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       call++;
@@ -793,10 +790,8 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
       })
     );
 
-    // The healthy node's spend survives; only the broken node's contribution is dropped.
-    // Tokens are unaffected — both nodes reported finite ones.
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.05, total_tokens_in: 14, total_tokens_out: 3 },
+      { total_cost_usd: null, total_tokens_in: 14, total_tokens_out: 3 },
     ]);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
@@ -1443,7 +1438,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     expect(started(store, 'b')).toHaveLength(0);
     expect(refusals(store)[0].data).toMatchObject({
       reason: 'cost_unavailable',
-      cost_unavailable: { node: 'a', reason: 'not_reported' },
+      cost_unavailable: { node: 'a', reason: 'incomplete' },
     });
 
     // A work ceiling alone does not need cost, so the same run completes.
@@ -1795,7 +1790,8 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       const prior = aiPrior ? ai('prior') : sh('prior');
       const store = await run({ name: 'cost-presence', nodes: [prior] });
       const resume = await resumeOptions(store);
-      expect(resume.priorUsage?.costUsd).toBe(cost);
+      const expectedCost = aiPrior && cost === undefined ? null : cost;
+      expect(resume.priorUsage?.costUsd).toBe(expectedCost);
       store.updateWorkflowRun.mockClear();
       mockSendQueryDag.mockClear();
 
@@ -1809,10 +1805,10 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       expect(mockSendQueryDag).not.toHaveBeenCalled();
       expect(started(store, 'remaining')).toHaveLength(1);
       const writes = runUsageWrites(store);
-      if (cost === undefined) {
+      if (expectedCost === undefined) {
         expect(writes.every(write => !('total_cost_usd' in write))).toBe(true);
       } else {
-        expect(writes).toEqual([expect.objectContaining({ total_cost_usd: cost })]);
+        expect(writes).toEqual([expect.objectContaining({ total_cost_usd: expectedCost })]);
       }
     }
   );
@@ -1838,11 +1834,7 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       expect(exitReason(store)).toBe('budget_refused');
       expect(refusals(store)).toHaveLength(1);
       const writes = runUsageWrites(store);
-      if (cost === undefined) {
-        expect(writes.every(write => !('total_cost_usd' in write))).toBe(true);
-      } else {
-        expect(writes).toEqual([expect.objectContaining({ total_cost_usd: cost })]);
-      }
+      expect(writes).toEqual([expect.objectContaining({ total_cost_usd: cost ?? null })]);
     }
   );
 

@@ -8,6 +8,7 @@ import { sessionPreview, type SendQueryOptions } from '@archon/provider-contract
 import { nodeExecutionMetadataSchema } from '../../../schemas/node-execution';
 import {
   createMockStore,
+  runUsageWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -709,7 +710,7 @@ describe('loop node completion channels', () => {
       yield { type: 'result', sessionId: 's1', structuredOutput: { note: 'no done key' } };
     });
     mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'result', sessionId: 's2', structuredOutput: { done: true } };
+      yield { type: 'result', sessionId: 's2', cost: 0.2, structuredOutput: { done: true } };
     });
 
     const store = createMockStore();
@@ -757,6 +758,7 @@ describe('loop node completion channels', () => {
       (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
     );
     expect(completed.length).toBe(1);
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
   });
 
   it('keeps threading the loop session across a mid-loop re-ask', async () => {

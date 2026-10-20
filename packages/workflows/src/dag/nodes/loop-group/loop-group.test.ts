@@ -1753,6 +1753,46 @@ process.stdout.write((n === 1 ? 'a' : 'b').repeat(40000));`
     ).toBeCloseTo(0.03, 5);
   });
 
+  it('COST: keeps an incomplete first iteration unknown after a priced iteration', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'agent_message_chunk', text: calls === 1 ? 'working' : 'DONE' };
+      if (calls === 1) {
+        yield { type: 'result', sessionId: 's1', cost: 0.01 };
+        yield { type: 'result', sessionId: 's1' };
+      } else {
+        yield { type: 'result', sessionId: 's2', cost: 0.02 };
+      }
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'lg-incomplete-cost',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work' } }],
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-incomplete-cost'),
+      })
+    );
+    expect(calls).toBe(2);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+  });
+
   it('COST: accumulates token usage across loop_group iterations', async () => {
     let calls = 0;
     mockSendQueryDag.mockImplementation(async function* () {
