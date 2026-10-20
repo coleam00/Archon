@@ -1594,8 +1594,13 @@ it alone. To remove a ref manually, first ensure no one is reusing or publishing
 that branch. From the surviving primary checkout, verify that the branch still
 belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`).
 The branch reported by cleanup is the local branch; a published remote ref can have
-a different name. Identify the completed tip from that surviving local branch or a
-recorded commit OID before proceeding. First check for service overrides or a transport helper:
+a different name. Cleanup may already have deleted the local branch and does not
+report its tip OID. If available, establish the completed tip from a surviving local
+branch, a commit recorded in the run's artifacts or logs, the pull request's head
+commit history, or a surviving Git reflog. Verify that the commit belongs to the
+completed work; a squash or merge commit is not necessarily its original tip.
+If that evidence is unavailable, use the candidate-ref inspection below with the
+repository owner instead. First check for service overrides or a transport helper:
 
 ```bash
 remote='<remote>'
@@ -1636,20 +1641,34 @@ git_at_endpoint() (
 git_at_endpoint ls-remote --symref -- "$endpoint" HEAD 'refs/heads/*'
 ```
 
-Inspect all advertised branch names and OIDs. Check both the local branch's name
-and differently named non-default refs containing the completed tip. For example,
+Inspect all advertised branch names and OIDs. Start with the reported local branch's
+name; when the completed tip is known, also check differently named non-default refs
+containing it. For example,
 local `topic` may have been published as `refs/heads/review-name`; an empty query
 for `refs/heads/topic` proves only that exact ref is absent. The default branch
 normally contains merged work and is not a cleanup target merely for containing
 the completed tip.
 
-For each candidate, verify ancestry with `git merge-base --is-ancestor <completed-tip-oid> <advertised-oid>`
+When the completed tip is known, verify each candidate's ancestry with
+`git merge-base --is-ancestor <completed-tip-oid> <advertised-oid>`
 (exit 0 means it contains the completed tip; exit 1 means it does not). If commits
 are missing, fetch the candidate from the same verified endpoint with
 `git_at_endpoint fetch --no-tags -- "$endpoint" '<full-remote-ref>'`, re-read the
 advertisement and repeat the check. A failed inspection or unknown ancestry does
 not prove absence. Ancestry alone does not prove ownership: confirm that the ref
 belongs to the completed work and is no longer in use before deleting it.
+
+If the completed tip cannot be established, do not guess a differently named ref
+or treat it as absent. Inspect candidate refs with the repository owner: match the
+receiving repository's pull request head-ref and commit history to the completed
+run and review the candidate's commits. Fetch candidates from the verified endpoint
+with the command above as needed, then inspect their advertised OIDs with
+`git show <advertised-oid>` and `git log <advertised-oid>`. A same-name ref can be
+inspected this way too; recovering the deleted local tip is not required. Confirm
+the candidate's provenance, current ownership, and that no replacement registration
+or other user is using or publishing it. If the evidence cannot identify a ref
+confidently, retain it. Once verified, re-read the advertisement and use that ref's
+current OID for the leased delete below.
 
 Keep the same `push_url` and `endpoint`. Enter the verified full remote ref name
 and its advertised OID, independently of the local branch name:
