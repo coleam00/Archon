@@ -20,7 +20,7 @@ const stalledCall = {
 };
 
 function hostWith(run: Partial<WorkflowRun> | null) {
-  const updateWorkflowRun = mock(async () => undefined);
+  const updateWorkflowRunMetadataIfRunning = mock(async () => true);
   const getWorkflowRun = mock(async () => (run ? ({ id: RUN_ID, ...run } as WorkflowRun) : null));
   const findWorkflowRunsByIdPrefix = mock(async () => [{ id: RUN_ID }]);
   const host = {
@@ -29,11 +29,11 @@ function hostWith(run: Partial<WorkflowRun> | null) {
       store: {
         getWorkflowRun,
         findWorkflowRunsByIdPrefix,
-        updateWorkflowRun,
+        updateWorkflowRunMetadataIfRunning,
       },
     },
   } as unknown as WorkflowHost;
-  return { host, updateWorkflowRun, getWorkflowRun, findWorkflowRunsByIdPrefix };
+  return { host, updateWorkflowRunMetadataIfRunning, getWorkflowRun, findWorkflowRunsByIdPrefix };
 }
 
 describe('workflow end-turn', () => {
@@ -43,26 +43,42 @@ describe('workflow end-turn', () => {
 
   it('records a request for the stalled stream', async () => {
     const output = spyOn(console, 'log').mockImplementation(() => {});
-    const { host, updateWorkflowRun } = hostWith({
+    const { host, updateWorkflowRunMetadataIfRunning } = hostWith({
       status: 'running',
       metadata: { tool_call_attention: [stalledCall] },
     });
     expect(await workflowEndTurnCommand(host, RUN_ID)).toBe(0);
     expect(output.mock.calls[0]?.[0]).toContain('Recorded an end-turn request');
     expect(output.mock.calls[0]?.[0]).toContain('owner_lost');
-    expect(updateWorkflowRun).toHaveBeenCalledWith(RUN_ID, {
-      metadata: {
-        end_turn_request: {
-          stalls: [
-            {
-              streamId: stalledCall.streamId,
-              toolCallId: stalledCall.toolCallId,
-              raisedAt: stalledCall.raisedAt,
-            },
-          ],
-        },
+    expect(updateWorkflowRunMetadataIfRunning).toHaveBeenCalledWith(RUN_ID, {
+      end_turn_request: {
+        stalls: [
+          {
+            streamId: stalledCall.streamId,
+            toolCallId: stalledCall.toolCallId,
+            raisedAt: stalledCall.raisedAt,
+          },
+        ],
       },
     });
+  });
+
+  it.each([false, true])('refuses a lost running-status race (json=%s)', async json => {
+    const output = spyOn(stdout, 'writeJsonLine').mockResolvedValue(undefined);
+    const error = spyOn(console, 'error').mockImplementation(() => {});
+    const success = spyOn(console, 'log').mockImplementation(() => {});
+    const h = hostWith({ status: 'running', metadata: { tool_call_attention: [stalledCall] } });
+    h.updateWorkflowRunMetadataIfRunning.mockResolvedValue(false);
+    expect(await workflowEndTurnCommand(h.host, RUN_ID, json)).toBe(1);
+    expect(success).not.toHaveBeenCalled();
+    if (json)
+      expect(output).toHaveBeenCalledWith({
+        ok: false,
+        runId: RUN_ID,
+        action: 'end_turn',
+        error: 'not_running',
+      });
+    else expect(error.mock.calls[0]?.[0]).toContain('only available for running runs');
   });
 
   it.each(['resolution', 'lookup', 'update'] as const)(
@@ -76,7 +92,7 @@ describe('workflow end-turn', () => {
       } else if (failure === 'lookup') {
         h.getWorkflowRun.mockRejectedValue(new Error('lookup failed'));
       } else {
-        h.updateWorkflowRun.mockRejectedValue(new Error('update failed'));
+        h.updateWorkflowRunMetadataIfRunning.mockRejectedValue(new Error('update failed'));
       }
       expect(await workflowEndTurnCommand(h.host, input, true, process.cwd())).toBe(1);
       expect(output).toHaveBeenCalledTimes(1);
@@ -89,14 +105,14 @@ describe('workflow end-turn', () => {
             ? expect.stringContaining('matches more than one run')
             : `${failure} failed`,
       });
-      if (failure !== 'update') expect(h.updateWorkflowRun).not.toHaveBeenCalled();
+      if (failure !== 'update') expect(h.updateWorkflowRunMetadataIfRunning).not.toHaveBeenCalled();
     }
   );
 
   it('keeps the resolved id when an update after prefix resolution throws', async () => {
     const output = spyOn(stdout, 'writeJsonLine').mockResolvedValue(undefined);
     const h = hostWith({ status: 'running', metadata: { tool_call_attention: [stalledCall] } });
-    h.updateWorkflowRun.mockRejectedValue(new Error('update failed'));
+    h.updateWorkflowRunMetadataIfRunning.mockRejectedValue(new Error('update failed'));
     expect(await workflowEndTurnCommand(h.host, RUN_ID.slice(0, 8), true, process.cwd())).toBe(1);
     expect(output).toHaveBeenCalledWith({
       ok: false,
@@ -129,9 +145,9 @@ describe('workflow end-turn', () => {
     ['an unknown run', null],
   ])('refuses %s without writing', async (_label, run) => {
     const output = spyOn(console, 'error').mockImplementation(() => {});
-    const { host, updateWorkflowRun } = hostWith(run);
+    const { host, updateWorkflowRunMetadataIfRunning } = hostWith(run);
     expect(await workflowEndTurnCommand(host, RUN_ID)).toBe(1);
-    expect(updateWorkflowRun).not.toHaveBeenCalled();
+    expect(updateWorkflowRunMetadataIfRunning).not.toHaveBeenCalled();
     if (run?.status === 'paused')
       expect(output.mock.calls[0]?.[0]).toContain('only available for running runs');
   });

@@ -468,6 +468,16 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
+  updateWorkflowRunMetadataIfRunning: IWorkflowStore['updateWorkflowRunMetadataIfRunning'] = async (
+    id,
+    metadata
+  ) => {
+    const run = this.runs.get(id);
+    if (run?.status !== 'running') return false;
+    Object.assign(run.metadata, structuredClone(metadata));
+    return true;
+  };
+
   updateWorkflowActivity = (): Promise<void> => Promise.resolve();
 
   getWorkflowRunStatus = (id: string): Promise<WorkflowRun['status'] | null> =>

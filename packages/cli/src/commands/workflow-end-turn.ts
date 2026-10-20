@@ -23,13 +23,16 @@ export async function workflowEndTurnCommand(
     runId = await resolveRunIdArg(host, runIdArg, cwd);
     const run = await host.deps.store.getWorkflowRun(runId);
     const plan = run ? planEndTurn(run) : ({ kind: 'refused', reason: 'not_found' } as const);
-    if (plan.kind === 'refused') {
-      const error = `${REFUSALS[plan.reason]}: ${runId}`;
-      if (json) await writeJsonLine({ ok: false, runId, action: 'end_turn', error: plan.reason });
+    if (
+      plan.kind === 'refused' ||
+      !(await host.deps.store.updateWorkflowRunMetadataIfRunning(runId, plan.metadata))
+    ) {
+      const refusal = plan.kind === 'refused' ? plan.reason : 'not_running';
+      const error = `${REFUSALS[refusal]}: ${runId}`;
+      if (json) await writeJsonLine({ ok: false, runId, action: 'end_turn', error: refusal });
       else console.error(error);
       return 1;
     }
-    await host.deps.store.updateWorkflowRun(runId, { metadata: plan.metadata });
     const nodes = [...new Set(plan.calls.map(call => call.nodeId))];
     if (json) {
       await writeJsonLine({ ok: true, runId, action: 'end_turn', requestRecorded: true, nodes });
