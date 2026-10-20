@@ -1,3 +1,4 @@
+import { withArtifactExchange } from '../../../artifact-exchange';
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
@@ -432,63 +433,66 @@ async function consumeIterationStream(
     scope.position.resumeSessionId,
     false
   );
-  const generator = run.aiClient.sendQuery(finalPrompt, ctx.cwd, pass.resumeSessionId, {
+  const queryOptions = {
     ...run.resolvedOptions,
     env: run.iterationEnv,
     abortSignal: attempt.abort.signal,
-  });
+  };
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
-  try {
-    for await (const msg of withIdleTimeout(
-      generator,
-      effectiveIdleTimeout,
-      () => {
-        attempt.idleTimedOut = true;
-        getLog().warn(
-          {
-            nodeId: node.id,
-            iteration: i,
-            timeoutMs: effectiveIdleTimeout,
-            ...(attempt.lastWatchdogReset
-              ? {
-                  lastResetType: attempt.lastWatchdogReset.type,
-                  lastResetAt: new Date(attempt.lastWatchdogReset.at).toISOString(),
-                }
-              : {}),
-          },
-          'loop_node.idle_timeout_reached'
-        );
-        attempt.abort.abort();
-      },
-      (msg, resetAt) => {
-        const type = msg.type;
-        attempt.lastWatchdogReset = { type, at: resetAt };
-        watchdogResets.observe(type, resetAt);
-      },
-      () =>
-        providerEvents.hasOpenTools() ||
-        (capabilities.backgroundWork === 'reported' && providerEvents.liveSubtaskIds().length > 0),
-      shouldStopStream
-    )) {
-      if (await shouldStopStream()) break;
+  await withArtifactExchange(ctx.artifactExchange, async () => {
+    try {
+      for await (const msg of withIdleTimeout(
+        run.aiClient.sendQuery(finalPrompt, ctx.cwd, pass.resumeSessionId, queryOptions),
+        effectiveIdleTimeout,
+        () => {
+          attempt.idleTimedOut = true;
+          getLog().warn(
+            {
+              nodeId: node.id,
+              iteration: i,
+              timeoutMs: effectiveIdleTimeout,
+              ...(attempt.lastWatchdogReset
+                ? {
+                    lastResetType: attempt.lastWatchdogReset.type,
+                    lastResetAt: new Date(attempt.lastWatchdogReset.at).toISOString(),
+                  }
+                : {}),
+            },
+            'loop_node.idle_timeout_reached'
+          );
+          attempt.abort.abort();
+        },
+        (msg, resetAt) => {
+          const type = msg.type;
+          attempt.lastWatchdogReset = { type, at: resetAt };
+          watchdogResets.observe(type, resetAt);
+        },
+        () =>
+          providerEvents.hasOpenTools() ||
+          (capabilities.backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0),
+        shouldStopStream
+      )) {
+        if (await shouldStopStream()) break;
 
-      if (msg.type === 'result') {
-        applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
-        // A result is not the end of the iteration; `settled` is. See the
-        // AI-node stream loop for the full rationale.
-      } else if (msg.type === 'settled') {
-        attempt.settled =
-          capabilities.backgroundWork !== 'reported' ||
-          providerEvents.liveSubtaskIds().length === 0;
-        break;
-      } else {
-        await providerEvents.handle(msg);
+        if (msg.type === 'result') {
+          applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+          // A result is not the end of the iteration; `settled` is. See the
+          // AI-node stream loop for the full rationale.
+        } else if (msg.type === 'settled') {
+          attempt.settled =
+            capabilities.backgroundWork !== 'reported' ||
+            providerEvents.liveSubtaskIds().length === 0;
+          break;
+        } else {
+          await providerEvents.handle(msg);
+        }
       }
+    } finally {
+      await providerEvents.clearAttention();
     }
-  } finally {
-    await providerEvents.clearAttention();
-  }
+  });
 }
 
 /**

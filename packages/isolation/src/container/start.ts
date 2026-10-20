@@ -30,8 +30,9 @@ class FuseMountFailure extends IsolationFailure {}
 export interface HostMounts {
   /** Frozen workflow source, read-only. */
   readonly source?: string;
-  /** Run artifacts directory, read-write. */
+  /** Legacy writable host bind. */
   readonly artifacts?: string;
+  readonly output?: { root: string; volume: string };
 }
 
 /** What a run's container is started from, whichever overlay mode mounts. */
@@ -77,9 +78,8 @@ function assertMountableHostPath(
 
 export function assertMountableHostMounts(mounts: HostMounts, workspacePath: string): void {
   if (mounts.source !== undefined) assertMountableHostPath('source', mounts.source, workspacePath);
-  if (mounts.artifacts !== undefined) {
-    assertMountableHostPath('artifacts', mounts.artifacts, workspacePath);
-  }
+  const artifacts = mounts.artifacts ?? mounts.output?.root;
+  if (artifacts !== undefined) assertMountableHostPath('artifacts', artifacts, workspacePath);
 }
 
 /**
@@ -184,11 +184,8 @@ async function runContainerInMode(
     `${hostRoot}:/mnt/lower:ro`,
     '-v',
     `${volume}:/mnt/upper`,
-    // The run's artifacts directory, read-write at the SAME absolute path: `$ARTIFACTS_DIR`
-    // is the run's output channel on both sides of the boundary, so a screenshot or the
-    // evidence marker written here lands on the host where the engine and the operator
-    // read it. Root inside the container writes root-owned files on a rootful Linux
-    // daemon; `restoreHostOwnership` hands them back on suspend and destroy.
+    ...(mounts.output ? ['-v', `${mounts.output.volume}:${mounts.output.root}`] : []),
+    // Pre-key environments retain their original writable bind until they end.
     ...(mounts.artifacts ? ['-v', `${mounts.artifacts}:${mounts.artifacts}`] : []),
     // The run's frozen workflow source, at the SAME absolute path it has on the host.
     // Identical paths are what let the engine hold one source-roots value that means

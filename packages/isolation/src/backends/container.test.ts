@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { join } from 'path';
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import { resolveBashPath } from '@archon/git';
 import { getArchonHome } from '@archon/paths';
@@ -247,10 +250,13 @@ describe('ContainerBackend.prepare', () => {
       });
       await expect(backend.prepare({ codebase: FOLDER })).rejects.toBe(failure);
       const started = ['exec', 'inspect', 'logs'].includes(phase);
+      const provisioned = !['version', 'image'].includes(phase);
       expect(docker.calls.filter(args => args[0] === 'run')).toHaveLength(
         ['version', 'image'].includes(phase) ? 0 : 1
       );
-      expect(docker.calls.filter(args => args[0] === 'rm')).toHaveLength(started ? 1 : 0);
+      expect(docker.calls.filter(args => args[0] === 'rm')).toHaveLength(
+        provisioned ? (started ? 2 : 1) : 0
+      );
       expect(docker.calls.filter(args => args[0] === 'volume' && args[1] === 'rm')).toHaveLength(
         ['version', 'image'].includes(phase) ? 0 : 1
       );
@@ -1374,64 +1380,6 @@ describe('ContainerBackend artifacts mount', () => {
     });
   }
 
-  test('binds the run artifacts read-write at the same absolute path, beside the source', async () => {
-    const store = fakeStore();
-    const docker = readyDocker();
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-
-    await backend.prepare({
-      codebase: FOLDER,
-      sourceMount: SOURCE_MOUNT,
-      artifactsMount: ARTIFACTS_MOUNT,
-    });
-
-    const runArgs = docker.calls.find(c => c[0] === 'run') ?? [];
-    // `$ARTIFACTS_DIR` means one host directory on both sides of the boundary, and a
-    // node must be able to write there — no `:ro`.
-    expect(runArgs).toContain(`${ARTIFACTS_MOUNT}:${ARTIFACTS_MOUNT}`);
-    expect(runArgs).not.toContain(`${ARTIFACTS_MOUNT}:${ARTIFACTS_MOUNT}:ro`);
-    expect(runArgs).toContain(`${SOURCE_MOUNT}:${SOURCE_MOUNT}:ro`);
-  });
-
-  test('records the mount so a recreated container can restore it', async () => {
-    const store = fakeStore();
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: readyDocker() });
-
-    await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
-
-    expect(store.created?.metadata).toMatchObject({ artifactsMount: ARTIFACTS_MOUNT });
-  });
-
-  test('re-applies the mount when resume has to recreate the container', async () => {
-    // The failure this guards: a recreated container without the bind writes artifacts
-    // into a container-local directory the host engine and operator never see.
-    const store = fakeStore();
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: readyDocker() });
-    const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
-
-    const resumeDocker = fakeDocker(args => {
-      if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
-      if (args[0] === 'volume' && args[1] === 'ls')
-        return {
-          stdout: String(store.created?.metadata?.volume ?? 'archon-res-1-upper'),
-          stderr: '',
-        };
-      if (args[0] === 'run') return { stdout: 'recreatedid\n', stderr: '' };
-      if (args[0] === 'exec') return { stdout: '', stderr: '' };
-      return { stdout: '', stderr: '' };
-    });
-    const resumeBackend = new ContainerBackend({
-      store,
-      config: CONFIG,
-      dockerRunner: resumeDocker,
-    });
-
-    await resumeBackend.resumeEnv(prepared.envId!);
-
-    const runArgs = resumeDocker.calls.find(c => c[0] === 'run');
-    expect(runArgs).toContain(`${ARTIFACTS_MOUNT}:${ARTIFACTS_MOUNT}`);
-  });
-
   test('refuses a mount outside ARCHON_HOME, before any docker work', async () => {
     const store = fakeStore();
     const docker = readyDocker();
@@ -1451,9 +1399,9 @@ describe('ContainerBackend artifacts mount', () => {
     const docker = readyDocker();
     hostIs(HOST);
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
+    const legacy = seedContainerRow(store, { artifactsMount: ARTIFACTS_MOUNT });
 
-    await backend.suspend(prepared.envId!);
+    await backend.suspend(legacy.id);
 
     const chown = docker.calls.findIndex(c => c[0] === 'exec' && c.includes('chown'));
     const stop = docker.calls.findIndex(c => c[0] === 'stop');
@@ -1479,9 +1427,9 @@ describe('ContainerBackend artifacts mount', () => {
     });
     hostIs(HOST);
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
+    const legacy = seedContainerRow(store, { artifactsMount: ARTIFACTS_MOUNT });
 
-    await backend.destroy(prepared.envId!);
+    await backend.destroy(legacy.id);
 
     const chown = docker.calls.findIndex(c => c[0] === 'exec' && c.includes('chown'));
     const rm = docker.calls.findIndex(c => c[0] === 'rm');
@@ -1494,9 +1442,9 @@ describe('ContainerBackend artifacts mount', () => {
     const docker = readyDocker();
     hostIs({ uid: 0, gid: 0 });
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
+    const legacy = seedContainerRow(store, { artifactsMount: ARTIFACTS_MOUNT });
 
-    await backend.suspend(prepared.envId!);
+    await backend.suspend(legacy.id);
 
     expect(docker.calls.some(c => c[0] === 'exec' && c.includes('chown'))).toBe(false);
     expect(docker.calls.some(c => c[0] === 'stop')).toBe(true);
@@ -1507,8 +1455,7 @@ describe('ContainerBackend artifacts mount', () => {
     // resumes as it always did, with `$ARTIFACTS_DIR` writes staying in the container, and
     // the backend says so in its log rather than refusing a run that was fine before.
     const store = fakeStore();
-    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: readyDocker() });
-    const prepared = await backend.prepare({ codebase: FOLDER, sourceMount: SOURCE_MOUNT });
+    const legacy = seedContainerRow(store, { sourceMount: SOURCE_MOUNT });
 
     const resumeDocker = fakeDocker(args => {
       if (args[0] === 'container' && args[1] === 'ls') return { stdout: '', stderr: '' };
@@ -1527,7 +1474,7 @@ describe('ContainerBackend artifacts mount', () => {
       dockerRunner: resumeDocker,
     });
 
-    await expect(resumeBackend.resumeEnv(prepared.envId!)).resolves.toBeDefined();
+    await expect(resumeBackend.resumeEnv(legacy.id)).resolves.toBeDefined();
 
     const runArgs = resumeDocker.calls.find(c => c[0] === 'run') ?? [];
     expect(runArgs).toContain(`${SOURCE_MOUNT}:${SOURCE_MOUNT}:ro`);
@@ -1544,9 +1491,580 @@ describe('ContainerBackend artifacts mount', () => {
     });
     hostIs(HOST);
     const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-    const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
+    const legacy = seedContainerRow(store, { artifactsMount: ARTIFACTS_MOUNT });
 
-    await expect(backend.suspend(prepared.envId!)).resolves.toBeUndefined();
+    await expect(backend.suspend(legacy.id)).resolves.toBeUndefined();
     expect(docker.calls.some(c => c[0] === 'stop')).toBe(true);
   });
+});
+
+describe('ContainerBackend separated artifact storage', () => {
+  const trackRoot = trackTempRoots();
+  const root = join(getArchonHome(), 'artifacts', 'runs', 'separated-run');
+  const outputVolume = 'archon-res-1-artifacts';
+  const layout = { version: 1, artifacts: { root, volume: outputVolume } };
+
+  function environment(options: { legacy?: boolean; artifacts?: boolean; native?: boolean } = {}) {
+    const store = fakeStore();
+    const row = seedContainerRow(
+      store,
+      options.legacy
+        ? { artifactsMount: root }
+        : {
+            artifactExchange:
+              options.artifacts === false ? { version: 1, artifacts: null } : layout,
+          }
+    );
+    const volumes = new Set(['archon-res-1-upper', outputVolume]);
+    let state = 'running';
+    let id = 'cid-orig';
+    let name = 'archon-res-1';
+    let mode = 'fuse';
+    let helper: string | undefined;
+    let mounts: unknown = [
+      { Type: 'volume', Name: outputVolume, Source: '/docker/output', Destination: root, RW: true },
+    ];
+    let helperExit = '0';
+    let fail: ((args: string[]) => unknown) | undefined;
+    let beforeWait: (() => Promise<void>) | undefined;
+    const docker = fakeDocker(async args => {
+      const failure = fail?.(args);
+      if (failure) throw failure;
+      if (args[0] === 'volume') {
+        if (args[1] === 'create') volumes.add(args.at(-1)!);
+        if (args[1] === 'rm') volumes.delete(args.at(-1)!);
+        return { stdout: [...volumes].join('\n'), stderr: '' };
+      }
+      if (args[0] === 'container') {
+        const entries = [
+          ...(state === 'missing' ? [] : [{ ID: id, Names: name, State: state }]),
+          ...(helper ? [{ ID: 'helper-id', Names: helper, State: 'running' }] : []),
+        ];
+        return {
+          stdout: entries
+            .map(entry =>
+              args.includes('{{json .}}')
+                ? JSON.stringify(entry)
+                : `${entry.ID}\t${entry.Names}\t${entry.State}`
+            )
+            .join('\n'),
+          stderr: '',
+        };
+      }
+      if (args[0] === 'run') {
+        id = 'cid-new';
+        name = args[args.indexOf('--name') + 1]!;
+        mode = args.includes('SYS_ADMIN') ? 'native' : 'fuse';
+        state = 'running';
+        return { stdout: id, stderr: '' };
+      }
+      if (args[0] === 'exec' && options.native && mode === 'fuse')
+        throw new IsolationFailure('unclassified', 'FUSE failed');
+      if (args[0] === 'inspect') {
+        const stdout = args.includes('{{.Id}}')
+          ? id
+          : args.includes('{{json .Config.Env}}')
+            ? JSON.stringify([`ARCHON_OVERLAY_MODE=${mode}`])
+            : args.includes('{{json .Mounts}}')
+              ? JSON.stringify(mounts)
+              : args.includes('{{.State.ExitCode}}')
+                ? '78'
+                : 'false';
+        return { stdout, stderr: '' };
+      }
+      if (args[0] === 'start' && args[1] !== 'helper-id') state = 'running';
+      if (args[0] === 'stop') state = 'exited';
+      if (args[0] === 'create') {
+        helper = args[args.indexOf('--name') + 1];
+        return { stdout: 'helper-id', stderr: '' };
+      }
+      if (args[0] === 'wait') {
+        await beforeWait?.();
+        return { stdout: helperExit, stderr: '' };
+      }
+      if (args[0] === 'logs') return { stdout: '', stderr: 'linked parent refused' };
+      if (args[0] === 'rm') {
+        if (args.at(-1) === 'helper-id') helper = undefined;
+        else state = 'missing';
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    return {
+      store,
+      row,
+      volumes,
+      docker,
+      backend,
+      setState(value: string) {
+        state = value;
+      },
+      setMounts(value: unknown) {
+        mounts = value;
+      },
+      setHelper(value: string) {
+        helper = value;
+      },
+      setHelperExit(value: string) {
+        helperExit = value;
+      },
+      setFailure(value: (args: string[]) => unknown) {
+        fail = value;
+      },
+      setWait(value: () => Promise<void>) {
+        beforeWait = value;
+      },
+    };
+  }
+
+  test.each([false, true])(
+    'new preparation keeps canonical storage out of the main container (native: %s)',
+    async native => {
+      const f = environment({ native });
+      const prepared = await f.backend.prepare({ codebase: FOLDER, artifactsMount: root });
+      expect(prepared.artifactExchange).toBeDefined();
+      const metadata = f.store.created?.metadata;
+      expect(metadata).not.toHaveProperty('artifactsMount');
+      expect(metadata?.artifactExchange).toEqual({
+        version: 1,
+        artifacts: { root, volume: expect.stringMatching(/^archon-.*-artifacts$/) },
+      });
+      const created = f.docker.calls.filter(args => args[0] === 'volume' && args[1] === 'create');
+      expect(created).toHaveLength(2);
+      expect(created[1]).toContain('diy.archon.managed=true');
+      const volume = created[1]!.at(-1)!;
+      const runs = f.docker.calls.filter(args => args[0] === 'run');
+      expect(runs).toHaveLength(native ? 2 : 1);
+      for (const run of runs) {
+        expect(run).toContain(`${volume}:${root}`);
+        expect(run).not.toContain(`${root}:${root}`);
+        expect(run).not.toContain(`${root}:${root}:ro`);
+      }
+    }
+  );
+
+  test('preparation without artifacts is versioned without an unused output volume', async () => {
+    const f = environment();
+    const prepared = await f.backend.prepare({ codebase: FOLDER });
+    expect(f.store.created?.metadata?.artifactExchange).toEqual({ version: 1, artifacts: null });
+    expect(prepared.artifactExchange).toBeUndefined();
+    expect(
+      f.docker.calls.filter(args => args[0] === 'volume' && args[1] === 'create')
+    ).toHaveLength(1);
+  });
+
+  test.each(['running', 'exited', 'missing'])(
+    'resumes %s environment from recorded storage',
+    async state => {
+      const f = environment();
+      f.setState(state);
+      const prepared = await f.backend.resumeEnv(f.row.id);
+      expect(prepared.artifactExchange).toBeDefined();
+      if (state === 'missing') {
+        const run = f.docker.calls.find(args => args[0] === 'run')!;
+        expect(run).toContain(`${outputVolume}:${root}`);
+        expect(run).not.toContain(`${root}:${root}`);
+        expect(f.row.metadata).toMatchObject({ containerId: 'cid-new', artifactExchange: layout });
+      } else {
+        expect(f.docker.calls.some(args => args[0] === 'run')).toBe(false);
+        expect(f.docker.calls.some(args => args[0] === 'start')).toBe(state === 'exited');
+      }
+      expect(f.docker.calls.some(args => args[0] === 'volume' && args[1] === 'create')).toBe(false);
+    }
+  );
+
+  test.each(['running', 'exited', 'missing'])(
+    'missing output blocks %s resume before creating or starting anything',
+    async state => {
+      const f = environment();
+      f.setState(state);
+      f.volumes.delete(outputVolume);
+      await expect(f.backend.resumeEnv(f.row.id)).rejects.toThrow('artifact output volume');
+      expect(f.docker.calls.every(args => args[0] === 'volume' && args[1] === 'ls')).toBe(true);
+    }
+  );
+
+  test.each([
+    null,
+    {},
+    { version: 2, artifacts: null },
+    { version: 1 },
+    { version: 1, artifacts: {} },
+    { version: 1, artifacts: { root, volume: outputVolume }, finalCollection: false },
+    { version: 1, artifacts: { root, volume: '/host/path' } },
+    { version: 1, artifacts: { root: 'relative', volume: outputVolume } },
+    { version: 1, artifacts: { root: '/arbitrary/host', volume: outputVolume } },
+    { version: 1, artifacts: { root, volume: '' } },
+  ])('present malformed metadata never falls back to legacy: %j', async artifactExchange => {
+    for (const operation of ['resumeEnv', 'suspend', 'destroy'] as const) {
+      const f = environment();
+      f.row.metadata.artifactExchange = artifactExchange;
+      await expect(f.backend[operation](f.row.id)).rejects.toThrow(
+        'Invalid persisted artifactExchange'
+      );
+      expect(f.docker.calls).toHaveLength(0);
+    }
+  });
+
+  test.each(['resumeEnv', 'suspend', 'destroy'] as const)(
+    '%s refuses mixed legacy and separated storage metadata',
+    async operation => {
+      const f = environment();
+      f.row.metadata.artifactsMount = root;
+      await expect(f.backend[operation](f.row.id)).rejects.toThrow(
+        'cannot contain a legacy artifactsMount'
+      );
+      expect(f.docker.calls).toHaveLength(0);
+    }
+  );
+
+  test('a versioned environment without artifacts resumes without allocating storage', async () => {
+    const f = environment({ artifacts: false });
+    f.volumes.delete(outputVolume);
+    const prepared = await f.backend.resumeEnv(f.row.id);
+    expect(prepared.artifactExchange).toBeUndefined();
+    expect(f.docker.calls.some(args => args[0] === 'volume')).toBe(false);
+    expect(f.row.metadata.artifactExchange).toEqual({ version: 1, artifacts: null });
+  });
+
+  test.each(['running', 'exited'])('checks all mounts before %s reuse', async state => {
+    const badMounts = [
+      [],
+      null,
+      [{ Type: 'bind', Source: root, Destination: root, RW: true }],
+      [{ Type: 'volume', Name: 'wrong', Source: '/docker/output', Destination: root, RW: true }],
+      [
+        {
+          Type: 'volume',
+          Name: outputVolume,
+          Source: '/docker/output',
+          Destination: root,
+          RW: false,
+        },
+      ],
+      [
+        {
+          Type: 'volume',
+          Name: outputVolume,
+          Source: '/docker/output',
+          Destination: root,
+          RW: true,
+        },
+        { Type: 'bind', Source: getArchonHome(), Destination: '/exposed', RW: false },
+      ],
+    ];
+    for (const mounts of badMounts) {
+      const f = environment();
+      f.setState(state);
+      f.setMounts(mounts);
+      await expect(f.backend.resumeEnv(f.row.id)).rejects.toThrow();
+      expect(f.docker.calls.some(args => ['start', 'run', 'exec'].includes(args[0]!))).toBe(false);
+    }
+  });
+
+  test.each(['prepare', 'resumeEnv'] as const)(
+    '%s rejects an overlapping source mount',
+    async operation => {
+      const f = environment();
+      f.row.metadata.sourceMount = getArchonHome();
+      await expect(
+        operation === 'prepare'
+          ? f.backend.prepare({
+              codebase: FOLDER,
+              artifactsMount: root,
+              sourceMount: getArchonHome(),
+            })
+          : f.backend.resumeEnv(f.row.id)
+      ).rejects.toThrow('overlaps exposed mount');
+      expect(f.docker.calls).toHaveLength(0);
+    }
+  );
+
+  (process.platform === 'win32' ? test.skip : test).each(['prepare', 'resumeEnv'] as const)(
+    '%s rejects canonical artifacts exposed through a source alias',
+    async operation => {
+      const temp = await mkdtemp(join(tmpdir(), 'archon-separated-mount-'));
+      trackRoot(temp);
+      const priorHome = process.env.ARCHON_HOME;
+      process.env.ARCHON_HOME = temp;
+      try {
+        const canonical = join(temp, 'canonical');
+        const alias = join(temp, 'source-alias');
+        await mkdir(canonical);
+        await symlink(canonical, alias);
+        const f = environment();
+        f.row.metadata.artifactExchange = {
+          version: 1,
+          artifacts: { root: join(canonical, 'missing-run'), volume: outputVolume },
+        };
+        f.row.metadata.sourceMount = alias;
+        await expect(
+          operation === 'prepare'
+            ? f.backend.prepare({
+                codebase: FOLDER,
+                artifactsMount: join(canonical, 'missing-run'),
+                sourceMount: alias,
+              })
+            : f.backend.resumeEnv(f.row.id)
+        ).rejects.toThrow('overlaps exposed mount');
+        expect(f.docker.calls).toHaveLength(0);
+      } finally {
+        if (priorHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = priorHome;
+      }
+    }
+  );
+
+  test('destroy is idempotent after a successful separated teardown', async () => {
+    const f = environment();
+    await f.backend.destroy(f.row.id);
+    const calls = f.docker.calls.length;
+    await f.backend.destroy(f.row.id);
+    expect(f.docker.calls).toHaveLength(calls);
+    expect(f.row.status).toBe('destroyed');
+  });
+
+  test('failed preparation preserves volumes when producer removal cannot be confirmed', async () => {
+    const f = environment();
+    f.volumes.clear();
+    spyOn(f.store, 'create').mockRejectedValueOnce(new Error('persistence failed'));
+    f.setFailure(args => (args[0] === 'rm' ? new Error('daemon lost') : undefined));
+    await expect(f.backend.prepare({ codebase: FOLDER, artifactsMount: root })).rejects.toThrow(
+      'persistence failed'
+    );
+    expect(f.volumes.size).toBe(2);
+    expect(f.docker.calls.some(args => args[0] === 'volume' && args[1] === 'rm')).toBe(false);
+  });
+
+  test.each(['running', 'exited', 'missing'])(
+    'legacy upgrade keeps a %s environment unchanged',
+    async state => {
+      const f = environment({ legacy: true });
+      const before = { ...f.row.metadata };
+      f.setState(state);
+      const prepared = await f.backend.resumeEnv(f.row.id);
+      expect(prepared.artifactExchange).toBeUndefined();
+      expect(f.row.metadata).not.toHaveProperty('artifactExchange');
+      expect(f.row.metadata.artifactsMount).toBe(root);
+      if (state === 'missing') {
+        const run = f.docker.calls.find(args => args[0] === 'run')!;
+        expect(run).toContain(`${root}:${root}`);
+        expect(run).not.toContain(`${outputVolume}:${root}`);
+      } else expect(f.row.metadata).toEqual(before);
+      expect(f.docker.calls.some(args => args[0] === 'volume' && args[1] === 'create')).toBe(false);
+    }
+  );
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s collects only after producer shutdown and retains output until collection completes',
+    async operation => {
+      const f = environment();
+      f.setWait(async () => {
+        expect(f.volumes.has(outputVolume)).toBe(true);
+        expect(f.volumes.has('archon-res-1-upper')).toBe(true);
+        expect(
+          f.docker.calls.some(
+            args =>
+              args[0] === (operation === 'suspend' ? 'stop' : 'rm') &&
+              args.at(-1) === 'archon-res-1'
+          )
+        ).toBe(true);
+        expect(f.row.status).toBe('active');
+      });
+      await f.backend[operation](f.row.id);
+      expect(f.docker.calls.some(args => args[0] === 'exec' && args.includes('chown'))).toBe(false);
+      expect(f.docker.calls.some(args => args[0] === 'wait')).toBe(true);
+      expect(f.volumes.has(outputVolume)).toBe(operation === 'suspend');
+      expect(f.row.status).toBe(operation === 'suspend' ? 'active' : 'destroyed');
+    }
+  );
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s preserves both volumes and reports failed collection',
+    async operation => {
+      const f = environment();
+      f.setHelperExit('1');
+      await expect(f.backend[operation](f.row.id)).rejects.toThrow('Artifact collect failed');
+      expect(f.volumes).toEqual(new Set(['archon-res-1-upper', outputVolume]));
+      expect(f.row.status).toBe('active');
+    }
+  );
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s refuses ambiguous helper/paused producer ownership',
+    async operation => {
+      for (const ambiguous of ['paused', 'helper']) {
+        const f = environment();
+        if (ambiguous === 'paused') f.setState('paused');
+        else f.setHelper('archon-res-1-artifacts-helper');
+        await expect(f.backend[operation](f.row.id)).rejects.toThrow('ownership is ambiguous');
+        expect(f.docker.calls.map(args => args[0])).toEqual(['container']);
+        expect(f.volumes.has(outputVolume)).toBe(true);
+      }
+    }
+  );
+
+  test('failed producer removal preserves both volumes without collecting', async () => {
+    const f = environment();
+    f.setFailure(args => (args[0] === 'rm' ? new Error('removal refused') : undefined));
+    await expect(f.backend.destroy(f.row.id)).rejects.toThrow('removal refused');
+    expect(f.volumes.size).toBe(2);
+    expect(f.row.status).toBe('active');
+    expect(f.docker.calls.some(args => args[0] === 'create')).toBe(false);
+  });
+
+  test.each(['upper-removal', 'status-write'] as const)(
+    'destroy retries after output deletion and %s failure, including a fresh backend',
+    async phase => {
+      const f = environment();
+      if (phase === 'status-write') {
+        spyOn(f.store, 'updateStatus').mockRejectedValueOnce(new Error('status unavailable'));
+      } else {
+        f.setFailure(args =>
+          args[0] === 'volume' && args[1] === 'rm' && args.at(-1) === 'archon-res-1-upper'
+            ? new Error('upper busy')
+            : undefined
+        );
+      }
+      await expect(f.backend.destroy(f.row.id)).rejects.toThrow(
+        phase === 'status-write' ? 'status unavailable' : 'upper busy'
+      );
+      expect(f.row.status).toBe('active');
+      expect(f.volumes.has(outputVolume)).toBe(false);
+      f.setFailure(() => undefined);
+      const retry = new ContainerBackend({
+        config: CONFIG,
+        store: f.store,
+        dockerRunner: f.docker,
+      });
+      await retry.destroy(f.row.id);
+      expect(f.row.status).toBe('destroyed');
+      expect(f.volumes.size).toBe(0);
+      expect(f.docker.calls.filter(args => args[0] === 'create')).toHaveLength(1);
+    }
+  );
+
+  test('failed final-collection checkpoint retains its source and retries collection', async () => {
+    const f = environment();
+    spyOn(f.store, 'updateMetadata').mockRejectedValueOnce(new Error('checkpoint unavailable'));
+    await expect(f.backend.destroy(f.row.id)).rejects.toThrow('checkpoint unavailable');
+    expect(f.volumes.has(outputVolume)).toBe(true);
+    expect(f.row.metadata.artifactExchange).not.toHaveProperty('finalCollection');
+    await f.backend.destroy(f.row.id);
+    expect(f.row.status).toBe('destroyed');
+    expect(f.docker.calls.filter(args => args[0] === 'create')).toHaveLength(2);
+  });
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s refuses missing output before final collection',
+    async operation => {
+      const f = environment();
+      f.volumes.delete(outputVolume);
+      await expect(f.backend[operation](f.row.id)).rejects.toThrow('Artifact collect failed');
+      expect(f.row.metadata.artifactExchange).not.toHaveProperty('finalCollection');
+      expect(f.row.status).toBe('active');
+      expect(f.volumes.has('archon-res-1-upper')).toBe(true);
+    }
+  );
+
+  test('resume refuses an environment whose final collection has completed', async () => {
+    const f = environment();
+    f.row.metadata.artifactExchange = { ...layout, finalCollection: true };
+    await expect(f.backend.resumeEnv(f.row.id)).rejects.toThrow('retry destruction');
+    expect(f.docker.calls).toHaveLength(0);
+  });
+
+  test('failed output removal preserves the tracking row and upper volume', async () => {
+    const f = environment();
+    f.setFailure(args =>
+      args[0] === 'volume' && args[1] === 'rm' ? new Error('volume busy') : undefined
+    );
+    await expect(f.backend.destroy(f.row.id)).rejects.toThrow('volume busy');
+    expect(f.row.status).toBe('active');
+    expect(f.volumes.size).toBe(2);
+  });
+
+  test.each(['output-create', 'run', 'store'] as const)(
+    'preparation rolls back the output volume after %s failure',
+    async phase => {
+      const f = environment();
+      f.setState('missing');
+      f.volumes.clear();
+      const failure = new Error('provisioning failed');
+      if (phase === 'store') spyOn(f.store, 'create').mockRejectedValueOnce(failure);
+      f.setFailure(args =>
+        (phase === 'run' && args[0] === 'run') ||
+        (phase === 'output-create' &&
+          args[0] === 'volume' &&
+          args[1] === 'create' &&
+          args.at(-1)?.endsWith('-artifacts'))
+          ? failure
+          : undefined
+      );
+      await expect(f.backend.prepare({ codebase: FOLDER, artifactsMount: root })).rejects.toBe(
+        failure
+      );
+      expect(f.volumes.size).toBe(0);
+      expect(f.docker.calls.filter(args => args[0] === 'volume' && args[1] === 'rm')).toHaveLength(
+        2
+      );
+    }
+  );
+
+  test.each(['suspend', 'destroy'] as const)(
+    '%s shares the invocation transfer queue',
+    async operation => {
+      const f = environment();
+      const prepared = await f.backend.resumeEnv(f.row.id);
+      let release: (() => void) | undefined;
+      const waiting = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let arrived: (() => void) | undefined;
+      const atWait = new Promise<void>(resolve => {
+        arrived = resolve;
+      });
+      f.setWait(async () => {
+        arrived?.();
+        await waiting;
+      });
+      const publish = prepared.artifactExchange!.publish();
+      await atWait;
+      const lifecycle = f.backend[operation](f.row.id);
+      expect(
+        f.docker.calls.some(
+          args => args[0] === 'stop' || (args[0] === 'rm' && args.at(-1) === 'archon-res-1')
+        )
+      ).toBe(false);
+      release?.();
+      await Promise.all([publish, lifecycle]);
+      const helperRemoved = f.docker.calls.findIndex(
+        args => args[0] === 'rm' && args.at(-1) === 'helper-id'
+      );
+      const shutdown = f.docker.calls.findIndex(
+        args =>
+          args.at(-1) === 'archon-res-1' && args[0] === (operation === 'suspend' ? 'stop' : 'rm')
+      );
+      expect(shutdown).toBeGreaterThan(helperRemoved);
+    }
+  );
+
+  test.each(['publish', 'collect', 'suspend', 'destroy'] as const)(
+    'refuses %s after an unconfirmed helper removal without starting another operation',
+    async operation => {
+      const f = environment();
+      const prepared = await f.backend.resumeEnv(f.row.id);
+      f.setFailure(args =>
+        args[0] === 'rm' && args.at(-1) === 'helper-id' ? new Error('daemon lost') : undefined
+      );
+      await expect(prepared.artifactExchange!.collect()).rejects.toThrow();
+      const before = f.docker.calls.length;
+      const refused =
+        operation === 'publish' || operation === 'collect'
+          ? prepared.artifactExchange![operation]()
+          : f.backend[operation](f.row.id);
+      await expect(refused).rejects.toThrow();
+      expect(f.docker.calls.slice(before).every(args => args[0] === 'container')).toBe(true);
+    }
+  );
 });

@@ -267,6 +267,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // a loop_group body exec in the same place (host, or the container in Phase B)
     // — without this a loop_group body would be a host-escape hole.
     execContext: ctx.execContext,
+    artifactExchange: ctx.artifactExchange,
     // persist_session across iterations is out of v1 scope (body sessions reset per
     // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
     // participate in cross-run session persistence inside the loop — and therefore
