@@ -5,6 +5,8 @@
  * the watch prints can only have come from the persisted store: no in-process emitter
  * is shared between the watcher and the run.
  */
+import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -333,3 +335,49 @@ test('an owner killed mid-run is reported once as owner_lost and the row stays r
   if (abandoned.exitCode !== 0) throw new Error(`abandon failed: ${abandoned.stderr}`);
   activeRunIds.delete(runId);
 }, 180_000);
+
+test('fan-out questions have independent stream identities and resolve second first', async () => {
+  const fixture = makeFixture(multiAttentionWorkflows);
+  const watch = startWatch(fixture);
+  await watch.next('ready', line => line.type === 'ready');
+  const parentId = await launchDetached(fixture, 'questions');
+  const opened = [];
+  for (const index of [0, 1]) {
+    const line = await watch.next(`question ${index}`, line => {
+      if (line.type !== 'attention') return false;
+      const item = attentionQueueItemSchema.parse(line.item);
+      return item.fanOut?.parentRunId === parentId && item.fanOut.index === index;
+    });
+    opened.push(attentionQueueItemSchema.parse(line.item));
+  }
+  const [first, second] = opened;
+  expect(first.runId).not.toBe(second.runId);
+  const answer = async (item: typeof first, choose: string) => {
+    if (item.kind !== 'attention') throw new Error('Expected attention');
+    const answered = await runCli(fixture, [
+      'workflow',
+      'answer',
+      item.runId,
+      '--occurrence',
+      item.occurrence,
+      '--choose',
+      choose,
+    ]);
+    expect(answered, answered.stdout + answered.stderr).toMatchObject({ exitCode: 0 });
+    expect(await watch.next('resolved', ofRun(item.runId, 'resolved'))).toMatchObject({
+      occurrence: item.occurrence,
+      reason: 'answered',
+    });
+  };
+  await answer(second, 'defer');
+  const remaining = await runCli(fixture, ['workflow', 'attention', first.runId, '--json']);
+  expect(remaining.exitCode).toBe(0);
+  expect(JSON.parse(remaining.stdout).item).toEqual(first);
+  expect(watch.lines.filter(ofRun(first.runId, 'resolved'))).toEqual([]);
+  await statusOf(fixture, parentId, 'paused');
+  await answer(first, 'accept');
+  await watch.next('parent completed', ofRun(parentId, 'terminal'));
+  await statusOf(fixture, parentId, 'completed');
+  activeRunIds.delete(parentId);
+  await watch.stop();
+}, 60_000);
