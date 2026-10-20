@@ -27,7 +27,7 @@ import {
 } from '../../.shared/merge-gate.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
-const sha = trimmed(process.env.INPUTS_SHA);
+const named = trimmed(process.env.INPUTS_SHA);
 const route = trimmed(process.env.INPUTS_ROUTE);
 const target = trimmed(process.env.INPUTS_TARGET);
 const delivers = trimmed(process.env.INPUTS_DELIVERS);
@@ -42,6 +42,10 @@ function run(cmd: string[]): { code: number; out: string; err: string } {
   const result = Bun.spawnSync(cmd, { stdout: 'pipe', stderr: 'pipe' });
   return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
 }
+
+// A reviewer may name the commit by a short id (seen live); compare the full one it stands for.
+const resolved = named === '' ? null : run(['git', 'rev-parse', '--verify', '--quiet', `${named}^{commit}`]);
+const sha = resolved !== null && resolved.code === 0 ? resolved.out.trim() : named;
 
 const tracking = new Map<string, boolean>();
 const refusals = recordRefusals({
