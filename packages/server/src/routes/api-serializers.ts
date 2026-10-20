@@ -3,6 +3,7 @@ import type { Codebase, Conversation } from '@archon/core';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { workflowRunUsageSchema } from '@archon/workflows/schemas/workflow-run-usage';
 import {
   isApprovalContext,
   runAttention,
@@ -93,10 +94,15 @@ function toApiRunAttention(row: WorkflowRun): ApiWorkflowRun['attention'] {
 }
 
 function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
-  const approval = metadata.approval;
+  const wireMetadata = { ...metadata };
+  // Historical usage remains in storage; values outside the wire contract are unreported.
+  for (const [key, schema] of Object.entries(workflowRunUsageSchema.shape)) {
+    if (!schema.safeParse(wireMetadata[key]).success) delete wireMetadata[key];
+  }
+  const approval = wireMetadata.approval;
   return isApprovalContext(approval)
-    ? { ...metadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
-    : metadata;
+    ? { ...wireMetadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
+    : wireMetadata;
 }
 
 export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {

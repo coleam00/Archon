@@ -65,6 +65,9 @@
       "src/routes/api.workflow-runs.test.ts"
     ],
     [
+      "src/routes/api.workflow-usage.test.ts"
+    ],
+    [
       "src/routes/api.workflow-run-launch.test.ts"
     ],
     [

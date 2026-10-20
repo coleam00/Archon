@@ -24,6 +24,9 @@ test('the attention endpoint and detail expose the shared projection with wire d
     ...MOCK_RUNNING_RUN,
     status: 'paused',
     metadata: {
+      total_cost_usd: 'free',
+      total_tokens_in: 'unknown',
+      total_tokens_out: 42,
       wait: {
         owner: 'node',
         nodeId: 'hold',
@@ -39,6 +42,9 @@ test('the attention endpoint and detail expose the shared projection with wire d
   const list = await app.request('/api/runs/attention');
   expect(list.status).toBe(200);
   const body = runsNeedingAttentionResponseSchema.parse(await list.json());
+  expect(body.runs[0]?.metadata).not.toHaveProperty('total_cost_usd');
+  expect(body.runs[0]?.metadata).not.toHaveProperty('total_tokens_in');
+  expect(body.runs[0]?.metadata.total_tokens_out).toBe(42);
   expect(body.runs[0]?.attention).toEqual({
     kind: 'attention',
     runId: run.id,
