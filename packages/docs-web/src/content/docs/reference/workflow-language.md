@@ -76,7 +76,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
-Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. `thinking:` and the old sequential `steps:` format fail to load.
+Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`.
 
 ### Execution order
 
@@ -106,14 +106,14 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 |-------|------|---------|-------------|
 | `id` | string | required | Unique node identifier. Used in `depends_on`, `when:`, and `$id.output` substitution |
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
-| `when` | string | none | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
+| `when` | string | unset | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
-| `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | none | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
-| `idle_timeout` | number | none | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Reported live background work suspends the timer |
-| `retry` | object | none | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
-| `mutates_checkout` | boolean | none | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
+| `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
+| `idle_timeout` | number | unset | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Reported live background work suspends the timer |
+| `retry` | object | unset | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
+| `mutates_checkout` | boolean | unset | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
 | `always_run` | boolean | `false` | Not a scheduling field: it does not change whether the node runs in a normal pass (use `when:` and `trigger_rule` for that). It opts the node out of the resume cache, so on resume it is evaluated again instead of replaying a prior completion, and still runs only if its `when:` and `trigger_rule` allow it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
-| `output_type` | string | none | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes (best-effort). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
+| `output_type` | string | unset | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes (best-effort). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
 
 **AI node options**: apply to `command` and `prompt` nodes:
 
@@ -121,20 +121,20 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 |-------|------|---------|-------------|
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
-| `output_format` | object | none | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
-| `allowed_tools` | string[] | none | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
-| `denied_tools` | string[] | none | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
-| `hooks` | object | none | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string \| `{ path, optional }` | none | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
-| `skills` | string[] | none | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
-| `plugins` | string[] | none | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
-| `agents` | object | none | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | none | Reasoning depth. Every provider with a request-level reasoning control: Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
-| `maxBudgetUsd` | number | none | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
-| `systemPrompt` | string | none | Set system instructions for this node (Claude/Codex/Pi/Copilot/OpenCode). Replaces the default `claude_code` prompt on Claude. Per-node only |
-| `fallbackModel` | string | none | Model to use if primary model fails. Claude only. Also settable at workflow level |
-| `betas` | string[] | none | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
-| `sandbox` | object | none | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
+| `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
+| `allowed_tools` | string[] | unset | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
+| `denied_tools` | string[] | unset | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
+| `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
+| `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
+| `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
+| `plugins` | string[] | unset | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
+| `agents` | object | unset | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
+| `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | unset | Reasoning depth. Every provider with a request-level reasoning control: Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
+| `maxBudgetUsd` | number | unset | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
+| `systemPrompt` | string | unset | Set system instructions for this node (Claude/Codex/Pi/Copilot/OpenCode). Replaces the default `claude_code` prompt on Claude. Per-node only |
+| `fallbackModel` | string | unset | Model to use if primary model fails. Claude only. Also settable at workflow level |
+| `betas` | string[] | unset | SDK beta feature flags (e.g., `'context-1m-2025-08-07'`). Claude only. Also settable at workflow level |
+| `sandbox` | object | unset | OS-level filesystem/network restrictions for the Claude subprocess. Claude only. Also settable at workflow level |
 | `settingSources` | (`'project'`\|`'user'`)[] | inherited | Which filesystem setting sources a capable provider discovers (for Claude: CLAUDE.md, skills, commands, agents). Workflow `skills:` remains the exact active skill set. Overrides the assistant-level default; unset everywhere = `['project', 'user']`. `[]` loads none. Requires the provider's `settingSources` capability. Per-node only |
 
 ### Bash and script node timeouts
@@ -809,7 +809,7 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:`: omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 0–60000 on loops; 1000–60000 otherwise | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | none | Which errors trigger a retry. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | | Which errors trigger a retry. Loops accept only `'transient'` or omission. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
@@ -851,7 +851,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | An AI provider stream that ends without any output | TRANSIENT | Yes |
 | A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
 | An AI node's structured output that fails its `output_format` after reasks | UNKNOWN | No (unless `on_error: all`) |
-| A `bash:`/`script:` node's stdout that fails its `output_format` | none | Never |
+| A `bash:`/`script:` node's stdout that fails its `output_format` | no bucket | Never |
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
@@ -2220,7 +2220,7 @@ can line results up against the input list positionally.
 | Field | Default | What it does |
 |-------|---------|--------------|
 | `items` | required | A `$node.output` (or `$node.output.field`) reference that must resolve to a **JSON array** at run time. Anything else (an object, a bare string, malformed JSON, a dangling ref) fails the node before any child is created. It never fans out over the characters of a string, and never silently degrades to zero items. An empty array is legal: the node completes immediately with `[]`. |
-| `as` | none | Names the current item as `$INPUTS.<as>` in each child. It must not collide with a `with:` key. The item also reaches the child as `$ARGUMENTS`. |
+| `as` | unset | Names the current item as `$INPUTS.<as>` in each child. It must not collide with a `with:` key. The item also reaches the child as `$ARGUMENTS`. |
 | `max_parallel` | `5` | Positive integer limiting unfinished children, or `all` to open every resolved item together. `all` is supported on `workflow:` nodes only. |
 | `join` | `all_done` | How N child outcomes reduce to one node outcome (below). |
 
@@ -2252,7 +2252,7 @@ Consequences worth planning for:
 |--------|------------------------|----------------|
 | `all_done` (default) | every child reached a terminal state and at least one child run was created (or the item list was empty) | JSON array in item order: each element is the child's **result value** (a structured child's terminal payload lands as the object itself, single-encoded; a text child's output stays the raw string), with each failed/cancelled child represented as `{ archon_failed: true, error, status }` in its slot |
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
-| `first_success` | none | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
+| `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
@@ -2838,7 +2838,7 @@ A list is how a bundled workflow names the concern each node serves without requ
 
 Tier and alias refs resolve to a provider, model and optional `effort`. If a workflow or node sets `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
-Archon keeps no allow-list of literal model ids. The provider's API decides at request time, and a rejected id fails the node with the SDK's error. Pair a provider-specific literal with an explicit `provider:` on the workflow or node, and use tiers for cross-provider defaults. Pi model refs take the form `<backend>/<model-id>`, such as `google/gemini-2.5-pro`.
+Archon keeps no allow-list of literal model ids. The provider's API decides at request time, and a rejected id fails the node with the SDK's error. Pair a provider-specific literal with an explicit `provider:` on the workflow or node, and use tiers for cross-provider defaults. Claude accepts family aliases such as `sonnet`, full model ids, context-window forms such as `opus[1m]`, and `inherit` to reuse the previous session's model. Pi model refs take the form `<backend>/<model-id>`, such as `google/gemini-2.5-pro`. Copilot accepts its model names or `auto`.
 
 ### Codex-Specific Options
 
@@ -2902,7 +2902,7 @@ The field never changes execution. Every run start announces, on each surface th
 
 ## Variable Substitution
 
-Prompts, command files, `bash:` bodies and `script:` bodies can use workflow variables such as `$ARGUMENTS` (the run's message), `$ARTIFACTS_DIR`, `$WORKFLOW_ID`, `$BASE_BRANCH` and `$STATE_DIR`, and node output references such as `$nodeId.output.field`. The [Variable Reference](/reference/variables/) lists every variable, the substitution order, and the deprecated `$LOOP_USER_INPUT` and `$REJECTION_REASON`, which an attention wait's `$<wait-id>.output.text` replaces.
+Prompts, command files, `bash:` bodies and `script:` bodies can use workflow variables such as `$ARGUMENTS` (the run's message), `$ARTIFACTS_DIR`, `$WORKFLOW_ID`, `$BASE_BRANCH` and `$STATE_DIR`, and node output references such as `$nodeId.output.field`. The [Variable Reference](/reference/variables/) lists every variable, the substitution order, and the deprecated `$LOOP_USER_INPUT` and `$REJECTION_REASON`. An attention wait's answer replaces both: `$<wait-id>.output.text`, read as `$LOOP_PREV.<wait-id>.output.text` in the next loop iteration.
 
 ## Testing a workflow
 
