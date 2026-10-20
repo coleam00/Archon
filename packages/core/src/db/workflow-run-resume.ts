@@ -35,6 +35,7 @@ import {
   resourceStartOccupancy,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
+import { lockRunCheckout } from './workflow-run-checkout';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog, normalizeMetadata } from './workflow-run-shared';
 
@@ -199,12 +200,7 @@ export async function resumeWorkflowRun(
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      // Acquire the SQLite writer lock before taking a snapshot. Without this,
-      // another process can commit between the SELECT and our first UPDATE and
-      // make the deferred transaction fail its read-to-write upgrade.
-      if (getDatabaseType() === 'sqlite') {
-        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-      }
+      await lockRunCheckout(query, id);
       const priorRows = await query<{
         status: string;
         metadata: unknown;
@@ -388,6 +384,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      await lockRunCheckout(query, id);
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',

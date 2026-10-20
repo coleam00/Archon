@@ -1479,14 +1479,15 @@ checkout sets `adopted: true` while preserving its creation proof, so that check
 can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
-Cleanup deletes an environment's local branch only when Archon created that branch.
-A branch that already existed when the run started (see `--branch` above) is kept,
-since it may hold commits that exist nowhere else. These branches are eligible for
-local deletion by `--merged` (and `--include-closed`) once their PR or branch is
-finished, or by `archon complete`. Those commands also attempt remote branch deletion.
-A remote deletion failure or timeout produces a warning; local removal and registration
-retirement can still complete while the remote branch remains.
-Records created before Archon tracked this are treated the same way, keeping their branch.
+Ordinary age-based cleanup deletes an environment's local branch only when Archon
+created that branch. It keeps pre-existing local branches and branches on legacy
+records that lack branch-creation tracking. Merged cleanup (`--merged`, including
+`--include-closed`) and `archon complete` can delete those local branches after
+their checks. Completion with `--force` bypasses commit-safety checks, so it can
+delete a branch with unmerged commits. Merged cleanup and completion also attempt
+remote branch deletion. A remote deletion failure or timeout produces a warning;
+local removal and registration retirement can still complete while the remote
+branch remains.
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
