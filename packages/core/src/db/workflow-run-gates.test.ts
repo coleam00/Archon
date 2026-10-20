@@ -68,7 +68,7 @@ describe('workflow run gates', () => {
       // this suite runs the Postgres dialect, so it pins that branch of
       // writeApprovalMetadata (#2673). Top-level run metadata still merges.
       expect(query).toContain(
-        "metadata = jsonb_set((metadata - 'wait') || $2::jsonb, '{approval}', $3::jsonb, true)"
+        "metadata = jsonb_set((metadata || $2::jsonb) - 'wait', '{approval}', $3::jsonb, true)"
       );
 
       // $2 is run-level metadata (only the pause cause here); $3 is the complete gate
