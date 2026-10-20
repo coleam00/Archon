@@ -25,11 +25,8 @@ such as one that arrived with a merge of the default branch, doesn't hold it.
 
 ## Unclear: the queue asks
 
-- Changes to the SDLC pack itself: its workflows, commands, scripts or policy documents.
 - A persisted schema, a migration, or any stored or wire format.
 - Authentication, credentials or permissions.
-- The workflow language: its YAML surface, schemas or validation.
-- The plugin protocol, or any contract an outside plugin or provider builds against.
 - Large changes: many files or packages, or a rewrite of a subsystem.
 - Partial work: one part of a multi-part plan, or a pull request whose review lists
   contract items as not yet met.
