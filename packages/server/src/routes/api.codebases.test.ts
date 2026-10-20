@@ -28,7 +28,11 @@ import {
   deleteCodebase,
   createCodebase as realCreateCodebase,
   getCodebase as realGetCodebase,
+  listCodebaseClaims as realListCodebaseClaims,
+  listCodebases as realListCodebases,
 } from '@archon/core/db/codebases';
+import type { Codebase } from '@archon/core/schemas/codebase';
+import { InvalidCodebaseDefaultCwdError } from '@archon/core/db/codebase-path';
 import { ProjectRegistrationError } from '@archon/core/handlers/clone';
 import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
@@ -60,6 +64,8 @@ const realCodebaseStore = {
   createCodebase: realCreateCodebase,
   getCodebase: realGetCodebase,
   deleteCodebase,
+  listCodebaseClaims: realListCodebaseClaims,
+  listCodebases: realListCodebases,
 };
 const fsPromises = await import('fs/promises');
 const mockRm = mock<typeof realRm>(removeRealDirectory);
@@ -83,7 +89,7 @@ const mockGetCodebase = mock(
 type MockCodebase = Omit<typeof MOCK_CODEBASE, 'repository_url'> & {
   repository_url: string | null;
 };
-const mockListCodebases = mock(async () => [] as MockCodebase[]);
+const mockListCodebaseClaims = mock(async (): Promise<readonly (MockCodebase | Codebase)[]> => []);
 const mockDeleteCodebase = mock<typeof deleteCodebase>(async () => {});
 const mockRenameCodebase = mock(async (_id: string, _name: string) => ({
   ...MOCK_CODEBASE,
@@ -206,7 +212,8 @@ mock.module('@archon/core/db/conversations', () => ({
 }));
 
 mock.module('@archon/core/db/codebases', () => ({
-  listCodebases: mockListCodebases,
+  listCodebases: realCodebaseStore.listCodebases,
+  listCodebaseClaims: mockListCodebaseClaims,
   getCodebase: mockGetCodebase,
   deleteCodebase: mockDeleteCodebase,
   renameCodebase: mockRenameCodebase,
@@ -313,11 +320,11 @@ function makeApp(dependencies?: Parameters<typeof registerApiRoutes>[5]): OpenAP
 
 describe('GET /api/codebases', () => {
   beforeEach(() => {
-    mockListCodebases.mockReset();
+    mockListCodebaseClaims.mockReset();
   });
 
   test('returns empty array when no codebases exist', async () => {
-    mockListCodebases.mockImplementationOnce(async () => []);
+    mockListCodebaseClaims.mockImplementationOnce(async () => []);
 
     const app = makeApp();
     const response = await app.request('/api/codebases');
@@ -329,7 +336,7 @@ describe('GET /api/codebases', () => {
   });
 
   test('returns list of codebases sorted by name', async () => {
-    mockListCodebases.mockImplementationOnce(async () => [
+    mockListCodebaseClaims.mockImplementationOnce(async () => [
       { ...MOCK_CODEBASE, id: 'b', name: 'zebra-project', repository_url: null },
       { ...MOCK_CODEBASE, id: 'a', name: 'alpha-project', repository_url: null },
     ]);
@@ -371,7 +378,7 @@ describe('GET /api/codebases', () => {
       name: 'alpha-project',
       repository_url: 'https://github.com/user/other',
     };
-    mockListCodebases.mockImplementationOnce(async () => [
+    mockListCodebaseClaims.mockImplementationOnce(async () => [
       ...variants.slice(0, 1),
       newest,
       ...variants.slice(1),
@@ -381,6 +388,101 @@ describe('GET /api/codebases', () => {
     const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual([unrelated, newest]);
+  });
+
+  test('keeps URL-bearing folders separate from each other and repository owners', async () => {
+    const repo = { ...MOCK_CODEBASE, id: 'repo', name: 'repo' };
+    const folders = ['first', 'second'].map(id => ({
+      ...MOCK_CODEBASE,
+      id,
+      name: `folder-${id}`,
+      kind: 'folder',
+      repository_url: 'git@github.com:user/repo.git',
+    }));
+    mockListCodebaseClaims.mockResolvedValueOnce([repo, ...folders]);
+
+    const response = await makeApp().request('/api/codebases');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([...folders, repo]);
+  });
+
+  test('deduplicates equivalent absolute local paths and retains the newer original row', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-list-local-'));
+    try {
+      const older = {
+        ...MOCK_CODEBASE,
+        id: 'older',
+        repository_url: `${root}/segment/../missing.git`,
+        updated_at: '2024-01-01T00:00:00Z',
+      };
+      const newer = {
+        ...older,
+        id: 'newer',
+        repository_url: join(root, 'missing.git'),
+        updated_at: '2024-06-01T00:00:00Z',
+      };
+      mockListCodebaseClaims.mockResolvedValueOnce([older, newer]);
+
+      const response = await makeApp().request('/api/codebases');
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([newer]);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
+  test('retains invalid stored checkout paths alongside healthy rows with per-row validation warnings', async () => {
+    const invalid = [
+      { id: 'first', kind: 'repo', repository_url: '../remote.git' },
+      { id: 'second', kind: 'repo', repository_url: '../remote.git' },
+      { id: 'network', kind: 'repo', repository_url: MOCK_CODEBASE.repository_url },
+      { id: 'url-less', kind: 'repo', repository_url: null },
+      { id: 'folder-url', kind: 'folder', repository_url: MOCK_CODEBASE.repository_url },
+      { id: 'folder-url-less', kind: 'folder', repository_url: null },
+    ].map(row => ({
+      ...MOCK_CODEBASE,
+      ...row,
+      name: `broken-${row.id}`,
+      default_cwd: 'relative/checkout',
+    }));
+    const healthy = { ...MOCK_CODEBASE, id: 'healthy', name: 'healthy' };
+    const rows = [...invalid, healthy].sort((a, b) => a.name.localeCompare(b.name));
+    const querySpy = spyOn(connection.pool, 'query').mockResolvedValue({
+      rows,
+      rowCount: rows.length,
+    });
+    const warningSpy = spyOn(getLog(), 'warn');
+    warningSpy.mockClear();
+    try {
+      mockListCodebaseClaims.mockResolvedValueOnce(rows);
+      await expect(realCodebaseStore.listCodebases()).rejects.toBeInstanceOf(
+        InvalidCodebaseDefaultCwdError
+      );
+      mockListCodebaseClaims.mockImplementationOnce(async () => [
+        ...(await realCodebaseStore.listCodebaseClaims()),
+      ]);
+      const response = await makeApp().request('/api/codebases');
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(rows);
+      expect(warningSpy).toHaveBeenCalledTimes(invalid.length);
+      for (const row of invalid) {
+        expect(warningSpy).toHaveBeenCalledWith(
+          {
+            err: expect.objectContaining({
+              name: 'InvalidCodebaseDefaultCwdError',
+              project: row.name,
+              defaultCwd: row.default_cwd,
+            }),
+            codebaseId: row.id,
+            codebaseName: row.name,
+          },
+          'list_codebases_remote_identity_unavailable'
+        );
+      }
+    } finally {
+      querySpy.mockRestore();
+      warningSpy.mockRestore();
+    }
   });
 
   test('keeps different hosts and case-sensitive non-GitHub repository paths separate', async () => {
@@ -393,7 +495,7 @@ describe('GET /api/codebases', () => {
       id: `distinct-${String(index)}`,
       repository_url,
     }));
-    mockListCodebases.mockImplementationOnce(async () => rows);
+    mockListCodebaseClaims.mockImplementationOnce(async () => rows);
 
     const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
@@ -427,7 +529,7 @@ describe('GET /api/codebases', () => {
       updated_at: '2024-01-01T00:00:00Z',
     };
     const rows = [healthy, ...unresolved, older, ...urlLess];
-    mockListCodebases.mockImplementationOnce(async () => rows);
+    mockListCodebaseClaims.mockImplementationOnce(async () => rows);
     const originalError = new Error('local remote access denied');
     const realIdentity = registrationIdentity.remoteIdentity;
     const identitySpy = spyOn(registrationIdentity, 'remoteIdentity').mockImplementation(
@@ -460,7 +562,7 @@ describe('GET /api/codebases', () => {
   });
 
   test('parses commands when stored as JSON string', async () => {
-    mockListCodebases.mockImplementationOnce(async () => [MOCK_CODEBASE_WITH_STRING_COMMANDS]);
+    mockListCodebaseClaims.mockImplementationOnce(async () => [MOCK_CODEBASE_WITH_STRING_COMMANDS]);
 
     const app = makeApp();
     const response = await app.request('/api/codebases');
@@ -473,7 +575,7 @@ describe('GET /api/codebases', () => {
   });
 
   test('returns 500 when DB throws', async () => {
-    mockListCodebases.mockImplementationOnce(async () => {
+    mockListCodebaseClaims.mockImplementationOnce(async () => {
       throw new Error('DB unavailable');
     });
 

@@ -14,6 +14,7 @@ import {
   ActiveWorktreeEnvironmentsError,
   WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
+import { assertAbsoluteDefaultCwd } from '@archon/core/db/codebase-path';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
@@ -55,7 +56,7 @@ const listCodebasesRoute = createRoute({
   method: 'get',
   path: '/api/codebases',
   tags: ['Codebases'],
-  summary: 'List registered codebases',
+  summary: 'List codebases with the newest representative of each resolved repository remote',
   responses: {
     200: {
       content: { 'application/json': { schema: codebaseListResponseSchema } },
@@ -244,17 +245,18 @@ export function registerCodebaseRoutes(
   // GET /api/codebases - List codebases
   registerOpenApiRoute(listCodebasesRoute, async c => {
     try {
-      const codebases = await codebaseDb.listCodebases();
+      const codebases = await codebaseDb.listCodebaseClaims();
 
       const seen = new Map<string, (typeof codebases)[number]>();
       const deduped: (typeof codebases)[number][] = [];
       for (const cb of codebases) {
-        if (!cb.repository_url) {
-          deduped.push(cb);
-          continue;
-        }
         let key: string;
         try {
+          assertAbsoluteDefaultCwd(cb.default_cwd, cb.name);
+          if (cb.kind === 'folder' || !cb.repository_url) {
+            deduped.push(cb);
+            continue;
+          }
           key = await remoteIdentity(cb.repository_url, cb.default_cwd);
         } catch (error) {
           getLog().warn(
