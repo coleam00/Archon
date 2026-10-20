@@ -29,7 +29,7 @@ start() {
   local selected_image=$1
   shift
   docker run -d --name "$container" --network none \
-    -e ARCHON_DOCKER=true -e CLAUDE_USE_GLOBAL_AUTH=true -e ARCHON_TELEMETRY_DISABLED=1 \
+    -e ARCHON_DOCKER=true -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -e ARCHON_TELEMETRY_DISABLED=1 \
     -v "$volume:/.archon" -v "$root/scripts/fixtures:/app/scripts/fixtures:ro" \
     "$@" "$selected_image" >/dev/null
 }
