@@ -387,6 +387,49 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 `;
 }
 
+interface ReadyObservation {
+  current: { head_revision: string; is_draft: boolean; state: string };
+  calls: string[];
+  writes: string[];
+}
+
+function failedCorrection(scenario: ReadyCase): boolean {
+  return ['refused', 'unknown', 'diagnostic-failed', 'closed', 'merged', 'readback-failed'].includes(scenario);
+}
+
+function ghReadyReads(scenario: ReadyCase): number {
+  if (scenario === 'already-draft') return 4;
+  if (scenario === 'readback-failed') return 6;
+  return 5;
+}
+
+function expectCorrectionError(result: ScriptRun, observed: ReadyObservation, scenario: ReadyCase, source: 'gh' | 'forge'): void {
+  expect(result.stderr).toContain('draft correction failed');
+  expect(result.stderr).toContain('Inspect');
+  const expectedError = scenario === 'closed' || scenario === 'merged' ? scenario
+    : scenario === 'readback-failed' ? 'read-back unavailable' : 'draft permission denied; mutation evidence retained';
+  expect(result.stderr).toContain(expectedError);
+  expect(observed.calls.at(-1)).toBe('pr.view');
+  if (source === 'forge') expect(result.stderr).toContain('draft state may have changed');
+  if (scenario === 'unknown') expect(result.stderr).toContain('outcome_unknown');
+  if (scenario === 'readback-failed' && source === 'forge') expect(result.stderr).toContain('verification_failed');
+  if (scenario === 'diagnostic-failed') {
+    expect(result.stderr).toContain('final state unknown');
+    expect(result.stderr).toContain('diagnostic unavailable');
+  } else {
+    expect(result.stderr).toContain(`observed ${observed.current.state}, draft=${String(observed.current.is_draft)}`);
+  }
+}
+
+function expectDraftObservation(result: ScriptRun, observed: ReadyObservation, scenario: ReadyCase): void {
+  expect(observed.current.is_draft).toBe(true);
+  expect(result.stderr).toContain('observed open, draft=true');
+  if (scenario === 'moved-again') {
+    expect(observed.current.head_revision).toBe(HEAD_C);
+    expect(result.stderr).toContain(HEAD_C);
+  }
+}
+
 describe('the build queue scripts', () => {
   describe('the ready transition', () => {
     for (const source of ['gh', 'forge'] as const) {
@@ -403,11 +446,7 @@ describe('the build queue scripts', () => {
           INPUTS_ANSWER: 'null',
           INPUTS_AT_CAP: 'false',
         }, { source, preload: readyPreload(source, scenario) });
-        const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as {
-          current: { head_revision: string; is_draft: boolean; state: string };
-          calls: string[];
-          writes: string[];
-        };
+        const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
         if (scenario === 'matching') {
           expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
           expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
@@ -427,34 +466,13 @@ describe('the build queue scripts', () => {
         }
         const noDraftWrite = ['already-draft', 'closed', 'merged'].includes(scenario);
         expect(observed.writes).toEqual(noDraftWrite ? ['pr.ready'] : ['pr.ready', 'pr.draft']);
-        if (['refused', 'unknown', 'diagnostic-failed', 'closed', 'merged', 'readback-failed'].includes(scenario)) {
-          expect(result.stderr).toContain('draft correction failed');
-          expect(result.stderr).toContain('Inspect');
-          expect(result.stderr).toContain(scenario === 'closed' || scenario === 'merged' ? scenario : scenario === 'readback-failed' ? 'read-back unavailable' : 'draft permission denied; mutation evidence retained');
-          expect(observed.calls.at(-1)).toBe('pr.view');
-          if (source === 'forge') expect(result.stderr).toContain('draft state may have changed');
-          if (scenario === 'unknown') expect(result.stderr).toContain('outcome_unknown');
-          if (scenario === 'readback-failed' && source === 'forge') expect(result.stderr).toContain('verification_failed');
-          if (scenario === 'diagnostic-failed') {
-            expect(result.stderr).toContain('final state unknown');
-            expect(result.stderr).toContain('diagnostic unavailable');
-          } else {
-            expect(result.stderr).toContain(`observed ${observed.current.state}, draft=${String(observed.current.is_draft)}`);
-          }
-        } else {
-          expect(observed.current.is_draft).toBe(true);
-          expect(result.stderr).toContain('observed open, draft=true');
-          if (scenario === 'moved-again') {
-            expect(observed.current.head_revision).toBe(HEAD_C);
-            expect(result.stderr).toContain(HEAD_C);
-          }
-        }
+        if (failedCorrection(scenario)) expectCorrectionError(result, observed, scenario, source);
+        else expectDraftObservation(result, observed, scenario);
         if (scenario === 'readback-failed') expect(observed.current.is_draft).toBe(true);
         if (['refused', 'unknown', 'diagnostic-failed'].includes(scenario)) expect(observed.current.is_draft).toBe(false);
         expect(observed.calls.filter(op => op === 'pr.draft')).toHaveLength(source === 'gh' && noDraftWrite ? 0 : 1);
-        const failure = ['refused', 'unknown', 'diagnostic-failed', 'closed', 'merged', 'readback-failed'].includes(scenario);
-        const expectedReads = source === 'forge' ? 1 + Number(failure)
-          : scenario === 'already-draft' ? 4 : noDraftWrite ? 5 : scenario === 'readback-failed' ? 6 : 5;
+        const failure = failedCorrection(scenario);
+        const expectedReads = source === 'forge' ? 1 + Number(failure) : ghReadyReads(scenario);
         expect(observed.calls.filter(op => op === 'pr.view')).toHaveLength(expectedReads);
       });
     }
