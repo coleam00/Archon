@@ -199,17 +199,6 @@ async function getStateDocument(store: IStateDocumentStore, scope: StateScope, n
     : { scope, name, revision: 0, value: null };
 }
 
-async function writeRawStateDocument(
-  store: IStateDocumentStore,
-  input: StateInput,
-  writeRaw: (text: string) => Promise<void>
-): Promise<void> {
-  const row = await store.getStateDocument(input.scope, input.name);
-  if (typeof row?.value !== 'string')
-    throw new StateValueNotTextError(`State document '${input.name}' has no text value`);
-  await writeRaw(row.value);
-}
-
 async function putStateDocument(
   store: IStateDocumentStore,
   input: StateInput,
@@ -355,7 +344,10 @@ export async function stateCommand(
     const context = await resolveStateContext(host, options, env, dependencies.storeKind);
     const input = { ...context, name: parsed.name };
     if (parsed.command === 'get' && options.raw) {
-      await writeRawStateDocument(store, input, writeRaw);
+      const row = await store.getStateDocument(input.scope, input.name);
+      if (typeof row?.value !== 'string')
+        throw new StateValueNotTextError(`State document '${input.name}' has no text value`);
+      await writeRaw(row.value);
     } else {
       await write(await executeStateCommand(store, input, parsed, options, readInput));
     }
