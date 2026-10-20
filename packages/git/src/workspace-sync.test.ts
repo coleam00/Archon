@@ -47,9 +47,11 @@ function workspaceCommands({
   };
   return async (_cmd, args) => {
     if (args.includes('status')) return output(status);
-    if (args.includes('--short=8')) return output(readShortSha());
-    if (args.includes('--abbrev-ref')) return output(currentBranch);
-    if (args.includes('rev-parse')) return output(args.includes(remoteRef) ? remoteSha : localSha);
+    // Real git ends every line with a newline; the sync must trim it before comparing SHAs.
+    if (args.includes('--short=8')) return output(`${readShortSha()}\n`);
+    if (args.includes('--abbrev-ref')) return output(`${currentBranch}\n`);
+    if (args.includes('rev-parse'))
+      return output(`${args.includes(remoteRef) ? remoteSha : localSha}\n`);
     if (args.includes('merge-base')) {
       expect([localSha, remoteSha]).toContain(args[4]);
       expect(args[5]).toBe(args[4] === localSha ? remoteSha : localSha);
