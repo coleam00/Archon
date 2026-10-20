@@ -14,7 +14,6 @@ export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
 export const endTurnRequestSchema = z.object({
   stalls: z.record(z.string().min(1), z.iso.datetime()),
-  requestedAt: z.iso.datetime(),
 });
 
 type EndTurnMetadata = {
@@ -26,10 +25,7 @@ export type EndTurnPlan =
   | { kind: 'refused'; reason: 'not_running' | 'nothing_stalled' | 'unreadable_attention' };
 
 /** What ending the run's stalled turns would write, or why there is nothing to end. */
-export function planEndTurn(
-  run: Pick<WorkflowRun, 'status' | 'metadata'>,
-  now: Date = new Date()
-): EndTurnPlan {
+export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndTurnPlan {
   if (run.status !== 'running' && run.status !== 'paused')
     return { kind: 'refused', reason: 'not_running' };
   const parsed = toolCallAttentionArraySchema.safeParse(
@@ -53,7 +49,6 @@ export function planEndTurn(
     metadata: {
       [END_TURN_REQUEST_METADATA_KEY]: endTurnRequestSchema.parse({
         stalls: Object.fromEntries(stalls),
-        requestedAt: now.toISOString(),
       }),
     },
   };

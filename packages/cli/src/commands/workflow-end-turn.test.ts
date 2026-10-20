@@ -49,7 +49,6 @@ describe('workflow end-turn', () => {
       metadata: {
         end_turn_request: {
           stalls: { 'stream-1': stalledCall.raisedAt },
-          requestedAt: expect.any(String),
         },
       },
     });
