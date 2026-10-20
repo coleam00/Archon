@@ -171,6 +171,7 @@ describe('a new checkout', () => {
 
     expect(env.metadata).toHaveProperty('branchCreated', false);
     expect(env.metadata).not.toHaveProperty('cutFromCommit');
+    expect(env.resolvedBaseBranch).toBeUndefined();
     expect(gitCalls().some(args => args.includes('branch') && args.includes('-f'))).toBe(false);
     expect(gitCalls()).toContainEqual([...LOCKED_ADD, 'archon/issue-42']);
   });
