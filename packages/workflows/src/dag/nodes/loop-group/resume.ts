@@ -105,6 +105,7 @@ export function readLoopGroupResume(
     isEscalatedGateResume: shape.isEscalatedGateResume,
     isEscalatedWaitResume,
     isLoopResume,
+    enclosingPauseIteration: enclosingPauseFrame?.iteration,
     bodySessionCursors,
     bodySessionCursorAncestry: withOwnCursors(ctx, shape.ownerInvocationKey, bodySessionCursors),
     resumeIteration,

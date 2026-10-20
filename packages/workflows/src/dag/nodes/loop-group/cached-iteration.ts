@@ -15,7 +15,7 @@ export interface CachedLoopIteration {
   previousOutputs: Map<string, NodeOutput>;
 }
 
-/** Recover only the iteration being resumed; loop-owned pauses start a fresh iteration. */
+/** Failure recovery must not replace the replay owned by a persisted pause. */
 export async function readCachedLoopIteration(
   run: LoopGroupRun
 ): Promise<CachedLoopIteration | undefined> {
@@ -23,6 +23,7 @@ export async function readCachedLoopIteration(
   if (
     ctx.priorCompletedNodes === undefined ||
     resume.isLoopResume ||
+    resume.enclosingPauseIteration !== undefined ||
     ctx.priorCompletedNodes.has(run.node.id)
   )
     return undefined;
