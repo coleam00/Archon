@@ -61,6 +61,44 @@ describe('executeDagWorkflow -- final status derivation', () => {
     await removeTempTree(testDir);
   });
 
+  it('propagates a between-layer status error without starting the next layer or concluding lifecycle', async () => {
+    const store = createMockStore();
+    const error = new Error(
+      'Unsupported workflow run status for run corrupt: "unsupported-status"'
+    );
+    store.getWorkflowRunStatus.mockRejectedValue(error);
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('corrupt'),
+          workflow: {
+            name: 'status-read-error',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'First.' } },
+              {
+                id: 'second',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Second.' },
+                depends_on: ['first'],
+              },
+            ],
+          },
+        })
+      )
+    ).rejects.toBe(error);
+    const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+    expect(events).toContainEqual(
+      expect.objectContaining({ event_type: 'node_completed', step_name: 'first' })
+    );
+    expect(events.some(event => event.step_name === 'second')).toBe(false);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('a failed-only DAG delegates its terminal event to failWorkflowRun', async () => {
     const mockStore = createMockStore();
 

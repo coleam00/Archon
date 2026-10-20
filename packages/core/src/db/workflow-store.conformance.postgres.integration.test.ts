@@ -49,12 +49,14 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       const { store, db } = harness;
       const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
       expect(await store.getWorkflowRunStatus(crypto.randomUUID())).toBeNull();
+      expect(await store.getWorkflowRun(crypto.randomUUID())).toBeNull();
       for (const status of workflowRunStatusSchema.options) {
         await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
           status,
           run.id,
         ]);
         expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+        expect((await store.getWorkflowRun(run.id))?.status).toBe(status);
       }
       const events = await store.listWorkflowEvents(run.id);
       for (const status of ['unsupported-status', '']) {
@@ -63,6 +65,9 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           run.id,
         ]);
         await expect(store.getWorkflowRunStatus(run.id)).rejects.toThrow(
+          `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
+        );
+        await expect(store.getWorkflowRun(run.id)).rejects.toThrow(
           `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
         );
         expect(

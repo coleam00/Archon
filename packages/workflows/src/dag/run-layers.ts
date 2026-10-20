@@ -668,47 +668,38 @@ async function aggregateLayerResults(
  * True when the walk stops here.
  */
 async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Promise<boolean> {
-  // Check for non-running status between DAG layers (cancellation, deletion, pause)
-  try {
-    const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
-    if (dagStatus === null || dagStatus !== 'running') {
-      const effectiveStatus = dagStatus ?? 'deleted';
-      if (
-        effectiveStatus === 'paused' &&
-        ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
-      ) {
-        getLog().debug(
-          { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
-          'dag.claimed_work_continues_through_parent_pause'
-        );
-        return false;
-      }
-      getLog().info(
-        {
-          workflowRunId: ctx.workflowRun.id,
-          layerIdx,
-          totalLayers: ctx.layers.length,
-          status: effectiveStatus,
-        },
-        'dag.stop_detected_between_layers'
+  const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  if (dagStatus === null || dagStatus !== 'running') {
+    const effectiveStatus = dagStatus ?? 'deleted';
+    if (
+      effectiveStatus === 'paused' &&
+      ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
+    ) {
+      getLog().debug(
+        { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
+        'dag.claimed_work_continues_through_parent_pause'
       );
-      // Paused is intentional (approval gate) — the approval message was already sent
-      if (effectiveStatus !== 'paused') {
-        await safeSendMessage(
-          ctx.platform,
-          ctx.conversationId,
-          `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(ctx.layers.length)}`,
-          { workflowId: ctx.workflowRun.id }
-        );
-      }
-      return true;
+      return false;
     }
-  } catch (statusErr) {
-    // Non-fatal — status check failure should not crash the workflow
-    getLog().warn(
-      { err: statusErr as Error, workflowRunId: ctx.workflowRun.id },
-      'dag.status_check_failed'
+    getLog().info(
+      {
+        workflowRunId: ctx.workflowRun.id,
+        layerIdx,
+        totalLayers: ctx.layers.length,
+        status: effectiveStatus,
+      },
+      'dag.stop_detected_between_layers'
     );
+    // Paused is intentional (approval gate) — the approval message was already sent
+    if (effectiveStatus !== 'paused') {
+      await safeSendMessage(
+        ctx.platform,
+        ctx.conversationId,
+        `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(ctx.layers.length)}`,
+        { workflowId: ctx.workflowRun.id }
+      );
+    }
+    return true;
   }
   return false;
 }

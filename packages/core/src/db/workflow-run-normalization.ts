@@ -1,4 +1,9 @@
-import { workflowRunOriginSchema, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  workflowRunOriginSchema,
+  workflowRunStatusSchema,
+  type WorkflowRun,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import { WORKFLOW_ORIGIN_ANCHOR_ID } from './workflow-origin-anchor';
 
 import {
@@ -10,6 +15,7 @@ import { toHydratedTimestamp } from './timestamps';
 
 /** Columns whose database value differs from the public `WorkflowRun` value. */
 type RawRunColumn =
+  | 'status'
   | 'origin'
   | 'metadata'
   | 'started_at'
@@ -25,6 +31,7 @@ type RawRunColumn =
  * columns are physical and may hold the reserved compatibility anchor.
  */
 export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
+  status: unknown;
   origin: unknown;
   metadata: string | Record<string, unknown> | null;
   started_at: string | Date;
@@ -67,6 +74,7 @@ export function normalizeWorkflowRun<T extends WorkflowRunRow>(
   const origin = readWorkflowRunOrigin(row);
   return {
     ...row,
+    status: readWorkflowRunStatus(row),
     metadata: readMetadata(row),
     checkout_baseline: readCheckoutBaseline(row),
     started_at: toHydratedTimestamp(row.started_at),
@@ -155,4 +163,14 @@ function readCheckoutBaseline(row: WorkflowRunRow): CheckoutObservation | null {
   if (parsed.success) return parsed.data;
   getLog().warn({ workflowRunId: row.id }, 'db.workflow_run_checkout_baseline_unreadable');
   return null;
+}
+
+export function readWorkflowRunStatus(row: { id: string; status: unknown }): WorkflowRunStatus {
+  const status = workflowRunStatusSchema.safeParse(row.status);
+  if (!status.success) {
+    throw new Error(
+      `Unsupported workflow run status for run ${row.id}: ${JSON.stringify(row.status)}`
+    );
+  }
+  return status.data;
 }

@@ -4,7 +4,11 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
+import {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  describeWorkflowStoreConformance,
+} from '@archon/workflows/store-conformance';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -31,7 +35,29 @@ test('validates persisted workflow statuses without changing lifecycle state', a
   const harness = await makeHarness();
   try {
     const { store, db } = harness;
-    const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
+    const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+    const run = await store.createWorkflowRun({
+      workflow_name: 'status-read',
+      user_message: '',
+      origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
+      codebase_id: CONFORMANCE_CODEBASE_ID,
+      parent_run_id: parent.id,
+      adopted_from_run_id: parent.id,
+      metadata: { isolation_env_id: 'status-env' },
+    });
+    const reads = await import('./workflow-run-reads');
+    const lists = await import('./workflow-run-lists');
+    const fullRunReads = [
+      () => store.getWorkflowRun(run.id),
+      () => reads.getRunByIsolationEnvId('status-env'),
+      () => reads.findWorkflowRunsByIdPrefix(run.id, CONFORMANCE_CODEBASE_ID),
+      () => reads.findChildRuns(parent.id),
+      () => reads.getWorkflowRunByWorkerPlatformId('conformance'),
+      () => lists.listDashboardRuns(),
+      () => lists.listWorkflowRuns(),
+      () => lists.findAdoptingRuns(parent.id),
+    ];
+    expect(await store.getWorkflowRun(crypto.randomUUID())).toBeNull();
     expect(await store.getWorkflowRunStatus(crypto.randomUUID())).toBeNull();
     for (const status of workflowRunStatusSchema.options) {
       await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
@@ -39,6 +65,8 @@ test('validates persisted workflow statuses without changing lifecycle state', a
         run.id,
       ]);
       expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+      expect((await store.getWorkflowRun(run.id))?.status).toBe(status);
+      for (const read of fullRunReads) await read();
     }
     const events = await store.listWorkflowEvents(run.id);
     for (const status of ['unsupported-status', '']) {
@@ -49,6 +77,11 @@ test('validates persisted workflow statuses without changing lifecycle state', a
       await expect(store.getWorkflowRunStatus(run.id)).rejects.toThrow(
         `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
       );
+      for (const read of fullRunReads) {
+        await expect(read()).rejects.toThrow(
+          `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
+        );
+      }
       expect(
         (await db.query('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
           .rows

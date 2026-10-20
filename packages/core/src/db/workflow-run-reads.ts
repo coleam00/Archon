@@ -4,14 +4,17 @@
  */
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
-  workflowRunStatusSchema,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { notOriginAnchor } from './workflow-origin-anchor';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  readWorkflowRunStatus,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
@@ -87,13 +90,7 @@ export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatu
     );
     const row = result.rows[0];
     if (!row) return null;
-    const status = workflowRunStatusSchema.safeParse(row.status);
-    if (!status.success) {
-      throw new Error(
-        `Unsupported workflow run status for run ${id}: ${JSON.stringify(row.status)}`
-      );
-    }
-    return status.data;
+    return readWorkflowRunStatus({ id, status: row.status });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_status_failed');
