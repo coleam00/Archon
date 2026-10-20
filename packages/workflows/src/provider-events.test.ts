@@ -38,7 +38,10 @@ async function makeHandler(
   };
   const handler = createProviderEventHandler({
     toolAttention: createRunToolCallAttention({
-      store: { setToolCallAttention: mock(async () => true) },
+      store: {
+        setToolCallAttention: mock(async () => true),
+        getWorkflowRun: mock(async () => null),
+      },
       runId: 'run-1',
     }).createStream({
       reportedBackgroundWork: false,

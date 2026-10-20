@@ -29,10 +29,15 @@ describe('workflowWaitCommand', () => {
     attention: { kind: 'terminal', runId: FULL_ID, status, at: new Date('2026-08-28T12:00:00Z') },
   });
 
-  it.each([false, true])(
-    'returns live tool attention with exit 0 and no resume advice (json=%s)',
-    async json => {
-      const attention = {
+  it.each([
+    { json: false, paused: false },
+    { json: true, paused: false },
+    { json: false, paused: true },
+    { json: true, paused: true },
+  ])(
+    'returns live work alongside gate attention (json=$json, paused=$paused)',
+    async ({ json, paused }) => {
+      const stalled = {
         kind: 'stalled_tool_calls',
         runId: 'child-run',
         status: 'running',
@@ -53,6 +58,16 @@ describe('workflowWaitCommand', () => {
           },
         ],
       };
+      const attention = paused
+        ? {
+            kind: 'awaiting_response',
+            runId: 'child-run',
+            respondTo: { runId: 'child-run', nodeId: 'review' },
+            occurrence: 'gate',
+            message: 'Approve',
+            stalledCalls: stalled.calls,
+          }
+        : stalled;
       mockWaitForRunAttention.mockResolvedValueOnce({ kind: 'attention', attention });
       expect(await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, json, '/repo')).toBe(0);
       if (json)
@@ -62,7 +77,8 @@ describe('workflowWaitCommand', () => {
         });
       else {
         const printed = consoleSpy.mock.calls.flat().join(' ');
-        expect(printed).toContain('child-run is still running');
+        expect(printed).toContain(`child-run is still ${paused ? 'paused' : 'running'}`);
+        if (paused) expect(printed).toContain("gate 'review'");
         expect(printed).toContain('implement');
         expect(printed).toContain('bun test');
         expect(printed).toContain('1800s');

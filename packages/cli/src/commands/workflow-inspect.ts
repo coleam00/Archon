@@ -29,6 +29,24 @@ import { writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import { printVerboseNodes } from './workflow-node-summaries';
 
+export function printRunToolAttention(run: Parameters<typeof runAttention>[0]): void {
+  const text = formatRunToolAttention(runAttention(run));
+  if (text) console.log(text);
+}
+
+function formatRunToolAttention(attention: RunAttention | null): string | undefined {
+  if (!attention || attention.kind === 'terminal') return undefined;
+  if (attention.kind === 'stalled_tool_calls') return formatToolAttention(attention);
+  if (attention.stalledCalls)
+    return formatToolAttention({
+      kind: 'stalled_tool_calls',
+      runId: attention.runId,
+      status: 'paused',
+      calls: attention.stalledCalls,
+    });
+  return undefined;
+}
+
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
   return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
 }
@@ -37,7 +55,7 @@ export function formatToolAttention(
   attention: Extract<RunAttention, { kind: 'stalled_tool_calls' }>
 ): string {
   return (
-    `Run ${attention.runId} is still running; provider turns or reported work need attention:\n` +
+    `Run ${attention.runId} is still ${attention.status}; provider turns or reported work need attention:\n` +
     attention.calls
       .map(
         call =>
@@ -56,6 +74,14 @@ export function formatToolAttention(
  * reason the caller can act on it.
  */
 export function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string {
+  const primary = formatPrimaryWaitOutcome(watchedRunId, result);
+  if (result.kind !== 'attention') return primary;
+  if (result.attention.kind === 'stalled_tool_calls') return primary;
+  const sibling = formatRunToolAttention(result.attention);
+  return sibling ? `${primary}\n${sibling}` : primary;
+}
+
+function formatPrimaryWaitOutcome(watchedRunId: string, result: RunWaitResult): string {
   switch (result.kind) {
     case 'deadline':
       return `Timed out waiting on run ${watchedRunId} — still ${result.observedStatus}.`;
@@ -377,6 +403,7 @@ export function printRunDetail(
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   printRunPauseLines(run);
+  printRunToolAttention(run);
   // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
   // with the key still set (cancelWorkflowRun abandons a failed run without touching
   // metadata), and the console's runStatusLabel applies the same rule.

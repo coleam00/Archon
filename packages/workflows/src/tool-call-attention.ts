@@ -5,10 +5,14 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import type { IWorkflowStore } from './store';
-import type { ToolCallAttention } from './schemas/workflow-run';
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from './schemas/workflow-run';
 
 interface ToolCallAttentionOptions {
-  store: Pick<IWorkflowStore, 'setToolCallAttention'>;
+  store: Pick<IWorkflowStore, 'setToolCallAttention' | 'getWorkflowRun'>;
   runId: string;
   nodeId: string;
   provider: string;
@@ -90,7 +94,7 @@ function createToolCallAttention(
   };
   let turnRaisedAt: string | undefined;
   let closed = false;
-  let persisted = '[]';
+  let persisted: string | undefined = '[]';
   let stall: StreamStall | undefined;
 
   function stalledCalls(): ToolCallAttention[] {
@@ -129,16 +133,29 @@ function createToolCallAttention(
     const calls = stalledCalls();
     const raisedAt = calls.map(call => call.raisedAt).sort()[0];
     if (stall?.raisedAt !== raisedAt) stall = undefined;
-    const snapshot = JSON.stringify(calls);
+    const snapshot = JSON.stringify(toolCallAttentionArraySchema.parse(calls));
     if (snapshot === persisted) return true;
     try {
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
-      if (changed || calls.length === 0) {
+      let confirmed = changed || calls.length === 0;
+      if (!confirmed) {
+        // A lost COMMIT response can reject a write the database already committed.
+        const run = await options.store.getWorkflowRun(options.runId);
+        const stored = toolCallAttentionArraySchema.safeParse(
+          run?.metadata[TOOL_CALL_ATTENTION_METADATA_KEY]
+        );
+        confirmed =
+          (run?.status === 'running' || run?.status === 'paused') &&
+          stored.success &&
+          JSON.stringify(stored.data.filter(call => call.streamId === streamId)) === snapshot;
+      }
+      if (confirmed) {
         persisted = snapshot;
         stall = raisedAt === undefined ? undefined : { streamId, raisedAt };
         return true;
       }
     } catch {
+      persisted = undefined;
       // Observability must never turn live work into node failure.
       createLogger('workflow.tool-attention').warn(
         { runId: options.runId, nodeId: options.nodeId, streamId, category: 'persistence' },

@@ -448,6 +448,7 @@ async function consumeIterationStream(
       },
       shouldStopStream
     )) {
+      if (msg.type !== 'result' && msg.type !== 'settled') await providerEvents.handle(msg);
       if (await shouldStopStream()) break;
 
       if (msg.type === 'result') {
@@ -459,8 +460,6 @@ async function consumeIterationStream(
           capabilities.backgroundWork !== 'reported' ||
           providerEvents.liveSubtaskIds().length === 0;
         break;
-      } else {
-        await providerEvents.handle(msg);
       }
     }
   } finally {

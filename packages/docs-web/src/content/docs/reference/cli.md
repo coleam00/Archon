@@ -1262,7 +1262,11 @@ still active. The attempt fails as `timeout`; its retry policy decides whether t
 a fresh attempt. A recovered stream or a later attempt is not ended by an old request.
 A paused run can have live streaming siblings; their stalls can also be ended without
 answering its gate. Inspect `workflow get <run-id> --json` for their
-`metadata.tool_call_attention`; the gate remains the paused run's primary attention.
+`attention.stalledCalls`, including node and idle duration; the gate remains the paused
+run's primary attention. The attention queue carries the same sibling calls. A paused
+wait with no primary attention reports `stalled_tool_calls` with `status: "paused"`.
+For a parent blocked on children, wait and queue views report its stalled siblings
+before following the children; `workflow get` retains the child pointers.
 
 Exit `0` means the request was recorded, not that an owner accepted it or that the run
 progressed. The owner might exit or the run might finish before it reads the request.

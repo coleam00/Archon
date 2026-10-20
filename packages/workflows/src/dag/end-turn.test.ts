@@ -18,7 +18,9 @@ import {
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import { CANCEL_CHECK_INTERVAL_MS } from './run-control';
-import { runAttention } from '../schemas/workflow-run';
+import type { ProviderEvent } from '@archon/provider-contract';
+import { attentionQueueItemForRun } from '../attention-queue';
+import { runAttention, type WorkflowRun } from '../schemas/workflow-run';
 import { planEndTurn } from '../end-turn-request';
 
 const DONE_SCHEMA = {
@@ -62,6 +64,28 @@ function assertRecoveryOutcome(
     expect(failed?.data?.failure_kind).toBe('timeout');
     expect(String(failed?.data?.error)).toContain('was ended by the operator');
     expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+  }
+}
+
+async function assertLiveAttention(
+  workflowRun: WorkflowRun,
+  store: ReturnType<typeof createMockStore>,
+  paused: boolean
+): Promise<void> {
+  const expectedCalls = [{ nodeId: 'ci', stalledForMs: expect.any(Number) }];
+  expect(runAttention(workflowRun)).toMatchObject(
+    paused
+      ? {
+          kind: 'awaiting_response',
+          stalledCalls: expectedCalls,
+          respondTo: { nodeId: 'review' },
+        }
+      : { kind: 'stalled_tool_calls', calls: expectedCalls }
+  );
+  if (paused) {
+    expect(
+      await attentionQueueItemForRun({ store, branchOf: async () => null }, workflowRun)
+    ).toMatchObject({ kind: 'awaiting_response', stalledCalls: expectedCalls, node: 'review' });
   }
 }
 
@@ -141,7 +165,10 @@ describe('ending a stalled turn', () => {
     async ({ kind, retry, payload, provider, work, paused }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`end-turn-${kind}`);
-      if (paused) workflowRun.status = 'paused';
+      if (paused) {
+        workflowRun.status = 'paused';
+        workflowRun.metadata.approval = { nodeId: 'review', message: 'Approve' };
+      }
       store.getWorkflowRunStatus.mockImplementation(async () => workflowRun.status);
       store.getWorkflowRun.mockImplementation(async () => workflowRun);
       let raised!: () => void;
@@ -226,12 +253,7 @@ describe('ending a stalled turn', () => {
       // Silence is attention, never evidence that the provider died.
       expect(signal?.aborted).toBe(false);
       expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
-      if (!paused) {
-        expect(runAttention(workflowRun)).toMatchObject({
-          kind: 'stalled_tool_calls',
-          calls: [{ nodeId: 'ci', stalledForMs: expect.any(Number) }],
-        });
-      }
+      await assertLiveAttention(workflowRun, store, paused);
       if (!work || work === 'unobserved') {
         const calls = workflowRun.metadata.tool_call_attention;
         expect(Array.isArray(calls) && calls[0].kind).toBe('provider_turn');
@@ -247,6 +269,91 @@ describe('ending a stalled turn', () => {
       assertRecoveryOutcome(store, retry, attempts);
       expect(workflowRun.metadata.tool_call_attention).toEqual([]);
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    { kind: 'agent', work: 'tool' },
+    { kind: 'agent', work: 'subtask' },
+    { kind: 'loop', work: 'tool' },
+    { kind: 'loop', work: 'subtask' },
+  ] as const)(
+    '$kind processes delivered $work recovery before matching a request',
+    async ({ kind, work }) => {
+      const store = createMockStore();
+      const workflowRun = makeWorkflowRun(`recovery-${kind}-${work}`);
+      store.getWorkflowRun.mockImplementation(async () => workflowRun);
+      store.setToolCallAttention.mockImplementation(async (_run, _stream, calls) => {
+        workflowRun.metadata.tool_call_attention = calls;
+        return true;
+      });
+      let signal: AbortSignal | undefined;
+      mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
+        signal = options?.abortSignal;
+        const start: ProviderEvent =
+          work === 'tool'
+            ? { type: 'tool_call', toolCallId: 'call', name: 'bash' }
+            : { type: 'subtask', taskId: 'task', status: 'started' };
+        yield start;
+        setSystemTime(new Date(Date.now() + 100));
+        yield { type: 'agent_thought_chunk', text: 'waiting' };
+        const plan = planEndTurn(workflowRun);
+        expect(plan.kind).toBe('request');
+        if (plan.kind !== 'request') throw new Error(plan.reason);
+        Object.assign(workflowRun.metadata, plan.metadata);
+        setSystemTime(new Date(Date.now() + CANCEL_CHECK_INTERVAL_MS + 1000));
+        yield work === 'tool'
+          ? { type: 'tool_call_update', toolCallId: 'call', status: 'completed' }
+          : { type: 'subtask', taskId: 'task', status: 'running' };
+        if (work === 'subtask') yield { type: 'subtask', taskId: 'task', status: 'completed' };
+        yield { type: 'agent_message_chunk', text: 'DONE' };
+        yield { type: 'result', sessionId: 'session' };
+        yield { type: 'settled' };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(
+            store,
+            withProviderCapabilities(mockProviderRegistry, 'codex', {
+              ...getProviderCapabilities('codex'),
+              backgroundWork: 'reported',
+            })
+          ),
+          workflowProvider: 'codex',
+          config: {
+            ...minimalConfig,
+            workflows: { autoResumeOnQuotaReset: false, toolCallAttentionMs: 20 },
+          },
+          cwd: testDir,
+          workflowRun,
+          workflow: {
+            name: 'recovery',
+            nodes: [
+              kind === 'agent'
+                ? {
+                    id: 'ci',
+                    kind: 'agent',
+                    retry: { max_attempts: 0 },
+                    idle_timeout: 10,
+                    source: { kind: 'command', name: 'my-cmd' },
+                  }
+                : {
+                    id: 'ci',
+                    kind: 'loop',
+                    retry: { max_attempts: 0 },
+                    idle_timeout: 10,
+                    ...structuredLoop(false),
+                  },
+            ],
+          },
+        })
+      );
+      expect(signal?.aborted).toBe(false);
+      expect(persistedEvents(store).filter(event => event.event_type === 'node_failed')).toEqual(
+        []
+      );
+      expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(
+        true
+      );
     }
   );
 });

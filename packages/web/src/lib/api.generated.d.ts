@@ -4605,7 +4605,7 @@ export interface components {
           kind: 'stalled_tool_calls';
           runId: string;
           /** @enum {string} */
-          status: 'running';
+          status: 'running' | 'paused';
           calls: {
             streamId: string;
             nodeId: string;
@@ -4630,6 +4630,25 @@ export interface components {
           /** @enum {string} */
           kind: 'awaiting_response';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           respondTo: {
             runId: string;
             nodeId: string;
@@ -4641,6 +4660,25 @@ export interface components {
           /** @enum {string} */
           kind: 'attention';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           nodeId: string;
           message: string;
           occurrence: string;
@@ -4655,6 +4693,25 @@ export interface components {
           /** @enum {string} */
           kind: 'usage_limit';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           nodeId: string;
           /** Format: date-time */
           resumeAt: string;
@@ -4663,6 +4720,25 @@ export interface components {
           /** @enum {string} */
           kind: 'blocked_on_child';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           childRunId: string;
           nodeId: string;
         }
@@ -4670,6 +4746,25 @@ export interface components {
           /** @enum {string} */
           kind: 'blocked_on_children';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           nodeId: string;
           childRunIds: string[];
         }
@@ -4677,6 +4772,25 @@ export interface components {
           /** @enum {string} */
           kind: 'unreadable';
           runId: string;
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           /** @enum {string} */
           reason:
             | 'malformed_tool_call_attention'
@@ -6192,7 +6306,92 @@ export interface components {
     AttentionQueueItem:
       | {
           /** @enum {string} */
+          kind: 'stalled_tool_calls';
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
+          runId: string;
+          workflow: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          fanOut: {
+            parentRunId: string;
+            nodeId: string;
+            index: number;
+          } | null;
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          context: {
+            artifactsDir: string | null;
+            transcript: string | null;
+            workingPath: string | null;
+            branch: string | null;
+          };
+          calls: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
+        }
+      | {
+          /** @enum {string} */
           kind: 'attention';
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           runId: string;
           workflow: string;
           project: {
@@ -6230,6 +6429,25 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'awaiting_response';
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           runId: string;
           workflow: string;
           project: {
@@ -6261,6 +6479,25 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'usage_limit';
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           runId: string;
           workflow: string;
           project: {
@@ -6292,6 +6529,25 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'unreadable';
+          stalledCalls?: {
+            streamId: string;
+            nodeId: string;
+            provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            lastProgressAt: string;
+            /** Format: date-time */
+            raisedAt: string;
+            thresholdMs: number;
+            elapsedMs: number;
+            stalledForMs: number;
+          }[];
           runId: string;
           workflow: string;
           project: {
@@ -6356,7 +6612,92 @@ export interface components {
       item:
         | {
             /** @enum {string} */
+            kind: 'stalled_tool_calls';
+            stalledCalls?: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
+            runId: string;
+            workflow: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            calls: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
+          }
+        | {
+            /** @enum {string} */
             kind: 'attention';
+            stalledCalls?: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
             runId: string;
             workflow: string;
             project: {
@@ -6394,6 +6735,25 @@ export interface components {
         | {
             /** @enum {string} */
             kind: 'awaiting_response';
+            stalledCalls?: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
             runId: string;
             workflow: string;
             project: {
@@ -6425,6 +6785,25 @@ export interface components {
         | {
             /** @enum {string} */
             kind: 'usage_limit';
+            stalledCalls?: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
             runId: string;
             workflow: string;
             project: {
@@ -6456,6 +6835,25 @@ export interface components {
         | {
             /** @enum {string} */
             kind: 'unreadable';
+            stalledCalls?: {
+              streamId: string;
+              nodeId: string;
+              provider: string;
+              /** @enum {string} */
+              kind?: 'provider_turn';
+              toolCallId: string;
+              name: string;
+              title?: string;
+              /** Format: date-time */
+              startedAt: string;
+              /** Format: date-time */
+              lastProgressAt: string;
+              /** Format: date-time */
+              raisedAt: string;
+              thresholdMs: number;
+              elapsedMs: number;
+              stalledForMs: number;
+            }[];
             runId: string;
             workflow: string;
             project: {
