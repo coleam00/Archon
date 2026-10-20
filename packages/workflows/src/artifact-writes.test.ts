@@ -129,6 +129,57 @@ describe('in a container-mounted artifacts directory', () => {
     expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('second');
   });
 
+  test('skips planted metadata links even when open ignores no-follow flags', async () => {
+    await mkdir(join(root, 'nodes'));
+    const path = join(root, 'nodes', 'probe.meta.json');
+    const target = join(outside, 'sentinel');
+    await writeFile(target, JSON.stringify({ nodeId: 'foreign' }));
+    await symlink(target, path);
+    const realOpen = fsPromises.open;
+    const intercepted = spyOn(fsPromises, 'open').mockImplementation((file, _flags, mode) =>
+      realOpen(file, constants.O_RDONLY, mode)
+    );
+    try {
+      expect(await contained(() => readArtifactFile(path))).toBeUndefined();
+      expect(intercepted).not.toHaveBeenCalled();
+    } finally {
+      intercepted.mockRestore();
+    }
+  });
+
+  test.each(['symlink', 'regular file'])(
+    'refuses a %s substituted before open when no-follow flags are ignored',
+    async kind => {
+      await mkdir(join(root, 'nodes'));
+      const path = join(root, 'nodes', 'probe.meta.json');
+      await writeFile(path, JSON.stringify({ nodeId: 'probe' }));
+      const target = join(outside, 'sentinel');
+      await writeFile(target, JSON.stringify({ nodeId: 'foreign' }));
+      const original = join(root, 'original');
+      const realOpen = fsPromises.open;
+      let read = false;
+      const intercepted = spyOn(fsPromises, 'open').mockImplementation(
+        async (file, _flags, mode) => {
+          await rename(path, original);
+          if (kind === 'symlink') await symlink(target, path);
+          else await writeFile(path, JSON.stringify({ nodeId: 'foreign' }));
+          const handle = await realOpen(file, constants.O_RDONLY, mode);
+          spyOn(handle, 'readFile').mockImplementation(() => {
+            read = true;
+            throw new Error('foreign metadata must not be read');
+          });
+          return handle;
+        }
+      );
+      try {
+        await expect(contained(() => readArtifactFile(path))).rejects.toThrow(ArtifactWriteError);
+        expect(read).toBe(false);
+      } finally {
+        intercepted.mockRestore();
+      }
+    }
+  );
+
   test.skipIf(process.platform === 'win32').each(['symlink', 'FIFO'])(
     'reads the opened regular metadata when its pathname is replaced by a %s',
     async kind => {
