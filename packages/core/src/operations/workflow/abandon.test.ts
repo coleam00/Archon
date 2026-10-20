@@ -1,6 +1,8 @@
 // @archon-test-isolated
 import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
+import { toRunEvent } from '../../../../web/src/experiments/console/primitives/event';
 import { hostname } from 'node:os';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
@@ -958,9 +960,10 @@ describe('abandon owned worktrees', () => {
     'retains the checkout and reports owner warnings on %s abandonment',
     async mode => {
       mockPersistWorkflowEvent.mockClear();
+      const ownerWarnings = ['Output is still held; inspect checkout'];
       mockRequestDetachedRunStop.mockResolvedValue({
         pid: 4242,
-        stop: async () => ({ warnings: ['Output is still held; inspect checkout'] }),
+        stop: async () => ({ warnings: ownerWarnings }),
         release: () => undefined,
       });
       if (mode === 'retry')
@@ -999,6 +1002,22 @@ describe('abandon owned worktrees', () => {
           data: { warnings: ['Output is still held; inspect checkout'] },
         });
         expect(mockPersistWorkflowEvent).toHaveBeenCalledTimes(1);
+        const persisted = mockPersistWorkflowEvent.mock.calls[0][0];
+        const wireEvent = workflowEventRowSchema.parse(
+          JSON.parse(
+            JSON.stringify({
+              id: 'cleanup-warning',
+              step_index: null,
+              step_name: null,
+              created_at: '2026-10-21T00:00:00Z',
+              ...persisted,
+            })
+          )
+        );
+        expect(toRunEvent(wireEvent)).toMatchObject({
+          kind: 'text',
+          content: `⚠️ Workflow cleanup warnings:\n- ${ownerWarnings.join('\n- ')}`,
+        });
       }
       expect(reclaim).not.toHaveBeenCalled();
       if (mode === 'root')

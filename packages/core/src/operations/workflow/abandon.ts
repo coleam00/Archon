@@ -272,9 +272,7 @@ function ranInStoppedRootOwner(
     rootOwner !== undefined &&
     recorded !== undefined &&
     rootOutcome?.kind === 'stopped' &&
-    recorded.host === rootOwner.host &&
-    recorded.pid === rootOwner.pid &&
-    recorded.uid === rootOwner.uid
+    sameExecutionOwner(recorded, rootOwner)
   );
 }
 
@@ -346,22 +344,24 @@ export async function abandonResumableRunsForConversation(
 async function checkBatchWorktreeOwners(ctx: OperationContext, runs: WorkflowRun[]) {
   const ownerChecks: {
     run: WorkflowRun;
-    ownerKey: string | undefined;
+    owner: ExecutionOwnerRecord | undefined;
     check: Awaited<ReturnType<typeof checkWorktreeOwner>>;
   }[] = [];
   for (const run of runs) {
     const owner = readExecutionOwner(run.metadata);
     ownerChecks.push({
       run,
-      ownerKey: owner ? JSON.stringify([owner.host, owner.uid, owner.pid]) : undefined,
+      owner,
       check: await checkWorktreeOwner(ctx, run),
     });
   }
-  return ownerChecks.map(({ run, ownerKey, check }) => {
+  return ownerChecks.map(({ run, owner, check }) => {
     // An endpoint can disappear when a sibling stops their shared owner. Resolve
     // the whole batch before releasing any checkout so those warnings survive.
-    const sharedChecks = ownerKey
-      ? ownerChecks.filter(other => other.ownerKey === ownerKey).map(other => other.check)
+    const sharedChecks = owner
+      ? ownerChecks
+          .filter(other => sameExecutionOwner(owner, other.owner))
+          .map(other => other.check)
       : [check];
     return {
       run,
@@ -369,4 +369,16 @@ async function checkBatchWorktreeOwners(ctx: OperationContext, runs: WorkflowRun
       warnings: [...new Set(sharedChecks.flatMap(other => other.warnings))],
     };
   });
+}
+
+function sameExecutionOwner(
+  owner: ExecutionOwnerRecord,
+  other: ExecutionOwnerRecord | undefined
+): boolean {
+  return (
+    other !== undefined &&
+    owner.host === other.host &&
+    owner.pid === other.pid &&
+    owner.uid === other.uid
+  );
 }

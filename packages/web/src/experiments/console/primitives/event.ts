@@ -6,7 +6,7 @@
  * event schema so RunStream rendering can switch on `kind` only.
  */
 
-import type { components } from '@/lib/api.generated';
+import type { components } from '../../../lib/api.generated';
 
 export type RunEventKind =
   | 'text'
@@ -358,6 +358,18 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   }
 
   if (et === 'workflow_cleanup_warning') {
+    if (
+      !Array.isArray(data.warnings) ||
+      data.warnings.length === 0 ||
+      !data.warnings.every(warning => typeof warning === 'string')
+    ) {
+      return {
+        ...base,
+        kind: 'text',
+        content:
+          'Invalid workflow_cleanup_warning payload: expected a nonempty string array in warnings. Inspect the stored run event before removing its checkout.',
+      };
+    }
     return {
       ...base,
       kind: 'text',

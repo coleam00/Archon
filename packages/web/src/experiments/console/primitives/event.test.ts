@@ -745,3 +745,15 @@ test('an undelivered pause notice is a system row, not a failure', () => {
     detail: 'slack',
   });
 });
+
+describe('cleanup warning payload validation', () => {
+  test.each([{}, { warnings: 'lost' }, { warnings: [] }, { warnings: ['valid', 123] }])(
+    'reports malformed cleanup warning data %j',
+    data => {
+      expect(toRunEvent(raw({ event_type: 'workflow_cleanup_warning', data }))).toMatchObject({
+        kind: 'text',
+        content: expect.stringContaining('Invalid workflow_cleanup_warning payload'),
+      });
+    }
+  );
+});
