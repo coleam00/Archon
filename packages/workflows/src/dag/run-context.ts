@@ -127,8 +127,6 @@ export interface RunDerived {
    *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
   execContext: ExecutionContext;
   artifactExchange?: ArtifactExchange;
-  /** Required artifact and instance persistence failures stay fatal across nested joins. */
-  onRequiredArtifactFailure?: (error: unknown) => void;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
   workflowLevelOptions: WorkflowLevelOptions;

@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -15,7 +15,6 @@ import {
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
-import * as workflowLogger from '../../../logger';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
 import type { WorkflowRun, WorkflowRunStatus } from '../../../schemas';
@@ -493,167 +492,6 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     const ownedNodeIds = runChildWorkflow.mock.calls.map(([args]) => args.nodeId);
     expect(new Set(ownedNodeIds).size).toBe(2);
   });
-
-  it('fails all_done when the still-running parent cannot persist an instance start', async () => {
-    await writeBlock(
-      'name: compose-blk\ndescription: test block\nnodes:\n  - id: work\n    prompt: work\n'
-    );
-    const store = createMockStore();
-    const refused = new Error('start storage unavailable');
-    (
-      store.persistWorkflowEventIfRunning as Mock<IWorkflowStore['persistWorkflowEventIfRunning']>
-    ).mockRejectedValue(refused);
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        cwd: testDir,
-        workflowRun: makeWorkflowRun('claim-rejected'),
-        workflow: {
-          name: 'claim-rejected',
-          nodes: [
-            {
-              id: 'fan',
-              kind: 'compose_fan_out',
-              include: 'compose-blk',
-              fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
-            },
-          ],
-        },
-      })
-    );
-    expect(store.persistWorkflowEventIfRunning).toHaveBeenCalled();
-    expect(mockSendQueryDag).not.toHaveBeenCalled();
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.failWorkflowRun).toHaveBeenCalled();
-    expect(eventsOf(store)).toContainEqual(
-      expect.objectContaining({
-        event_type: 'node_failed',
-        step_name: 'fan',
-        data: expect.objectContaining({
-          error: expect.stringContaining('start storage unavailable'),
-        }),
-      })
-    );
-  });
-
-  it.each([
-    { phase: 'start', boundary: 'store', bodyFails: false },
-    { phase: 'start', boundary: 'sink', bodyFails: false },
-    { phase: 'terminal', boundary: 'store', bodyFails: false },
-    { phase: 'terminal', boundary: 'sink', bodyFails: false },
-    { phase: 'terminal', boundary: 'store', bodyFails: true },
-    { phase: 'terminal', boundary: 'sink', bodyFails: true },
-    { phase: 'terminal', boundary: 'none', bodyFails: false },
-    { phase: 'terminal', boundary: 'none', bodyFails: true },
-  ] as const)(
-    'settles nested all_done (phase=$phase, rejection=$boundary, bodyFails=$bodyFails)',
-    async ({ phase, boundary, bodyFails }) => {
-      await writeBlock(`name: compose-blk
-description: nested fan
-nodes:
-  - id: inner
-    kind: compose_fan_out
-    include: leaf-blk
-    fan_out:
-      items: '[1]'
-      as: item
-      max_parallel: 1
-      join: all_done
-`);
-      await writeBlock(
-        `name: leaf-blk\ndescription: leaf\nnodes:\n  - id: leaf\n    prompt: work\n`,
-        'leaf-blk'
-      );
-      if (bodyFails) {
-        mockSendQueryDag.mockImplementationOnce(async function* () {
-          throw new Error('authored body failure');
-        });
-      }
-      const store = createMockStore();
-      const refused = new Error(`inner ${phase} ${boundary} unavailable`);
-      let claims = 0;
-      let innerPath: string | undefined;
-      let rejections = 0;
-      store.persistWorkflowEventIfRunning = mock(async event => {
-        if (++claims === 2) {
-          innerPath = event.step_name;
-          if (phase === 'start' && boundary === 'store') {
-            rejections++;
-            throw refused;
-          }
-        }
-        await store.createWorkflowEvent(event);
-        return { persisted: true };
-      });
-      store.persistWorkflowEvent = mock(async event => {
-        if (phase === 'terminal' && boundary === 'store' && event.step_name === innerPath) {
-          rejections++;
-          throw refused;
-        }
-        await store.createWorkflowEvent(event);
-      });
-      const logEvent = workflowLogger.logWorkflowEvent;
-      const sink = spyOn(workflowLogger, 'logWorkflowEvent').mockImplementation(async (...args) => {
-        const event = args[2];
-        if (
-          boundary === 'sink' &&
-          event.step === innerPath &&
-          event.type ===
-            (phase === 'start' ? 'node_start' : bodyFails ? 'node_error' : 'node_complete')
-        ) {
-          rejections++;
-          throw refused;
-        }
-        await logEvent(...args);
-      });
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            cwd: testDir,
-            workflowRun: makeWorkflowRun('nested-persistence-rejected'),
-            workflow: {
-              name: 'nested-persistence-rejected',
-              nodes: [
-                {
-                  id: 'fan',
-                  kind: 'compose_fan_out',
-                  include: 'compose-blk',
-                  fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
-                },
-              ],
-            },
-          })
-        );
-        expect(rejections).toBe(boundary === 'none' ? 0 : 1);
-        if (boundary === 'none') {
-          expect(store.failWorkflowRun).not.toHaveBeenCalled();
-          expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-          const outer = eventsOf(store).find(
-            event => event.event_type === 'node_completed' && event.step_name === 'fan'
-          );
-          expect(outer?.data.structured_output).toEqual(
-            bodyFails
-              ? [[{ archon_failed: true, error: 'authored body failure', status: 'failed' }]]
-              : [['DAG AI response']]
-          );
-          return;
-        }
-        expect(mockSendQueryDag).toHaveBeenCalledTimes(phase === 'start' ? 0 : 1);
-        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-        expect(eventsOf(store)).toContainEqual(
-          expect.objectContaining({
-            event_type: 'node_failed',
-            step_name: 'fan',
-            data: expect.objectContaining({ error: expect.stringContaining(refused.message) }),
-          })
-        );
-      } finally {
-        sink.mockRestore();
-      }
-    }
-  );
 
   it('does not start a later instance when its atomic running-state claim loses', async () => {
     await writeBlock(

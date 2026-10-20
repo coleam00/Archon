@@ -1,4 +1,3 @@
-import { withArtifactWriteRoot } from './artifact-writes';
 import { publishArtifactInputs } from './artifact-exchange';
 import {
   continueBlockedRun,
@@ -386,20 +385,15 @@ export async function executeWorkflow(
     // win over file/db/bot-github env — preserves the GitHub merge order and
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
     // returns empty bags when the feature is disabled or no userId is present).
-    const { env: userProviderEnv, protectedValues } = await withArtifactWriteRoot(
-      containerCtx?.artifactExchange ? artifactsDir : undefined,
-      async () => {
-        await clearManagedProviderCredentialFiles(artifactsDir);
-        await publishArtifactInputs(containerCtx?.artifactExchange);
-        await assertRunCredentials(deps, prepared, { cwd, execContext });
-        return resolveUserProviderEnvForWorkflow(
-          deps,
-          executionUserId,
-          artifactsDir,
-          prepared.requirements,
-          prepared.connectedVendors
-        );
-      }
+    await clearManagedProviderCredentialFiles(artifactsDir);
+    await publishArtifactInputs(containerCtx?.artifactExchange);
+    await assertRunCredentials(deps, prepared, { cwd, execContext });
+    const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
+      deps,
+      executionUserId,
+      artifactsDir,
+      prepared.requirements,
+      prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
     config.userCredentialEnvKeys = Object.keys(userProviderEnv);

@@ -1,24 +1,16 @@
 // @archon-test-isolated
 import type { ArtifactExchange } from '../container-context';
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { executeDagWorkflow } from '../dag-executor';
-import * as dispatch from './dispatch';
-import { TerminalStatusWriteError } from '../terminal-status-write';
-import { NodeEventWriteError } from '../node-event-write';
-import { RunBudgetRefusedError } from '../run-budget';
-import { RunSourceUnreadableError } from './node-source';
 import { NodeFailure } from './ai-turn';
-import { readNodeRecordEvent } from '../node-record-reader';
 import { writeNodeArtifact } from '../artifacts-index';
 import { dagNodeSchema } from '../schemas';
 import {
-  mockLogFn,
-  runUsageWrites,
   createMockDeps,
   createMockStore,
   dagOptions,
@@ -160,539 +152,65 @@ describe('artifact exchange at workflow invocation boundaries', () => {
     }
   );
 
-  it.each([0, 1])(
-    'preserves paid sibling usage and logs a typed-artifact refusal at index %s',
-    async failingIndex => {
-      mockLogFn.mockClear();
-      const store = createMockStore();
-      const artifactsDir = join(root, 'canonical');
-      const outside = join(root, 'outside');
-      await mkdir(artifactsDir);
-      await mkdir(outside);
-      await writeFile(join(outside, 'produce.md'), 'untouched');
-      await symlink(outside, join(artifactsDir, 'nodes'));
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'output' };
-        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
-      });
-      await expect(
-        executeDagWorkflow(
-          exchangeOptions({
-            deps: createMockDeps(store),
-            cwd: root,
-            artifactsDir,
-            workflowRun: makeWorkflowRun('typed-refusal', { output_root: root }),
-            artifactExchange: { async publish() {}, async collect() {} },
-            workflow: {
-              name: 'typed-refusal',
-              description: 'test',
-              nodes: [0, 1].map(index =>
-                dagNodeSchema.parse({
-                  id: index === failingIndex ? 'produce' : 'sibling',
-                  prompt: 'produce',
-                  ...(index === failingIndex ? { output_type: 'text' } : {}),
-                })
-              ),
-            },
-          })
-        )
-      ).rejects.toThrow('real directory');
-      expect(await readFile(join(outside, 'produce.md'), 'utf8')).toBe('untouched');
-      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-      expect(runUsageWrites(store).at(-1)).toMatchObject({
-        total_cost_usd: 0.2,
-        total_tokens_in: 20,
-        total_tokens_out: 2,
-      });
-      expect(mockLogFn.mock.calls).toContainEqual([
-        expect.objectContaining({
-          nodeId: 'produce',
-          workflowRunId: 'typed-refusal',
-          err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
-        }),
-        'artifacts.write_failed',
-      ]);
-    }
-  );
-
-  it.each([
-    new TerminalStatusWriteError(new Error('terminal unavailable')),
-    new NodeEventWriteError(
-      { workflow_run_id: 'mixed', step_name: 'recovery', event_type: 'node_started', data: {} },
-      new Error('events unavailable')
-    ),
-    new RunBudgetRefusedError({
-      reason: 'work_units_exhausted',
-      path: 'recovery',
-      limit: 1,
-      consumed: 1,
-    }),
-    new RunSourceUnreadableError('recovery', new Error('source unavailable')),
-  ])(
-    'preserves mixed-layer recovery rejection %s alongside artifact refusal',
-    async recoveryError => {
-      mockLogFn.mockClear();
-      const artifactsDir = join(root, 'canonical');
-      const outside = join(root, 'outside');
-      await mkdir(artifactsDir);
-      await mkdir(outside);
-      await symlink(outside, join(artifactsDir, 'nodes'));
-      const store = createMockStore();
-      const originalDispatch = dispatch.dispatchNode;
-      const dispatchSpy = spyOn(dispatch, 'dispatchNode').mockImplementation(
-        async (ctx, node, parallel) => {
-          if (node.id === 'recovery') throw recoveryError;
-          return originalDispatch(ctx, node, parallel);
-        }
-      );
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'paid work' };
-        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
-      });
-      try {
-        const execution = executeDagWorkflow(
-          exchangeOptions({
-            deps: createMockDeps(store),
-            cwd: root,
-            artifactsDir,
-            workflowRun: makeWorkflowRun('mixed', { output_root: root }),
-            artifactExchange: { async publish() {}, async collect() {} },
-            workflow: {
-              name: 'mixed',
-              nodes: [
-                dagNodeSchema.parse({ id: 'produce', prompt: 'work', output_type: 'text' }),
-                dagNodeSchema.parse({ id: 'recovery', prompt: 'work' }),
-              ],
-            },
-          })
-        );
-        if (recoveryError instanceof RunSourceUnreadableError) {
-          await execution;
-          expect(store.releaseRunForUnreadableSource).toHaveBeenCalled();
-        } else await expect(execution).rejects.toBe(recoveryError);
-        expect(mockLogFn.mock.calls).toContainEqual([
-          expect.objectContaining({
-            nodeId: 'produce',
-            err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
-          }),
-          'artifacts.write_failed',
-        ]);
-        expect(await readdir(outside)).toEqual([]);
-        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-      } finally {
-        dispatchSpy.mockRestore();
-      }
-    }
-  );
-
-  it.each(['loop-group', 'compose', 'compose-all-done', 'compose-loop-group'] as const)(
-    'preserves paid nested %s usage and closes its failure record',
-    async kind => {
-      const artifactsDir = join(root, 'canonical');
-      await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
-      await writeFile(
-        join(root, '.archon', 'workflows', 'block.yaml'),
-        kind === 'compose-loop-group'
-          ? 'name: block\ndescription: Nested usage\nnodes:\n  - id: group\n    loop_group:\n      max_iterations: 1\n      until: DONE\n      nodes:\n        - id: work\n          prompt: work\n          output_type: text\n'
-          : 'name: block\ndescription: Nested usage\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
-      );
-      const store = createMockStore();
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'paid work' };
-        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
-      });
-      await executeDagWorkflow(
-        exchangeOptions({
-          deps: createMockDeps(store),
-          cwd: root,
-          artifactsDir,
-          workflowRun: makeWorkflowRun('nested-failure', { output_root: root }),
-          artifactExchange: {
-            async publish() {},
-            async collect() {
-              await writeFile(join(artifactsDir, 'nodes'), 'blocks sidecar directory');
-            },
-          },
-          workflow: {
-            name: 'nested-failure',
-            nodes: [
-              dagNodeSchema.parse(
-                kind !== 'loop-group'
-                  ? {
-                      id: 'outer',
-                      include: 'block',
-                      fan_out: {
-                        items: '[1]',
-                        as: 'item',
-                        max_parallel: 1,
-                        join: kind === 'compose' ? 'all_success' : 'all_done',
-                      },
-                    }
-                  : {
-                      id: 'outer',
-                      loop_group: {
-                        max_iterations: 1,
-                        until: 'DONE',
-                        nodes: [{ id: 'work', prompt: 'work', output_type: 'text' }],
-                      },
-                    }
-              ),
-            ],
-          },
-        })
-      );
-      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-      expect(runUsageWrites(store).at(-1)).toMatchObject({
-        total_cost_usd: 0.1,
-        total_tokens_in: 10,
-        total_tokens_out: 1,
-      });
-      const records = store.createWorkflowEvent.mock.calls.flatMap(([event]) => {
-        const record = readNodeRecordEvent({ ...event, data: event.data });
-        return record ? [record] : [];
-      });
-      const started = records.filter(record => record.metadata?.lifecycle.status === 'started');
-      expect(started.length).toBeGreaterThan(0);
-      for (const record of started) {
-        expect(
-          records.some(
-            terminal =>
-              terminal.metadata?.invocation.id === record.metadata?.invocation.id &&
-              (terminal.metadata?.lifecycle.status === 'completed' ||
-                terminal.metadata?.lifecycle.status === 'failed')
-          )
-        ).toBe(true);
-      }
-      const failedOwner = records.find(
-        record =>
-          record.metadata?.node.kind ===
-            (kind !== 'loop-group' ? 'compose_fan_out_instance' : 'loop_group') &&
-          record.metadata.lifecycle.status === 'failed'
-      );
-      expect(failedOwner?.metadata?.spend).toMatchObject({
-        costUsd: { source: 'provider', value: 0.1 },
-        tokens: { source: 'provider', value: { input: 10, output: 1 } },
-      });
-      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    }
-  );
-
-  it.each([
-    'agent-listing',
-    'bash-listing',
-    'script-listing',
-    'loop-listing',
-    'loop-group-listing',
-    'bash-persisted',
-    'script-persisted',
-    'bash-reference',
-    'nested-sidecar',
-  ] as const)('fails composed all_done after required %s refusal', async kind => {
-    mockLogFn.mockClear();
-    const artifactsDir = join(root, 'canonical');
-    const outside = join(root, 'outside');
-    await mkdir(artifactsDir);
-    await mkdir(outside);
-    await writeFile(join(outside, 'sentinel'), 'untouched');
-    const workflows = join(root, '.archon', 'workflows');
-    await mkdir(workflows, { recursive: true });
-    const large = 'x'.repeat(40_000);
-    const body =
-      kind === 'agent-listing' || kind === 'nested-sidecar'
-        ? 'prompt: work\n    output_type: text'
-        : kind === 'loop-listing'
-          ? 'loop: {prompt: work, until: DONE, max_iterations: 1}'
-          : kind === 'loop-group-listing'
-            ? 'loop_group: {until: DONE, max_iterations: 1, nodes: [{id: child, prompt: work}]}'
-            : kind.startsWith('script')
-              ? 'runtime: bun\n    script: console.log("work")'
-              : kind === 'bash-reference'
-                ? 'bash: echo $seed.output'
-                : 'bash: echo work';
-    await writeFile(
-      join(workflows, 'block.yaml'),
-      `name: block\ndescription: Required write failure\nnodes:\n  - id: work\n    ${body}\n`
-    );
-    if (kind === 'nested-sidecar') {
-      await writeFile(
-        join(workflows, 'nested.yaml'),
-        'name: nested\ndescription: Nested join\nnodes:\n  - id: inner\n    include: block\n    fan_out: {items: "[1]", as: item, max_parallel: 1, join: all_done}\n'
-      );
-      await symlink(outside, join(artifactsDir, 'nodes'));
-    } else {
-      await mkdir(join(artifactsDir, '.archon'));
-      await symlink(
-        outside,
-        join(
-          artifactsDir,
-          '.archon',
-          kind.endsWith('listing') ? 'typed-artifacts' : 'node-output-spills'
-        )
-      );
-    }
-    if (kind === 'bash-reference') {
-      await writeFile(
-        join(workflows, 'block.yaml'),
-        `name: block\ndescription: Reference spill\nnodes:\n  - id: seed\n    prompt: seed\n  - id: work\n    depends_on: [seed]\n    ${body}\n`
-      );
-    }
-    const store = createMockStore();
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: kind === 'bash-reference' ? large : 'work' };
-      yield { type: 'result' };
-    });
-    const exec = spyOnNodeExec().mockResolvedValue({ stdout: large, stderr: '' });
-    try {
-      await executeDagWorkflow(
-        exchangeOptions({
-          deps: createMockDeps(store),
-          cwd: root,
-          artifactsDir,
-          workflowRun: makeWorkflowRun('required-write', { output_root: root }),
-          artifactExchange: { async publish() {}, async collect() {} },
-          workflow: {
-            name: 'required-write',
-            nodes: [
-              dagNodeSchema.parse({
-                id: 'outer',
-                include: kind === 'nested-sidecar' ? 'nested' : 'block',
-                fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_done' },
-              }),
-            ],
-          },
-        })
-      );
-      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-      expect(store.failWorkflowRun).toHaveBeenCalled();
-      expect(store.createWorkflowEvent.mock.calls).toContainEqual([
-        expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
-      ]);
-      expect(mockLogFn.mock.calls).toContainEqual([
-        expect.objectContaining({
-          err: expect.objectContaining({ message: expect.stringContaining('real directory') }),
-        }),
-        'artifacts.write_failed',
-      ]);
-      expect(mockSendQueryDag).toHaveBeenCalledTimes(
-        kind === 'nested-sidecar' || kind === 'bash-reference' ? 1 : 0
-      );
-      expect(exec).toHaveBeenCalledTimes(kind.endsWith('persisted') ? 1 : 0);
-      if (kind.endsWith('persisted') || kind === 'bash-reference') {
-        expect(mockLogFn.mock.calls).toContainEqual([
-          expect.objectContaining({
-            dir: kind.endsWith('persisted')
-              ? join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
-              : join(artifactsDir, '.archon', 'node-output-spills'),
-          }),
-          'dag.spill_file_write_failed',
-        ]);
-      }
-      expect(await readdir(outside)).toEqual(['sentinel']);
-      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('untouched');
-    } finally {
-      exec.mockRestore();
-    }
-  });
-
-  for (const joinRule of ['all_success', 'all_done'] as const) {
-    it.each(['collision', 'linked-parent', 'io'] as const)(
-      `fails composed ${joinRule} after a required %s sidecar failure`,
-      async failure => {
-        mockLogFn.mockClear();
-        const artifactsDir = join(root, 'canonical');
-        const outside = join(root, 'outside');
-        await mkdir(outside);
+  for (const kind of ['agent', 'bash', 'script'] as const) {
+    it.each(['publish', 'collect'] as const)(
+      `fails composed all_success after required %s for a ${kind} body`,
+      async operation => {
         await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+        const body =
+          kind === 'agent'
+            ? 'prompt: work'
+            : kind === 'bash'
+              ? 'bash: echo work'
+              : 'runtime: bun\n    script: console.log("work")';
         await writeFile(
           join(root, '.archon', 'workflows', 'block.yaml'),
-          'name: block\ndescription: Artifact failure\nnodes:\n  - id: work\n    prompt: work\n    output_type: text\n'
+          `name: block\ndescription: Exchange failure\nnodes:\n  - id: work\n    ${body}\n`
         );
         const store = createMockStore();
         mockSendQueryDag.mockImplementation(async function* () {
-          yield { type: 'agent_message_chunk', text: 'paid work' };
-          yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
+          yield { type: 'agent_message_chunk', text: 'work' };
+          yield { type: 'result' };
         });
-        await executeDagWorkflow(
-          exchangeOptions({
-            deps: createMockDeps(store),
-            cwd: root,
-            artifactsDir,
-            workflowRun: makeWorkflowRun('compose-sidecar', { output_root: root }),
-            artifactExchange: {
-              async publish() {},
-              async collect() {
-                const record = store.createWorkflowEvent.mock.calls
-                  .map(([event]) => readNodeRecordEvent({ ...event, data: event.data }))
-                  .find(record => record?.metadata?.node.kind === 'agent');
-                const nodeId = record?.metadata?.node.id;
-                expect(nodeId).toBeDefined();
-                if (!nodeId) throw new Error('missing started body');
-                if (failure === 'collision') {
-                  await writeNodeArtifact(
-                    artifactsDir,
-                    {
-                      nodeId: nodeId.replace('_', '.'),
-                      outputType: 'text',
-                      runId: 'compose-sidecar',
-                      producedAt: new Date().toISOString(),
-                    },
-                    'original owner'
-                  );
-                } else if (failure === 'linked-parent')
-                  await symlink(outside, join(artifactsDir, 'nodes'));
-                else await mkdir(join(artifactsDir, 'nodes', `${nodeId}.md`), { recursive: true });
+        const exec = spyOnNodeExec().mockResolvedValue({ stdout: 'work', stderr: '' });
+        const refused = new Error('exchange refused');
+        try {
+          await executeDagWorkflow(
+            exchangeOptions({
+              deps: createMockDeps(store),
+              cwd: root,
+              workflowRun: makeWorkflowRun('compose-exchange', { output_root: root }),
+              artifactExchange: {
+                async publish() {
+                  if (operation === 'publish') throw refused;
+                },
+                async collect() {
+                  if (operation === 'collect') throw refused;
+                },
               },
-            },
-            workflow: {
-              name: 'compose-sidecar',
-              nodes: [
-                dagNodeSchema.parse({
-                  id: 'outer',
-                  include: 'block',
-                  fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: joinRule },
-                }),
-              ],
-            },
-          })
-        );
-        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-        expect(store.failWorkflowRun).toHaveBeenCalled();
-        expect(store.createWorkflowEvent.mock.calls).toContainEqual([
-          expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
-        ]);
-        expect(mockLogFn.mock.calls).toContainEqual([
-          expect.objectContaining({ workflowRunId: 'compose-sidecar' }),
-          'artifacts.write_failed',
-        ]);
-        expect(runUsageWrites(store).at(-1)).toMatchObject({
-          total_cost_usd: 0.1,
-          total_tokens_in: 10,
-          total_tokens_out: 1,
-        });
-        expect(await readdir(outside)).toEqual([]);
+              workflow: {
+                name: 'compose-exchange',
+                nodes: [
+                  dagNodeSchema.parse({
+                    id: 'outer',
+                    include: 'block',
+                    fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+                  }),
+                ],
+              },
+            })
+          );
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+          expect(store.failWorkflowRun).toHaveBeenCalled();
+          expect(store.createWorkflowEvent.mock.calls).toContainEqual([
+            expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
+          ]);
+        } finally {
+          exec.mockRestore();
+        }
       }
     );
-
-    for (const kind of ['agent', 'bash', 'script'] as const) {
-      it.each(['publish', 'collect'] as const)(
-        `fails composed ${joinRule} after required %s for a ${kind} body`,
-        async operation => {
-          await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
-          const body =
-            kind === 'agent'
-              ? 'prompt: work'
-              : kind === 'bash'
-                ? 'bash: echo work'
-                : 'runtime: bun\n    script: console.log("work")';
-          await writeFile(
-            join(root, '.archon', 'workflows', 'block.yaml'),
-            `name: block\ndescription: Exchange failure\nnodes:\n  - id: work\n    ${body}\n`
-          );
-          const store = createMockStore();
-          mockSendQueryDag.mockImplementation(async function* () {
-            yield { type: 'agent_message_chunk', text: 'work' };
-            yield { type: 'result' };
-          });
-          const exec = spyOnNodeExec().mockResolvedValue({ stdout: 'work', stderr: '' });
-          const refused = new Error('exchange refused');
-          try {
-            await executeDagWorkflow(
-              exchangeOptions({
-                deps: createMockDeps(store),
-                cwd: root,
-                workflowRun: makeWorkflowRun('compose-exchange', { output_root: root }),
-                artifactExchange: {
-                  async publish() {
-                    if (operation === 'publish') throw refused;
-                  },
-                  async collect() {
-                    if (operation === 'collect') throw refused;
-                  },
-                },
-                workflow: {
-                  name: 'compose-exchange',
-                  nodes: [
-                    dagNodeSchema.parse({
-                      id: 'outer',
-                      include: 'block',
-                      fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: joinRule },
-                    }),
-                  ],
-                },
-              })
-            );
-            expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-            expect(store.failWorkflowRun).toHaveBeenCalled();
-            expect(store.createWorkflowEvent.mock.calls).toContainEqual([
-              expect.objectContaining({ event_type: 'node_failed', step_name: 'outer' }),
-            ]);
-          } finally {
-            exec.mockRestore();
-          }
-        }
-      );
-    }
   }
-
-  it.each(['collision', 'linked-parent', 'io'] as const)(
-    'persists later settled sibling artifacts after a %s refusal',
-    async failure => {
-      mockLogFn.mockClear();
-      const artifactsDir = join(root, 'canonical');
-      const store = createMockStore();
-      let collections = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'paid work' };
-        yield { type: 'result', cost: 0.1, tokens: { input: 10, output: 1 } };
-      });
-      await expect(
-        executeDagWorkflow(
-          exchangeOptions({
-            deps: createMockDeps(store),
-            cwd: root,
-            artifactsDir,
-            workflowRun: makeWorkflowRun('siblings', { output_root: root }),
-            artifactExchange: {
-              async publish() {},
-              async collect() {
-                if (++collections !== 3 || failure === 'collision') return;
-                if (failure === 'io')
-                  await mkdir(join(artifactsDir, 'nodes', 'a_b.md'), { recursive: true });
-                else {
-                  const outside = join(root, 'outside');
-                  await mkdir(outside);
-                  await symlink(outside, join(artifactsDir, 'nodes'));
-                }
-              },
-            },
-            workflow: {
-              name: 'siblings',
-              nodes: ['a.b', 'a_b', 'later'].map(id =>
-                dagNodeSchema.parse({ id, prompt: 'work', output_type: 'text' })
-              ),
-            },
-          })
-        )
-      ).rejects.toThrow();
-      if (failure === 'linked-parent') {
-        expect(await readdir(join(root, 'outside'))).toEqual([]);
-        for (const nodeId of ['a.b', 'a_b', 'later']) {
-          expect(mockLogFn.mock.calls).toContainEqual([
-            expect.objectContaining({ nodeId }),
-            'artifacts.write_failed',
-          ]);
-        }
-      } else {
-        expect(await readFile(join(artifactsDir, 'nodes', 'later.md'), 'utf8')).toBe('paid work');
-        expect(
-          JSON.parse(await readFile(join(artifactsDir, 'nodes', 'later.meta.json'), 'utf8')).nodeId
-        ).toBe('later');
-      }
-      const usage = runUsageWrites(store).at(-1);
-      expect(usage?.total_cost_usd).toBeCloseTo(0.3);
-      expect(usage).toMatchObject({ total_tokens_in: 30, total_tokens_out: 3 });
-    }
-  );
 
   it('carries exchange into a composed fan-out body', async () => {
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });

@@ -1,4 +1,3 @@
-import { withArtifactWriteRoot } from './artifact-writes';
 /**
  * DAG Workflow Executor
  *
@@ -93,15 +92,6 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
 ): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
-  return withArtifactWriteRoot(
-    options.containerCtx?.artifactExchange ? options.artifactsDir : undefined,
-    () => executeDagWorkflowWithArtifactRoot(options)
-  );
-}
-
-async function executeDagWorkflowWithArtifactRoot(
-  options: ExecuteDagWorkflowOptions
-): ReturnType<typeof executeDagWorkflow> {
   const {
     deps,
     platform,

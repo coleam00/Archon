@@ -11,7 +11,7 @@ import { prepareRunAiConfiguration } from './run-preflight';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile, symlink } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'path';
 import * as realStorage from '@archon/paths/archon-paths';
@@ -4493,53 +4493,6 @@ describe('executeWorkflow', () => {
         }
       }
     );
-
-    it('fails the run before publishing when a canonical credential parent is linked', async () => {
-      const artifactsDir = cwdPath('/tmp', 'artifacts', 'runs', 'run-123');
-      const parent = join(artifactsDir, 'pi-home');
-      const outside = await mkdtemp(join(tmpdir(), 'credential-link-target-'));
-      await mkdir(artifactsDir, { recursive: true });
-      await writeFile(join(outside, 'auth.json'), 'untouched');
-      await symlink(outside, parent);
-      const store = makeStore();
-      const publish = mock(async () => {});
-      try {
-        const result = await executeWorkflow(
-          makeDeps(store),
-          makePlatform(),
-          'conv-1',
-          '/tmp',
-          makeWorkflow(),
-          'msg',
-          { conversationId: 'db-c1' },
-          {
-            container: {
-              envId: 'env-1',
-              writeBack: 'auto',
-              backend: {
-                async suspend() {},
-                async finalize() {
-                  return { requiresApproval: false };
-                },
-                async applyChanges() {
-                  return { filesApplied: 0, filesDeleted: 0, warnings: [] };
-                },
-                async discardChanges() {},
-              },
-              artifactExchange: { publish, async collect() {} },
-            },
-          }
-        );
-        expect(result.success).toBe(false);
-        expect(store.failWorkflowRun).toHaveBeenCalled();
-        expect(publish).not.toHaveBeenCalled();
-        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-        expect(await readFile(join(outside, 'auth.json'), 'utf8')).toBe('untouched');
-      } finally {
-        await rm(parent, { force: true });
-        await removeTempTree(outside);
-      }
-    });
 
     it('blocks DAG entry and cleans partial delivery when a later file write fails', async () => {
       const credentialValue = 'oauth-partial-write-secret';

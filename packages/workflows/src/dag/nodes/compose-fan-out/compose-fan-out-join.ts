@@ -12,9 +12,9 @@ export type ComposeFanOutJoinResult =
   | ({ status: 'failed'; providerFailure?: ProviderFailure } & ComposeFanOutFailure);
 
 /**
- * Reduce the instance outcomes through the declared `join`. Ambiguous work and
- * infrastructure errors block either join. `all_success` fails on any failed child;
- * `all_done` represents authored child failures as markers in the aggregate.
+ * Reduce the instance outcomes through the declared `join`. An ambiguous instance blocks
+ * either join. `all_success` fails on the first non-completed instance; `all_done`
+ * represents each failure as a marker object in the aggregate.
  */
 export function joinComposeOutcomes(
   node: ComposeFanOutNode,
@@ -22,11 +22,9 @@ export function joinComposeOutcomes(
   snapshots: readonly FanOutInstanceSnapshot[],
   outcomes: readonly ComposeInstanceOutcome[]
 ): ComposeFanOutJoinResult {
-  const blocked = outcomes.find(
-    outcome => outcome.status === 'ambiguous' || outcome.status === 'error'
-  );
-  if (blocked !== undefined) {
-    const error = blocked.error ?? 'a composed instance has ambiguous non-terminal work';
+  const ambiguous = outcomes.find(outcome => outcome.status === 'ambiguous');
+  if (ambiguous !== undefined) {
+    const error = ambiguous.error ?? 'a composed instance has ambiguous non-terminal work';
     return {
       status: 'failed',
       error,

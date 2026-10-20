@@ -30,8 +30,8 @@ export function utf8SequenceLength(leadByte: number): number {
  * the spill file being overwritten each iteration is correct: it always holds exactly
  * what the next resume's snapshot will resolve to for that key, never a stale iteration.
  *
- * Host spill failures degrade to preview-only persistence, matching `shellQuoteOrFile`.
- * Separated container runs surface canonical write failures instead.
+ * A spill write failure never fails the node — it degrades to preview-only persistence,
+ * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
  *
  * Because the spill filename is reused, `foldDagResumeSnapshot` (dag-resume-snapshot.ts)
  * checks its byte length against the row's `originalBytes`. A later execution can

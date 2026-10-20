@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
-import {
-  ArtifactWriteError,
-  isProtectedArtifactPath,
-  writeArtifactFileSync,
-} from '../artifact-writes';
+import { mkdirSync, writeFileSync } from 'fs';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { getLog } from './log';
 import { NODE_OUTPUT_FILE_THRESHOLD } from './node-output';
@@ -20,12 +16,13 @@ export function shellQuote(value: string): string {
 /**
  * Write `value` to `<dir>/<filename>`, creating `dir` as needed. Returns the full
  * path on success, or `undefined` after logging on any failure (permission, disk
- * space, etc.). Separated container writes fail instead of falling back.
+ * space, etc.) — callers own their own fallback; this never throws.
  */
 export function writeSpillFile(dir: string, filename: string, value: string): string | undefined {
   const filePath = joinPath(dir, filename);
   try {
-    writeArtifactFileSync(filePath, value);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(filePath, value);
     return filePath;
   } catch (fileErr) {
     const err = fileErr as Error;
@@ -33,7 +30,6 @@ export function writeSpillFile(dir: string, filename: string, value: string): st
       { err, dir, filename, valueSize: value.length, filePath },
       'dag.spill_file_write_failed'
     );
-    if (fileErr instanceof ArtifactWriteError || isProtectedArtifactPath(filePath)) throw fileErr;
     return undefined;
   }
 }
