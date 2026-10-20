@@ -35,7 +35,9 @@ nodes:
 
   - id: parse-args
     script: |
-      const raw = String.raw`$ARGUMENTS`.trim().toLowerCase();
+      // The run message arrives as the ARGUMENTS env var; a script body never
+      // substitutes $ARGUMENTS (#2115).
+      const raw = (process.env.ARGUMENTS ?? "").trim().toLowerCase();
       const tokens = raw.split(/\s+/).filter(Boolean);
       const dryRun = tokens.includes("--dry-run") || tokens.includes("dry-run");
       const bumpToken = tokens.find((t) => ["patch", "minor", "major"].includes(t));
