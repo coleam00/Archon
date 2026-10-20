@@ -1,7 +1,8 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { sameWorktreeRegistration } from '@archon/isolation/types';
+import type { IsolationEnvironmentRow } from '@archon/isolation/types';
+import { getCodebase } from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -282,9 +283,7 @@ export async function isolationCleanupMergedCommand(
   );
 }
 
-type CompletionEnvironment = NonNullable<
-  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
->;
+type CompletionEnvironment = IsolationEnvironmentRow & { codebase_default_cwd: string };
 type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
 type CompletionOutcome = 'completed' | 'failed' | 'notFound';
 
@@ -537,7 +536,10 @@ function reportCompletionResult(
 
 class CompletionRefusal extends Error {}
 
-async function resolveCompletionEnvironment(branch: string): Promise<CompletionEnvironment | null> {
+async function resolveCompletionEnvironment(branch: string): Promise<{
+  env: CompletionEnvironment;
+  registration: IsolationEnvironmentRow;
+} | null> {
   const matches = (await isolationDb.listActive()).filter(
     candidate => candidate.branch_name === branch
   );
@@ -550,26 +552,22 @@ async function resolveCompletionEnvironment(branch: string): Promise<CompletionE
   if (selected && selected.provider !== 'worktree') {
     throw new CompletionRefusal('not a worktree environment');
   }
-  const env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
-  // Hydration adds codebase fields; legacy registration identity compares the whole row.
-  const observed = selected && {
-    ...selected,
-    codebase_default_cwd: env?.codebase_default_cwd,
-    codebase_name: env?.codebase_name,
+  if (!selected) return null;
+  const codebase = await getCodebase(selected.codebase_id);
+  if (!codebase) throw new CompletionRefusal('environment codebase not found');
+  return {
+    env: { ...selected, codebase_default_cwd: codebase.default_cwd },
+    registration: selected,
   };
-  if (env && observed && !sameWorktreeRegistration(env, observed)) {
-    throw new CompletionRefusal('environment changed during lookup; refusing ambiguous deletion');
-  }
-  return env;
 }
 
 async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
+  let resolved: Awaited<ReturnType<typeof resolveCompletionEnvironment>>;
   try {
-    env = await resolveCompletionEnvironment(branch);
+    resolved = await resolveCompletionEnvironment(branch);
   } catch (error) {
     const err = error as Error;
     if (err instanceof CompletionRefusal) {
@@ -581,10 +579,12 @@ async function completeBranch(
     return 'failed';
   }
 
-  if (!env) {
+  if (!resolved) {
     console.log(`  Not found: ${branch} (no active isolation environment)`);
     return 'notFound';
   }
+
+  const { env, registration } = resolved;
 
   if (!options.force) {
     const blockers = await getCompletionBlockers(env, branch);
@@ -599,11 +599,9 @@ async function completeBranch(
   }
 
   try {
-    const { codebase_default_cwd, codebase_name, ...observedRegistration } = env;
-    const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
+    const result: RemoveEnvironmentResult = await removeEnvironment(registration, {
       force: options.force,
       deleteRemoteBranch: options.deleteRemote ?? true,
-      observedRegistration,
     });
     return reportCompletionResult(branch, result);
   } catch (error) {

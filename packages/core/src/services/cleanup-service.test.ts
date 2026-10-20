@@ -211,6 +211,10 @@ mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
+  withWorktreeRegistration: async (
+    env: IsolationEnvironmentRow,
+    remove: (retire: () => Promise<void>) => Promise<unknown>
+  ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
@@ -424,10 +428,16 @@ describe('cleanupContainerEnvironments', () => {
   });
 });
 
+async function selectedEnvironment(): Promise<IsolationEnvironmentRow> {
+  const env = await mockGetById('env-1');
+  if (!env) throw new Error('Missing selected environment fixture');
+  return env;
+}
+
 describe('removeEnvironment', () => {
   test('refuses container removal even with force', async () => {
     mockGetById.mockResolvedValue(makeEnvironment({ provider: 'container' }));
-    const result = await removeEnvironment('env-1', { force: true });
+    const result = await removeEnvironment(await selectedEnvironment(), { force: true });
     expect(result.skippedReason).toContain('not a worktree');
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
@@ -442,7 +452,7 @@ describe('removeEnvironment', () => {
       })
     );
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).toHaveBeenCalledWith('/path/that/does/not/exist', {
       force: undefined,
@@ -464,7 +474,9 @@ describe('removeEnvironment', () => {
       new Error("fatal: cannot change to '/path/exists/but/git/fails': No such file or directory")
     );
 
-    await expect(removeEnvironment('env-1')).rejects.toThrow('No such file or directory');
+    await expect(removeEnvironment(await selectedEnvironment())).rejects.toThrow(
+      'No such file or directory'
+    );
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
@@ -479,7 +491,7 @@ describe('removeEnvironment', () => {
       warnings: [warning],
     });
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(result).toEqual({ worktreeRemoved: true, branchDeleted: false, warnings: [warning] });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
@@ -496,7 +508,7 @@ describe('removeEnvironment', () => {
       makeEnvironment({ working_path: '/workspace/worktrees/pr-99', branch_name: 'feature-branch' })
     );
 
-    await removeEnvironment('env-1', { deleteRemoteBranch: true });
+    await removeEnvironment(await selectedEnvironment(), { deleteRemoteBranch: true });
 
     expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-99', {
       force: undefined,
@@ -525,7 +537,7 @@ describe('removeEnvironment', () => {
       })
     );
 
-    await removeEnvironment('env-1');
+    await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/operator-branch', {
       force: undefined,
@@ -542,7 +554,7 @@ describe('removeEnvironment', () => {
     mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValue(true);
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
@@ -560,7 +572,7 @@ describe('removeEnvironment', () => {
     const failure = new Error('status unavailable');
     mockHasUncommittedChanges.mockRejectedValueOnce(failure);
 
-    await expect(removeEnvironment('env-1')).rejects.toBe(failure);
+    await expect(removeEnvironment(await selectedEnvironment())).rejects.toBe(failure);
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -585,7 +597,7 @@ describe('removeEnvironment', () => {
         warnings: [],
         [field]: false,
       });
-      const result = await removeEnvironment('env-1');
+      const result = await removeEnvironment(await selectedEnvironment());
       expect(result.skippedReason).toContain('filesystem removal incomplete');
       expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     }
@@ -1762,7 +1774,9 @@ describe('cleanup after a chat plugin is removed', () => {
 
   test('explicit environment removal reports an unknown platform', async () => {
     mockGetById.mockResolvedValue(makeEnvironment({ created_by_platform: UNKNOWN_PLATFORM }));
-    expect((await removeEnvironment('env-1')).skippedReason).toBe(UNKNOWN_PLATFORM_REASON);
+    expect((await removeEnvironment(await selectedEnvironment())).skippedReason).toBe(
+      UNKNOWN_PLATFORM_REASON
+    );
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });

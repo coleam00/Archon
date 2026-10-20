@@ -165,7 +165,7 @@ test.each(['active', 'destroyed'] as const)(
        VALUES ($1, 'github', $1, $2, $3, $4)`,
       [conversationId, codebaseId, env.id, env.working_path]
     );
-    if (initialStatus === 'destroyed') await removeEnvironment(env.id);
+    if (initialStatus === 'destroyed') await removeEnvironment(env);
 
     await onConversationClosed('github', conversationId);
 
@@ -800,7 +800,7 @@ test('ordinary cleanup preserves a replacement clone and its active record', asy
   await git(root, 'clone', '-q', repo, env.working_path);
   await writeFile(join(env.working_path, 'operator-file'), 'keep me');
 
-  const error = await removeEnvironment(env.id, { force: true }).catch((error: unknown) => error);
+  const error = await removeEnvironment(env, { force: true }).catch((error: unknown) => error);
 
   expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
   expect(error).toBeInstanceOf(Error);
@@ -810,12 +810,28 @@ test('ordinary cleanup preserves a replacement clone and its active record', asy
 });
 
 test('ordinary cleanup removes a proven checkout and its branch', async () => {
-  const result = await removeEnvironment(env.id);
+  const result = await removeEnvironment(env);
   expect(result.worktreeRemoved).toBe(true);
   expect(result.branchDeleted).toBe(true);
   expect(existsSync(env.working_path)).toBe(false);
   expect(await status()).toBe('destroyed');
   expect(await git(repo, 'branch', '--list', env.branch_name)).toBe('');
+});
+
+test('ordinary cleanup accepts an unchanged legacy registration with joined codebase fields', async () => {
+  const { worktree_registration_id, ...metadata } = env.metadata;
+  await db.query('UPDATE remote_agent_isolation_environments SET metadata = $1 WHERE id = $2', [
+    JSON.stringify(metadata),
+    env.id,
+  ]);
+  const selected = (await isolationDb.listAllActiveWithCodebase()).find(row => row.id === env.id);
+  if (!selected) throw new Error('Missing joined environment fixture');
+
+  const result = await removeEnvironment(selected);
+
+  expect(result.worktreeRemoved).toBe(true);
+  expect(await status()).toBe('destroyed');
+  expect(existsSync(env.working_path)).toBe(false);
 });
 
 test('ordinary cleanup keeps an existing branch the environment checked out', async () => {
@@ -840,7 +856,7 @@ test('ordinary cleanup keeps an existing branch the environment checked out', as
     metadata: { ...worktreeRegistrationMetadata(created.metadata) },
   });
 
-  const result = await removeEnvironment(existing.id);
+  const result = await removeEnvironment(existing);
 
   expect(result.worktreeRemoved).toBe(true);
   expect(result.branchDeleted).toBeNull();
@@ -857,13 +873,13 @@ test('listing retains a replacement directory without a Git entry', async () => 
     env.id
   );
   expect(await status()).toBe('active');
-  await expect(removeEnvironment(env.id, { force: true })).rejects.toThrow('ownership');
+  await expect(removeEnvironment(env, { force: true })).rejects.toThrow('ownership');
   expect(await readFile(join(env.working_path, 'operator-file'), 'utf8')).toBe('keep me');
 });
 
 test('ordinary cleanup removes a proven checkout under a symlinked base', async () => {
   await useSymlinkedBase();
-  const result = await removeEnvironment(env.id);
+  const result = await removeEnvironment(env);
   expect(result.worktreeRemoved).toBe(true);
   expect(existsSync(env.working_path)).toBe(false);
   expect(await status()).toBe('destroyed');
@@ -993,23 +1009,82 @@ describe('cleanup retires only the registration it observed', () => {
     expectReplacementActive(await isolationDb.getById(env.id), replacement);
   });
 
-  test('removeEnvironment', async () => {
-    const provider = getIsolationProvider();
-    const destroy = provider.destroy.bind(provider);
+  test.each([false, true])('refuses post-reload replacement with force=%s', async force => {
+    const getCodebase = codebaseDb.getCodebase;
     let replacement: IsolationEnvironmentRow | undefined;
-    const racing = spyOn(provider, 'destroy').mockImplementation(async (...args) => {
-      const result = await destroy(...args);
+    const racing = spyOn(codebaseDb, 'getCodebase').mockImplementation(async id => {
       replacement = await reRegister();
-      return result;
+      return getCodebase(id);
     });
     try {
-      await expect(removeEnvironment(env.id)).rejects.toBeInstanceOf(
+      await expect(removeEnvironment(env, { force })).rejects.toBeInstanceOf(
         WorktreeRegistrationChangedError
       );
     } finally {
       racing.mockRestore();
     }
     expectReplacementActive(await isolationDb.getById(env.id), replacement);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
+  });
+
+  test('scheduled missing-path cleanup refuses a registration replaced after selection', async () => {
+    await git(repo, 'worktree', 'remove', env.working_path);
+    const getLiveRun = isolationDb.getLiveRunOwningEnv;
+    let replacement: IsolationEnvironmentRow | undefined;
+    const racing = spyOn(isolationDb, 'getLiveRunOwningEnv').mockImplementation(async id => {
+      replacement = await reRegister();
+      return getLiveRun(id);
+    });
+    const destroy = spyOn(getIsolationProvider(), 'destroy');
+    try {
+      const report = await runScheduledCleanup();
+      expect(report.removed).toEqual([]);
+      expect(report.errors).toContainEqual({
+        id: env.id,
+        error: expect.stringContaining('changed during cleanup'),
+      });
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      racing.mockRestore();
+      destroy.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
+  });
+
+  test('registration replacement waits until the destructive callback releases ownership', async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const destroy = spyOn(getIsolationProvider(), 'destroy').mockImplementation(async () => {
+      entered.resolve();
+      await finish.promise;
+      return {
+        worktreeRemoved: false,
+        directoryClean: false,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+      };
+    });
+    const removal = removeEnvironment(env);
+    await entered.promise;
+    let published = false;
+    const replacement = reRegister().then(row => {
+      published = true;
+      return row;
+    });
+    try {
+      await Bun.sleep(0);
+      expect(published).toBe(false);
+    } finally {
+      finish.resolve();
+      await removal;
+      await replacement;
+      destroy.mockRestore();
+    }
+    expectReplacementActive(await isolationDb.getById(env.id), await replacement);
+    expect(existsSync(env.working_path)).toBe(true);
   });
 
   test('run reclaim of a vanished checkout', async () => {

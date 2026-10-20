@@ -10,6 +10,8 @@ export interface QueryResult<T> {
   readonly rowCount: number;
 }
 
+export type TransactionOptions = { retryOnBusy: false };
+
 /**
  * Minimal database interface that both PostgreSQL and SQLite implement
  */
@@ -27,11 +29,13 @@ export interface IDatabase {
    * All queries using the provided function are atomic -
    * they either all commit or all roll back on error.
    *
+   * Disable busy retries when the callback has external side effects that cannot be replayed.
    * @param fn - Callback receiving a transaction-scoped query function
    * @returns The callback's return value
    */
   withTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>,
+    options?: TransactionOptions
   ): Promise<T>;
 
   /**

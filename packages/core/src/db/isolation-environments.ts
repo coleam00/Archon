@@ -2,7 +2,7 @@
  * Database operations for isolation environments
  */
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
@@ -308,9 +308,12 @@ function observedRegistrationPredicate(
 }
 
 /** Mark only the observed worktree registration destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+export async function markWorktreeDestroyed(
+  observed: IsolationEnvironmentRow,
+  query: typeof pool.query = pool.query
+): Promise<void> {
   const predicate = observedRegistrationPredicate(observed, 2);
-  const result = await pool.query(
+  const result = await query(
     `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
      WHERE id = $1${predicate.sql}`,
     [observed.id, ...predicate.params]
@@ -319,6 +322,30 @@ export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): 
     throw new WorktreeRegistrationChangedError(observed.id);
   }
   getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
+}
+
+/**
+ * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
+ * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
+ * The callback must use the supplied retirement function, not the pooled connection.
+ */
+export async function withWorktreeRegistration<T>(
+  observed: IsolationEnvironmentRow,
+  remove: (markDestroyed: () => Promise<void>) => Promise<T>
+): Promise<T> {
+  const predicate = observedRegistrationPredicate(observed, 2);
+  return getDatabase().withTransaction(
+    async query => {
+      const locked = await query(
+        `UPDATE remote_agent_isolation_environments SET status = status
+       WHERE id = $1 AND status = 'active'${predicate.sql}`,
+        [observed.id, ...predicate.params]
+      );
+      if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
+      return remove(() => markWorktreeDestroyed(observed, query));
+    },
+    { retryOnBusy: false }
+  );
 }
 
 /**

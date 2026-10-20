@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import type { IDatabase, QueryResult, SqlDialect } from './types';
+import type { IDatabase, QueryResult, SqlDialect, TransactionOptions } from './types';
 import { createLogger } from '@archon/paths';
 import { APP_VERSION } from '../schema-version';
 
@@ -230,17 +230,14 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async withTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>,
+    options?: TransactionOptions
   ): Promise<T> {
     this.assertNotInOwnTransaction();
-    // The block's own statements run directly on the open transaction, without a
-    // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
-    // good, so only rerunning the whole block can succeed.
+    // A busy snapshot requires replaying the whole transaction, never a single statement.
     const execute = this.execute.bind(this);
     const runOnce = async (): Promise<T> => {
-      // A busy statement spoils this attempt however the block handles it: callers wrap
-      // errors in their own messages, which would hide the busy code from the retry. So
-      // the adapter remembers it, rolls back, and rethrows the busy error itself.
+      // Remember busy errors even when the callback catches or wraps them.
       let busy: SQLiteError | undefined;
       const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
         try {
@@ -266,9 +263,11 @@ export class SqliteAdapter implements IDatabase {
       }
     };
     // A busy failure anywhere in the block, COMMIT included, has already rolled back,
-    // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
-    // queries and compute a return value, which makes rerunning them safe.
-    return this.serialize(() => retryWhileBusy('transaction', runOnce));
+    // so replayable blocks rerun from BEGIN against fresh state. A callback with
+    // external side effects must opt out of replay.
+    return this.serialize(() =>
+      options?.retryOnBusy === false ? runOnce() : retryWhileBusy('transaction', runOnce)
+    );
   }
 
   /**

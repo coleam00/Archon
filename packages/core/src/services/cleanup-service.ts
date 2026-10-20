@@ -3,7 +3,7 @@
  * Handles removal triggered by events, schedule, or commands
  */
 import { lstat } from 'node:fs/promises';
-import { getEnvironmentForRemoval } from './cleanup-registration';
+import { destroyEnvironment } from './cleanup-destroy';
 import {
   readOwnedWorktree,
   type OwnedWorktree,
@@ -357,7 +357,7 @@ export async function onConversationClosed(
     return;
   }
 
-  const result = await removeEnvironment(envId, {
+  const result = await removeEnvironment(env, {
     force: false,
     deleteRemoteBranch: options?.merged,
   });
@@ -385,8 +385,6 @@ export async function onConversationClosed(
 export interface RemoveEnvironmentOptions {
   force?: boolean;
   deleteRemoteBranch?: boolean;
-  /** Fence removal to the registration the caller checked, without joined codebase fields. */
-  observedRegistration?: IsolationEnvironmentRow;
 }
 
 const NON_WORKTREE_CLEANUP_REASON =
@@ -402,7 +400,6 @@ export interface RemoveEnvironmentResult {
    * on a reason fail type-check when it changes, instead of silently diverging.
    */
   skippedReason?:
-    | 'environment not found'
     | 'already destroyed'
     | typeof NON_WORKTREE_CLEANUP_REASON
     | 'has uncommitted changes'
@@ -416,20 +413,15 @@ export interface RemoveEnvironmentResult {
  * Remove a specific environment
  */
 export async function removeEnvironment(
-  envId: string,
+  env: IsolationEnvironmentRow,
   options?: RemoveEnvironmentOptions
 ): Promise<RemoveEnvironmentResult> {
+  const envId = env.id;
   const noopResult: RemoveEnvironmentResult = {
     worktreeRemoved: false,
     branchDeleted: false,
     warnings: [],
   };
-
-  const env = await getEnvironmentForRemoval(envId, options?.observedRegistration);
-  if (!env) {
-    getLog().debug({ envId }, 'env_not_found');
-    return { ...noopResult, skippedReason: 'environment not found' };
-  }
 
   if (env.status === 'destroyed') {
     getLog().debug({ envId }, 'env_already_destroyed');
@@ -462,8 +454,6 @@ export async function removeEnvironment(
   // Check if directory exists before attempting removal
   const pathExists = await worktreeExists(toWorktreePath(env.working_path));
 
-  const provider = getIsolationProvider();
-
   try {
     // If path exists, check for uncommitted changes (unless force)
     if (pathExists && !options?.force) {
@@ -474,43 +464,9 @@ export async function removeEnvironment(
       }
     }
 
-    // A branch this environment did not create (an existing branch it checked out)
-    // may hold the only copy of someone's commits, so it is deleted only together
-    // with its remote branch. Callers request that only when the branch is finished:
-    // merged, or an operator's explicit `--include-closed` or `archon complete`.
-    const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
-    // Call destroy even if path doesn't exist - branch cleanup may still be needed
-    const destroyResult = await provider.destroy(env.working_path, {
-      force: options?.force,
-      creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-      ...(deleteBranch ? { branchName: toBranchName(env.branch_name) } : {}),
-      canonicalRepoPath,
-      deleteRemoteBranch: options?.deleteRemoteBranch,
-      remote,
-    });
-
-    // Log warnings from partial failures
-    if (destroyResult.warnings.length > 0) {
-      getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
-    }
-
-    if (!destroyResult.worktreeRemoved || !destroyResult.directoryClean) {
-      return {
-        worktreeRemoved: destroyResult.worktreeRemoved,
-        branchDeleted: destroyResult.branchDeleted,
-        warnings: destroyResult.warnings,
-        skippedReason: 'filesystem removal incomplete; environment remains active',
-      };
-    }
-    await isolationEnvDb.markWorktreeDestroyed(env);
-
-    getLog().info({ envId, workingPath: env.working_path }, 'env_removed');
-
-    return {
-      worktreeRemoved: destroyResult.worktreeRemoved,
-      branchDeleted: destroyResult.branchDeleted,
-      warnings: destroyResult.warnings,
-    };
+    return await isolationEnvDb.withWorktreeRegistration(env, markDestroyed =>
+      destroyEnvironment(env, options, canonicalRepoPath, remote, markDestroyed)
+    );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, envId }, 'env_remove_failed');
@@ -864,7 +820,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
               });
               continue;
             }
-            const removeResult = await removeEnvironment(env.id, { force: false });
+            const removeResult = await removeEnvironment(env, { force: false });
             if (removeResult.skippedReason) {
               report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
             } else {
@@ -912,7 +868,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           }
 
           // Safe to remove merged branch (also delete remote branch)
-          const mergedResult = await removeEnvironment(env.id, {
+          const mergedResult = await removeEnvironment(env, {
             force: false,
             deleteRemoteBranch: true,
           });
@@ -971,7 +927,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             continue;
           }
 
-          const staleResult = await removeEnvironment(env.id, { force: false });
+          const staleResult = await removeEnvironment(env, { force: false });
           if (staleResult.skippedReason) {
             report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
           } else {
@@ -1172,7 +1128,7 @@ export async function cleanupStaleWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env.id);
+      const removeResult = await removeEnvironment(env);
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
@@ -1257,7 +1213,7 @@ export async function cleanupMergedWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
+      const removeResult = await removeEnvironment(env, { deleteRemoteBranch: true });
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {

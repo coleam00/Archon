@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, expect, it, mock, spyOn } from 'bun:test';
+// @archon-test-isolated
+import { afterAll, afterEach, beforeEach, expect, it, mock, spyOn } from 'bun:test';
 import type { IsolationEnvironmentRow, IIsolationProvider } from '@archon/isolation';
-import { sameWorktreeRegistration } from '@archon/isolation/types';
-import type * as IsolationDb from '@archon/core/db/isolation-environments';
 import type * as Git from '@archon/git';
+import { toBranchName } from '@archon/git';
 import { createMockLogger } from '@archon/core/test/mocks/logger';
 
 const original: IsolationEnvironmentRow = {
@@ -33,35 +33,17 @@ const destroy = mock<IIsolationProvider['destroy']>(async () => ({
   remoteBranchDeleted: true,
   warnings: [],
 }));
-const getById = mock<typeof IsolationDb.getById>(async () => {
-  if (replacement) {
-    current = {
-      ...observed,
-      working_path: replacement === 'token' ? observed.working_path : '/probe/replacement',
-      metadata: {
-        worktree_registration_id:
-          replacement === 'path' ? 'original-registration' : 'replacement-registration',
-        worktree_creation_id: 'replacement-creation',
-        worktree_branch_created: true,
-      },
-    };
-  }
-  return current;
-});
-const markDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>(async env => {
-  if (sameWorktreeRegistration(current, env)) current = { ...current, status: 'destroyed' };
-});
-mock.module('@archon/core/db/isolation-environments', () => ({
-  listActive: async () => [observed],
-  findActiveByBranchName: async () => ({
-    ...observed,
-    codebase_default_cwd: '/probe/repo',
-    codebase_name: 'probe',
-  }),
-  getById,
-  markWorktreeDestroyed: markDestroyed,
-  getLiveRunOwningEnv: async () => null,
+const { SqliteAdapter, sqliteDialect } = await import('@archon/core/db/adapters/sqlite');
+const db = new SqliteAdapter(':memory:');
+mock.module('@archon/core/db/connection', () => ({
+  pool: db,
+  getDatabase: () => db,
+  getDialect: () => sqliteDialect,
+  getDatabaseType: () => 'sqlite',
 }));
+const isolationDb = await import('@archon/core/db/isolation-environments');
+afterAll(() => db.close());
+
 const git = await import('@archon/git');
 const worktreeExists = mock<typeof Git.worktreeExists>(async () => true);
 mock.module('@archon/git', () => ({
@@ -81,7 +63,40 @@ mock.module('@archon/core/db/conversations', () => ({}));
 mock.module('@archon/core/db/sessions', () => ({ SessionNotFoundError: class extends Error {} }));
 mock.module('@archon/core/db/workflows', () => ({}));
 mock.module('@archon/core/db/codebases', () => ({
-  getCodebase: async () => ({ default_cwd: '/probe/repo' }),
+  getCodebase: async () => {
+    const change = replacement;
+    if (change) {
+      replacement = undefined;
+      current = await isolationDb.create({
+        ...observed,
+        created_by_platform: observed.created_by_platform ?? undefined,
+        created_by_user_id: observed.created_by_user_id ?? undefined,
+        working_path: change === 'token' ? observed.working_path : '/probe/replacement',
+        branch_name: toBranchName(observed.branch_name),
+        metadata: { worktree_creation_id: 'replacement-creation', worktree_branch_created: true },
+      });
+      if (change === 'path') {
+        await db.query(
+          'UPDATE remote_agent_isolation_environments SET metadata = $1 WHERE id = $2',
+          [
+            JSON.stringify({
+              ...current.metadata,
+              worktree_registration_id: observed.metadata.worktree_registration_id,
+            }),
+            current.id,
+          ]
+        );
+        current = {
+          ...current,
+          metadata: {
+            ...current.metadata,
+            worktree_registration_id: observed.metadata.worktree_registration_id,
+          },
+        };
+      }
+    }
+    return { default_cwd: '/probe/repo' };
+  },
 }));
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mock(),
@@ -97,13 +112,20 @@ const { setPlatformPolicies, clearPlatformPolicies } = await import(
 const { isolationCompleteCommand } = await import('./isolation');
 let log: ReturnType<typeof spyOn>;
 let error: ReturnType<typeof spyOn>;
-beforeEach(() => {
-  observed = original;
+beforeEach(async () => {
+  await db.query('DELETE FROM remote_agent_isolation_environments');
+  await db.query(
+    `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('codebase', 'probe', '/probe/repo') ON CONFLICT DO NOTHING`
+  );
+  observed = await isolationDb.create({
+    ...original,
+    created_by_platform: original.created_by_platform ?? undefined,
+    created_by_user_id: original.created_by_user_id ?? undefined,
+    branch_name: toBranchName(original.branch_name),
+  });
   current = observed;
   replacement = undefined;
   destroy.mockClear();
-  getById.mockClear();
-  markDestroyed.mockClear();
   worktreeExists.mockClear();
   setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
   log = spyOn(console, 'log').mockImplementation(() => {});
@@ -119,8 +141,13 @@ it.each(
   [false, true].flatMap(force =>
     (['token', 'path', 'legacy'] as const).map(change => ({ force, change }))
   )
-)('refuses $change replacement at cleanup reload with force=$force', async ({ force, change }) => {
-  if (change === 'legacy') observed = { ...original, metadata: {} };
+)('refuses $change replacement after selection with force=$force', async ({ force, change }) => {
+  if (change === 'legacy') {
+    await db.query("UPDATE remote_agent_isolation_environments SET metadata = '{}' WHERE id = $1", [
+      observed.id,
+    ]);
+    observed = { ...observed, metadata: {} };
+  }
   current = observed;
   replacement = change;
 
@@ -128,18 +155,22 @@ it.each(
     'Failed to complete'
   );
 
-  expect(getById).toHaveBeenCalledWith(original.id);
   expect(destroy).not.toHaveBeenCalled();
-  expect(markDestroyed).not.toHaveBeenCalled();
-  expect(current.status).toBe('active');
-  expect(current.metadata.worktree_registration_id).toBe(
-    change === 'path' ? 'original-registration' : 'replacement-registration'
-  );
+  expect(current.id).toBe(observed.id);
+  expect((await isolationDb.getById(observed.id))?.status).toBe('active');
+  expect(
+    current.metadata.worktree_registration_id === observed.metadata.worktree_registration_id
+  ).toBe(change === 'path');
   expect(error).toHaveBeenCalledWith(expect.stringContaining('changed during cleanup'));
 });
 
 it.each([false, true])('completes unchanged registration (legacy=%s)', async legacy => {
-  observed = legacy ? { ...original, metadata: {} } : original;
+  if (legacy) {
+    await db.query("UPDATE remote_agent_isolation_environments SET metadata = '{}' WHERE id = $1", [
+      observed.id,
+    ]);
+    observed = { ...observed, metadata: {} };
+  }
   current = observed;
 
   await isolationCompleteCommand(['probe-branch'], {});
@@ -148,7 +179,6 @@ it.each([false, true])('completes unchanged registration (legacy=%s)', async leg
     observed.working_path,
     expect.objectContaining({ deleteRemoteBranch: true })
   );
-  expect(markDestroyed).toHaveBeenCalledWith(observed);
-  expect(current.status).toBe('destroyed');
+  expect((await isolationDb.getById(observed.id))?.status).toBe('destroyed');
   expect(log).toHaveBeenCalledWith('  Completed: probe-branch');
 });

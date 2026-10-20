@@ -1484,6 +1484,26 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(1);
   });
 
+  test('a non-replayable transaction fails busy after one attempt', async () => {
+    await lockedAdapter();
+    let attempts = 0;
+    await expect(
+      adapter.withTransaction(
+        async query => {
+          attempts++;
+          await query(
+            `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+            ['cb-once', 'cb-once', '/tmp/test-cwd']
+          );
+        },
+        { retryOnBusy: false }
+      )
+    ).rejects.toMatchObject({ code: 'SQLITE_BUSY' });
+    expect(attempts).toBe(1);
+    holder.run('ROLLBACK');
+    expect(await codebaseCount()).toBe(0);
+  });
+
   test('a block that wraps the busy error in its own still reruns from BEGIN', async () => {
     await lockedAdapter();
     const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
