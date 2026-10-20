@@ -113,6 +113,38 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   });
 
+  test('writes editable block YAML that round-trips and runs unchanged', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'editable-stubs',
+      nodes: [
+        {
+          id: 'a',
+          prompt: 'check',
+          output_format: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' } },
+            required: ['ok'],
+          },
+        },
+        { id: 'b', prompt: 'work', depends_on: ['a'] },
+      ],
+    });
+    const path = join(temporaryDirectory(), 'stubs.yaml');
+    const written = await writeDryRunStubScaffold(workflow, path);
+    const yaml = await Bun.file(path).text();
+
+    expect(
+      yaml
+        .trim()
+        .split('\n')
+        .map(line => line.trimEnd())
+    ).toEqual(['a:', '  ok: false', 'b: TODO']);
+    expect(Bun.YAML.parse(yaml)).toEqual(written);
+    const result = await dryRunWorkflow({ workflow, stubs: await loadDryRunStubs(path) });
+    expect(result.outcome).toBe('completed');
+    expect(result.missingStubs).toEqual([]);
+  });
+
   test('does not leave a partial file when a placeholder cannot satisfy the schema', async () => {
     const workflow = makeTestWorkflow({
       name: 'unsupported-placeholder',

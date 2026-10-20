@@ -102,6 +102,10 @@ steps:
     expect(result.error?.errorType).toBe('validation_error');
     expect(result.error?.error).toContain('steps:');
     expect(result.error?.error).toContain('has been removed');
+    expect(result.error?.error).toContain('nodes:');
+    expect(result.error?.error).toContain('https://archon.diy/guides/authoring-workflows/');
+    expect(result.error?.error).not.toContain('docs/sequential-dag-migration-guide.md');
+    expect(result.error?.error).not.toContain('claude');
   });
 
   it('should reject unknown provider at load time', () => {
@@ -373,9 +377,38 @@ nodes:
   it('rejects on_timeout on a non-exec node', () => {
     expect(
       parseError(withNodes('  - id: prompt\n    prompt: "work"\n    on_timeout: skip\n'))
-    ).toContain(
-      "Node 'prompt': 'on_timeout' 'on_timeout' is only supported on bash or script nodes, not on prompt node 'prompt'."
+    ).toBe(
+      "DAG node validation failed: Node 'prompt': 'on_timeout' is only supported on bash or script nodes, not on prompt nodes."
     );
+  });
+
+  it.each([
+    [
+      '  - id: a\n    prompt: work\n    timeout: 5\n',
+      "Node 'a': 'timeout' is only supported on bash, loop, loop_group or script nodes, not on prompt nodes.",
+    ],
+    [
+      '  - id: a\n    include: block\n    isolation: worktree\n',
+      "Node 'a': 'isolation' is not supported on an include node: a composed block runs inside the run that composed it, so it has no checkout of its own to isolate. Use a 'workflow:' node instead when you want a separate governed run.",
+    ],
+    [
+      '  - id: a\n    include: block\n    input: work\n',
+      "Node 'a': 'input' is not supported on an include node: a composed block reads named values as $INPUTS.<name>, supplied through 'with:' — there is no separate $ARGUMENTS for it. Use a 'workflow:' node instead when you want a separate governed run.",
+    ],
+    [
+      '  - id: a\n    prompt: work\n    until_bash: true\n',
+      "Node 'a': 'until_bash' is only honoured inside 'loop:' or 'loop_group:'; at the top level nothing reads it.",
+    ],
+    [
+      '  - id: outer\n    loop_group:\n      until: DONE\n      max_iterations: 1\n      nodes:\n        - id: inner\n          prompt: work\n          runtime: bun\n',
+      "Node 'inner': 'loop_group.nodes.0.runtime' is only supported on script nodes, not on prompt nodes.",
+    ],
+    [
+      '  - id: outer\n    loop_group:\n      until: DONE\n      max_iterations: 1\n      nodes:\n        - id: inner\n          prompt: work\n          until_bash: true\n',
+      "Node 'inner': 'loop_group.nodes.0.until_bash' is only honoured inside 'loop:' or 'loop_group:'; at the top level nothing reads it.",
+    ],
+  ])('formats wrong-key context once for %s', (nodes, expected) => {
+    expect(parseError(withNodes(nodes))).toBe(`DAG node validation failed: ${expected}`);
   });
 
   it.each<[string, string, RegExp]>([
@@ -2335,7 +2368,7 @@ nodes:
       'with-ignored.yaml'
     );
     expect(result.error?.error).toContain(
-      "'with' is only supported on command, script, include or workflow nodes, not on bash node 'run'"
+      "'with' is only supported on command, script, include or workflow nodes, not on bash nodes."
     );
   });
 });

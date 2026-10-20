@@ -234,10 +234,10 @@ describe('dagNodeSchema — ExecNode', () => {
       const issues = result.error?.issues ?? [];
       expect(issues).toHaveLength(1);
       expect(issues[0]?.path).toEqual([key]);
-      expect(issues[0]?.message).toContain(`'${key}'`);
-      // The include launch-only reasons point at 'workflow:' instead of naming the node.
+      expect(issues[0]).toMatchObject({ params: { nodeId: 'n1' } });
+      // Include launch-only reasons point at 'workflow:' instead of listing owners.
       if (mode === 'include' && (key === 'isolation' || key === 'input')) return;
-      expect(issues[0]?.message).toContain(`not on ${mode} node 'n1'`);
+      expect(issues[0]?.message).toContain(`not on ${mode} nodes`);
       for (const owner of modes.filter(m => NODE_MODE_KEYS.get(m)?.has(key))) {
         expect(issues[0]?.message).toContain(owner);
       }
@@ -247,32 +247,32 @@ describe('dagNodeSchema — ExecNode', () => {
   test.each([
     [
       { id: 'n1', prompt: 'p', runtime: 'bun' },
-      "'runtime' is only supported on script nodes, not on prompt node 'n1'",
+      'is only supported on script nodes, not on prompt nodes',
     ],
     [
       { id: 'n1', command: 'c', input: 'x' },
-      "'input' is only supported on workflow nodes, not on command node 'n1'",
+      'is only supported on workflow nodes, not on command nodes',
     ],
     [
       { id: 'n1', bash: 'echo', deps: ['zod'] },
-      "'deps' is only supported on script nodes, not on bash node 'n1'",
+      'is only supported on script nodes, not on bash nodes',
     ],
     [
       { id: 'n1', prompt: 'p', with: { a: 'b' } },
-      "'with' is only supported on command, script, include or workflow nodes",
+      'is only supported on command, script, include or workflow nodes',
     ],
     [
       { id: 'n1', command: 'c', timeout: 5 },
-      "'timeout' is only supported on bash, loop, loop_group or script nodes",
+      'is only supported on bash, loop, loop_group or script nodes',
     ],
     // A value the owning mode would also refuse still reports the placement.
     [
       { id: 'n1', prompt: 'p', on_timeout: 123 },
-      "'on_timeout' is only supported on bash or script nodes, not on prompt node 'n1'",
+      'is only supported on bash or script nodes, not on prompt nodes',
     ],
     [
       { id: 'n1', prompt: 'p', runtime: 'perl' },
-      "'runtime' is only supported on script nodes, not on prompt node 'n1'",
+      'is only supported on script nodes, not on prompt nodes',
     ],
   ])('names the owning modes for %o', (node, expected) => {
     const error = validationError(dagNodeSchema.safeParse(node));
@@ -299,7 +299,7 @@ describe('dagNodeSchema — ExecNode', () => {
     );
     expect(untilBashError.issues[0]?.path).toEqual(['until_bash']);
     expect(untilBashError.issues[0]?.message).toBe(
-      "'until_bash' is only honoured inside 'loop:' or 'loop_group:'; at the top level of node 'n1' nothing reads it."
+      "is only honoured inside 'loop:' or 'loop_group:'; at the top level nothing reads it."
     );
 
     const misplacedOnLoop = dagNodeSchema.safeParse({
@@ -320,8 +320,9 @@ describe('dagNodeSchema — ExecNode', () => {
       })
     );
     const message = bodyInteractiveError.issues.map(i => i.message).join(' | ');
-    expect(message).toContain("'interactive' is only honoured inside");
-    expect(message).toContain("node 'check'");
+    expect(bodyInteractiveError.issues[0]?.path).toEqual(['loop_group', 'nodes', 0, 'interactive']);
+    expect(message).toContain('is only honoured inside');
+    expect(bodyInteractiveError.issues[0]).toMatchObject({ params: { nodeId: 'check' } });
     expect(message).toContain('wait: { attention: <message> }');
   });
 
