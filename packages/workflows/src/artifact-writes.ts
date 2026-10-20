@@ -96,43 +96,45 @@ function checkParents({ root, parts }: ContainedParent, create: boolean): boolea
  */
 export async function readArtifactFile(path: string): Promise<string | undefined> {
   const contained = containedParent(path);
-  if (contained !== undefined) {
-    if (!checkParents(contained, false)) return undefined;
-    // Windows ignores O_NOFOLLOW. Inspect the leaf and verify the opened identity
-    // before reading; POSIX flags also prevent opening a replacement link or FIFO.
-    const entry = lstatIfPresent(path);
-    if (entry === undefined || entry.isSymbolicLink()) return undefined;
-    if (!entry.isFile()) {
-      throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
-    }
-    let handle;
+  if (contained === undefined) {
     try {
-      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      return await readFile(path, 'utf8');
     } catch (error) {
-      const code = errorCode(error);
-      if (code === 'ENOENT' || code === 'ELOOP') return undefined;
+      if (errorCode(error) === 'ENOENT') return undefined;
       throw error;
     }
-    try {
-      const opened = await handle.stat();
-      if (!opened.isFile()) {
-        throw new ArtifactWriteError(
-          `Refusing artifact owner read: '${path}' is not a regular file`
-        );
-      }
-      if (opened.dev !== entry.dev || opened.ino !== entry.ino) {
-        throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' changed during open`);
-      }
-      return await handle.readFile('utf8');
-    } finally {
-      await handle.close();
-    }
+  }
+  if (!checkParents(contained, false)) return undefined;
+  return readContainedArtifactFile(path);
+}
+
+async function readContainedArtifactFile(path: string): Promise<string | undefined> {
+  // Windows ignores O_NOFOLLOW. Inspect the leaf and verify the opened identity
+  // before reading; POSIX flags also prevent opening a replacement link or FIFO.
+  const entry = lstatIfPresent(path);
+  if (entry === undefined || entry.isSymbolicLink()) return undefined;
+  if (!entry.isFile()) {
+    throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
+  }
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === 'ENOENT' || code === 'ELOOP') return undefined;
+    throw error;
   }
   try {
-    return await readFile(path, 'utf8');
-  } catch (error) {
-    if (errorCode(error) === 'ENOENT') return undefined;
-    throw error;
+    const opened = await handle.stat();
+    if (!opened.isFile()) {
+      throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
+    }
+    if (opened.dev !== entry.dev || opened.ino !== entry.ino) {
+      throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' changed during open`);
+    }
+    return await handle.readFile('utf8');
+  } finally {
+    await handle.close();
   }
 }
 
