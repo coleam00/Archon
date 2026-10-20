@@ -10,7 +10,7 @@ import type { IAgentProvider, SendQueryOptions } from '../agent-provider';
 import { credentialStatusSchema, type CredentialStatus } from '../credential-status';
 import type { ProviderChunk } from '../events';
 import type { ProviderSettled } from '../settled';
-import { PluginProtocolError, PluginRemoteError, PluginRpc, type PluginIO } from './rpc';
+import { PluginProtocolError, PluginRpc, type PluginIO } from './rpc';
 import {
   PROVIDER_PLUGIN_PROTOCOL,
   diagnoseRequestSchema,
@@ -227,26 +227,11 @@ export async function connectProvider(
       });
       const { sessionId } = rpc.parse(
         newSessionResponseSchema,
-        await rpc
-          .request('session/new', {
-            cwd,
-            mcpServers: [],
-            _meta: { archon: { request } },
-          })
-          .catch((error: unknown) => {
-            if (
-              request.requireMcpConnections &&
-              error instanceof PluginRemoteError &&
-              error.code === -32602
-            ) {
-              throw new PluginRemoteError(
-                error.code,
-                `${error.message}\nThis request needs a provider plugin that supports required MCP connection readiness. Upgrade the plugin.`,
-                error.data
-              );
-            }
-            throw error;
-          })
+        await rpc.request('session/new', {
+          cwd,
+          mcpServers: [],
+          _meta: { archon: { request } },
+        })
       );
       if (options.abortSignal?.aborted) {
         await rpc.notify('session/cancel', { sessionId });

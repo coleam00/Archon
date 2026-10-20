@@ -508,6 +508,12 @@ async function* buildQueryOptions(
 
   const mcpNames = Object.keys(options.mcpServers ?? {});
   if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
+    if (requestOptions.requireMcpConnections && options.mcpServers?.[ARCHON_TOOL_SERVER]) {
+      throw new ClassifiedProviderError(
+        'misconfigured',
+        `MCP server "${ARCHON_TOOL_SERVER}" conflicts with Archon's native tool server`
+      );
+    }
     registerNativeTools(options, requestOptions.nativeTools);
   }
   setResumeTarget(options, cwd, resumeSessionId, requestOptions?.forkSession);
@@ -516,18 +522,12 @@ async function* buildQueryOptions(
 
 /**
  * Register in-process native tools (e.g. manage_run) as an archon MCP server,
- * alongside the file-based MCP servers. The internal name cannot replace a file server.
+ * alongside the file-based MCP servers.
  */
 function registerNativeTools(
   options: Options,
   nativeTools: NonNullable<SendQueryOptions['nativeTools']>
 ): void {
-  if (options.mcpServers?.[ARCHON_TOOL_SERVER]) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `MCP server "${ARCHON_TOOL_SERVER}" conflicts with Archon's native tool server`
-    );
-  }
   const server = buildArchonMcpServer(nativeTools);
   options.mcpServers = { ...(options.mcpServers ?? {}), [ARCHON_TOOL_SERVER]: server };
   options.allowedTools = [...(options.allowedTools ?? []), `mcp__${ARCHON_TOOL_SERVER}__*`];

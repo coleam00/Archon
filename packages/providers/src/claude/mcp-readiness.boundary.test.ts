@@ -39,11 +39,13 @@ for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as c
         fetch(request) {
           if (new URL(request.url).pathname.endsWith('/messages')) {
             modelCalls++;
-            expect(observations).toContainEqual({
-              type: 'mcp_server_status',
-              server: name,
-              status: 'connected',
-            });
+            if (mode !== 'optional-collision') {
+              expect(observations).toContainEqual({
+                type: 'mcp_server_status',
+                server: name,
+                status: 'connected',
+              });
+            }
           }
           return Response.json(
             { error: { type: 'invalid_request_error', message: 'local fixture' } },
@@ -103,7 +105,9 @@ for (const mode of ['broken', 'delayed', 'collision', 'optional-collision'] as c
           if (chunk.type === 'mcp_server_status' && chunk.status === 'pending')
             await writeFile(release, 'ready');
         }
-        if (broken) {
+        if (mode === 'optional-collision') {
+          expect(modelCalls).toBeGreaterThan(0);
+        } else if (broken) {
           expect(modelCalls).toBe(0);
           expect(observations).toContainEqual(
             expect.objectContaining({

@@ -288,7 +288,7 @@ test('a baseline plugin rejects required MCP readiness before invoking its provi
         .next()
     ).rejects.toMatchObject({
       code: -32602,
-      message: expect.stringContaining('Upgrade the plugin'),
+      message: expect.stringContaining('requireMcpConnections'),
     });
     expect(requests).toHaveLength(1);
   } finally {
