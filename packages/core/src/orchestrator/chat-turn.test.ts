@@ -66,14 +66,22 @@ describe('stale session ID clearing on error_during_execution', () => {
       test(`${mode}: reports an unanswered ${status} tool without leaking output`, async () => {
         mockCaptureChatTurn.mockClear();
         mockSendQuery.mockImplementationOnce(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Starting the action.' };
           yield {
             type: 'tool_call_update',
             toolCallId: 'shell',
             status,
             output: 'private tool output',
           };
+          yield { type: 'result', cost: 0.1, tokens: { input: 100, output: 10 } };
+          yield { type: 'result', cost: 0.2, tokens: { input: 200, output: 20 } };
         });
-        const platform = makePlatform();
+        const platform = {
+          ...makePlatform(),
+          sendResultFooter: mock<NonNullable<IPlatformAdapter['sendResultFooter']>>(() =>
+            Promise.resolve()
+          ),
+        };
         (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
         await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
         expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -84,8 +92,12 @@ describe('stale session ID clearing on error_during_execution', () => {
           JSON.stringify((platform.sendMessage as ReturnType<typeof mock>).mock.calls)
         ).not.toContain('private tool output');
         expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-          expect.objectContaining({ outcome: 'failed' })
+          expect.objectContaining({ outcome: 'failed', tokensIn: 300, tokensOut: 30 })
         );
+        expect(mockCaptureChatTurn.mock.calls[0]?.[0]?.costUsd).toBeCloseTo(0.3);
+        const footer = platform.sendResultFooter.mock.calls[0]?.[1];
+        expect(footer?.cost).toBeCloseTo(0.3);
+        expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
       });
 
       test(`${mode}: assistant recovery takes precedence over a ${status} tool`, async () => {

@@ -87,6 +87,26 @@ describe('provider cwd resolution', () => {
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
   });
 
+  test('scoped CLI chat binds the selected project in the shell environment without a command prefix', async () => {
+    const codebase = makeCodebaseForSync();
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({ tiers: { large: { provider: 'copilot', model: 'gpt-5' } } })
+    );
+    mockGetOrCreateConversation.mockResolvedValueOnce(
+      makeConversation({ codebase_id: codebase.id, ai_assistant_type: 'copilot' })
+    );
+    mockGetCodebase.mockResolvedValueOnce(codebase);
+    mockListCodebases.mockResolvedValueOnce([codebase]);
+    mockGetCodebaseEnvVars.mockResolvedValueOnce({ ARCHON_WORKFLOW_CODEBASE_ID: 'other-project' });
+
+    const scopePlatform = makePlatform();
+    await handleMessage(scopePlatform, 'conv-1', 'inspect this run', { actor: operator });
+
+    expect(mockSendQuery.mock.calls[0]?.[3]?.env).toMatchObject({
+      ARCHON_WORKFLOW_CODEBASE_ID: codebase.id,
+    });
+  });
+
   test('scoped chat uses conversation.cwd when set (active worktree path)', async () => {
     const codebase = makeCodebaseForSync();
     const conversation = makeConversation({

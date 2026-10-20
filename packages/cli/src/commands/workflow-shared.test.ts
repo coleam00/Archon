@@ -79,8 +79,14 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       checkout_baseline: null,
     };
     try {
-      for (const id of [FULL_ID, FULL_ID.replaceAll('-', ''), '0b1ee8da']) {
-        const matchedId = id.length === 32 ? id : FULL_ID;
+      for (const id of [
+        FULL_ID,
+        FULL_ID.toUpperCase(),
+        FULL_ID.replaceAll('-', ''),
+        FULL_ID.replaceAll('-', '').toUpperCase(),
+        '0b1ee8da',
+      ]) {
+        const matchedId = id.length === 32 ? id.toLowerCase() : FULL_ID;
         find.mockResolvedValueOnce([{ ...run, id: matchedId }]);
         expect(await resolveRunIdArg(host, id, '/repo')).toBe(matchedId);
         expect(find).toHaveBeenLastCalledWith(id, 'cb-1');

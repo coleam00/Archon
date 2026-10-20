@@ -344,7 +344,10 @@ async function resolveProjectScopedRunId(
 ): Promise<string> {
   if (!codebaseId) throw new Error('ARCHON_WORKFLOW_CODEBASE_ID must name a registered project.');
   const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
-  if (matches.length !== 1 || (FULL_RUN_ID_RE.test(runId) && matches[0]?.id !== runId)) {
+  if (
+    matches.length !== 1 ||
+    (FULL_RUN_ID_RE.test(runId) && matches[0]?.id.toLowerCase() !== runId.toLowerCase())
+  ) {
     throw new Error(`Run id '${runId}' does not identify exactly one run in the selected project.`);
   }
   return matches[0].id;

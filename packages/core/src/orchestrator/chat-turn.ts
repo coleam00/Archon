@@ -199,17 +199,24 @@ async function completeChatTurn(
   });
 }
 
-async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> {
+async function reportUnansweredToolFailure(
+  input: ChatTurnInput,
+  turnResult: TurnResult | undefined
+): Promise<void> {
   const { platform, conversationId, aiClient, requestOptions, turn } = input;
   await platform.sendMessage(
     conversationId,
     'A tool failed or was cancelled, and the assistant returned no follow-up reply. The requested action may not have completed. Check the run status before retrying.'
   );
+  await maybeSendResultFooter(platform, conversationId, turnResult);
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions.model,
     durationMs: Date.now() - turn.startedAt,
+    costUsd: turnResult?.cost,
+    tokensIn: turnResult?.tokens?.input,
+    tokensOut: turnResult?.tokens?.output,
     outcome: 'failed',
   });
 }
@@ -268,7 +275,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
     await tryPersistSessionId(session.id, newSessionId);
   }
 
-  if (toolFailed) return reportUnansweredToolFailure(input);
+  if (toolFailed) return reportUnansweredToolFailure(input, turnResult);
 
   if (allMessages.length === 0) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
@@ -360,7 +367,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
 
-  if (toolFailed) return reportUnansweredToolFailure(input);
+  if (toolFailed) return reportUnansweredToolFailure(input, turnResult);
 
   if (!finalMessage) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is

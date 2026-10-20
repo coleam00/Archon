@@ -1,6 +1,6 @@
 ---
 title: Commands Reference
-description: All slash commands available in Archon adapters including Web UI, Telegram, Slack, Discord, and GitHub.
+description: Archon orchestrator commands and how to submit them, including through a bot mention in Slack threads.
 category: reference
 area: handlers
 audience: [user]
