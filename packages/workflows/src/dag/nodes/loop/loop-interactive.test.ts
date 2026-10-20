@@ -6,6 +6,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   mockLogFn,
+  createMockStore,
   runUsageWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
@@ -18,6 +19,8 @@ import {
   makeWorkflowRun,
   expectLoopGateEvidence,
 } from '../../test-utils';
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -61,6 +64,84 @@ describe('interactive loop node', () => {
   };
 
   // ─── Interactive Loop Tests ────────────────────────────────────────────
+
+  it('counts a recovered paid gate once and adds the resumed iteration', async () => {
+    const store = createMockStore();
+    const failure = new WorkflowStatusReadError('paid-loop', new Error('Unsupported status'));
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    const pause = store.pauseWorkflowRun.getMockImplementation();
+    if (!pause) throw new Error('Expected pause implementation');
+    store.pauseWorkflowRun.mockImplementation(async (...args) => {
+      await pause(...args);
+      throw failure;
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let resumed = false;
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: resumed ? '<promise>DONE</promise>' : 'Draft' };
+      yield {
+        type: 'result',
+        sessionId: 'paid',
+        cost: resumed ? 0.1 : 0.37,
+        tokens: { input: resumed ? 10 : 100, output: resumed ? 5 : 50 },
+      };
+    });
+    const workflow = {
+      name: 'paid-loop',
+      nodes: [
+        {
+          id: 'refine',
+          kind: 'loop' as const,
+          loop: {
+            prompt: 'Work',
+            until: 'DONE',
+            max_iterations: 3,
+            fresh_context: false,
+            interactive: true,
+            gate_message: 'Review',
+          },
+        },
+      ],
+    };
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('paid-loop'),
+        })
+      )
+    ).rejects.toBe(failure);
+    const prior = await store.getDagResumeSnapshot('paid-loop');
+    expect(prior.costUsd).toBeCloseTo(0.37);
+    const approval = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(approval?.execution?.attempt.id).toBeDefined();
+    resumed = true;
+    store.getWorkflowRunStatus.mockResolvedValue('running');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('paid-loop', {
+          metadata: { approval, loop_user_input: 'Continue', loop_feedback_given: true },
+        }),
+        priorCompletedNodes: prior.completedNodeOutputs,
+        priorUsage: prior,
+      })
+    );
+    const settled = await store.getDagResumeSnapshot('paid-loop');
+    expect(settled.costUsd).toBeCloseTo(0.47);
+    expect(settled.tokens).toEqual({ input: 110, output: 55 });
+  });
 
   it('interactive loop with gate_message pauses after first iteration', async () => {
     mockSendQueryDag.mockImplementation(async function* () {

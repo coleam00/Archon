@@ -3,6 +3,7 @@
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import type { ScheduledWorkflowResume, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CAPACITY_WAIT_METADATA_KEY,
@@ -100,6 +101,7 @@ export async function findResumableRun(
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error(
       { err, errorType: err.constructor.name, workflowName, workingPath },
@@ -143,6 +145,7 @@ export async function findResumableRunByParentConversation(
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error(
       { err, workflowName, parentConversationId, codebaseId },
@@ -325,6 +328,7 @@ export async function resumeWorkflowRun(
       return { rowCount };
     });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_failed');
     throw new Error(`Failed to resume workflow run: ${err.message}`);
@@ -427,6 +431,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
       return normalizeWorkflowRun(row);
     });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     if (error instanceof Error && error.message.startsWith('Workflow run ')) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');

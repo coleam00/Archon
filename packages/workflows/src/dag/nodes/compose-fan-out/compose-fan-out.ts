@@ -1,4 +1,3 @@
-import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
@@ -186,9 +185,7 @@ async function readParentStatus(
   node: ComposeFanOutNode
 ): Promise<'accepting' | 'stopped'> {
   const parentRunId = ctx.workflowRun.id;
-  const runStatus = await readWorkflowLifecycle(parentRunId, () =>
-    ctx.deps.store.getWorkflowRunStatus(parentRunId)
-  );
+  const runStatus = await ctx.deps.store.getWorkflowRunStatus(parentRunId);
   const claimedWorkMayFinishPaused =
     runStatus === 'paused' && ctx.claimedWorkPausePolicy === 'finish_through_parent_pause';
   if (runStatus === 'running' || claimedWorkMayFinishPaused) return 'accepting';

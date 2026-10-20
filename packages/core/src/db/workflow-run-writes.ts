@@ -4,6 +4,7 @@
  * write-back claim, and deleting terminal runs. Re-exported from the
  * `./workflows` entry.
  */
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 import {
@@ -286,6 +287,7 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
       await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
     });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     if (error instanceof WorkflowRunGuardError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');

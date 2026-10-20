@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from './workflow-status-read';
 import {
   configWith,
   containerBackend,
@@ -145,7 +146,7 @@ describe('container resume guard', () => {
       const store = makeStore({
         releaseRunForUnreadableSource: mock(async () => ({ released: false })),
         getWorkflowRun: mock(async () => {
-          throw cause;
+          throw new WorkflowStatusReadError('corrupt', cause);
         }),
       });
       const platform = makePlatform();

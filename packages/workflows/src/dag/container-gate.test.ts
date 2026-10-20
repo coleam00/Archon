@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import { describe, it, expect, afterEach, mock } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -50,8 +51,10 @@ describe('executeDagWorkflow -- container write-back gate', () => {
       const store = createMockStore();
       const cause = new Error('Unreadable lifecycle');
       if (kind === 'status') {
-        store.getWorkflowRunStatus.mockResolvedValueOnce('running').mockRejectedValue(cause);
-      } else store.getWorkflowRun.mockRejectedValue(cause);
+        store.getWorkflowRunStatus
+          .mockResolvedValueOnce('running')
+          .mockRejectedValue(new WorkflowStatusReadError('corrupt', cause));
+      } else store.getWorkflowRun.mockRejectedValue(new WorkflowStatusReadError('corrupt', cause));
       const backend = makeWritebackBackend();
       await expect(
         executeDagWorkflow(

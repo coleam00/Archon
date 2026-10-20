@@ -1,4 +1,3 @@
-import { readWorkflowLifecycle } from './workflow-status-read';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { mkdir } from 'fs/promises';
@@ -461,9 +460,7 @@ export async function resolveAdoptedRunDir(
   // Supersession is metadata-only (#3064): no estate, so skip the output_root
   // gate and the $ADOPTED_RUN_DIR resolution that only adoption needs.
   if (effectiveContinuationMode !== 'supersede') {
-    const adopted = await readWorkflowLifecycle(effectiveAdoptedFromRunId, () =>
-      deps.store.getWorkflowRun(effectiveAdoptedFromRunId)
-    );
+    const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
     // Deliberately precedes the resolver below: a missing persisted root is
     // corruption, not relocation, so adoption refuses rather than re-deriving
     // from a codebase row the way the display-only CLI/server readers would.

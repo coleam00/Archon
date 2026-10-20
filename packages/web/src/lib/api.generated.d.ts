@@ -4297,6 +4297,7 @@ export interface components {
           id: string;
           /** Format: date-time */
           startedAt: string;
+          continuedFrom?: string;
           checkoutStart?:
             | {
                 /** @enum {string} */
@@ -5697,6 +5698,7 @@ export interface components {
             id: string;
             /** Format: date-time */
             startedAt: string;
+            continuedFrom?: string;
             checkoutStart?:
               | {
                   /** @enum {string} */

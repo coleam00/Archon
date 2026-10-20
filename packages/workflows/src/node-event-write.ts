@@ -53,13 +53,19 @@ export async function persistUnsettledNodeUsage(
   usage: ExecutionObservations
 ): Promise<void> {
   try {
-    await persistNodeEvent(
-      store,
-      serializeDeferredNodeUsage({
-        ...execution,
-        spend: observeExecutionSpend(execution.spend, usage),
-      })
-    );
+    const event = serializeDeferredNodeUsage({
+      ...execution,
+      spend: observeExecutionSpend(execution.spend, usage),
+    });
+    await persistNodeEvent(store, {
+      ...event,
+      data: {
+        ...event.data,
+        node: execution.node,
+        invocation: execution.invocation,
+        attempt: execution.attempt,
+      },
+    });
   } catch (error) {
     createLogger('workflow').error(
       { err: error, workflowRunId: execution.runId, nodeId: execution.path },

@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import { createEscalationStore } from './pause-test-utils';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
@@ -749,11 +750,11 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
         throw new WorkflowRunPauseConflictError('pause-read');
       });
       store.getWorkflowRunStatus.mockImplementation(async () => {
-        if (attempted && site === 'status') throw cause;
+        if (attempted && site === 'status') throw new WorkflowStatusReadError('corrupt', cause);
         return attempted ? 'paused' : 'running';
       });
       store.getWorkflowRun.mockImplementation(async () => {
-        throw cause;
+        throw new WorkflowStatusReadError('corrupt', cause);
       });
       const platform = createMockPlatform();
       await expect(

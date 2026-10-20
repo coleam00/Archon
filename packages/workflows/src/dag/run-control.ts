@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import type { WorkflowRunStatus } from '../schemas';
 import type { WorkflowDeps } from '../deps';
 import { runSubprocess } from '../subprocess';
@@ -37,10 +38,11 @@ export async function waitForNodeRetry(
   delayMs: number
 ): Promise<void> {
   for (let remaining = delayMs; remaining > 0; ) {
-    // A failed status read is not a stop signal: keep waiting, as the streaming check does.
+    // A transient query failure does not establish a stop; retry the read.
     try {
       if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
     } catch (statusErr) {
+      if (statusErr instanceof WorkflowStatusReadError) throw statusErr;
       getLog().warn(
         { err: statusErr as Error, workflowRunId: runId, nodeId },
         'dag.status_check_failed'
@@ -58,8 +60,8 @@ export const SUBPROCESS_STOP_CHECK_INTERVAL_MS = 1_000;
 
 /**
  * `runSubprocess` for a node of `runId`, ending its tree when that run stops; the
- * rejection is then marked `cancelled`. Only this run's status aborts it, so another
- * run's subprocess is never signalled.
+ * rejection is then marked `cancelled`. An unsupported lifecycle value aborts the
+ * tree and escapes as the original status error instead.
  */
 export async function runSubprocessUntilRunStops(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
@@ -69,6 +71,7 @@ export async function runSubprocessUntilRunStops(
 ): ReturnType<typeof runSubprocess> {
   const controller = new AbortController();
   let reading = false;
+  let statusFailure: WorkflowStatusReadError | undefined;
   const poll = setInterval(() => {
     if (reading) return;
     reading = true;
@@ -83,8 +86,14 @@ export async function runSubprocessUntilRunStops(
         );
         controller.abort();
       })
-      // A failed status read is not a stop signal: keep polling, as the streaming check does.
+      // A transient query failure does not establish a stop; retry the read.
       .catch((statusErr: unknown) => {
+        if (statusErr instanceof WorkflowStatusReadError) {
+          statusFailure = statusErr;
+          clearInterval(poll);
+          controller.abort();
+          return;
+        }
         getLog().warn(
           { err: statusErr as Error, workflowRunId: runId, nodeId },
           'dag.status_check_failed'
@@ -95,10 +104,17 @@ export async function runSubprocessUntilRunStops(
       });
   }, SUBPROCESS_STOP_CHECK_INTERVAL_MS);
   try {
-    return await runSubprocess(execContext, cmd, args, {
+    const result = await runSubprocess(execContext, cmd, args, {
       ...options,
       abortSignal: controller.signal,
     });
+    if (statusFailure) throw statusFailure;
+    return result;
+  } catch (error) {
+    if (statusFailure && error instanceof Error && 'treeSurvived' in error) {
+      getLog().error({ workflowRunId: runId, nodeId }, 'dag.status_error_subprocess_tree_survived');
+    }
+    throw statusFailure ?? error;
   } finally {
     clearInterval(poll);
   }

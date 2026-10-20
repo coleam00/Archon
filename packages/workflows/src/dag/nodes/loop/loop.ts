@@ -210,6 +210,7 @@ export async function executeLoopNode(
   });
   if (savedExecution !== undefined) {
     execution.timing.startedAt = savedExecution.timing.startedAt;
+    execution.attempt.continuedFrom = savedExecution.attempt.id;
     if (
       savedExecution.spend.tokens.source === 'unavailable' &&
       savedExecution.spend.tokens.reason === 'incomplete'

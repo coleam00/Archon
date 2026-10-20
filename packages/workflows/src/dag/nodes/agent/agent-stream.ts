@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
@@ -292,6 +293,10 @@ function stopCheck(
           return true;
         }
       } catch (cancelCheckErr) {
+        if (cancelCheckErr instanceof WorkflowStatusReadError) {
+          pc.abortController.abort();
+          throw cancelCheckErr;
+        }
         getLog().warn(
           { err: cancelCheckErr as Error, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
           'dag.status_check_failed'

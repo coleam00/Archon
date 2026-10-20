@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { bashInvocation } from '../../../bash-invocation';
 import {
   hostSpawnFailure,
@@ -152,6 +153,7 @@ export async function executeBashNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as RawSubprocessRejection;
     // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
     // rejection. Report it verbatim and keep it outside subprocess classification.
@@ -166,25 +168,7 @@ export async function executeBashNode(
     // full `Command failed: bash -c <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
     const spawnFailure = hostSpawnFailure(execContext, err);
-    let errorMsg: string;
-    if (contractFailure) {
-      errorMsg = err.message;
-    } else if (isTimeout) {
-      errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
-    } else if (err.treeSurvived) {
-      errorMsg = `${label} failed: ${err.message}`;
-    } else if (err.cancelled) {
-      errorMsg = `${label} cancelled`;
-    } else if (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR') {
-      errorMsg =
-        `${label} failed: bash executable not found at '${bashPath}'. ` +
-        'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
-        '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
-    } else if (spawnFailure === 'EACCES') {
-      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
-    } else {
-      errorMsg = formatted.userMessage;
-    }
+    const errorMsg = bashFailureMessage(node, err, bashPath, spawnFailure, formatted.userMessage);
 
     getLog().error(
       { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
@@ -239,4 +223,32 @@ export async function executeBashNode(
       }
     )
   );
+}
+
+function bashFailureMessage(
+  node: ExecNode,
+  error: RawSubprocessRejection,
+  bashPath: string,
+  spawnFailure: ReturnType<typeof hostSpawnFailure>,
+  fallback: string
+): string {
+  const label = `Bash node '${node.id}'`;
+  if (error instanceof ExecOutputContractError) {
+    return error.message;
+  } else if (isSubprocessTimeout(error)) {
+    return `${label} timed out after ${String(node.timeout)}ms`;
+  } else if (error.treeSurvived) {
+    return `${label} failed: ${error.message}`;
+  } else if (error.cancelled) {
+    return `${label} cancelled`;
+  } else if (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR') {
+    return (
+      `${label} failed: bash executable not found at '${bashPath}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  } else if (spawnFailure === 'EACCES') {
+    return `${label} failed: permission denied (check cwd permissions)`;
+  }
+  return fallback;
 }

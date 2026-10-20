@@ -134,6 +134,11 @@ interface ResumeFold {
   /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
   readonly usageContributions: UsageContribution[];
+  readonly unsettledUsage: Map<string, UsageContribution>;
+  readonly loopUsage: Map<
+    string,
+    { usage: UsageContribution; continuedFrom?: string; counted: boolean }
+  >;
   readonly authoritativeInstanceScopes: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
@@ -203,17 +208,21 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   return undefined;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+function readUsage(
+  runId: string,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage']
+): UsageContribution | undefined {
   const contribution: UsageContribution = {
     stepName,
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
   };
   if (rawUsage.tokens !== undefined) {
-    const tokens = readTokens(fold.runId, stepName, rawUsage.tokens);
+    const tokens = readTokens(runId, stepName, rawUsage.tokens);
     if (tokens !== undefined) contribution.tokens = tokens;
   }
   if (rawUsage.costUsd !== undefined) {
-    const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
+    const costUsd = readCost(runId, stepName, rawUsage.costUsd);
     if (costUsd !== undefined) contribution.costUsd = costUsd;
   }
   if (
@@ -221,8 +230,48 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     contribution.tokens !== undefined ||
     contribution.costUsd !== undefined
   ) {
-    fold.usageContributions.push(contribution);
+    return contribution;
   }
+  return undefined;
+}
+
+function addUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage'],
+  checkpoint?: string
+): void {
+  const usage = readUsage(fold.runId, stepName, rawUsage);
+  if (!usage) return;
+  if (checkpoint) fold.unsettledUsage.set(checkpoint, usage);
+  else fold.usageContributions.push(usage);
+}
+
+function usageCheckpointKey(path: string, data: SerializedNodeData): string | undefined {
+  if (!data.node || !data.invocation || !data.attempt) return undefined;
+  return JSON.stringify([
+    path,
+    data.node.kind === 'workflow' ? data.invocation.id : data.attempt.id,
+  ]);
+}
+
+function foldLoopUsage(
+  fold: ResumeFold,
+  path: string,
+  data: SerializedNodeData,
+  rawUsage: NodeRecord['rawUsage'],
+  counted = true
+): boolean {
+  if (data.node?.kind !== 'loop' || !data.attempt) return false;
+  const usage = readUsage(fold.runId, path, rawUsage);
+  if (usage) {
+    fold.loopUsage.set(data.attempt.id, {
+      usage,
+      continuedFrom: data.attempt.continuedFrom,
+      counted: counted || fold.loopUsage.get(data.attempt.id)?.counted === true,
+    });
+  }
+  return true;
 }
 
 function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
@@ -235,7 +284,8 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
     });
   }
   if (usage && nodeCostScope(usage.data) !== 'total') {
-    addUsage(fold, row.step_name, usage.rawUsage);
+    if (foldLoopUsage(fold, row.step_name, usage.data, usage.rawUsage)) return;
+    addUsage(fold, row.step_name, usage.rawUsage, usageCheckpointKey(row.step_name, usage.data));
   }
 }
 
@@ -430,6 +480,9 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type !== 'node_skipped_prior_success') {
+    if (foldLoopUsage(fold, row.step_name, record.data, record.rawUsage)) return;
+    const checkpoint = usageCheckpointKey(row.step_name, record.data);
+    if (checkpoint) fold.unsettledUsage.delete(checkpoint);
     addUsage(fold, row.step_name, record.rawUsage);
   }
 }
@@ -449,6 +502,9 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   foldInvocation(fold, record);
   const data = record.data;
   recordPriorFailure(fold.failedNodes, row.event_type, row.step_name, data);
+  if (row.event_type === 'node_suspended' && nodeCostScope(data) !== 'total') {
+    foldLoopUsage(fold, row.step_name, data, record.rawUsage, false);
+  }
   if (
     row.event_type !== 'node_completed' &&
     row.event_type !== 'node_skipped_prior_success' &&
@@ -486,7 +542,42 @@ function countedUsage(
   const authoritativeInstancePrefixes = [...fold.authoritativeInstanceScopes].map(
     scope => `${scope}__`
   );
-  const counted = fold.usageContributions.filter(
+  const continuedAttempts = new Set(
+    [...fold.loopUsage.values()].flatMap(record =>
+      record.continuedFrom ? [record.continuedFrom] : []
+    )
+  );
+  const loopUsage = [...fold.loopUsage.entries()]
+    .filter(([id, record]) => record.counted || continuedAttempts.has(id))
+    .map(([, { usage, continuedFrom }]) => {
+      const base = continuedFrom ? fold.loopUsage.get(continuedFrom)?.usage : undefined;
+      if (!base) return usage;
+      const tokens =
+        usage.tokens && base.tokens
+          ? {
+              ...usage.tokens,
+              input: usage.tokens.input - base.tokens.input,
+              output: usage.tokens.output - base.tokens.output,
+              ...(usage.tokens.cacheRead !== undefined && base.tokens.cacheRead !== undefined
+                ? { cacheRead: usage.tokens.cacheRead - base.tokens.cacheRead }
+                : {}),
+              ...(usage.tokens.cacheWrite !== undefined && base.tokens.cacheWrite !== undefined
+                ? { cacheWrite: usage.tokens.cacheWrite - base.tokens.cacheWrite }
+                : {}),
+            }
+          : usage.tokens;
+      return {
+        ...usage,
+        tokens,
+        tokensUnknown: usage.tokensUnknown || base.tokensUnknown,
+        costUsd: usage.costUsd === undefined ? undefined : usage.costUsd - (base.costUsd ?? 0),
+      };
+    });
+  const counted = [
+    ...fold.usageContributions,
+    ...fold.unsettledUsage.values(),
+    ...loopUsage,
+  ].filter(
     contribution =>
       !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
   );
@@ -513,6 +604,9 @@ function countedUsage(
  * rows, and only from rows whose `nodeCostScope` is their own spend. Failed rows contribute
  * spend but never completed outputs, so their nodes remain eligible for resume. A
  * deferred-usage row is accounting only: it never changes lifecycle state or output.
+ * Recovery checkpoints reconcile with settlement by invocation or attempt identity.
+ * Linked loop continuations include a suspended predecessor's total; only their delta
+ * is new spend. Unlinked legacy suspensions remain excluded from the total.
  *
  * This makes a run's total MONEY BURNED, not the cost of the surviving path — the
  * figure an operator watching a budget wants, and a deliberate change from what the
@@ -565,6 +659,8 @@ export async function foldDagResumeSnapshot(
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
     usageContributions: [],
+    unsettledUsage: new Map(),
+    loopUsage: new Map(),
     authoritativeInstanceScopes: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),

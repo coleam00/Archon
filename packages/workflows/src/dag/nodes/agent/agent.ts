@@ -1,7 +1,8 @@
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
-import { recordNodeState } from '../../../node-event-write';
+import { persistUnsettledNodeUsage, recordNodeState } from '../../../node-event-write';
 import type { SendQueryOptions, ProviderFailure } from '@archon/provider-contract';
 import type { AgentNode, EffortLevel } from '../../../schemas';
 import { isNodeContextResume } from '../../../schemas';
@@ -163,6 +164,14 @@ export async function executeAgentNode(
   try {
     result = await runWorkload(pc, state, prompt.prompt, session);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) {
+      await persistUnsettledNodeUsage(deps.store, execution, {
+        costUsd: state.costUsd,
+        tokens: state.tokens,
+        tokensUnknown: state.tokensUnknown,
+      });
+      throw error;
+    }
     const cancelled = abortController.signal.aborted && !state.idleTimedOut;
     const failure = attemptFailure(error as Error, cancelled, nodeMcp, node.id);
     return failAgentNode(failure.message, failure.kind, {

@@ -1,4 +1,4 @@
-/** A lifecycle check failed; execution cannot infer a node or run outcome. */
+/** A persisted lifecycle value is unsupported; execution cannot infer a run outcome. */
 export class WorkflowStatusReadError extends Error {
   constructor(
     readonly workflowRunId: string,
@@ -9,17 +9,5 @@ export class WorkflowStatusReadError extends Error {
       { cause }
     );
     this.name = 'WorkflowStatusReadError';
-  }
-}
-
-export async function readWorkflowLifecycle<T>(
-  workflowRunId: string,
-  read: () => Promise<T>
-): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (error instanceof WorkflowStatusReadError) throw error;
-    throw new WorkflowStatusReadError(workflowRunId, error);
   }
 }

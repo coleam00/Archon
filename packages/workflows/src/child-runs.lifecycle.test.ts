@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { settlingProvider } from './test-settling-provider';
 import {
   mockLogger,
@@ -84,7 +85,7 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
           store.runs.get(id)?.workflow_name === 'paid-child' &&
           store.events.some(e => e.workflow_run_id === id && e.event_type === 'node_completed')
         )
-          throw cause;
+          throw new WorkflowStatusReadError('corrupt', cause);
         return status(id);
       };
       const deps = makeDeps(store);
@@ -142,7 +143,7 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     const store = new InMemoryStore();
     const cause = new Error('Unsupported ancestor status');
     store.getRunAncestry = async () => {
-      throw cause;
+      throw new WorkflowStatusReadError('corrupt', cause);
     };
     const fail = spyOn(store, 'failWorkflowRun');
     const cancel = spyOn(store, 'cancelWorkflowRun');
@@ -1374,7 +1375,8 @@ nodes:
       } else {
         const readStatus = store.getWorkflowRunStatus;
         store.getWorkflowRunStatus = async id => {
-          if (id === parentRun!.id && store.runs.get(id)?.status === 'running') throw cause;
+          if (id === parentRun!.id && store.runs.get(id)?.status === 'running')
+            throw new WorkflowStatusReadError('corrupt', cause);
           return readStatus(id);
         };
       }

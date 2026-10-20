@@ -2,7 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the evidence and write-back gates, and the completion write.
  */
-import { readWorkflowLifecycle } from '../workflow-status-read';
+
 import { existsSync } from 'fs';
 import { join as joinPath } from 'path';
 import type { WorkflowDeps } from '../deps';
@@ -580,9 +580,7 @@ export async function skipIfStatusChanged(
   workflowRun: WorkflowRun,
   logEvent: string
 ): Promise<boolean> {
-  const status = await readWorkflowLifecycle(workflowRun.id, () =>
-    deps.store.getWorkflowRunStatus(workflowRun.id)
-  );
+  const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
   if (status === 'running') return false;
   getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
   if (status !== 'paused') {

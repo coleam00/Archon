@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from './workflow-status-read';
 import {
   containerBackend,
   makeCliPlatform,
@@ -63,6 +64,47 @@ describe('concurrent-run guard', () => {
       });
       const store = makeStore({
         getRunAncestry: mock(async () => {
+          if (site === 'ancestry') throw new WorkflowStatusReadError('corrupt', cause);
+          return [];
+        }),
+        findChildRuns: mock(async id => {
+          if (
+            site === 'siblings' ||
+            (site === 'sibling descendants' && id === 'sibling') ||
+            (site === 'own descendants' && id === run.id)
+          )
+            throw new WorkflowStatusReadError('corrupt', cause);
+          return id === 'parent' ? [sibling] : [];
+        }),
+      });
+      const platform = makePlatform();
+      await expect(
+        startWorkflow({ store, platform, cwd: '/tmp/ops', options: resumeOf(run) })
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelFanOutRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(sentMessages(platform).some(message => /failed|blocked/i.test(message))).toBe(false);
+    }
+  );
+
+  it.each(['ancestry', 'siblings', 'sibling descendants', 'own descendants'] as const)(
+    'cancels admitted work for an ordinary %s query failure',
+    async site => {
+      const cause = new Error('Database connection lost');
+      const run = makeRun({
+        parent_run_id: site === 'own descendants' ? null : 'parent',
+        working_path: '/tmp/ops',
+        metadata: { parent_node_id: 'fan', child_index: 0 },
+      });
+      const sibling = makeRun({
+        id: 'sibling',
+        working_path: '/tmp/ops',
+        metadata: { parent_node_id: 'fan', child_index: 1 },
+      });
+      const store = makeStore({
+        getRunAncestry: mock(async () => {
           if (site === 'ancestry') throw cause;
           return [];
         }),
@@ -77,14 +119,17 @@ describe('concurrent-run guard', () => {
         }),
       });
       const platform = makePlatform();
-      await expect(
-        startWorkflow({ store, platform, cwd: '/tmp/ops', options: resumeOf(run) })
-      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
-      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      const result = await startWorkflow({
+        store,
+        platform,
+        cwd: '/tmp/ops',
+        options: resumeOf(run),
+      });
+      expect(result.success).toBe(false);
+      expect(store.cancelFanOutRun).toHaveBeenCalledTimes(1);
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
-      expect(store.cancelFanOutRun).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
-      expect(sentMessages(platform).some(message => /failed|blocked/i.test(message))).toBe(false);
     }
   );
 

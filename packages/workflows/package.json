@@ -15,6 +15,7 @@
     "./deprecation": "./src/deprecation.ts",
     "./router": "./src/router.ts",
     "./resource-start-store": "./src/resource-start-store.ts",
+    "./workflow-status-read": "./src/workflow-status-read.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
     "./attention-watch": "./src/attention-watch.ts",

@@ -9,6 +9,7 @@ import {
   CONFORMANCE_CONVERSATION_ID,
   describeWorkflowStoreConformance,
 } from '@archon/workflows/store-conformance';
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -54,6 +55,7 @@ test('validates persisted workflow statuses without changing lifecycle state', a
       () => reads.findChildRuns(parent.id),
       () => reads.getWorkflowRunByWorkerPlatformId('conformance'),
       () => lists.listDashboardRuns(),
+      () => lists.listDashboardRuns({ limit: 0, status: 'completed' }),
       () => lists.listWorkflowRuns(),
       () => lists.findAdoptingRuns(parent.id),
     ];
@@ -74,6 +76,12 @@ test('validates persisted workflow statuses without changing lifecycle state', a
         status,
         run.id,
       ]);
+      await expect(store.getWorkflowRunStatus(run.id)).rejects.toBeInstanceOf(
+        WorkflowStatusReadError
+      );
+      await expect(store.getWorkflowRun(run.id)).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(reads.findChildRuns(parent.id)).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(reads.getRunAncestry(run.id)).rejects.toBeInstanceOf(WorkflowStatusReadError);
       await expect(store.getWorkflowRunStatus(run.id)).rejects.toThrow(
         `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
       );

@@ -1,4 +1,4 @@
-import { readWorkflowLifecycle } from '../../../workflow-status-read';
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
@@ -137,9 +137,7 @@ export async function runIterationAttempts(
   const retry: IterationRetry = { attempt: 0, sawRateLimit: false };
   for (; ; retry.attempt++) {
     if (retry.attempt > 0) {
-      const status = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
-        ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
-      );
+      const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
       if (!shouldContinueStreamingForStatus(status)) {
         return failed(
           await failLoopNode(ctx, run.node.id, state, `Workflow ${status ?? 'deleted'}`, {
@@ -307,6 +305,7 @@ async function streamIterationAttempt(
     recordDanglingTasks(run, state, i, attempt);
   } catch (error) {
     foldIterationUsage(state, usage, node.id);
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
     recordIterationFailed(run, i, err.message, Date.now() - iterationStart);
@@ -527,6 +526,10 @@ async function stopStreamIfRunStopped(
       return true;
     }
   } catch (statusErr) {
+    if (statusErr instanceof WorkflowStatusReadError) {
+      attempt.abort.abort();
+      throw statusErr;
+    }
     getLog().warn(
       { err: statusErr as Error, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
       'loop_node.status_check_failed'

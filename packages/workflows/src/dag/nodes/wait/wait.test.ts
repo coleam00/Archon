@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { createEscalationStore } from '../../pause-test-utils';
 import { describe, it, expect, beforeEach, afterEach, mock, setSystemTime } from 'bun:test';
 import { mkdir } from 'fs/promises';
@@ -55,7 +56,9 @@ describe('executeDagWorkflow -- durable wait node', () => {
     const store = createMockStore();
     const cause = new Error('status read failed');
     store.pauseWorkflowRunForWait = mock(async () => {
-      store.getWorkflowRunStatus.mockRejectedValueOnce(cause);
+      store.getWorkflowRunStatus.mockRejectedValueOnce(
+        new WorkflowStatusReadError('corrupt', cause)
+      );
       throw new Error('pause write failed');
     });
     await expect(

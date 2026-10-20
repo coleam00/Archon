@@ -1,4 +1,3 @@
-import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -77,9 +76,7 @@ export async function runLoopGroupIteration(
   // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
   // means the loop must stop now, skipping snapshot/completion handling for this
   // iteration. Re-check before proceeding.
-  const postBodyStatus = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
-    ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
-  );
+  const postBodyStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
   // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
   if (!shouldContinueStreamingForStatus(postBodyStatus)) {
     const effectiveStatus = postBodyStatus ?? 'deleted';
@@ -164,9 +161,7 @@ async function stopBeforeIteration(
   i: number
 ): Promise<LoopGroupBodyResult | undefined> {
   const { ctx, node } = run;
-  const runStatus = await readWorkflowLifecycle(ctx.workflowRun.id, () =>
-    ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id)
-  );
+  const runStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
   if (shouldContinueStreamingForStatus(runStatus)) return undefined;
   const effectiveStatus = runStatus ?? 'deleted';
   getLog().info(
@@ -428,9 +423,7 @@ async function ownedSuspensionPoint(
   if (isGateNode(terminalSuspendNode)) {
     return suspendOutput?.execution?.lifecycle.status === 'suspended' ? 'approval' : undefined;
   }
-  const freshRun = await readWorkflowLifecycle(run.ctx.workflowRun.id, () =>
-    run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id)
-  );
+  const freshRun = await run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id);
   const freshWait = freshRun?.metadata?.wait;
   return isWorkflowWaitContext(freshWait) &&
     freshWait.owner === 'loop_group' &&

@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { WorkflowStatusReadError } from '../workflow-status-read';
 import { recordNodeProcessTrees } from '../subprocess';
 import { executeDagWorkflow } from '../dag-executor';
 import { dagNodeSchema, type WorkflowRunStatus } from '../schemas';
@@ -54,6 +55,92 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
     await new Promise(resolve => setTimeout(resolve, 2500));
     return { store, leaked: existsSync(join(testDir, 'leaked')) };
   }
+
+  it.skipIf(process.platform === 'win32').each(['bash', 'script', 'loop predicate'] as const)(
+    'stops the %s process tree and preserves an unsupported status error',
+    async kind => {
+      const store = createMockStore();
+      const failure = new WorkflowStatusReadError('poll', new Error('Unsupported status'));
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (existsSync(join(testDir, 'started'))) throw failure;
+        return 'running';
+      });
+      const command = 'touch started; (sleep 2; touch leaked) & wait';
+      const node =
+        kind === 'bash'
+          ? { id: 'hang', bash: command }
+          : kind === 'script'
+            ? {
+                id: 'hang',
+                runtime: 'bun',
+                script:
+                  "import { writeFileSync } from 'node:fs'; writeFileSync('started', ''); await new Promise(resolve => setTimeout(resolve, 2000)); writeFileSync('leaked', '');",
+              }
+            : {
+                id: 'hang',
+                loop: {
+                  prompt: 'Work',
+                  until_bash: command,
+                  max_iterations: 2,
+                  fresh_context: false,
+                },
+              };
+      const trees = recordNodeProcessTrees();
+      try {
+        await expect(
+          executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(store),
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('poll'),
+              workflow: { name: 'poll', nodes: [dagNodeSchema.parse(node)] },
+            })
+          )
+        ).rejects.toBe(failure);
+      } finally {
+        trees.release();
+      }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      expect(existsSync(join(testDir, 'started'))).toBe(true);
+      expect(existsSync(join(testDir, 'leaked'))).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        store.createWorkflowEvent.mock.calls.some(([event]) => event.event_type === 'node_failed')
+      ).toBe(false);
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'lets a subprocess finish after a transient status query failure',
+    async () => {
+      const store = createMockStore();
+      let rejected = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (!rejected && existsSync(join(testDir, 'started'))) {
+          rejected = true;
+          throw new Error('Connection unavailable');
+        }
+        return 'running';
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('transient'),
+          workflow: {
+            name: 'transient',
+            nodes: [
+              dagNodeSchema.parse({ id: 'work', bash: 'touch started; sleep 1.2; echo done' }),
+            ],
+          },
+        })
+      );
+      expect(rejected).toBe(true);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   // Each case starts a background job that would write `leaked` after the cancel.
   it.skipIf(process.platform === 'win32').each([

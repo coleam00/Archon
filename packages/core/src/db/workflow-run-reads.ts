@@ -2,6 +2,7 @@
  * Point reads of workflow runs: lookups by id, conversation, path, parent and
  * worker platform id. Re-exported from the `./workflows` entry.
  */
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
@@ -26,6 +27,7 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_failed');
     throw new Error(`Failed to get workflow run: ${err.message}`);
@@ -51,6 +53,7 @@ export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
     throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
@@ -76,6 +79,7 @@ export async function findWorkflowRunsByIdPrefix(
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_find_by_prefix_failed');
     throw new Error(`Failed to find workflow runs by id prefix: ${err.message}`);
@@ -92,6 +96,7 @@ export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatu
     if (!row) return null;
     return readWorkflowRunStatus({ id, status: row.status });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_status_failed');
     throw new Error(`Failed to get workflow run status: ${err.message}`);
@@ -109,6 +114,7 @@ export async function getActiveWorkflowRun(conversationId: string): Promise<Work
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_active_failed');
     throw new Error(`Failed to get active workflow run: ${err.message}`);
@@ -119,7 +125,7 @@ export async function getActiveWorkflowRun(conversationId: string): Promise<Work
  * Find a paused workflow run for a conversation (or its parent).
  * Used by the message handler to give the chat agent the open approval gate as
  * context for the turn (#2565).
- * Non-throwing: returns null on DB error so the caller can fall through to normal routing.
+ * Returns null on query error so the caller can fall through to normal routing.
  */
 export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
   try {
@@ -132,6 +138,7 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, conversationId }, 'db.workflow_run_get_paused_failed');
     return null;
@@ -235,6 +242,7 @@ export async function getActiveWorkflowRunByPath(
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, workingPath }, 'db.workflow_run_get_active_by_path_failed');
     throw new Error(`Failed to get active workflow run by path: ${err.message}`);
@@ -255,6 +263,7 @@ export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]>
     );
     return result.rows.map(row => normalizeWorkflowRun(row));
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, parentRunId }, 'db.workflow_run_find_children_failed');
     throw new Error(`Failed to find child workflow runs: ${err.message}`);
@@ -328,6 +337,7 @@ export async function getWorkflowRunByWorkerPlatformId(
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_get_by_worker_platform_id_failed');
     throw new Error(`Failed to get workflow run by worker platform ID: ${err.message}`);

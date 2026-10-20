@@ -3,6 +3,7 @@
  * queue's paused rows, filtered lists, the open-work inbox and the health check.
  * Re-exported from the `./workflows` entry.
  */
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   isAttentionQueueRow,
@@ -20,6 +21,7 @@ import { listActiveWorkflowNodeIds } from './workflow-events';
 import { notOriginAnchor } from './workflow-origin-anchor';
 import {
   normalizeWorkflowRun,
+  readWorkflowRunStatus,
   readWorkflowRunOrigin,
   type WorkflowRunRow,
 } from './workflow-run-normalization';
@@ -191,8 +193,8 @@ export async function listDashboardRuns(
          LIMIT ${limitParam} OFFSET ${offsetParam}`,
         listValues
       ),
-      pool.query<{ status: string; cnt: string }>(
-        `SELECT r.status, COUNT(*) AS cnt
+      pool.query<{ id: string; status: unknown; cnt: string }>(
+        `SELECT MIN(CAST(r.id AS TEXT)) AS id, r.status, COUNT(*) AS cnt
          FROM remote_agent_workflow_runs r
          ${countWhereStr}
          GROUP BY r.status`,
@@ -208,13 +210,12 @@ export async function listDashboardRuns(
       cancelled: 0,
       pending: 0,
       paused: 0,
-    };
+    } satisfies Record<WorkflowRunStatus | 'all', number>;
     for (const row of countResult.rows) {
       const n = Number(row.cnt);
       counts.all += n;
-      if (row.status in counts) {
-        counts[row.status as keyof Omit<typeof counts, 'all'>] = n;
-      }
+      const status = readWorkflowRunStatus(row);
+      counts[status] = n;
     }
 
     // Total for the current filter (with status applied)
@@ -240,6 +241,7 @@ export async function listDashboardRuns(
 
     return { runs, total, counts };
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'list_dashboard_runs_failed');
     throw new Error(`Failed to list dashboard runs: ${err.message}`);
@@ -353,6 +355,7 @@ export async function listWorkflowRuns(options?: {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_list_failed');
     throw new Error(`Failed to list workflow runs: ${err.message}`);
@@ -396,6 +399,7 @@ export async function findOpenWorkRuns(options?: {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_open_work_list_failed');
     throw new Error(`Failed to list open workflow runs: ${err.message}`);
@@ -414,6 +418,7 @@ export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, runId }, 'db.workflow_run_adopters_lookup_failed');
     throw new Error(`Failed to find adopting runs: ${err.message}`);

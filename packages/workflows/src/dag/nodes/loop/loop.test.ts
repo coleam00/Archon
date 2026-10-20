@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import {
   describe,
   it,
@@ -78,7 +79,7 @@ describe('loop node execution', () => {
           phase === 'pre-iteration' ||
           persistedEvents(store).some(event => event.event_type === 'node_retry_scheduled')
         )
-          throw cause;
+          throw new WorkflowStatusReadError('corrupt', cause);
         return 'running';
       });
       mockSendQueryDag.mockImplementation(async function* () {

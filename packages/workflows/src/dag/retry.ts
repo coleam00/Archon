@@ -1,4 +1,3 @@
-import { readWorkflowLifecycle } from '../workflow-status-read';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DagNode, NodeOutput, AgentNode, ExecNode, WorkflowRun } from '../schemas';
 import {
@@ -165,9 +164,7 @@ export async function runNodeRetryLoop(
   let attempt = 0;
   while (true) {
     if (attempt > 0) {
-      const status = await readWorkflowLifecycle(workflowRun.id, () =>
-        store.getWorkflowRunStatus(workflowRun.id)
-      );
+      const status = await store.getWorkflowRunStatus(workflowRun.id);
       if (!shouldContinueStreamingForStatus(status)) {
         output = {
           state: 'failed',

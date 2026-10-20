@@ -280,3 +280,19 @@ test('quiet live work suspends the watchdog, then silence times out after it end
   expect(values).toEqual(['started', 'completed']);
   expect(timedOut).toHaveBeenCalledTimes(1);
 });
+
+test('a rejected stop check escapes without waiting behind a silent producer', async () => {
+  const failure = new Error('lifecycle unreadable');
+  const stream = withIdleTimeout(
+    hangAfter(['ready']),
+    20,
+    undefined,
+    undefined,
+    undefined,
+    async () => {
+      throw failure;
+    }
+  );
+  expect(await stream.next()).toEqual({ value: 'ready', done: false });
+  await expect(stream.next()).rejects.toBe(failure);
+});

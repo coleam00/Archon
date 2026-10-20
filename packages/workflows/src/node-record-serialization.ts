@@ -115,6 +115,9 @@ export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pi
   aggregate: true,
   tokens: true,
   cost_usd: true,
+  node: true,
+  invocation: true,
+  attempt: true,
 });
 export type SerializedDeferredNodeUsageEvent = Omit<SerializedNodeEvent, 'event_type' | 'data'> & {
   event_type: typeof DEFERRED_NODE_USAGE_EVENT_TYPE;
@@ -125,7 +128,8 @@ export function serializeDeferredNodeUsage(
   record: NodeExecutionRecord
 ): SerializedDeferredNodeUsageEvent {
   const serialized = serializeNodeStateRecord(record);
-  const data = serializedDeferredNodeUsageDataSchema.parse(serialized.data);
+  const { node: _node, invocation: _invocation, attempt: _attempt, ...segment } = serialized.data;
+  const data = serializedDeferredNodeUsageDataSchema.parse(segment);
   return {
     workflow_run_id: serialized.workflow_run_id,
     step_name: serialized.step_name,

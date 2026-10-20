@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
@@ -58,12 +59,20 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
         expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
         expect((await store.getWorkflowRun(run.id))?.status).toBe(status);
       }
+      const { listDashboardRuns } = await import('./workflow-run-lists');
       const events = await store.listWorkflowEvents(run.id);
       for (const status of ['unsupported-status', '']) {
         await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
           status,
           run.id,
         ]);
+        await expect(store.getWorkflowRunStatus(run.id)).rejects.toBeInstanceOf(
+          WorkflowStatusReadError
+        );
+        await expect(store.getWorkflowRun(run.id)).rejects.toBeInstanceOf(WorkflowStatusReadError);
+        await expect(listDashboardRuns({ limit: 0, status: 'completed' })).rejects.toBeInstanceOf(
+          WorkflowStatusReadError
+        );
         await expect(store.getWorkflowRunStatus(run.id)).rejects.toThrow(
           `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`
         );

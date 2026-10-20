@@ -1,4 +1,4 @@
-import { readWorkflowLifecycle, WorkflowStatusReadError } from './workflow-status-read';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
@@ -400,7 +400,7 @@ async function holdCheckoutPathLock(
   if (workflow.mutates_checkout === false && subrun.childIndex === undefined) return undefined;
   try {
     const ancestry = workflowRun.parent_run_id
-      ? await readWorkflowLifecycle(workflowRun.id, () => deps.store.getRunAncestry(workflowRun.id))
+      ? await deps.store.getRunAncestry(workflowRun.id)
       : [];
     const pathLockExclude = ancestry.map(run => run.id);
     const sharedCheckoutSiblings: WorkflowRun[] = [];
@@ -415,9 +415,7 @@ async function holdCheckoutPathLock(
         continue;
       }
       const parentRunId = branch.parent_run_id;
-      const siblings = (
-        await readWorkflowLifecycle(parentRunId, () => deps.store.findChildRuns(parentRunId))
-      ).filter(peer => {
+      const siblings = (await deps.store.findChildRuns(parentRunId)).filter(peer => {
         const peerMetadata = readSubrunMetadata(peer.metadata);
         return (
           peer.id !== branch.id &&

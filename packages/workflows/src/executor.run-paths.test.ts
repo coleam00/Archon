@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from './workflow-status-read';
 import {
   captureAdoptedRunDir,
   cwdPath,
@@ -46,7 +47,8 @@ describe('adopted run dir', () => {
     let reads = 0;
     const store = makeStore({
       getWorkflowRun: mock(async id => {
-        if (id === 'prior-run' && ++reads === 2) throw cause;
+        if (id === 'prior-run' && ++reads === 2)
+          throw new WorkflowStatusReadError('corrupt', cause);
         return makeRun({
           id,
           status: 'completed',

@@ -65,6 +65,15 @@ export async function* withIdleTimeout<T>(
     while (true) {
       const nextPromise = generator.next();
 
+      const checkStop = async (): Promise<boolean> => {
+        try {
+          return shouldStop ? await shouldStop() : false;
+        } catch (error) {
+          nextAbandoned = true;
+          nextPromise.catch(() => undefined);
+          throw error;
+        }
+      };
       let result: IteratorResult<T> | undefined;
       while (result === undefined) {
         const tickMs = Math.max(0, Math.min(WATCHDOG_TICK_MS, timeoutMs - idleMs));
@@ -84,7 +93,7 @@ export async function* withIdleTimeout<T>(
 
         if (settled !== TICK) {
           result = settled;
-        } else if (shouldStop && (await shouldStop())) {
+        } else if (shouldStop && (await checkStop())) {
           nextAbandoned = true;
           // The caller aborts the producer; do not await return behind its pending next.
           nextPromise.catch(() => undefined);

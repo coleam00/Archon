@@ -1,4 +1,3 @@
-import { readWorkflowLifecycle } from '../workflow-status-read';
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import { getWorkflowEventEmitter } from '../event-emitter';
@@ -58,7 +57,7 @@ export function statusAfterPauseFailure(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
   runId: string
 ): Promise<WorkflowRunStatus | null> {
-  return readWorkflowLifecycle(runId, () => store.getWorkflowRunStatus(runId));
+  return store.getWorkflowRunStatus(runId);
 }
 
 /**
@@ -88,7 +87,7 @@ export async function pauseGateRespectingExternalTransition(
     const status = await statusAfterPauseFailure(deps.store, runId);
     if (status === 'running' || status === 'pending') throw pauseErr;
     if (status === 'paused') {
-      const run = await readWorkflowLifecycle(runId, () => deps.store.getWorkflowRun(runId));
+      const run = await deps.store.getWorkflowRun(runId);
       const active = run?.metadata?.approval;
       const wait = run?.metadata?.wait;
       if (isWorkflowWaitContext(wait)) {

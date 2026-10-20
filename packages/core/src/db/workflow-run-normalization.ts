@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 import {
   workflowRunOriginSchema,
   workflowRunStatusSchema,
@@ -168,8 +169,9 @@ function readCheckoutBaseline(row: WorkflowRunRow): CheckoutObservation | null {
 export function readWorkflowRunStatus(row: { id: string; status: unknown }): WorkflowRunStatus {
   const status = workflowRunStatusSchema.safeParse(row.status);
   if (!status.success) {
-    throw new Error(
-      `Unsupported workflow run status for run ${row.id}: ${JSON.stringify(row.status)}`
+    throw new WorkflowStatusReadError(
+      row.id,
+      new Error(`Unsupported workflow run status for run ${row.id}: ${JSON.stringify(row.status)}`)
     );
   }
   return status.data;

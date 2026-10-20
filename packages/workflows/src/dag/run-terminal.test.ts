@@ -103,7 +103,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
               ? events.some(e => e.event_type === 'node_retry_scheduled')
               : events.some(e => e.event_type === 'node_completed')
         )
-          throw cause;
+          throw new WorkflowStatusReadError('corrupt', cause);
         return 'running';
       });
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
@@ -182,7 +182,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
       });
       store.getWorkflowRunStatus.mockImplementation(async () => {
         if (persistedEvents(store).some(e => e.event_type === 'loop_iteration_completed'))
-          throw cause;
+          throw new WorkflowStatusReadError('corrupt', cause);
         return 'running';
       });
       store.getDagResumeSnapshot.mockImplementation(async id => {
@@ -239,7 +239,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
     let afterWork = 0;
     store.getWorkflowRunStatus.mockImplementation(async () => {
       if (persistedEvents(store).some(e => e.event_type === 'node_completed') && ++afterWork === 2)
-        throw cause;
+        throw new WorkflowStatusReadError('corrupt', cause);
       return 'running';
     });
     await expect(
@@ -292,7 +292,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
             : events.some(event => event.event_type === 'node_completed') &&
               (phase !== 'after' || ++completedReads === 2)
         )
-          throw error;
+          throw new WorkflowStatusReadError('corrupt', error);
         return 'running';
       });
       const body: DagNode[] = [

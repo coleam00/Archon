@@ -1,4 +1,4 @@
-import { readWorkflowLifecycle, WorkflowStatusReadError } from './workflow-status-read';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
@@ -62,7 +62,7 @@ export async function gatherDescendantRunIds(
     const id = queue.shift();
     if (id === undefined) break;
     processed++;
-    const children = await readWorkflowLifecycle(id, () => deps.store.findChildRuns(id));
+    const children = await deps.store.findChildRuns(id);
     for (const c of children) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
@@ -213,10 +213,7 @@ export async function runChildWorkflow(
     // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
     //    The child's ancestor chain is the parent plus the parent's ancestors; a
     //    resolved target already in the chain is a cycle.
-    const ancestry = [
-      parentRun,
-      ...(await readWorkflowLifecycle(parentRun.id, () => deps.store.getRunAncestry(parentRun.id))),
-    ];
+    const ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
     if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
       return failOutcome(
         `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
@@ -486,9 +483,7 @@ export async function runChildWorkflow(
 
       // 6. Read the child back for the node-facing outcome (status + summary + cost +
       //    tokens). Works for synchronous completion AND a child paused at its gate.
-      const finalChild = await readWorkflowLifecycle(childRunId, () =>
-        deps.store.getWorkflowRun(childRunId)
-      );
+      const finalChild = await deps.store.getWorkflowRun(childRunId);
       if (!finalChild) {
         return failOutcome('Child run row disappeared after execution.', childRunId);
       }

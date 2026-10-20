@@ -221,6 +221,8 @@ export const nodeExecutionMetadataSchema = z.object({
   attempt: z.object({
     id: z.string(),
     startedAt: z.string().datetime({ offset: true }),
+    /** An interactive loop continuation reports totals including this earlier attempt. */
+    continuedFrom: z.string().optional(),
     /** The checkout when this attempt started; the attempt's own sample, not the invocation's. */
     checkoutStart: checkoutObservationSchema.optional(),
   }),

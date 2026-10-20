@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { createEscalationStore } from '../../pause-test-utils';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
@@ -345,11 +346,12 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       const store = createEscalationStore('unreadable-wait');
       const cause = new Error('Unreadable status');
       if (phase === 'owned-wait') {
-        store.getWorkflowRun.mockRejectedValue(cause);
+        store.getWorkflowRun.mockRejectedValue(new WorkflowStatusReadError('corrupt', cause));
       } else {
         const readStatus = store.getWorkflowRunStatus;
         store.getWorkflowRunStatus = mock(async id => {
-          if (store.pauseWorkflowRunForWait.mock.calls.length > 0) throw cause;
+          if (store.pauseWorkflowRunForWait.mock.calls.length > 0)
+            throw new WorkflowStatusReadError('corrupt', cause);
           return readStatus(id);
         });
       }

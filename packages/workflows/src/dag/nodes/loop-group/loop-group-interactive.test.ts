@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -52,7 +53,7 @@ describe('interactive loop_group gate and resume', () => {
       );
       if (groupStarted && !rejected) {
         rejected = true;
-        throw error;
+        throw new WorkflowStatusReadError('corrupt', error);
       }
       return 'running';
     });

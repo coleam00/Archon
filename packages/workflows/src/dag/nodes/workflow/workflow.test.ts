@@ -1,4 +1,6 @@
 // @archon-test-isolated
+import { ChildWorkflowStatusReadError } from '../../child-run';
+import { WorkflowRunPauseConflictError } from '../../../store';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
@@ -141,7 +143,8 @@ describe('executeDagWorkflow -- workflow: node', () => {
       );
       let reads = 0;
       store.findChildRuns.mockImplementation(async () => {
-        if (++reads === (phase === 'refresh' || phase === 'join' ? 2 : 1)) throw cause;
+        if (++reads === (phase === 'refresh' || phase === 'join' ? 2 : 1))
+          throw new WorkflowStatusReadError('corrupt', cause);
         return [];
       });
       const platform = createMockPlatform();
@@ -211,10 +214,139 @@ describe('executeDagWorkflow -- workflow: node', () => {
     }
   );
 
+  it.each([false, true])('settles recovered child usage once (fan-out: %s)', async fanOut => {
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    prompt: Work',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    const usage = { costUsd: 0.37, tokens: { input: 100, output: 50 } };
+    const failure = new ChildWorkflowStatusReadError(
+      new WorkflowStatusReadError('paid', new Error('Unsupported status')),
+      usage
+    );
+    let recovering = false;
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+      if (!recovering) throw failure;
+      return { childRunId: 'paid', status: 'completed', output: 'done', ...usage };
+    });
+    const workflow = {
+      name: 'recovery',
+      nodes: [
+        {
+          id: 'child',
+          kind: 'workflow' as const,
+          workflow: 'child-workflow',
+          ...(fanOut
+            ? { fan_out: { items: '[1]', max_parallel: 1, join: 'all_done' as const } }
+            : {}),
+        },
+      ],
+    };
+    const options = dagOptions({
+      deps: createMockDeps(store),
+      cwd: testDir,
+      workflow,
+      workflowRun: makeWorkflowRun('recovery'),
+      runChildWorkflow,
+    });
+    await expect(executeDagWorkflow(options)).rejects.toBe(failure);
+    const prior = await store.getDagResumeSnapshot('recovery');
+    expect(prior.costUsd).toBeCloseTo(0.37);
+    recovering = true;
+    await executeDagWorkflow({
+      ...options,
+      priorCompletedNodes: prior.completedNodeOutputs,
+      priorUsage: prior,
+    });
+    const settled = await store.getDagResumeSnapshot('recovery');
+    expect(settled.costUsd).toBeCloseTo(0.37);
+    expect(settled.tokens).toEqual(usage.tokens);
+  });
+
+  it.each([false, true])(
+    "retains a paused child's usage when parent reconciliation fails (tokens unavailable: %s)",
+    async tokensUnknown => {
+      const store = createMockStore();
+      const cause = new Error('Unsupported parent status');
+      const failure = new WorkflowStatusReadError('paused-parent', cause);
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      let reconciling = false;
+      store.pauseWorkflowRun.mockImplementation(async () => {
+        reconciling = true;
+        throw new WorkflowRunPauseConflictError('paused-parent');
+      });
+      store.getWorkflowRun.mockImplementation(async () => {
+        throw failure;
+      });
+      store.getWorkflowRunStatus.mockResolvedValue('paused');
+      const usage = {
+        costUsd: 0.37,
+        ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+      };
+      const workflow = {
+        name: 'paused-parent',
+        nodes: [{ id: 'child', kind: 'workflow' as const, workflow: 'child-workflow' }],
+      };
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        reconciling ? 'paused' : 'running'
+      );
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflow,
+            workflowRun: makeWorkflowRun('paused-parent'),
+            runChildWorkflow: mock(async () => ({
+              childRunId: 'paid',
+              status: 'paused' as const,
+              ...usage,
+            })),
+          })
+        )
+      ).rejects.toBe(failure);
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.37,
+        total_tokens_in: tokensUnknown ? null : 100,
+        total_tokens_out: tokensUnknown ? null : 50,
+      });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      const snapshot = await store.getDagResumeSnapshot('paused-parent');
+      store.getWorkflowRunStatus.mockResolvedValue('running');
+      store.getWorkflowRun.mockResolvedValue(makeWorkflowRun('paused-parent'));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('paused-parent'),
+          priorCompletedNodes: snapshot.completedNodeOutputs,
+          runChildWorkflow: mock(async () => ({
+            childRunId: 'paid',
+            status: 'completed' as const,
+            output: 'done',
+            ...usage,
+          })),
+        })
+      );
+      const settled = await store.getDagResumeSnapshot('paused-parent');
+      expect(settled.costUsd).toBeCloseTo(0.37);
+      expect(settled.tokensUnknown).toBe(tokensUnknown);
+      expect(settled.tokens).toEqual(tokensUnknown ? undefined : { input: 100, output: 50 });
+    }
+  );
+
   it('propagates unreadable child rows without failing the workflow node', async () => {
     const store = createMockStore();
     const cause = new Error('Unsupported child status');
-    store.findChildRuns.mockRejectedValue(cause);
+    store.findChildRuns.mockRejectedValue(new WorkflowStatusReadError('corrupt', cause));
     await expect(
       executeDagWorkflow(
         dagOptions({

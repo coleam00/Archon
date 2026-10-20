@@ -1,4 +1,4 @@
-import { WorkflowStatusReadError, readWorkflowLifecycle } from '../../../workflow-status-read';
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -27,6 +27,7 @@ import { getLog } from '../../log';
 import { executeFanOutWorkflowNode } from './fan-out';
 import {
   childOutcomeFromRun,
+  childUsageFromRun,
   ChildWorkflowStatusReadError,
   type ChildWorkflowOutcome,
 } from '../../child-run';
@@ -222,21 +223,32 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
+  const pauseParentOnChild = async (
+    childRunId: string,
+    usage: ChildWorkflowStatusReadError['usage']
+  ): Promise<NodeExecutionResult> => {
     const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },
-      { output: { text: '' }, diagnostics: { childRunId } }
+      { output: { text: '' }, ...usage, diagnostics: { childRunId } }
     );
-    const paused = await pauseGateRespectingExternalTransition(
-      deps,
-      parentRun.id,
-      { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
-      { event: serializeNodeStateRecord(suspended) }
-    );
+    let paused: Awaited<ReturnType<typeof pauseGateRespectingExternalTransition>>;
+    try {
+      paused = await pauseGateRespectingExternalTransition(
+        deps,
+        parentRun.id,
+        { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
+        { event: serializeNodeStateRecord(suspended) }
+      );
+    } catch (error) {
+      if (error instanceof WorkflowStatusReadError) {
+        await persistUnsettledNodeUsage(deps.store, execution, usage);
+      }
+      throw error;
+    }
     if (!paused) return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
     await safeSendMessage(
@@ -253,7 +265,7 @@ export async function executeWorkflowNode(
       case 'completed':
         return await asCompleted(outcome);
       case 'paused':
-        return pauseParentOnChild(outcome.childRunId);
+        return pauseParentOnChild(outcome.childRunId, outcome);
       case 'failed':
         return failResult(
           outcome.error ?? `Sub-run '${node.workflow}' failed`,
@@ -285,9 +297,9 @@ export async function executeWorkflowNode(
   // Re-entry: find THIS node's child (a parent may run several workflow: nodes, so
   // filter by parent_node_id). At most one child per node in slice 1; if somehow
   // several, the most recent wins.
-  const children = (
-    await readWorkflowLifecycle(parentRun.id, () => deps.store.findChildRuns(parentRun.id))
-  ).filter(c => readSubrunMetadata(c.metadata).parentNodeId === executionNodeId);
+  const children = (await deps.store.findChildRuns(parentRun.id)).filter(
+    c => readSubrunMetadata(c.metadata).parentNodeId === executionNodeId
+  );
   const existing = children.length > 0 ? children[children.length - 1] : undefined;
 
   const childArgs = {
@@ -320,7 +332,7 @@ export async function executeWorkflowNode(
     ) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
-      return await pauseParentOnChild(existing.id);
+      return await pauseParentOnChild(existing.id, childUsageFromRun(existing));
     }
     // completed / cancelled — thread the outcome through the same state table a
     // freshly-run child uses (interpret handles both).

@@ -178,3 +178,120 @@ describe('node-event-write', () => {
     expect(emitted[0]).not.toHaveProperty('duration');
   });
 });
+
+it.each(
+  (['child', 'fan-out', 'loop', 'agent'] as const).flatMap(kind =>
+    [false, true].map(tokensUnknown => [kind, tokensUnknown] as const)
+  )
+)(
+  'settles cumulative %s recovery usage once and preserves a separate paid execution',
+  async (kind, tokensUnknown) => {
+    const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
+    const { persistUnsettledNodeUsage } = await import('./node-event-write');
+    const { serializeNodeStateRecord } = await import('./node-record-serialization');
+    const events: import('./dag-resume-snapshot').DagResumeEvent[] = [];
+    const store = {
+      persistWorkflowEvent: async (event: import('./store').DurableNodeEventInput) => {
+        events.push(event);
+      },
+    };
+    const record = completedRecord();
+    record.node =
+      kind === 'loop'
+        ? { id: 'build', kind: 'loop' }
+        : kind === 'agent'
+          ? { id: 'build', kind: 'agent', source: { kind: 'inline' } }
+          : { id: 'build', kind: 'workflow', ...(kind === 'fan-out' ? { fanOut: true } : {}) };
+    record.lifecycle = { status: 'started' };
+    events.length = 0;
+    const usage = {
+      costUsd: 0.37,
+      ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+    };
+    await persistUnsettledNodeUsage(store, record, usage);
+    await persistUnsettledNodeUsage(store, record, usage);
+    const pending = await foldDagResumeSnapshot(events, record.runId);
+    expect(pending.costUsd).toBeCloseTo(0.37);
+    expect(pending.tokensUnknown).toBe(tokensUnknown);
+    const settled = structuredClone(record);
+    settled.lifecycle = { status: 'completed' };
+    settled.spend.costUsd = { source: 'provider', value: 0.47 };
+    settled.spend.tokens = tokensUnknown
+      ? { source: 'unavailable', reason: 'incomplete' }
+      : { source: 'provider', value: { input: 110, output: 60 } };
+    if (kind !== 'agent') settled.attempt.id = 'resumed-attempt';
+    if (kind === 'loop') {
+      const suspended = structuredClone(record);
+      suspended.lifecycle = { status: 'suspended', point: 'interactive_loop' };
+      suspended.spend.costUsd = { source: 'provider', value: 0.37 };
+      suspended.spend.tokens = tokensUnknown
+        ? { source: 'unavailable', reason: 'incomplete' }
+        : { source: 'provider', value: { input: 100, output: 50 } };
+      events.push(serializeNodeStateRecord(suspended));
+      settled.attempt.continuedFrom = record.attempt.id;
+    }
+    events.push(serializeNodeStateRecord(settled));
+    const snapshot = await foldDagResumeSnapshot(events, record.runId);
+    expect(snapshot.costUsd).toBeCloseTo(0.47);
+    expect(snapshot.tokensUnknown).toBe(tokensUnknown);
+    expect(snapshot.tokens).toEqual(tokensUnknown ? undefined : { input: 110, output: 60 });
+    const repeated = structuredClone(settled);
+    repeated.invocation.id = kind === 'loop' ? record.invocation.id : 'inv-2';
+    repeated.attempt = { id: 'attempt-2', startedAt: record.attempt.startedAt };
+    repeated.timing.startedAt = '2026-09-22T11:00:00Z';
+    events.push(serializeNodeStateRecord(repeated));
+    expect((await foldDagResumeSnapshot(events, record.runId)).costUsd).toBeCloseTo(0.94);
+  }
+);
+
+it('keeps paid loop attempts that replay the same gate separate from its continuation', async () => {
+  const { foldDagResumeSnapshot } = await import('./dag-resume-snapshot');
+  const { persistUnsettledNodeUsage } = await import('./node-event-write');
+  const { serializeNodeStateRecord } = await import('./node-record-serialization');
+  const events: import('./dag-resume-snapshot').DagResumeEvent[] = [];
+  const store = {
+    persistWorkflowEvent: async (event: import('./store').DurableNodeEventInput) => {
+      events.push(event);
+    },
+  };
+  const gate = completedRecord();
+  gate.node = { id: 'build', kind: 'loop' };
+  gate.lifecycle = { status: 'suspended', point: 'interactive_loop' };
+  gate.spend.costUsd = { source: 'provider', value: 0.37 };
+  gate.spend.tokens = {
+    source: 'provider',
+    value: { input: 100, output: 50, cacheRead: 20, cacheWrite: 10 },
+  };
+  events.push(serializeNodeStateRecord(gate));
+  const legacyCompletion = structuredClone(gate);
+  legacyCompletion.attempt.id = 'legacy-completion';
+  legacyCompletion.lifecycle = { status: 'completed' };
+  legacyCompletion.spend.costUsd = { source: 'provider', value: 0.47 };
+  expect(
+    (
+      await foldDagResumeSnapshot(
+        [...events, serializeNodeStateRecord(legacyCompletion)],
+        gate.runId
+      )
+    ).costUsd
+  ).toBeCloseTo(0.47);
+  const aborted = structuredClone(gate);
+  aborted.attempt = { ...gate.attempt, id: 'aborted', continuedFrom: gate.attempt.id };
+  await persistUnsettledNodeUsage(store, aborted, {
+    costUsd: 0.47,
+    tokens: { input: 110, output: 55, cacheRead: 22, cacheWrite: 11 },
+  });
+  expect((await foldDagResumeSnapshot(events, gate.runId)).costUsd).toBeCloseTo(0.47);
+  const replayed = structuredClone(aborted);
+  replayed.attempt.id = 'replayed';
+  replayed.lifecycle = { status: 'completed' };
+  replayed.spend.costUsd = { source: 'provider', value: 0.57 };
+  replayed.spend.tokens = {
+    source: 'provider',
+    value: { input: 120, output: 60, cacheRead: 24, cacheWrite: 12 },
+  };
+  events.push(serializeNodeStateRecord(replayed));
+  const result = await foldDagResumeSnapshot(events, gate.runId);
+  expect(result.costUsd).toBeCloseTo(0.67);
+  expect(result.tokens).toEqual({ input: 130, output: 65, cacheRead: 26, cacheWrite: 13 });
+});
