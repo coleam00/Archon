@@ -265,8 +265,8 @@ whole process tree before it reports the timeout, so the real work behind a wrap
 `bun run` or `uv run` stops too. On Windows it runs `taskkill /T /F` on the node's process.
 On macOS and Linux `archon serve` and a foreground `workflow run`, `workflow resume` or
 `trigger execute` start the node in its own process group and send `SIGTERM` to that group. A
-node of a detached run shares its owner's process group, so on macOS and Linux its timeout
-still ends only the node's own process, and work it started in the background keeps running.
+node of a detached run also gets its own group when the engine polls for run stops;
+its owner-death watcher ends that group if the detached owner dies.
 `until_bash` checks end only their own process. A container node's timeout ends only the
 local `docker exec` client, so the command inside the container may keep running.
 
@@ -288,8 +288,13 @@ running host `bash:` and `script:` nodes and `until_bash` checks within about a 
 (`SIGKILL` to the node's process group on macOS and Linux, `taskkill /T /F` on Windows), and
 records the node failed as cancelled. Other runs' processes are not touched. A process that
 left the node's group with `setsid` escapes. On Windows, background work whose node process
-already exited is not reached. A container node's command is not reached.
-Cancelling a detached run ends its owner's process group on macOS and Linux, nodes included.
+already exited is not reached. Container subprocess polling signals the command's own
+in-container process group through a separate `docker exec`; sibling commands are untouched.
+An unsupported persisted run status uses the same termination path and propagates the original
+read error without recording a failed or cancelled node. Termination failures are logged while
+preserving that original error.
+Cancelling a detached run ends its owner's process group on macOS and Linux; node owner-death
+watchers then end their separate groups.
 On Windows it ends the owner's Job Object, which also holds node processes whose parent
 already exited.
 

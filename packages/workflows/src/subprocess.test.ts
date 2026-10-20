@@ -304,25 +304,12 @@ test('aborting a recorded node ends the wrapper and its grandchild', async () =>
   }
 }, 15_000);
 
-test('an unrecorded node ignores the abort, because its owner ends it', async () => {
-  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-node-abort-')));
-  const controller = new AbortController();
-  controller.abort();
-  const { stdout } = await runSubprocess(
-    { kind: 'host' },
-    process.execPath,
-    ['-e', 'await Bun.sleep(200); console.log("finished")'],
-    {
-      cwd: dir,
-      timeout: 5000,
-      env: {},
-      endTreeOnTimeout: true,
-      abortSignal: controller.signal,
-      retention: { standalone: true },
-    }
-  );
-  expect(stdout.trim()).toBe('finished');
-});
+test('aborting an unrecorded node ends the wrapper and its grandchild', async () => {
+  const { error, leaked } = await runAbortedWrapper();
+  expect(error?.message).toBe('Command cancelled');
+  expect(error?.cancelled).toBe(true);
+  expect(leaked).toBe(false);
+}, 15_000);
 
 test('an owned-group deadline remains a timeout whatever exit evidence arrives', () => {
   const error = Object.assign(new Error('deadline'), { timedOut: true, code: 7 });

@@ -29,7 +29,6 @@ import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from '../deps';
 import type { IWorkflowStore } from '../store';
 import { waitCompletionEvents } from '../store';
 import { composeFanOutScopeSegment } from '../fan-out-identity';
-import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
 
 /**
  * Shared scaffolding for the DAG executor tests. Importing this module replaces
@@ -578,22 +577,20 @@ export function resolveTestWorkflow(workflow: TestWorkflowDefinition): ResolvedW
  * `docker`, which can take longer than a test's whole budget on a CI runner.
  */
 export function stubMissingContainer(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
-  return spyOn(git, 'execFileAsync').mockImplementation(async () => {
+  return spyOnNodeExec().mockImplementation(async () => {
     throw new Error('Error response from daemon: No such container');
   });
 }
 
 /**
- * Spy on `execFileAsync` as the transport of a host bash or script node. On Windows such a
- * node runs through the owned process group instead, so its deadline can end the whole tree;
- * that path is routed into the same spy until the test ends.
+ * Route node process groups and ordinary exec calls through one transport spy.
+ * Process ownership is exercised by the subprocess tests, not these caller tests.
  */
 export function spyOnNodeExec(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
   const execSpy = spyOn(git, 'execFileAsync');
-  if (process.platform === 'win32')
-    ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
-      (cmd, args, options) => git.execFileAsync(cmd, args, options)
-    );
+  ownedGroupSpy = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+    (cmd, args, options) => git.execFileAsync(cmd, args, options)
+  );
   return execSpy;
 }
 let ownedGroupSpy: { mockRestore(): void } | undefined;
@@ -606,9 +603,7 @@ afterEach(() => {
 export function nodeDockerCalls(
   calls: Parameters<typeof git.execFileAsync>[]
 ): Parameters<typeof git.execFileAsync>[] {
-  return calls.filter(
-    ([command, args]) => command === 'docker' && args.at(-1) !== CONTAINER_MARKER_PROBE
-  );
+  return calls.filter(([command, args]) => command === 'docker' && args.includes('setsid'));
 }
 
 /**

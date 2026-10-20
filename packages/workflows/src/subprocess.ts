@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { createLogger } from '@archon/paths';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { terminateTree } from '@archon/paths/plugin-process';
 import { retainStreamTail } from './executor-shared';
@@ -151,8 +153,8 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * - `archon serve` ends one run's trees through each node's `abortSignal` when that run
  *   stops, and never calls `end()`.
  *
- * A detached owner must not record: the cancel controller ends its nodes by killing the
- * owner's process group, which a node in its own group would escape.
+ * A detached owner does not enable this process-wide registry. Abortable nodes have a
+ * private registry and lifeline instead, so owner death still ends their separate groups.
  *
  * `end()` refuses every later node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
@@ -261,16 +263,14 @@ export async function runSubprocess(
     timeout?: number;
     /**
      * A host node body: its deadline ends the node's whole tree before the timeout is
-     * reported. On POSIX that needs the node's own process group, which only a recording
-     * owner gives it; an unrecorded POSIX node shares its owner's group, which
-     * `archon workflow cancel` kills to end a detached run, so its deadline still ends the
-     * root only.
+     * reported. On POSIX that needs the node's own process group, supplied by a recording
+     * owner or an abortable node. Other unrecorded nodes share their owner's group and
+     * their deadline ends only the root.
      */
     endTreeOnTimeout?: true;
     /**
-     * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
-     * host node. An unrecorded (detached) node is ended by its owner's group kill; a
-     * container node's command is not ended.
+     * Its run stopped: end the node's process group with SIGKILL (taskkill on Windows).
+     * Container commands are signalled inside the container, separately from the client.
      */
     abortSignal?: AbortSignal;
     env: NodeJS.ProcessEnv;
@@ -304,32 +304,25 @@ export async function runSubprocess(
   // credential in output. Sanitize at the shared boundaries below so every downstream
   // reader — the rejection's consumers and the retained evidence alike — sees the same
   // safe text.
+  const recorder = recorderForNode(options.abortSignal);
   try {
     const result =
       execContext.kind === 'container'
-        ? await execFileAsync(
-            'docker',
-            buildSubprocessDockerArgs(execContext, cmd, args, {
-              cwd: options.cwd,
-              env: options.env,
-              input: options.input,
-            }),
-            { timeout: options.timeout, input: options.input }
-          )
+        ? await runContainerSubprocess(execContext, cmd, args, options)
         : options.ownProcessGroup
           ? await execOwnedProcessGroup(cmd, args, {
               cwd: options.cwd,
               timeout: options.timeout,
               env: subprocessEnv,
             })
-          : nodeProcessRecorder || (options.endTreeOnTimeout && process.platform === 'win32')
+          : recorder || (options.endTreeOnTimeout && process.platform === 'win32')
             ? await execOwnedProcessGroup(cmd, args, {
                 cwd: options.cwd,
                 timeout: options.timeout,
                 env: subprocessEnv,
                 input: options.input,
                 node: {
-                  recorder: nodeProcessRecorder,
+                  recorder,
                   endTreeOnTimeout: options.endTreeOnTimeout === true,
                   abortSignal: options.abortSignal,
                 },
@@ -382,6 +375,109 @@ export async function runSubprocess(
         }
       );
     throw rejection;
+  }
+}
+
+// A separate group must still die with a detached owner whose cancel kills the owner group.
+function recorderForNode(signal: AbortSignal | undefined): NodeProcessRecorder | undefined {
+  return nodeProcessRecorder ?? (signal ? { roots: new Map(), ended: false } : undefined);
+}
+
+// A local docker-exec kill does not reach the container. As with provider processes,
+// a per-invocation pidfile identifies only this command; setsid makes it a tree root.
+async function runContainerSubprocess(
+  context: Extract<ExecutionContext, { kind: 'container' }>,
+  cmd: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    input?: string;
+    timeout?: number;
+    abortSignal?: AbortSignal;
+  }
+): Promise<{ stdout: string; stderr: string }> {
+  if (!options.abortSignal) {
+    return execFileAsync('docker', buildSubprocessDockerArgs(context, cmd, args, options), {
+      timeout: options.timeout,
+      input: options.input,
+    });
+  }
+  if (options.abortSignal.aborted)
+    throw Object.assign(new Error('Command cancelled'), { cancelled: true });
+  const pidFile = `/tmp/archon-node-${randomUUID()}.pid`;
+  const control = (script: string): Promise<{ stdout: string; stderr: string }> =>
+    execFileAsync(
+      'docker',
+      buildSubprocessDockerArgs(context, 'sh', ['-c', script], {
+        cwd: options.cwd,
+        env: {},
+      }),
+      { timeout: 5000 }
+    );
+  const local = new AbortController();
+  let termination: Promise<void> | undefined;
+  let terminationError: unknown;
+  const abort = (): void => {
+    termination = control(`pid=$(cat ${pidFile}) && kill -KILL -"$pid"`)
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          terminationError = error;
+        }
+      )
+      .finally(() => local.abort());
+  };
+  const pending = execOwnedProcessGroup(
+    'docker',
+    buildSubprocessDockerArgs(
+      context,
+      'setsid',
+      [
+        'sh',
+        '-c',
+        'echo $$ > "$1" && shift && exec "$@"',
+        'archon-node',
+        pidFile,
+        containerCommandName(cmd),
+        ...args,
+      ],
+      options
+    ),
+    {
+      cwd: options.cwd,
+      env: process.env,
+      timeout: options.timeout,
+      input: options.input,
+      node: {
+        recorder: recorderForNode(local.signal),
+        endTreeOnTimeout: false,
+        abortSignal: local.signal,
+      },
+    }
+  );
+  options.abortSignal.addEventListener('abort', abort, { once: true });
+  try {
+    const result = await pending;
+    await termination;
+    if (options.abortSignal.aborted) throw new Error('Command cancelled');
+    return result;
+  } catch (error) {
+    await termination;
+    if (options.abortSignal.aborted && error instanceof Error) {
+      error.message = 'Command cancelled';
+      Object.assign(error, { cancelled: true });
+      if (terminationError) Object.assign(error, { treeSurvived: true, cause: terminationError });
+    }
+    throw error;
+  } finally {
+    options.abortSignal.removeEventListener('abort', abort);
+    await control(`rm -f ${pidFile}`).catch((error: unknown) => {
+      createLogger('workflow.subprocess').warn(
+        { err: error },
+        'subprocess.container_pid_cleanup_failed'
+      );
+    });
   }
 }
 
@@ -480,7 +576,7 @@ export async function execOwnedProcessGroup(
           child.stdout?.destroy();
           child.stderr?.destroy();
         }, options.timeout);
-  const abortSignal = recorder ? node?.abortSignal : undefined;
+  const abortSignal = node?.abortSignal;
   const abort = (): void => {
     cancelled = true;
     clearTimeout(timer);

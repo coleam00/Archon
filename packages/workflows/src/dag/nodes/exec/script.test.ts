@@ -1,11 +1,10 @@
 // @archon-test-isolated
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { chmod, mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import * as git from '@archon/git';
 import {
   type MockWorkflowStore,
   mockClaudeCapabilities,
@@ -1141,7 +1140,7 @@ describe('executeDagWorkflow -- script nodes', () => {
     'preserves Docker %s spawn attribution for a container %s script',
     async (code, runtime, script) => {
       const mockDeps = createMockDeps();
-      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_command, args) => {
+      const execSpy = spyOnNodeExec().mockImplementation(async (_command, args) => {
         if (args.at(-1) === CONTAINER_MARKER_PROBE) return { stdout: 'none\n', stderr: '' };
         throw Object.assign(new Error(`spawn docker ${code}`), { code });
       });

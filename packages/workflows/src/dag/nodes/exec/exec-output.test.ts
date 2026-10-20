@@ -4,7 +4,6 @@ import { mkdir, readFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import * as git from '@archon/git';
 import * as pluginProcess from '@archon/paths/plugin-process';
 import * as subprocess from '../../../subprocess';
 import { recordNodeProcessTrees } from '../../../subprocess';
@@ -270,7 +269,7 @@ describe('executeDagWorkflow -- subprocess calls honor the node timeout', () => 
   // Spy on the module boundary runSubprocess calls (@archon/git's execFileAsync), the same
   // way the script-injection tests above do.
   function spyOnExec() {
-    return spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+    return spyOnNodeExec().mockResolvedValue({ stdout: '', stderr: '' });
   }
 
   function untilBashTimeout(execSpy: ReturnType<typeof spyOnExec>): number | undefined {
@@ -472,23 +471,22 @@ describe('subprocess credential redaction', () => {
           stderr: string;
         })
       | undefined;
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
-      async (command: string, args: string[]) => {
-        const commandLine = [command, ...args].join(' ');
-        rejection = Object.assign(
-          new Error(`Command failed: ${commandLine}\nmessage echoed ${openAiSecret}`),
-          {
-            code: 1,
-            killed: false,
-            cmd: commandLine,
-            spawnargs: args,
-            stdout: `stdout echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
-            stderr: `stderr echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
-          }
-        );
-        throw rejection;
-      }
-    );
+    const execSpy = spyOnNodeExec().mockImplementation(async (command: string, args: string[]) => {
+      if (command === 'docker' && !args.includes('setsid')) return { stdout: 'none\n', stderr: '' };
+      const commandLine = [command, ...args].join(' ');
+      rejection = Object.assign(
+        new Error(`Command failed: ${commandLine}\nmessage echoed ${openAiSecret}`),
+        {
+          code: 1,
+          killed: false,
+          cmd: commandLine,
+          spawnargs: args,
+          stdout: `stdout echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
+          stderr: `stderr echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
+        }
+      );
+      throw rejection;
+    });
 
     try {
       await executeDagWorkflow(

@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -356,7 +356,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
     )
   )('a container %s keeps Docker %s spawn attribution', async (_label, code, node) => {
     const mockDeps = createMockDeps();
-    const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_command, args) => {
+    const execSpy = spyOnNodeExec().mockImplementation(async (_command, args) => {
       if (args.at(-1) === CONTAINER_MARKER_PROBE) return { stdout: 'none\n', stderr: '' };
       throw Object.assign(new Error(`spawn docker ${code}`), { code });
     });

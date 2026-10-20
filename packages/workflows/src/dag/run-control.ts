@@ -114,7 +114,10 @@ export async function runSubprocessUntilRunStops(
     return result;
   } catch (error) {
     if (statusFailure && error instanceof Error && 'treeSurvived' in error) {
-      getLog().error({ workflowRunId: runId, nodeId }, 'dag.status_error_subprocess_tree_survived');
+      getLog().error(
+        { err: error, workflowRunId: runId, nodeId },
+        'dag.status_error_subprocess_tree_survived'
+      );
     }
     throw statusFailure ?? error;
   }

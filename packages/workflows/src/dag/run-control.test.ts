@@ -56,9 +56,15 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
     return { store, leaked: existsSync(join(testDir, 'leaked')) };
   }
 
-  it.skipIf(process.platform === 'win32').each(['bash', 'script', 'loop predicate'] as const)(
-    'stops the %s process tree and preserves an unsupported status error',
-    async kind => {
+  it
+    .skipIf(process.platform === 'win32')
+    .each(
+      (['bash', 'script', 'loop predicate', 'loop-group predicate'] as const).flatMap(kind =>
+        [false, true].map(recorded => [kind, recorded] as const)
+      )
+    )(
+    'stops the %s process tree and preserves an unsupported status error (recorded=%s)',
+    async (kind, recorded) => {
       const store = createMockStore();
       const failure = new WorkflowStatusReadError('poll', new Error('Unsupported status'));
       store.getWorkflowRunStatus.mockImplementation(async () => {
@@ -76,16 +82,25 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
                 script:
                   "import { writeFileSync } from 'node:fs'; writeFileSync('started', ''); await new Promise(resolve => setTimeout(resolve, 2000)); writeFileSync('leaked', '');",
               }
-            : {
-                id: 'hang',
-                loop: {
-                  prompt: 'Work',
-                  until_bash: command,
-                  max_iterations: 2,
-                  fresh_context: false,
-                },
-              };
-      const trees = recordNodeProcessTrees();
+            : kind === 'loop-group predicate'
+              ? {
+                  id: 'hang',
+                  loop_group: {
+                    until_bash: command,
+                    max_iterations: 2,
+                    nodes: [{ id: 'work', bash: 'true' }],
+                  },
+                }
+              : {
+                  id: 'hang',
+                  loop: {
+                    prompt: 'Work',
+                    until_bash: command,
+                    max_iterations: 2,
+                    fresh_context: false,
+                  },
+                };
+      const trees = recorded ? recordNodeProcessTrees() : undefined;
       try {
         await expect(
           executeDagWorkflow(
@@ -98,7 +113,7 @@ describe('executeDagWorkflow -- a run stopped while its subprocess runs', () => 
           )
         ).rejects.toBe(failure);
       } finally {
-        trees.release();
+        trees?.release();
       }
       await new Promise(resolve => setTimeout(resolve, 1500));
       expect(existsSync(join(testDir, 'started'))).toBe(true);
