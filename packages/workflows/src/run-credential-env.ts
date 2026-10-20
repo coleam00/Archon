@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
 import { delimiter, join } from 'path';
-import { prepareArtifactParent, removeArtifactFile, writeArtifactFile } from './artifact-writes';
+import { removeArtifactFile, writeArtifactFile } from './artifact-writes';
 import {
   MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   type WorkflowDeps,
@@ -254,7 +254,6 @@ export async function resolveUserProviderEnvForWorkflow(
   const written: string[] = [];
   try {
     for (const f of files) {
-      await prepareArtifactParent(f.path);
       written.push(f.path);
       await writeArtifactFile(f.path, f.contents, { mode: 0o600 });
     }
