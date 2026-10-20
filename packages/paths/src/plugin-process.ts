@@ -5,6 +5,70 @@ import { isPidProvablyGone } from './process-owner';
 
 const execFileAsync = promisify(execFile);
 
+export interface ProcessGroupMember {
+  pid: number;
+  pgid: number;
+  state: string;
+  command: string;
+}
+
+export type ProcessGroupStop =
+  | { pgid: number; leaderReaped: true; signalAttempted: false }
+  | { pgid: number; leaderReaped: false; signalAttempted: true; signalError?: string };
+
+export interface ProcessGroupSurvivor extends ProcessGroupMember {
+  reason: 'leader_reaped';
+}
+
+async function listPosixProcesses(): Promise<string> {
+  const { stdout } = await execFileAsync(
+    '/bin/ps',
+    ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat=', '-o', 'comm='],
+    { timeout: 5000 }
+  );
+  return stdout;
+}
+
+/** Inspect recorded groups without a signal, including signal 0 after leader reaping. */
+export async function inspectProcessGroups(
+  pgids: readonly number[],
+  listProcesses: () => Promise<string> = listPosixProcesses
+): Promise<ProcessGroupMember[]> {
+  if (pgids.length === 0) return [];
+  const groups = new Set(pgids);
+  const members: ProcessGroupMember[] = [];
+  for (const line of (await listProcesses()).split('\n')) {
+    if (!line.trim()) continue;
+    const fields = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (!fields) throw new Error('Invalid POSIX process listing');
+    const [, rawPid, rawPgid, state, command] = fields;
+    const pid = Number(rawPid);
+    const pgid = Number(rawPgid);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(pgid) || pgid < 0) {
+      throw new Error('Invalid POSIX process identifier');
+    }
+    if (groups.has(pgid)) members.push({ pid, pgid, state, command });
+  }
+  return members;
+}
+
+export async function confirmProcessGroupsGone(
+  pgids: readonly number[],
+  timeoutMs: number
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const members = await inspectProcessGroups(pgids);
+    if (members.length === 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Process groups still running: ${[...new Set(members.map(m => m.pgid))].join(', ')}`
+      );
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+}
+
 export function validateCommand(command: string): string | undefined {
   if (!isAbsolute(command)) return 'plugin command must be an absolute executable path';
   const extension = extname(command).toLowerCase();
