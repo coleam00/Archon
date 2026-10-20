@@ -320,7 +320,7 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'end-turn',
     spec: 'workflow end-turn <run-id>',
-    description: 'Record a request to end stalled provider turns or reported work',
+    description: 'Record a request to end stalled tools or reported work',
   },
   {
     command: 'workflow',

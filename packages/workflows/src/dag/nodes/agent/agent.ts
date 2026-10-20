@@ -21,7 +21,12 @@ import {
 import { substituteLoopBodyText } from '../../loop-scope';
 import { rejectedArtifactPointer } from '../../node-output';
 import { lastNodeCancelCheck, lastNodeActivityUpdate } from '../../run-control';
-import { cutOffClause, unsettledTurnError, NodeFailure } from '../../ai-turn';
+import {
+  formatWatchdogResetDiagnostic,
+  cutOffClause,
+  unsettledTurnError,
+  NodeFailure,
+} from '../../ai-turn';
 import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
@@ -138,7 +143,7 @@ export async function executeAgentNode(
     return result;
   }
 
-  // Per-node abort controller, for operator cutoff and cancellation.
+  // Per-node abort controller, for idle timeout, operator cutoff and cancellation.
   const abortController = new AbortController();
   const pc: AgentPassContext = {
     ctx,
@@ -335,7 +340,7 @@ async function finishTurnOutput(
   pc: AgentPassContext,
   state: AgentAttemptState
 ): Promise<WorkloadResult | undefined> {
-  // If cancelled during streaming (not an end-turn request), return as failed with cancel reason
+  // If cancelled during streaming (not idle timeout or an end-turn request), return as failed with cancel reason
   if (pc.abortController.signal.aborted && !state.cutOff) {
     const duration = Date.now() - pc.nodeStartTime;
     getLog().info(
@@ -359,7 +364,7 @@ async function finishTurnOutput(
     await safeSendMessage(pc.ctx.platform, pc.ctx.conversationId, batchContent, pc.nodeContext);
   }
 
-  // A closed stream with no output cannot complete the node.
+  // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
   if (state.outputText.trim() === '' && state.structuredOutput === undefined) {
     return emptyOutputFailure(pc, state);
   }
@@ -367,7 +372,7 @@ async function finishTurnOutput(
 }
 
 // Every provider ends a turn with `settled`. Output without it means the stream was
-// cut off (operator request, a provider that died or broke the contract), so the node
+// cut off (idle timeout, operator request, a provider that died or broke the contract), so the node
 // fails rather than completing on a turn that may not be done. Zero output falls
 // through to the empty-output guard; cancellation is handled by the caller.
 function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void {
@@ -384,9 +389,11 @@ function emptyOutputFailure(pc: AgentPassContext, state: AgentAttemptState): Wor
   const nodeId = pc.node.id;
   const duration = Date.now() - pc.nodeStartTime;
   const emptyError =
-    state.cutOff === 'operator'
+    state.cutOff?.kind === 'operator'
       ? `Node '${nodeId}' ${cutOffClause()}, before producing output.`
-      : `Node '${nodeId}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+      : state.cutOff?.kind === 'idle_timeout'
+        ? `Node '${nodeId}' timed out with no output (idle for ${String(pc.idleTimeoutMs / 60000)} min).${formatWatchdogResetDiagnostic(state.cutOff.lastReset)} Consider increasing idle_timeout or reducing prompt size.`
+        : `Node '${nodeId}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
   getLog().error({ nodeId, durationMs: duration }, 'dag.node_empty_output');
   return {
     state: 'failed',

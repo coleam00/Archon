@@ -28,7 +28,6 @@ import {
   pausedAttentionWait,
   pausedUsageLimitWait,
   queuedRunAttention,
-  stalledCallsSchema,
   runAttentionUnreadableReasonSchema,
   SUBRUN_METADATA_KEYS,
   type QueuedRunAttention,
@@ -69,7 +68,6 @@ export const attentionQueueContextSchema = z.object({
 });
 
 const itemBase = {
-  stalledCalls: stalledCallsSchema.optional(),
   runId: z.string(),
   workflow: z.string(),
   /** Null only when the run has no trusted storage root, so there is no key to give. */
@@ -91,11 +89,9 @@ const itemBase = {
  * provider usage limit, or a rate limit that outlasted its retries, that tries again by
  * itself at `resetAt` (the provider's reported reset, or a computed backoff for a rate
  * limit) and needs no answer; `unreadable` is a paused run nothing can describe, which someone has to look at
- * and resume or abandon. `stalled_tool_calls` names a paused run
- * whose live siblings need attention without answering its wait.
+ * and resume or abandon.
  */
 export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('stalled_tool_calls'), ...itemBase, calls: stalledCallsSchema }),
   z.object({
     kind: z.literal('attention'),
     ...itemBase,
@@ -192,9 +188,6 @@ export function toAttentionQueueItem(
   const root = resolveRunStorageRoot(run, sources.codebase);
   const wait = attention.kind === 'attention' ? pausedAttentionWait(run) : undefined;
   const base = {
-    ...(attention.kind !== 'stalled_tool_calls' && attention.stalledCalls
-      ? { stalledCalls: attention.stalledCalls }
-      : {}),
     runId: run.id,
     workflow: run.workflow_name,
     project: projectRefForRun(run, sources.codebase),
@@ -210,8 +203,6 @@ export function toAttentionQueueItem(
     },
   };
   switch (attention.kind) {
-    case 'stalled_tool_calls':
-      return { kind: 'stalled_tool_calls', ...base, calls: attention.calls };
     case 'attention':
       return {
         kind: 'attention',
@@ -279,9 +270,9 @@ async function itemFor(
 }
 
 /**
- * The attention that makes `run` an item of its own. A parent blocked on sub-runs is
- * listed for its own stalled siblings or an unreadable child tree; otherwise the
- * walk reaches a child, which is listed by its own row.
+ * The attention that makes `run` an item of its own. A parent blocked on sub-runs is one
+ * only when the walk the single read uses stops at the parent, because its sub-run tree
+ * cannot be read; otherwise the walk reaches a child, which is listed by its own row.
  */
 async function ownQueuedAttention(
   source: AttentionQueueSource,

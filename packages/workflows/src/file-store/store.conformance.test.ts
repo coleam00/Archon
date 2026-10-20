@@ -1,4 +1,4 @@
-import { afterEach, spyOn, test, expect } from 'bun:test';
+import { afterEach, spyOn } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,40 +52,4 @@ describeWorkflowStoreConformance('files', async () => {
     terminalReports: () => [...reports],
     close: async () => {},
   };
-});
-
-test('live attention can publish, renew and clear alongside a paused gate', async () => {
-  const root = roots(await mkdtemp(join(tmpdir(), 'paused-attention-')));
-  const store = await createFileWorkflowStore({ root });
-  const run = await store.createWorkflowRun({ workflow_name: 'test', user_message: '' });
-  await store.claimPendingWorkflowRun(run.id);
-  const approval = {
-    nodeId: 'gate',
-    message: 'Review',
-    requestedAt: '2026-10-18T06:55:59.000Z',
-  };
-  await store.pauseWorkflowRun(run.id, approval);
-  const at = '2026-10-18T06:55:59.000Z';
-  const call = {
-    streamId: 'live-sibling',
-    nodeId: 'ci',
-    provider: 'codex',
-    kind: 'provider_turn' as const,
-    toolCallId: 'turn:live-sibling',
-    name: 'provider turn',
-    startedAt: at,
-    lastProgressAt: at,
-    raisedAt: at,
-    thresholdMs: 100,
-  };
-  expect(await store.setToolCallAttention(run.id, call.streamId, [call])).toBe(true);
-  expect((await store.getWorkflowRun(run.id))?.metadata.tool_call_attention).toEqual([call]);
-  const renewed = { ...call, raisedAt: '2026-10-18T07:55:59.000Z' };
-  expect(await store.setToolCallAttention(run.id, call.streamId, [renewed])).toBe(true);
-  expect((await store.getWorkflowRun(run.id))?.metadata.tool_call_attention).toEqual([renewed]);
-  expect(await store.setToolCallAttention(run.id, call.streamId, [])).toBe(true);
-  const paused = await store.getWorkflowRun(run.id);
-  expect(paused?.metadata.tool_call_attention).toBeUndefined();
-  expect(paused?.status).toBe('paused');
-  expect(paused?.metadata.approval).toEqual(approval);
 });

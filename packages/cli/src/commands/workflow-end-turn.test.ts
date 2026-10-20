@@ -9,7 +9,6 @@ const RUN_ID = '8b465df4-ec97-4d6a-9d59-26b0e74d6a6c';
 
 const stalledCall = {
   streamId: 'stream-1',
-  stallId: 'stall-1',
   nodeId: 'ci',
   provider: 'codex',
   toolCallId: 'subtask:command:thread:exec-1',
@@ -54,7 +53,13 @@ describe('workflow end-turn', () => {
     expect(updateWorkflowRun).toHaveBeenCalledWith(RUN_ID, {
       metadata: {
         end_turn_request: {
-          stallIds: [stalledCall.stallId],
+          stalls: [
+            {
+              streamId: stalledCall.streamId,
+              toolCallId: stalledCall.toolCallId,
+              raisedAt: stalledCall.raisedAt,
+            },
+          ],
         },
       },
     });
@@ -112,6 +117,10 @@ describe('workflow end-turn', () => {
 
   it.each([
     ['a run with nothing stalled', { status: 'running' as const, metadata: {} }],
+    [
+      'a paused run',
+      { status: 'paused' as const, metadata: { tool_call_attention: [stalledCall] } },
+    ],
     ['a terminal run', { status: 'completed' as const, metadata: {} }],
     [
       'unreadable attention',
@@ -119,9 +128,11 @@ describe('workflow end-turn', () => {
     ],
     ['an unknown run', null],
   ])('refuses %s without writing', async (_label, run) => {
-    spyOn(console, 'error').mockImplementation(() => {});
+    const output = spyOn(console, 'error').mockImplementation(() => {});
     const { host, updateWorkflowRun } = hostWith(run);
     expect(await workflowEndTurnCommand(host, RUN_ID)).toBe(1);
     expect(updateWorkflowRun).not.toHaveBeenCalled();
+    if (run?.status === 'paused')
+      expect(output.mock.calls[0]?.[0]).toContain('only available for running runs');
   });
 });

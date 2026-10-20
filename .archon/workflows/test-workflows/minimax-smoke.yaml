@@ -10,8 +10,7 @@ description: |
   to a tiny prompt (→ the stall is prompt-size / structured-output specific), or
   does it hang even here (→ Pi/M3 is broken outright)?
 
-  `idle_timeout: 120000` (2 min) raises attention for a silent turn.
-  Use `archon workflow end-turn <run-id>` to end the stalled turn explicitly.
+  `idle_timeout: 120000` (2 min) so a stall fails fast instead of waiting 30 min.
 
 provider: pi
 model: minimax/MiniMax-M3

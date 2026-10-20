@@ -15,7 +15,7 @@ import {
   type ProviderEventHandler,
 } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
-import { withStreamPolling } from '../../../utils/idle-timeout';
+import { withIdleTimeout } from '../../../utils/idle-timeout';
 import { isEndTurnRequested } from '../../../end-turn-request';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -29,7 +29,12 @@ import {
   ACTIVITY_HEARTBEAT_INTERVAL_MS,
 } from '../../run-control';
 import type { NodeMcpResolution } from '../../provider-resolution';
-import { type TurnCutOff, type structuredOutputPass, providerReportedFailure } from '../../ai-turn';
+import {
+  type TurnCutOff,
+  type WatchdogReset,
+  type structuredOutputPass,
+  providerReportedFailure,
+} from '../../ai-turn';
 
 /** What every stream pass of one agent attempt reads and never changes. */
 export interface AgentPassContext {
@@ -77,9 +82,10 @@ export interface AgentAttemptState {
   batchMessages: string[];
   /** What cut the last pass off before it settled, if anything did. */
   cutOff: TurnCutOff | undefined;
+  lastWatchdogReset: WatchdogReset | undefined;
   watchdogResets: WatchdogResetRecorder;
   /**
-   * Task ids still live when the stream ended abnormally (operator cutoff / subprocess death),
+   * Task ids still live when the stream ended abnormally (idle timeout / operator cutoff / subprocess death),
    * recorded on the node_completed event so an incomplete node never masquerades as a clean
    * success (#2083).
    */
@@ -104,6 +110,7 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
     structuredOutput: undefined,
     batchMessages: [],
     cutOff: undefined,
+    lastWatchdogReset: undefined,
     watchdogResets: createWatchdogResetRecorder(ctx.logDir, ctx.workflowRun.id, nodeId),
     backgroundTasksIncomplete: [],
     settled: false,
@@ -125,13 +132,19 @@ export async function runStreamPass(
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
-    for await (const msg of withStreamPolling(
+    for await (const msg of withIdleTimeout(
       pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
+      pc.idleTimeoutMs,
+      () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
-        providerEvents.progress(resetAt);
         const type = msg.type;
+        state.lastWatchdogReset = { type, at: resetAt };
         state.watchdogResets.observe(type, resetAt);
       },
+      () =>
+        providerEvents.hasOpenTools() ||
+        (pc.capabilities.backgroundWork === 'reported' &&
+          providerEvents.liveSubtaskIds().length > 0),
       shouldStopStream
     )) {
       const tickNow = Date.now();
@@ -155,8 +168,11 @@ export async function runStreamPass(
     await providerEvents.clearAttention();
   }
 
-  // Unfinished background work may leave artifacts missing (#2083). Retain its
-  // task ids for the node failure's audit trail (see unsettledTurnError).
+  // Stream ended with subtasks still live: the SDK subprocess died, the idle
+  // timeout fired mid-wait, or the operator ended the turn, so the tasks' artifacts may be missing (#2083).
+  // Record them for the audit trail. The operator hears about it once, from the
+  // node's failure: a stream that produced output and never settled fails the node
+  // and names these tasks (see unsettledTurnError).
   if (providerEvents.liveSubtaskIds().length > 0) {
     state.backgroundTasksIncomplete = providerEvents.liveSubtaskIds();
     getLog().warn(
@@ -187,6 +203,7 @@ function resetPass(
   state.passSawResult = false;
   state.tokens = undefined;
   state.cutOff = undefined;
+  state.lastWatchdogReset = undefined;
   state.settled = false;
   state.watchdogResets = createWatchdogResetRecorder(
     pc.ctx.logDir,
@@ -207,7 +224,6 @@ function createPassEventHandler(
       nodeId: pc.stepName,
       reportedBackgroundWork: pc.capabilities.backgroundWork === 'reported',
       provider: pc.provider,
-      idleThresholdMs: pc.idleTimeoutMs,
       thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
       env: {
         ...(ctx.execContext.kind === 'host' ? process.env : {}),
@@ -252,7 +268,7 @@ function createPassEventHandler(
 
 /**
  * Refreshes tool attention and, throttled, aborts the stream once the run is no longer
- * running or the operator ended this stream's stalled turn.
+ * streaming or the operator ended this stream's stalled turn.
  */
 function stopCheck(
   pc: AgentPassContext,
@@ -281,7 +297,7 @@ function stopCheck(
           return true;
         }
         if (await operatorEndedTurn(pc, providerEvents)) {
-          state.cutOff = 'operator';
+          state.cutOff = { kind: 'operator' };
           pc.abortController.abort();
           return true;
         }
@@ -297,6 +313,26 @@ function stopCheck(
   };
 }
 
+function onIdleTimeout(pc: AgentPassContext, state: AgentAttemptState): void {
+  state.cutOff = {
+    kind: 'idle_timeout',
+    timeoutMs: pc.idleTimeoutMs,
+    lastReset: state.lastWatchdogReset,
+  };
+  const lastReset = state.lastWatchdogReset;
+  getLog().warn(
+    {
+      nodeId: pc.node.id,
+      timeoutMs: pc.idleTimeoutMs,
+      ...(lastReset
+        ? { lastResetType: lastReset.type, lastResetAt: new Date(lastReset.at).toISOString() }
+        : {}),
+    },
+    'dag_node_idle_timeout_reached'
+  );
+  pc.abortController.abort();
+}
+
 /** Whether the operator ended this pass's turn while it had stalled calls raised. */
 async function operatorEndedTurn(
   pc: AgentPassContext,
@@ -310,6 +346,7 @@ async function operatorEndedTurn(
   return true;
 }
 
+/** Activity heartbeat, throttled to every 60s; only stale/zombie detection reads it. */
 async function heartbeat(pc: AgentPassContext, tickNow: number): Promise<void> {
   if (tickNow - (lastNodeActivityUpdate.get(pc.nodeKey) ?? 0) <= ACTIVITY_HEARTBEAT_INTERVAL_MS) {
     return;

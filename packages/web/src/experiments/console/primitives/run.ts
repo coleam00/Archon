@@ -193,15 +193,6 @@ export function runMessageConversationId(run: Run | undefined): string | null {
   return run.conversationPlatformId ?? run.workerPlatformId;
 }
 
-function readToolCallAttention(raw: RawWorkflowRun): Run['toolCallAttention'] {
-  if (raw.status !== 'running' && raw.status !== 'paused') return [];
-  const attention = raw.attention;
-  if (attention?.kind === 'stalled_tool_calls') return attention.calls;
-  if (attention && 'stalledCalls' in attention && attention.stalledCalls)
-    return attention.stalledCalls;
-  return [];
-}
-
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
@@ -249,7 +240,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     userMessage: raw.user_message ?? '',
     activeNodes,
     lastTool: null,
-    toolCallAttention: readToolCallAttention(raw),
+    toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
     approval: parsedWait === null ? parsedApproval : null,
     wait: parsedWait,
     gateResolved,

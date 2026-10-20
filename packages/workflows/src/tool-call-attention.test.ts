@@ -3,9 +3,6 @@ import { describe, expect, mock, test } from 'bun:test';
 const warn = mock(() => undefined);
 mock.module('@archon/paths', () => ({ createLogger: () => ({ warn }) }));
 import { planEndTurn, isEndTurnRequested } from './end-turn-request';
-import { queuedRunAttention, runAttentionSchema } from './schemas/workflow-run';
-import { resolveRunAttention } from './run-attention-resolution';
-import { toAttentionQueueItem, attentionQueueItemSchema } from './attention-queue';
 const { createRunToolCallAttention } = await import('./tool-call-attention');
 import { runAttention, type ToolCallAttention, type WorkflowRun } from './schemas/workflow-run';
 import {
@@ -13,7 +10,7 @@ import {
   DEFAULT_TOOL_CALL_ATTENTION_MS,
 } from './schemas/run-config';
 
-function harness(thresholdMs = 100, reportedBackgroundWork = false, idleThresholdMs = 0) {
+function harness(thresholdMs = 100, reportedBackgroundWork = false) {
   let time = Date.parse('2026-10-01T00:00:00Z');
   const snapshots: ToolCallAttention[][] = [];
   const write = mock(async (_run: string, _stream: string, calls: ToolCallAttention[]) => {
@@ -56,7 +53,6 @@ function harness(thresholdMs = 100, reportedBackgroundWork = false, idleThreshol
     nodeId: 'group.node',
     provider: 'codex',
     thresholdMs,
-    idleThresholdMs,
     env: { API_TOKEN: 'secret-value', SPECIAL: 'file-key' },
     protectedEnvKeys: ['SPECIAL'],
     protectedCredentialValues: ['file-credential'],
@@ -84,34 +80,6 @@ const start = {
 } as const;
 
 describe('tool call attention', () => {
-  test('silent turns raise, progress clears and renews the stall, and closure stays clear', async () => {
-    const h = harness(0, false, 100);
-    h.advance(99);
-    await h.tracker.refresh();
-    expect(h.write).not.toHaveBeenCalled();
-    h.tracker.progress(h.now());
-    h.advance(99);
-    await h.tracker.refresh();
-    expect(h.write).not.toHaveBeenCalled();
-    h.advance(1);
-    await h.tracker.refresh();
-    expect(h.snapshots.at(-1)).toMatchObject([{ kind: 'provider_turn', name: 'provider turn' }]);
-    const original = h.tracker.stall();
-    h.tracker.progress(h.now());
-    h.write.mockRejectedValueOnce(new Error('clear failed'));
-    await h.tracker.refresh();
-    expect(h.tracker.stall()).toBeUndefined();
-    await h.tracker.refresh();
-    expect(h.snapshots.at(-1)).toEqual([]);
-    h.advance(100);
-    await h.tracker.refresh();
-    expect(h.tracker.stall()?.stallIds).not.toEqual(original?.stallIds);
-    await h.tracker.clear();
-    h.advance(1000);
-    await h.tracker.refresh();
-    expect(h.snapshots.at(-1)).toEqual([]);
-  });
-
   test('raises only at the threshold, redacts before retaining, clears on completion', async () => {
     const h = harness();
     await h.tracker.observe(start);
@@ -131,6 +99,7 @@ describe('tool call attention', () => {
     h.advance(100);
     await h.tracker.refresh();
     expect(h.write).toHaveBeenCalledTimes(1);
+    expect(h.read).not.toHaveBeenCalled();
     expect(
       runAttention(
         { id: 'run', status: 'running', metadata: { tool_call_attention: [call] } },
@@ -189,10 +158,10 @@ describe('tool call attention', () => {
     expect(h.snapshots.at(-1)).toEqual([]);
   });
 
-  test.each(['turn', 'tool', 'subtask'] as const)(
-    'an old request cannot end a renewed %s stall after the clock moves backward or repeats',
+  test.each(['tool', 'subtask'] as const)(
+    'an old request cannot end a renewed %s stall after progress with a backward clock jump',
     async kind => {
-      const h = harness(100, true, 100);
+      const h = harness(100, true);
       if (kind === 'tool') await h.tracker.observe(start);
       if (kind === 'subtask')
         await h.tracker.observe({ type: 'subtask', taskId: 'task', status: 'started' });
@@ -203,33 +172,28 @@ describe('tool call attention', () => {
         if (!stall) throw new Error('expected published stall');
         return isEndTurnRequested({ getWorkflowRun: h.read }, 'run', stall);
       };
-      for (const jump of [-1000, -100]) {
-        const plan = planEndTurn({
-          ...h.run,
-          metadata: { tool_call_attention: h.snapshots.at(-1) },
+      const plan = planEndTurn({
+        ...h.run,
+        metadata: { tool_call_attention: h.snapshots.at(-1) },
+      });
+      if (plan.kind !== 'request') throw new Error(plan.reason);
+      Object.assign(h.run.metadata, plan.metadata);
+      expect(await requested()).toBe(true);
+      h.advance(-1000);
+      if (kind === 'tool') {
+        await h.tracker.observe({
+          type: 'subtask',
+          taskId: 'child',
+          parentToolCallId: 'call',
+          status: 'running',
         });
-        if (plan.kind !== 'request') throw new Error(plan.reason);
-        Object.assign(h.run.metadata, plan.metadata);
-        expect(await requested()).toBe(true);
-        h.advance(jump);
-        if (kind === 'turn') {
-          h.tracker.progress(h.now());
-          await h.tracker.refresh();
-        } else if (kind === 'tool') {
-          await h.tracker.observe({
-            type: 'subtask',
-            taskId: 'child',
-            parentToolCallId: 'call',
-            status: 'running',
-          });
-        } else {
-          await h.tracker.observe({ type: 'subtask', taskId: 'task', status: 'running' });
-        }
-        expect(h.tracker.stall()).toBeUndefined();
-        h.advance(100);
-        await h.tracker.refresh();
-        expect(await requested()).toBe(false);
+      } else {
+        await h.tracker.observe({ type: 'subtask', taskId: 'task', status: 'running' });
       }
+      expect(h.tracker.stall()).toBeUndefined();
+      h.advance(100);
+      await h.tracker.refresh();
+      expect(await requested()).toBe(false);
     }
   );
 
@@ -260,44 +224,33 @@ describe('tool call attention', () => {
     expect(await isEndTurnRequested({ getWorkflowRun: h.read }, 'run', successor)).toBe(false);
   });
 
-  test.each(['read', 'write'] as const)(
-    'clear finishes after an in-flight persistence %s and leaves no attention',
-    async boundary => {
-      const h = harness();
-      await h.tracker.observe(start);
-      h.advance(100);
-      await h.tracker.refresh();
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      if (boundary === 'read') {
-        h.read.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return { ...h.run, metadata: {} };
-        });
-      } else {
-        h.advance(100);
-        await h.tracker.observe({ ...start, toolCallId: 'second' });
-        h.advance(100);
-        h.write.mockImplementationOnce(async (_run, _stream, calls) => {
-          entered.resolve();
-          await release.promise;
-          h.snapshots.push(calls);
-          return true;
-        });
-      }
-      const refresh = h.tracker.refresh();
-      await entered.promise;
-      const clear = h.tracker.clear();
-      release.resolve();
-      await Promise.all([refresh, clear]);
-      expect(h.snapshots.at(-1)).toEqual([]);
-      expect(h.tracker.stall()).toBeUndefined();
-      h.advance(100);
-      await h.tracker.refresh();
-      expect(h.snapshots.at(-1)).toEqual([]);
-    }
-  );
+  test('clear finishes after an in-flight write and leaves no attention', async () => {
+    const h = harness();
+    await h.tracker.observe(start);
+    h.advance(100);
+    await h.tracker.refresh();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    h.advance(100);
+    await h.tracker.observe({ ...start, toolCallId: 'second' });
+    h.advance(100);
+    h.write.mockImplementationOnce(async (_run, _stream, calls) => {
+      entered.resolve();
+      await release.promise;
+      h.snapshots.push(calls);
+      return true;
+    });
+    const refresh = h.tracker.refresh();
+    await entered.promise;
+    const clear = h.tracker.clear();
+    release.resolve();
+    await Promise.all([refresh, clear]);
+    expect(h.snapshots.at(-1)).toEqual([]);
+    expect(h.tracker.stall()).toBeUndefined();
+    h.advance(100);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toEqual([]);
+  });
 
   test('a backward clock jump cannot clear an already raised advisory', async () => {
     const h = harness();
@@ -339,13 +292,16 @@ describe('tool call attention', () => {
     expect(h.snapshots).toHaveLength(1);
   });
 
-  test('disabled reported-work publication and fresh streams with reused provider ids', async () => {
+  test('disable affects publication only; a fresh stream owns reused provider ids', async () => {
     const h = harness(0);
+    expect(h.tracker.hasOpenTools()).toBe(false);
     await h.tracker.observe(start);
     h.advance(10000000);
     await h.tracker.refresh();
     expect(h.write).not.toHaveBeenCalled();
+    expect(h.tracker.hasOpenTools()).toBe(true);
     await h.tracker.clear();
+    expect(h.tracker.hasOpenTools()).toBe(false);
     const a = harness(),
       b = harness();
     await a.tracker.observe(start);
@@ -490,98 +446,11 @@ describe('tool call attention', () => {
     await successor.observe({ ...start, toolCallId: 'successor' });
     await h.owner.refresh();
     expect(h.snapshots.at(-1)).toEqual([]);
+    expect(successor.hasOpenTools()).toBe(true);
     const writes = h.write.mock.calls.length;
     await h.owner.refresh();
     expect(h.write.mock.calls).toHaveLength(writes);
   });
-
-  test.each(['gate', 'quota', 'timer'] as const)(
-    'paused %s retains live sibling calls in the projection and queue',
-    async primary => {
-      const h = harness();
-      await h.tracker.observe(start);
-      h.advance(100);
-      await h.tracker.refresh();
-      const wait = { owner: 'node', nodeId: 'wait', waitingSince: new Date(h.now()).toISOString() };
-      const run: WorkflowRun = {
-        ...h.run,
-        status: 'paused',
-        metadata: {
-          tool_call_attention: h.snapshots[0],
-          ...(primary === 'gate'
-            ? { approval: { nodeId: 'review', message: 'Approve' } }
-            : {
-                wait:
-                  primary === 'quota'
-                    ? {
-                        ...wait,
-                        kind: 'quota',
-                        pauseId: 'pause',
-                        resumeAt: new Date(h.now() + 1000).toISOString(),
-                      }
-                    : { ...wait, kind: 'time', resumeAt: new Date(h.now() + 1000).toISOString() },
-              }),
-        },
-      };
-      const attention = runAttentionSchema.parse(runAttention(run, h.now()));
-      const calls = [{ nodeId: 'group.node', stalledForMs: 100 }];
-      expect(attention).toMatchObject(
-        primary === 'timer'
-          ? { kind: 'stalled_tool_calls', status: 'paused', calls }
-          : { kind: primary === 'gate' ? 'awaiting_response' : 'usage_limit', stalledCalls: calls }
-      );
-      const queued = queuedRunAttention(run, attention);
-      if (!queued) throw new Error('expected paused attention in queue');
-      const item = attentionQueueItemSchema.parse(
-        toAttentionQueueItem(run, queued, { codebase: null, branch: null })
-      );
-      expect(item).toMatchObject(primary === 'timer' ? { calls } : { stalledCalls: calls });
-    }
-  );
-
-  test.each(['child_workflow', 'fan_out'] as const)(
-    'a stalled sibling remains visible before resolving a %s child',
-    async type => {
-      const h = harness();
-      await h.tracker.observe(start);
-      h.advance(100);
-      await h.tracker.refresh();
-      const run: WorkflowRun = {
-        ...h.run,
-        status: 'paused',
-        metadata: {
-          tool_call_attention: h.snapshots[0],
-          approval: {
-            nodeId: 'child',
-            message: 'Waiting',
-            type,
-            ...(type === 'fan_out' ? { childRunIds: ['child'] } : { childRunId: 'child' }),
-          },
-        },
-      };
-      expect(runAttention(run, h.now())).toMatchObject({
-        kind: type === 'fan_out' ? 'blocked_on_children' : 'blocked_on_child',
-        stalledCalls: [{ nodeId: 'group.node', stalledForMs: 100 }],
-      });
-      const resolved = await resolveRunAttention({ getWorkflowRun: h.read }, run);
-      expect(resolved).toMatchObject({
-        kind: 'attention',
-        attention: {
-          kind: 'stalled_tool_calls',
-          runId: 'run',
-          status: 'paused',
-          calls: [{ nodeId: 'group.node' }],
-        },
-      });
-      expect(h.read).not.toHaveBeenCalled();
-      const queued = queuedRunAttention(run);
-      if (!queued) throw new Error('expected paused sibling in queue');
-      expect(toAttentionQueueItem(run, queued, { codebase: null, branch: null })).toMatchObject({
-        kind: 'stalled_tool_calls',
-        calls: [{ nodeId: 'group.node' }],
-      });
-    }
-  );
 
   test('reconciles a committed write whose response was lost before honoring recovery', async () => {
     const h = harness();
@@ -597,11 +466,13 @@ describe('tool call attention', () => {
     await h.tracker.refresh();
     expect(h.read).toHaveBeenCalledTimes(1);
     const published = h.snapshots[0][0];
-    if (!published.stallId) throw new Error('expected stall identity');
-    expect(h.tracker.stall()).toEqual({
-      streamId: published.streamId,
-      stallIds: [published.stallId],
-    });
+    expect(h.tracker.stall()).toEqual([
+      {
+        streamId: published.streamId,
+        toolCallId: published.toolCallId,
+        raisedAt: published.raisedAt,
+      },
+    ]);
     const plan = planEndTurn({ ...h.run, metadata: { tool_call_attention: h.snapshots[0] } });
     if (plan.kind !== 'request') throw new Error(plan.reason);
     Object.assign(h.run.metadata, plan.metadata);

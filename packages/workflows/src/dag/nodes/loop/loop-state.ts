@@ -74,7 +74,7 @@ export interface LoopState {
   lastStructuredOutput: unknown;
   /**
    * Union of task ids still live when ANY iteration's stream ended abnormally
-   * (operator cutoff / subprocess death) — #2083. Union rather than last-iteration:
+   * (idle timeout / operator cutoff / subprocess death) — #2083. Union rather than last-iteration:
    * a mid-loop iteration that lost its background tasks may have produced
    * incomplete artifacts even when a later iteration finishes cleanly and
    * signals completion — last-iteration-only reporting would hide that.

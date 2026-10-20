@@ -92,7 +92,7 @@ If none of the three resolves in a compiled binary, Archon throws with install i
 
 The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
-**CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node raises attention after its silence threshold. Use `archon workflow end-turn <run-id>` to request recovery and `workflow wait` to check progress.
+**CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node fails at the idle timeout, saying that the provider never signalled that its turn settled.
 
 **Typical paths by install method:**
 

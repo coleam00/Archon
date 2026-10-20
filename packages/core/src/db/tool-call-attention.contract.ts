@@ -69,10 +69,7 @@ export function toolCallAttentionContract(
     await db.query("UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1", [
       runId,
     ]);
-    expect(await workflows.setToolCallAttention(runId, 'a', [call('a')])).toBe(true);
-    expect((await readRun()).metadata.tool_call_attention).toHaveLength(2);
-    expect(await workflows.setToolCallAttention(runId, 'a', [])).toBe(true);
-    expect((await readRun()).metadata.tool_call_attention).toEqual([call('b')]);
+    expect(await workflows.setToolCallAttention(runId, 'a', [call('a')])).toBe(false);
     await workflows.resumeWorkflowRun(runId);
     expect((await readRun()).metadata).toEqual({
       keep: 'value',

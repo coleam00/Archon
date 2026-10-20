@@ -239,7 +239,7 @@ Commands:
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
-  workflow end-turn <run-id> Record a request to end stalled provider turns or reported work
+  workflow end-turn <run-id> Record a request to end stalled tools or reported work
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)

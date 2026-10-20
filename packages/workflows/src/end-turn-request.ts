@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   TOOL_CALL_ATTENTION_METADATA_KEY,
   toolCallAttentionArraySchema,
+  toolCallAttentionSchema,
   type ToolCallAttention,
   type WorkflowRun,
 } from './schemas/workflow-run';
@@ -13,7 +14,9 @@ import type { StreamStall } from './tool-call-attention';
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
 export const endTurnRequestSchema = z.object({
-  stallIds: z.array(z.string().min(1)).min(1),
+  stalls: z
+    .array(toolCallAttentionSchema.pick({ streamId: true, toolCallId: true, raisedAt: true }))
+    .min(1),
 });
 
 type EndTurnMetadata = {
@@ -26,8 +29,7 @@ export type EndTurnPlan =
 
 /** What ending the run's stalled turns would write, or why there is nothing to end. */
 export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndTurnPlan {
-  if (run.status !== 'running' && run.status !== 'paused')
-    return { kind: 'refused', reason: 'not_running' };
+  if (run.status !== 'running') return { kind: 'refused', reason: 'not_running' };
   const parsed = toolCallAttentionArraySchema.safeParse(
     run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] === undefined
       ? []
@@ -36,17 +38,16 @@ export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndT
   if (!parsed.success) return { kind: 'refused', reason: 'unreadable_attention' };
   const calls = parsed.data;
   if (calls.length === 0) return { kind: 'refused', reason: 'nothing_stalled' };
-  const stallIds: string[] = [];
-  for (const call of calls) {
-    if (call.stallId === undefined) return { kind: 'refused', reason: 'unreadable_attention' };
-    stallIds.push(call.stallId);
-  }
   return {
     kind: 'request',
     calls,
     metadata: {
       [END_TURN_REQUEST_METADATA_KEY]: endTurnRequestSchema.parse({
-        stallIds,
+        stalls: calls.map(({ streamId, toolCallId, raisedAt }) => ({
+          streamId,
+          toolCallId,
+          raisedAt,
+        })),
       }),
     },
   };
@@ -59,6 +60,17 @@ export async function isEndTurnRequested(
   stall: StreamStall
 ): Promise<boolean> {
   const run = await store.getWorkflowRun(runId);
+  if (run?.status !== 'running') return false;
   const request = endTurnRequestSchema.safeParse(run?.metadata[END_TURN_REQUEST_METADATA_KEY]);
-  return request.success && stall.stallIds.some(id => request.data.stallIds.includes(id));
+  return (
+    request.success &&
+    stall.some(current =>
+      request.data.stalls.some(
+        observed =>
+          current.streamId === observed.streamId &&
+          current.toolCallId === observed.toolCallId &&
+          current.raisedAt === observed.raisedAt
+      )
+    )
+  );
 }

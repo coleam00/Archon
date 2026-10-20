@@ -82,7 +82,7 @@ export interface ProviderEventHandler {
   liveSubtaskIds(): string[];
   /** This pass's attention stall while its stalled calls are on the run row. */
   stall(): StreamStall | undefined;
-  progress(at: number): void;
+  hasOpenTools(): boolean;
   refreshAttention(): Promise<void>;
   clearAttention(): Promise<void>;
 }
@@ -190,7 +190,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
         }
       }
     },
-    progress: at => deps.toolAttention.progress(at),
+    hasOpenTools: () => deps.toolAttention.hasOpenTools(),
     stall: () => deps.toolAttention.stall(),
     refreshAttention: async (): Promise<void> => {
       await deps.toolAttention.refresh();

@@ -330,37 +330,6 @@ describe('manage_run — reads', () => {
     expect(out).toContain('matches more than one run');
   });
 
-  test('get retains a gate alongside a stalled live sibling', async () => {
-    mockFindByPrefix.mockResolvedValue([
-      makeRun({
-        status: 'paused',
-        metadata: {
-          approval: { nodeId: 'review', message: 'Ship it?', type: 'interactive_loop' },
-          tool_call_attention: [
-            {
-              streamId: 's',
-              nodeId: 'silent-sibling',
-              provider: 'codex',
-              toolCallId: 'turn',
-              name: 'provider turn',
-              kind: 'provider_turn',
-              startedAt: new Date(Date.now() - 1800000).toISOString(),
-              lastProgressAt: new Date(Date.now() - 1800000).toISOString(),
-              raisedAt: new Date().toISOString(),
-              thresholdMs: 1800000,
-            },
-          ],
-        },
-      }),
-    ]);
-    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
-    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
-    expect(out).toContain('gate: awaiting approval (node review');
-    expect(out).toContain('silent-sibling');
-    expect(out).toContain('no progress 1800s');
-    expect(out).toContain('archon workflow end-turn r1abcdef-1234');
-  });
-
   test('get returns detail for an in-project run resolved by short prefix', async () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({ status: 'completed', completed_at: new Date('2026-06-01T01:00:00.000Z') }),

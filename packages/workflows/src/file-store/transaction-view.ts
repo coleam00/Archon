@@ -431,7 +431,6 @@ export function createTransactionView(
           data: error === null ? {} : { error },
         });
       if (run.status === 'paused') record(workflowUnpausedEvent(id));
-      Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
       if (pausedUsageLimitWait(run)) delete run.metadata.wait;
       if (
@@ -448,6 +447,7 @@ export function createTransactionView(
       }
       delete run.metadata.error;
       delete run.metadata.stop_reason;
+      Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       delete run.metadata.continuation_retry_at;
       Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
       Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
@@ -463,7 +463,7 @@ export function createTransactionView(
       if (snapshot.some(call => call.streamId !== streamId))
         throw new Error('Tool attention stream mismatch');
       const run = runs.get(id);
-      if (run?.status !== 'running' && run?.status !== 'paused') return false;
+      if (run?.status !== 'running') return false;
       const previous = toolCallAttentionArraySchema.parse(
         run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
       );

@@ -39,7 +39,7 @@ import {
 } from './workflow-transcript';
 import {
   usageLimitWaitLine,
-  printRunToolAttention,
+  formatToolAttention,
   formatWaitOutcome,
   announceWaitAttached,
   type LeaveBehind,
@@ -330,8 +330,8 @@ export async function workflowStatusCommand(
     console.log(`  Name:   ${run.workflow_name}`);
     console.log(`  Path:   ${run.working_path ?? '(none)'}`);
     console.log(`  Status: ${run.status}`);
-    printRunToolAttention(run);
     const attention = runAttention(run);
+    if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
     if (attention?.kind === 'usage_limit')
       console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
     if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);

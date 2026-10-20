@@ -20,8 +20,7 @@ import {
 import { executeDagWorkflow } from '../dag-executor';
 import { CANCEL_CHECK_INTERVAL_MS } from './run-control';
 import type { ProviderEvent } from '@archon/provider-contract';
-import { attentionQueueItemForRun } from '../attention-queue';
-import { runAttention, type WorkflowRun } from '../schemas/workflow-run';
+import { runAttention } from '../schemas/workflow-run';
 import { planEndTurn } from '../end-turn-request';
 
 const DONE_SCHEMA = {
@@ -68,28 +67,6 @@ function assertRecoveryOutcome(
   }
 }
 
-async function assertLiveAttention(
-  workflowRun: WorkflowRun,
-  store: ReturnType<typeof createMockStore>,
-  paused: boolean
-): Promise<void> {
-  const expectedCalls = [{ nodeId: 'ci', stalledForMs: expect.any(Number) }];
-  expect(runAttention(workflowRun)).toMatchObject(
-    paused
-      ? {
-          kind: 'awaiting_response',
-          stalledCalls: expectedCalls,
-          respondTo: { nodeId: 'review' },
-        }
-      : { kind: 'stalled_tool_calls', calls: expectedCalls }
-  );
-  if (paused) {
-    expect(
-      await attentionQueueItemForRun({ store, branchOf: async () => null }, workflowRun)
-    ).toMatchObject({ kind: 'awaiting_response', stalledCalls: expectedCalls, node: 'review' });
-  }
-}
-
 describe('ending a stalled turn', () => {
   let testDir: string;
 
@@ -106,70 +83,18 @@ describe('ending a stalled turn', () => {
   });
 
   it.each([
-    { kind: 'agent', retry: false, payload: true, provider: 'codex', work: true, paused: false },
-    { kind: 'loop', retry: false, payload: true, provider: 'codex', work: true, paused: false },
-    {
-      kind: 'structured loop',
-      retry: true,
-      payload: true,
-      provider: 'codex',
-      work: true,
-      paused: false,
-    },
-    {
-      kind: 'structured loop',
-      retry: true,
-      payload: false,
-      provider: 'codex',
-      work: true,
-      paused: false,
-    },
-    {
-      kind: 'structured agent',
-      retry: true,
-      payload: true,
-      provider: 'codex',
-      work: true,
-      paused: false,
-    },
-    {
-      kind: 'structured agent',
-      retry: true,
-      payload: true,
-      provider: 'pi',
-      work: false,
-      paused: false,
-    },
-    { kind: 'agent', retry: true, payload: false, provider: 'claude', work: false, paused: false },
-    { kind: 'agent', retry: false, payload: false, provider: 'codex', work: false, paused: false },
-    { kind: 'loop', retry: true, payload: false, provider: 'pi', work: false, paused: false },
-    { kind: 'agent', retry: false, payload: false, provider: 'codex', work: false, paused: true },
-    { kind: 'loop', retry: false, payload: false, provider: 'codex', work: true, paused: true },
-    {
-      kind: 'agent',
-      retry: true,
-      payload: false,
-      provider: 'pi',
-      work: 'unobserved',
-      paused: false,
-    },
-    {
-      kind: 'loop',
-      retry: true,
-      payload: false,
-      provider: 'pi',
-      work: 'unobserved',
-      paused: false,
-    },
+    { kind: 'agent', retry: false, payload: true, provider: 'codex', work: true },
+    { kind: 'loop', retry: false, payload: true, provider: 'codex', work: true },
+    { kind: 'structured loop', retry: true, payload: true, provider: 'codex', work: true },
+    { kind: 'structured loop', retry: true, payload: false, provider: 'codex', work: true },
+    { kind: 'structured agent', retry: true, payload: true, provider: 'codex', work: true },
+    { kind: 'agent', retry: true, payload: false, provider: 'claude', work: false },
+    { kind: 'loop', retry: true, payload: false, provider: 'pi', work: false },
   ] as const)(
-    'ends $provider $kind with work=$work, payload=$payload, retry=$retry, paused=$paused',
-    async ({ kind, retry, payload, provider, work, paused }) => {
+    'ends $provider $kind with work=$work, payload=$payload, retry=$retry',
+    async ({ kind, retry, payload, provider, work }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`end-turn-${kind}`);
-      if (paused) {
-        workflowRun.status = 'paused';
-        workflowRun.metadata.approval = { nodeId: 'review', message: 'Approve' };
-      }
       store.getWorkflowRunStatus.mockImplementation(async () => workflowRun.status);
       store.getWorkflowRun.mockImplementation(async () => workflowRun);
       let raised!: () => void;
@@ -192,6 +117,7 @@ describe('ending a stalled turn', () => {
           return;
         }
         signal = options?.abortSignal;
+        if (!work) yield { type: 'tool_call', toolCallId: 'call', name: 'bash' };
         if (work)
           yield {
             type: 'subtask',
@@ -236,7 +162,7 @@ describe('ending a stalled turn', () => {
             store,
             withProviderCapabilities(mockProviderRegistry, provider, {
               ...getProviderCapabilities(provider),
-              backgroundWork: work === 'unobserved' ? 'unobserved' : 'reported',
+              backgroundWork: work ? 'reported' : 'unobserved',
             })
           ),
           workflowProvider: provider,
@@ -251,14 +177,13 @@ describe('ending a stalled turn', () => {
       );
 
       await stalled;
-      // Silence is attention, never evidence that the provider died.
+      // Open work remains live beyond idle_timeout until the operator requests recovery.
       expect(signal?.aborted).toBe(false);
       expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
-      await assertLiveAttention(workflowRun, store, paused);
-      if (!work || work === 'unobserved') {
-        const calls = workflowRun.metadata.tool_call_attention;
-        expect(Array.isArray(calls) && calls[0].kind).toBe('provider_turn');
-      }
+      expect(runAttention(workflowRun)).toMatchObject({
+        kind: 'stalled_tool_calls',
+        calls: [{ nodeId: 'ci', stalledForMs: expect.any(Number) }],
+      });
       const plan = planEndTurn(workflowRun);
       if (plan.kind !== 'request') throw new Error(`expected a request, got ${plan.reason}`);
       Object.assign(workflowRun.metadata, plan.metadata);

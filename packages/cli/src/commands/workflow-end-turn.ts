@@ -6,10 +6,10 @@ import { resolveRunIdArg } from './workflow-shared';
 
 const REFUSALS = {
   not_found: 'Workflow run not found',
-  not_running: 'Run is not live, so it has no turn to end',
+  not_running: 'Run is not running; end-turn is only available for running runs',
   unreadable_attention: 'Run attention is unreadable. Inspect it with archon workflow get',
   nothing_stalled:
-    'Run has no stalled turns, tools or background work to end. Inspect it with archon workflow get',
+    'Run has no stalled tools or background work to end. Inspect it with archon workflow get',
 } as const;
 
 export async function workflowEndTurnCommand(

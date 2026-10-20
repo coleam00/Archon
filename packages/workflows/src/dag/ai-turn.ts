@@ -1,7 +1,19 @@
 import { type NodeFailureKind } from '../schemas/node-execution';
+import type { MessageChunk } from '@archon/provider-contract';
 import { type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
+
+export interface WatchdogReset {
+  type: MessageChunk['type'];
+  at: number;
+}
+
+export function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): string {
+  return lastReset
+    ? ` Last watchdog reset: ${new Date(lastReset.at).toISOString()} from chunk type '${lastReset.type}'.`
+    : ' No provider chunk reset the watchdog after the stream opened.';
+}
 
 /**
  * Max validate-and-reask attempts for a `best-effort` provider whose structured
@@ -29,11 +41,12 @@ export function structuredOutputPass(
   return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
 }
 
-/** An explicit operator cutoff fails the attempt as a timeout under its retry policy. */
-export type TurnCutOff = 'operator';
+export type TurnCutOff =
+  | { kind: 'operator' }
+  | { kind: 'idle_timeout'; timeoutMs: number; lastReset: WatchdogReset | undefined };
 
 export function cutOffClause(): string {
-  return 'was ended by the operator after its provider turn or reported work stalled';
+  return 'was ended by the operator after its tool call or reported work stalled';
 }
 
 /**
@@ -46,9 +59,11 @@ export function unsettledTurnError(
   liveTaskIds: readonly string[]
 ): string {
   const cause =
-    cutOff !== undefined
-      ? `${cutOffClause()}, before the provider signalled that its turn settled.`
-      : 'the provider stream ended without signalling that its turn settled.';
+    cutOff?.kind === 'idle_timeout'
+      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
+      : cutOff !== undefined
+        ? `${cutOffClause()}, before the provider signalled that its turn settled.`
+        : 'the provider stream ended without signalling that its turn settled.';
   const tasks =
     liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';
   return `${cause}${tasks} Its work may be incomplete.`;
