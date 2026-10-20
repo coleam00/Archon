@@ -207,13 +207,13 @@ function bumpTypes(): string[] {
  * The run messages the workflow accepts, and the output each one must produce.
  *
  * These are message texts, not command lines. The CLI's own option table claims any
- * argument that starts with `--`, so a message that starts with one reaches the
- * workflow only when the CLI's separator hands it over as a positional; the API route
- * delivers the message byte for byte as its `$ARGUMENTS` either way.
+ * argument that starts with `--`, so such a message reaches the workflow only when
+ * the CLI's separator hands it over as a positional; the API route delivers the
+ * message byte for byte as its `$ARGUMENTS` whatever it starts with.
  */
 const MESSAGES: readonly (readonly [string, JsonValue])[] = [
-  // The producer reads the flag in any position; only the CLI delivers a message
-  // that does not start with `--`.
+  // The producer reads the flag in any position. A message that starts with `--`
+  // reaches the workflow through the CLI's separator or through the API route.
   ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
   ['dry-run minor', { bump: 'minor', dryRun: 'true' }],
   ['--dry-run minor', { bump: 'minor', dryRun: 'true' }],
