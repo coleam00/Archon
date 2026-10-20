@@ -201,6 +201,8 @@ export async function createFileWorkflowStore(
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRunMetadataIfRunning: (id, metadata) =>
+      write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -230,8 +232,8 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
-    releaseRunForUnreadableSource: (id, release) =>
-      write([id], view => view.releaseRunForUnreadableSource(id, release)),
+    releaseRunForUnreadableSource: (id, release, beforePublish) =>
+      write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>

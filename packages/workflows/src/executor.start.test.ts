@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   configWith,
+  containerBackend,
   makeDeps,
   makePlatform,
   makeRun,
@@ -97,6 +98,7 @@ describe('workflow_started configuration snapshot', () => {
       cwd: '/tmp/container',
       options: {
         execContext: { kind: 'container', containerId: 'container-1' },
+        container: { envId: 'env', writeBack: 'approve', backend: containerBackend() },
         isolationContext: { branchName: 'feature/snapshot' },
       },
     });

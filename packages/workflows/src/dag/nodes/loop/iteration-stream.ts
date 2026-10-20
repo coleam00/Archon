@@ -1,6 +1,7 @@
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
+  type TurnCutOff,
   type WatchdogReset,
   STRUCTURED_OUTPUT_MAX_REASKS,
   structuredOutputPass,
@@ -13,6 +14,7 @@ import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { createProviderEventHandler, type ProviderEventHandler } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
+import { isEndTurnRequested } from '../../../end-turn-request';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { stripCompletionTags } from '../../../executor-shared';
@@ -70,10 +72,11 @@ export interface Reask {
 export interface StreamedAttempt {
   kind: 'streamed';
   fullOutput: string;
-  idleTimedOut: boolean;
+  /** What cut this attempt's stream off before it settled, if anything did. */
+  cutOff: TurnCutOff | undefined;
+  lastWatchdogReset: WatchdogReset | undefined;
   /** Whether this attempt's stream ended on the provider's `settled` (see the AI-node path's streamSettled). */
   settled: boolean;
-  lastWatchdogReset: WatchdogReset | undefined;
   /** Raw structured payload seen on this attempt, before validation. */
   structured: unknown;
   /**
@@ -217,9 +220,9 @@ function newAttempt(run: LoopRun): StreamedAttempt {
   const attempt = {
     kind: 'streamed',
     fullOutput: '',
-    idleTimedOut: false,
-    settled: false,
+    cutOff: undefined,
     lastWatchdogReset: undefined,
+    settled: false,
     structured: undefined,
     stopStatus: undefined,
     abort: new AbortController(),
@@ -344,7 +347,7 @@ function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: strin
 }
 
 /**
- * Stream ended with background tasks still live (idle timeout mid-wait or subprocess
+ * Stream ended with background tasks still live (idle timeout mid-wait, operator cutoff or subprocess
  * death): their artifacts may be missing (#2083). Record them for the audit trail
  * whatever ended the stream; the operator hears about it once, from the iteration's
  * unsettled failure, which names these tasks.
@@ -363,8 +366,8 @@ function recordDanglingTasks(
       nodeId: run.node.id,
       iteration: i,
       taskIds: danglingTaskIds,
-      idleTimedOut: attempt.idleTimedOut,
-      cancelled: attempt.abort.signal.aborted && !attempt.idleTimedOut,
+      cutOff: attempt.cutOff,
+      cancelled: attempt.abort.signal.aborted && !attempt.cutOff,
     },
     'loop_node.iteration_stream_ended_with_live_background_tasks'
   );
@@ -444,7 +447,11 @@ async function consumeIterationStream(
       generator,
       effectiveIdleTimeout,
       () => {
-        attempt.idleTimedOut = true;
+        attempt.cutOff = {
+          kind: 'idle_timeout',
+          timeoutMs: effectiveIdleTimeout,
+          lastReset: attempt.lastWatchdogReset,
+        };
         getLog().warn(
           {
             nodeId: node.id,
@@ -471,19 +478,19 @@ async function consumeIterationStream(
         (capabilities.backgroundWork === 'reported' && providerEvents.liveSubtaskIds().length > 0),
       shouldStopStream
     )) {
-      if (await shouldStopStream()) break;
+      // A result is not the end of the iteration; `settled` is. See the
+      // AI-node stream loop for the full rationale.
+      if (msg.type === 'result') applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+      else if (msg.type !== 'settled') await providerEvents.handle(msg);
+      const stopped = await shouldStopStream();
+      if (msg.type === 'result' && (!stopped || attempt.cutOff)) throwOnResultFailure(run, i, msg);
+      if (stopped) break;
 
-      if (msg.type === 'result') {
-        applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
-        // A result is not the end of the iteration; `settled` is. See the
-        // AI-node stream loop for the full rationale.
-      } else if (msg.type === 'settled') {
+      if (msg.type === 'settled') {
         attempt.settled =
           capabilities.backgroundWork !== 'reported' ||
           providerEvents.liveSubtaskIds().length === 0;
         break;
-      } else {
-        await providerEvents.handle(msg);
       }
     }
   } finally {
@@ -523,6 +530,11 @@ async function stopStreamIfRunStopped(
       attempt.abort.abort();
       return true;
     }
+    if (await operatorEndedIteration(run, i, attempt)) {
+      attempt.cutOff = { kind: 'operator' };
+      attempt.abort.abort();
+      return true;
+    }
   } catch (statusErr) {
     getLog().warn(
       { err: statusErr as Error, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
@@ -530,6 +542,23 @@ async function stopStreamIfRunStopped(
     );
   }
   return false;
+}
+
+/** Whether the operator ended this attempt's turn while it had stalled calls raised. */
+async function operatorEndedIteration(
+  run: LoopRun,
+  i: number,
+  attempt: StreamedAttempt
+): Promise<boolean> {
+  const stall = attempt.providerEvents.stall();
+  if (stall === undefined) return false;
+  const runId = run.ctx.workflowRun.id;
+  if (!(await isEndTurnRequested(run.ctx.deps.store, runId, stall))) return false;
+  getLog().warn(
+    { workflowRunId: runId, nodeId: run.node.id, iteration: i },
+    'loop_node.turn_ended_by_operator'
+  );
+  return true;
 }
 
 function applyResultChunk(
@@ -551,7 +580,6 @@ function applyResultChunk(
     scope.attempt.fullOutput = msg.text;
   }
   scope.attempt.structured = msg.structuredOutput;
-  throwOnResultFailure(run, i, msg);
 }
 
 /**

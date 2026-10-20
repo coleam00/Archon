@@ -166,6 +166,20 @@ export async function updateWorkflowRun(
   }
 }
 
+export async function updateWorkflowRunMetadataIfRunning(
+  id: string,
+  metadata: WorkflowRun['metadata']
+): Promise<boolean> {
+  validateWorkflowWaitMetadata(metadata);
+  const result = await pool.query(
+    `UPDATE remote_agent_workflow_runs
+     SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+     WHERE id = $1 AND status = 'running'`,
+    [id, JSON.stringify(metadata)]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /**
  * Atomically CLAIM the container write-back apply before the live root is mutated
  * (R2-F4). A conditional UPDATE that sets `metadata.writeback_apply_claimed = true`

@@ -920,6 +920,11 @@ export interface IWorkflowStore
       working_path?: string;
     }
   ): Promise<void>;
+  /** Atomically merge metadata only while running; false means nothing was written. */
+  updateWorkflowRunMetadataIfRunning(
+    id: string,
+    metadata: WorkflowRun['metadata']
+  ): Promise<boolean>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   /**
@@ -966,15 +971,15 @@ export interface IWorkflowStore
     event?: GatePauseEventInput
   ): Promise<void>;
   /**
-   * Release a running run this host could not read the frozen source for (#4209): a
-   * compare-and-swap from `running` to `paused` that writes `source_release` with a
-   * store-minted `releaseId` and `releasedAt`, sets `continuation_retry_at` to `retryAt`, and commits
-   * `source_released` in the same transaction. Writes nothing, and returns
-   * `released: false`, when status or `claimId` no longer matches: another execution owns it.
+   * Claim-checked release from running to paused for unreadable source; status/claim losers write nothing.
+   * Atomically writes source_release (store-minted releaseId/releasedAt), continuation_retry_at, and source_released.
+   * beforePublish runs under exclusion against resume; rejection aborts the transition.
+   * It must be repeatable (SQL may retry), without store I/O or event publication.
    */
   releaseRunForUnreadableSource(
     id: string,
-    release: SourceReleaseWrite
+    release: SourceReleaseWrite,
+    beforePublish?: () => Promise<void>
   ): Promise<{ released: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or

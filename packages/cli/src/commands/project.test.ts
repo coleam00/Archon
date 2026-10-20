@@ -46,7 +46,7 @@ describe('projectListCommand', () => {
     stdoutSpy.mockRestore();
   });
 
-  it('emits each row with the key --project accepts', async () => {
+  it('emits each row with its project key', async () => {
     expect(await projectListCommand({ listCodebases: async () => ROWS }, { json: true })).toBe(0);
 
     const { projects } = JSON.parse(stdout.join('')) as { projects: Record<string, unknown>[] };

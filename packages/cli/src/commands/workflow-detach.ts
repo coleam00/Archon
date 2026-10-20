@@ -25,7 +25,12 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
-import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import {
+  DETACHED_LAUNCH_TOKEN_ENV,
+  DETACHED_LAUNCH_METADATA_KEY,
+  matchesDetachedLaunch,
+  DETACHED_RUN_OWNER_ENV,
+} from '../utils/detached-run-control';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
@@ -182,7 +187,8 @@ export async function spawnDetachedWorkflowRun(
   conversationId: string,
   extraArgs: string[],
   runConfigPayload?: string,
-  confirmResume = false
+  confirmResume = false,
+  launchToken = ''
 ): Promise<string | null> {
   const cmd = buildDetachedRunCmd(
     BUNDLED_IS_BINARY,
@@ -232,6 +238,7 @@ export async function spawnDetachedWorkflowRun(
       env: {
         ...process.env,
         [DETACHED_RUN_OWNER_ENV]: '1',
+        [DETACHED_LAUNCH_TOKEN_ENV]: launchToken,
         [DETACHED_RESUME_RECEIPT_ENV]: confirmResume ? '1' : '',
         ...(runConfigPayload
           ? {
@@ -308,20 +315,25 @@ export async function spawnDetachedWorkflowRun(
  * the row sits `pending` forever while the reason exists only in the child's log: the
  * same silent failure this issue closed at launch, moved one process later.
  *
- * `pending` is the whole guard, and it is what keeps this from guessing at a lifecycle
- * it does not own: the executor flips the row to `running` before any node executes, so
- * a row still `pending` here is one no execution ever claimed. Anything else belongs to
- * the run and is left alone — `failWorkflowRun`'s own status CAS closes the race.
+ * The launch token binds the row even when process-container setup or admission threw.
+ * Only pending rows belong to startup; running and terminal rows belong to the
+ * executor and are left alone.
  */
 export async function recordDetachedChildStartupFailure(
   host: WorkflowHost,
-  detachedRunId: string | undefined,
+  request: {
+    detachedRunId: string | undefined;
+    detachedProcessOwner: boolean;
+    launchToken: string | undefined;
+  },
   error: Error
 ): Promise<void> {
-  if (detachedRunId === undefined) return;
+  const { detachedRunId, detachedProcessOwner, launchToken } = request;
+  if (detachedRunId === undefined || !detachedProcessOwner) return;
   try {
-    const status = await host.deps.store.getWorkflowRunStatus(detachedRunId);
-    if (status !== 'pending') return;
+    const row = await host.deps.store.getWorkflowRun(detachedRunId);
+    if (row?.status !== 'pending' || !matchesDetachedLaunch(row.metadata, launchToken)) return;
+    if ((await host.deps.store.getWorkflowRunStatus(detachedRunId)) !== 'pending') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
@@ -447,6 +459,7 @@ interface DetachedRunClaim {
    * A continuation's row belongs to its own run.
    */
   launchedRunId?: string;
+  launchToken?: string;
 }
 
 /**
@@ -467,7 +480,9 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
       cwd,
       destinationCorrelationId(childDestination),
       extraArgs,
-      runConfigPayload
+      runConfigPayload,
+      false,
+      claim.launchToken
     );
   } catch (error) {
     // The child never took the run — it failed to spawn, or died inside the startup
@@ -527,6 +542,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     // No reserved id: this process's own capture is discarded on the way out, and
     // reusing its id would point the child's capture at a directory this process is
     // about to reclaim. The row's generated id is what the child files under.
+    const launchToken = crypto.randomUUID();
     const created = await host.deps.store.createWorkflowRun({
       workflow_name: workflow.name,
       origin: {
@@ -535,6 +551,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
       user_message: userMessage,
       metadata: {
+        [DETACHED_LAUNCH_METADATA_KEY]: launchToken,
         [RUN_AI_CONFIGURATION_METADATA_KEY]: detachedPrepared.aiConfigurationSnapshot,
         ...(detachedPrepared.runConfigMetadata
           ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: detachedPrepared.runConfigMetadata }
@@ -550,7 +567,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
     });
-    return { detachedRunId: created.id, launchedRunId: created.id };
+    return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
       `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
@@ -575,6 +592,10 @@ function buildDetachedChildArgs(
   const supersededRunId = declaration?.mode === 'supersede' ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
+  // Pin identity after name resolution so a rename cannot redirect the child.
+  if (!launch.isContinuation && options.codebaseId && launch.codebase) {
+    extraArgs.push('--project', launch.codebase.id);
+  }
   // Pin a generated branch only when isolating AND the caller didn't pass
   // --branch (an explicit --branch is already in argv). Without this, the child
   // would generate its own timestamped branch and fork a second worktree.

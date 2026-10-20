@@ -1,3 +1,4 @@
+import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
   describeForeignCheckoutAdmission,
   resourceStartFixtures,
@@ -284,6 +285,40 @@ export function describeWorkflowStoreConformance(
     });
     afterEach(async () => {
       await harness?.close();
+    });
+
+    test.each(['paused', 'completed', 'failed', 'cancelled'] as const)(
+      'running metadata write refuses a run that became %s after observation',
+      async status => {
+        const run = await running(store, { metadata: { preserved: true } });
+        expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+        if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+        else if (status === 'completed')
+          await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        else if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
+        else await store.cancelWorkflowRun(run.id);
+        const before = await store.getWorkflowRun(run.id);
+        expect(
+          await store.updateWorkflowRunMetadataIfRunning(run.id, { end_turn_request: {} })
+        ).toBe(false);
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      }
+    );
+
+    test('running metadata write merges only into a running run', async () => {
+      const pending = await create(store);
+      expect(await store.updateWorkflowRunMetadataIfRunning(pending.id, { request: true })).toBe(
+        false
+      );
+      expect(
+        await store.updateWorkflowRunMetadataIfRunning(crypto.randomUUID(), { request: true })
+      ).toBe(false);
+      const run = await running(store, { metadata: { preserved: true } });
+      expect(await store.updateWorkflowRunMetadataIfRunning(run.id, { request: true })).toBe(true);
+      expect((await store.getWorkflowRun(run.id))?.metadata).toMatchObject({
+        preserved: true,
+        request: true,
+      });
     });
 
     const { launch, start } = resourceStartFixtures(
@@ -1391,29 +1426,7 @@ export function describeWorkflowStoreConformance(
       );
       expect(await types(store, run.id)).toContain('source_released');
     });
-    test('a source release never overrides another transition', async () => {
-      const release = {
-        claimId: null,
-        nodeId: 'check',
-        error: 'EACCES',
-        retryAt: new Date(Date.now() + 60_000).toISOString(),
-      };
-      const cancelled = await running(store);
-      await store.cancelWorkflowRun(cancelled.id);
-      expect(await store.releaseRunForUnreadableSource(cancelled.id, release)).toEqual({
-        released: false,
-      });
-      expect((await store.getWorkflowRun(cancelled.id))?.status).toBe('cancelled');
-      const gated = await running(store);
-      await store.pauseWorkflowRun(gated.id, approval);
-      expect(await store.releaseRunForUnreadableSource(gated.id, release)).toEqual({
-        released: false,
-      });
-      const row = await store.getWorkflowRun(gated.id);
-      expect(row?.status).toBe('paused');
-      expect(readSourceRelease(row?.metadata)).toBeUndefined();
-      expect(await types(store, gated.id)).not.toContain('source_released');
-    });
+    describeSourceReleaseConformance(() => store);
     test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
       const run = await running(store);
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(
