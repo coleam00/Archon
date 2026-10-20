@@ -94,6 +94,17 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A return hands the item to the build queue, and no build round owns an own pull request. */
+function withoutOwnPrReturn(decision: Decision, item: Item): Decision {
+  if (decision.action !== 'return' || item.own_pr !== true) return decision;
+  return {
+    ...decision,
+    action: 'wait',
+    brief: '',
+    reason: `${decision.reason} (no build round owns an own pull request, so the next sweep asks instead)`,
+  };
+}
+
 /**
  * The decisions record acts on: one per claimed pull request, in the sweep's order. A
  * decision about a pull request this run did not claim is refused with a note, because
@@ -108,17 +119,9 @@ function decide(items: readonly Item[], sweep: Sweep): Decision[] {
   }
   const decided = new Map<number, Decision>();
   for (const declared of sweep.decisions) {
-    if (!wanted.has(declared.number) || decided.has(declared.number)) continue;
-    // A return hands the item to the build queue, and no build round owns an own pull request.
-    const decision =
-      declared.action === 'return' && wanted.get(declared.number)?.own_pr === true
-        ? {
-            ...declared,
-            action: 'wait' as const,
-            brief: '',
-            reason: `${declared.reason} (no build round owns an own pull request, so the next sweep asks instead)`,
-          }
-        : declared;
+    const item = wanted.get(declared.number);
+    if (item === undefined || decided.has(declared.number)) continue;
+    const decision = withoutOwnPrReturn(declared, item);
     // An ask the sweep wrote no item for has nothing to raise; it waits like any other undecided one.
     const asks = decision.action === 'ask' && decision.attention !== null;
     decided.set(decision.number, asks ? decision : { ...decision, action: decision.action === 'ask' ? 'wait' : decision.action, attention: null });
