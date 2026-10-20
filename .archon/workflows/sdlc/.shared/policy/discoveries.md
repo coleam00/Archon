@@ -1,8 +1,9 @@
 # Discoveries policy
 
-This is the SDLC pack's default policy for deciding run discoveries. A project
-replaces it whole with its own `.archon/sdlc/policy/discoveries.md`, which may be
-nothing more than a pointer to documents the project already has.
+This is the SDLC pack's default policy for deciding run discoveries. A project adds to
+it with its own `.archon/sdlc/policy/discoveries.md`: the decision reads this default
+first and the project's file after it, and where the two conflict, the project's line
+wins.
 
 - **File** a defect that is real at the base, worth an issue of its own, and covered
   by no open issue or pull request. Write a full brief: problem, why, why now, outcome,

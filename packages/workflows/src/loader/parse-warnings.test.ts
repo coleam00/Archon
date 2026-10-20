@@ -226,8 +226,8 @@ describe('unknown key warnings (#2213)', () => {
       parseError(
         workflowLines(['nodes:', '  - id: plan', '    prompt: plan it', '    runtime: bun'])
       )
-    ).toContain(
-      "Node 'plan': 'runtime' 'runtime' is only supported on script nodes, not on prompt node 'plan'."
+    ).toBe(
+      "DAG node validation failed: Node 'plan': 'runtime' is only supported on script nodes, not on prompt nodes."
     );
   });
 

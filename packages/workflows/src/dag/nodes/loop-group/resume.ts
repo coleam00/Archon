@@ -26,7 +26,11 @@ import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
-import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
+import {
+  ownsBodySessionCursor,
+  type RunLayersContext,
+  type SequentialSessionCursor,
+} from '../../run-context';
 import { nodeTemplateReferences } from '../../references';
 import {
   findLoopGroupTerminalSuspendNode,
@@ -111,16 +115,14 @@ export function readLoopGroupResume(
   };
 }
 
-/** The enclosing ancestry, plus this invocation's own cursors once any cursor is tracked. */
+/** Every enclosing invocation needs a frame, even when it owns no sessions. */
 function withOwnCursors(
   ctx: RunLayersContext,
   ownerInvocationKey: string,
   bodySessionCursors: Map<string, SessionCursor> | undefined
 ): Map<string, Map<string, SessionCursor>> {
   const bodySessionCursorAncestry = new Map(ctx.bodySessionCursorAncestry);
-  if (bodySessionCursors !== undefined || bodySessionCursorAncestry.size > 0) {
-    bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
-  }
+  bodySessionCursorAncestry.set(ownerInvocationKey, bodySessionCursors ?? new Map());
   return bodySessionCursorAncestry;
 }
 
@@ -206,9 +208,10 @@ function enclosingPauseFrameOf(
 }
 
 /**
- * Restore the named owner sessions this group's body nodes resume, from the pause this
- * run resumes or an enclosing group's pause frame. Undefined when no body node resumes a
- * session context.
+ * Restore the owner sessions of body nodes that resume an enclosing source, from the
+ * pause this run resumes or an enclosing group's pause frame. Undefined when no body node
+ * resumes a session context; a group whose consumers all resume same-body sources still
+ * returns an (empty) map so a nested pause resumes inside the paused iteration.
  */
 function restoreBodySessionCursors(
   node: LoopGroupNode,
@@ -218,8 +221,11 @@ function restoreBodySessionCursors(
     enclosingPauseFrame: { iteration: number } | undefined;
   }
 ): Map<string, SessionCursor> | undefined {
-  const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
-  if (ownerIds.size === 0) return undefined;
+  if (!bodyNodes.some(n => isNodeContextResume(n.context))) return undefined;
+  const bodyNodeIds = new Set(bodyNodes.map(n => n.id));
+  const ownerIds = new Set(
+    bodyNodes.filter(n => ownsBodySessionCursor(n, bodyNodeIds)).map(n => n.id)
+  );
   const bodySessionCursors = new Map<string, SessionCursor>();
   if (shape.rawLoopWait && !shape.isEscalatedWaitResume) {
     throw new Error(

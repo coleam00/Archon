@@ -1,7 +1,11 @@
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
-import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
+import {
+  pauseGateRespectingExternalTransition,
+  sendPauseNotice,
+  snapshotBodySessionCursorAncestry,
+} from '../../pause';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
 import {
@@ -562,6 +566,7 @@ async function pauseAtLoopGate(
     iteration: i,
     // null = this pause has no session to restore.
     sessionId: state.sessionId ?? null,
+    ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
     // Signal state for finalize-on-bare-approve (#2074). The structured payload
     // rides along (#2637) so the finalize attaches it like a natural completion.
     completionSignaled: completionDetected,

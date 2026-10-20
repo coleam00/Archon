@@ -180,7 +180,7 @@ The former plugin `install` verb remains a deprecated alias for `archon plugin a
 
 A provider plugin records its descriptor in the receipt and registers on the next CLI invocation or server restart. A workflow names its descriptor id in `provider:`. See [Provider plugins](/guides/publishing-plugins/#provider-plugins) for executable naming, capabilities, credentials, and the process environment.
 
-A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each usable chat receipt starts one supervised plugin process; a receipt that is unreadable or does not own its executable is logged and skipped until `update <id>` or `remove <id>` repairs it. Install, update, and removal take effect at the next restart. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
+A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each usable chat receipt starts one supervised plugin process; a receipt that is unreadable or does not own its executable is logged and skipped until `update <id>` or `remove <id>` repairs it. Install, update, and removal take effect at the next restart. In Docker, `SLACK_BOT_TOKEN` declares offline provisioning of the image-provided Slack plugin: removing it while tokens remain configured reinstalls it on the next boot. Remove the tokens from every effective env source as well to keep Slack removed. Valid installed Slack releases are retained; image upgrades do not update them. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
 A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
@@ -387,11 +387,11 @@ Every run freezes its workflow source when it starts, whether or not you pass th
 - **A run does not change shape while it is running.** Edit, move, or delete the source checkout after a run starts and a resume still executes what the run began with. Start a new run to pick up the edits.
 - **Resume needs no source path.** Every continuation -- `archon workflow resume <run-id>`, `archon workflow run <name> --resume`, `approve`, and `reject` -- loads the run's own captured source, which is why `--workflow-source` is refused alongside `--resume`.
 
-The captured source lives beside that run's artifacts, at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, and stays as long as the run's other output does. It is deliberately not inside `$ARTIFACTS_DIR`: that directory is the run's output channel, handed to every node and listed for inspection, and the frozen source is neither. Its manifest records a content digest and source-resolution settings, which the run row also stores. Archon checks those pinned values during initial discovery, on resume, and immediately before every later filesystem-backed command, named script, or composed-source read, hashing the full capture each time. If the capture is changed or replaced, the read and any container dispatch are refused. Start a fresh run to execute the current workflow. If a read fails after the run started because this host cannot read the capture, or the capture is missing here, the run pauses instead of failing and is continued by a host that can read it (see `workflow wake`).
+The captured source lives beside that run's artifacts, at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, and stays as long as the run's other output does. It is deliberately not inside `$ARTIFACTS_DIR`: that directory is the run's output channel, handed to every node and listed for inspection, and the frozen source is neither. Its manifest records a content digest and source-resolution settings, which the run row also stores. Archon checks those pinned values during initial discovery, on resume, and immediately before every later filesystem-backed command, named script, or composed-source read, hashing the full capture each time. If the capture is changed or replaced, the read and any container dispatch are refused. Start a fresh run to execute the current workflow. If a read fails after the run started because this host cannot read the capture, or the capture is missing here, a successful source release pauses the run for continuation by a host that can read it (see `workflow wake`). If the release write rejects after admission, the executor attempts to record the run as failed. If that failure write succeeds, the caller receives a failure result with the original error. If it also rejects, the caller receives both errors and the row may still be `running`; inspect the store state and run ownership before recovery.
 
 These checks detect a mismatch present when Archon checks; they do not seal the directory or turn workflow execution into a security sandbox. Another process running as the Archon user can still change a file after a check, and already-started parallel nodes are not cancelled. Inline node bodies and command bodies compiled into an included graph are already in memory. A runtime `workflow:` child deliberately captures the live authoring source when that child starts, then receives its own pinned capture. If the parent's recorded authoring directory has moved or been deleted, Archon refuses to start the child instead of capturing a same-named workflow from the target checkout.
 
-The one exception is a run that started before Archon captured source at all. It has nothing recorded to honor, so it resumes against the current source on disk with a warning. A run whose recorded capture is missing or unreadable never falls back to live source. After admission, it pauses for continuation on a host that can read the capture; before admission, execution is refused until the capture is readable. Source-integrity failures, such as a changed or replaced capture, still fail or refuse execution.
+The one exception is a run that started before Archon captured source at all. It has nothing recorded to honor, so it resumes against the current source on disk with a warning. A run whose recorded capture is missing or unreadable never falls back to live source. After admission, a successful source release pauses it for continuation on a host that can read the capture. A rejected release write fails the run when the subsequent failure write succeeds. If that write also rejects, the caller receives both errors and the row may still be `running`; inspect the store state and run ownership before recovery. Before admission, execution is refused until the capture is readable. Source-integrity failures, such as a changed or replaced capture, still fail or refuse execution.
 
 An older captured run may have a digest in its run row but no out-of-band copy of its source-resolution settings. Archon still verifies its tree against that digest, reads the settings from the manifest, and on the first resume records them on the run row beside the digest, with a warning. Nothing can prove those settings are the ones the run started with, since the manifest is outside the digest; pinning them closes the window, so a later edit to the manifest is refused like any other change.
 
@@ -591,7 +591,7 @@ archon workflow runs --limit 50        # cap rows (default 20)
 archon workflow runs --all             # list across all projects (ignore cwd scope)
 ```
 
-If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one.
+If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 The run-list JSON uses the same `active_nodes` contract as `workflow status`. The retained singular
 fields are compatibility fields: `current_step_name` and `current_step_status` are populated only
@@ -1173,6 +1173,24 @@ operation as `abandon`. Cancelling a parent therefore attempts descendant cancel
 [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count)
 and can report the same cascade failures or blocked parent described below.
 
+On Windows a detached owner runs in a Job Object that every process it starts inherits, so
+cancel and abandon stop and confirm the whole tree even when an intermediate process has
+already exited. An owner started by an Archon version without this reports no job, and its
+tree cannot be confirmed, so cancel and abandon refuse it while it runs: stop the owner
+process and its descendants yourself, then use `workflow abandon`.
+
+A detached run that a node launches with `workflow run`, `resume`, `approve`, `reject`,
+or `respond` and `--detach` starts outside the launching run's job and owns its own.
+Cancelling the launching run leaves it running; stop it with its own `cancel`.
+The broker and relayed CLI ignore
+`BUN_OPTIONS` and `bunfig.toml` startup hooks, which would execute outside the owner's job.
+On POSIX a detached run starts its own process group, so the same holds.
+
+The job grants no other way out: a tool in the run that asks Windows to start a process
+outside its job fails to start it. A run that a node starts through `archon trigger` stays
+in the launching run's job. Cancelling the launching run kills that run's processes, and
+its row stays `running` with no owner until you `workflow abandon` it.
+
 For a detached container run, cancel must also confirm container teardown after stopping
 the owner and before recording cancellation. If that teardown fails, cancel fails and
 leaves the run's state unchanged, even though the owner process has stopped. With
@@ -1343,7 +1361,9 @@ In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode th
 wrong-status, missing-context, `child_workflow`-blocked, already-resolved, or
 no-working-path run is refused synchronously and nothing is spawned. The parent then
 hands the whole command to a detached child that owns all state mutation in its own
-process group. A shell that dies mid-flight can no longer wedge the run.
+process group on POSIX or Job Object on Windows. When launched inside a Windows run,
+the child escapes the launching run's job, so cancelling the launcher leaves the child
+running and independently owned. A shell that dies mid-flight can no longer wedge the run.
 
 For `resume`, the parent waits for the child's engine admission receipt before
 acknowledging success, rather than waiting for workflow completion. Even a run that

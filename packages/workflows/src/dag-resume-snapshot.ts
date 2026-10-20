@@ -336,15 +336,9 @@ function forgetReplayedInvocations(fold: ResumeFold, record: NodeRecord): void {
  * spill retains the preview and its incompleteness rather than failing resume.
  * Prior-success replay must preserve that provenance for later terminal records.
  *
- * The spill file is addressed by a stable, node-scoped filename that a later
- * execution of the SAME node overwrites in place (by design — see
- * `formatPersistedNodeOutput`'s doc comment). The spill precedes its awaited
- * lifecycle insert, so a process crash between the file overwrite and that insert
- * can still leave an older, durable row pointing at
- * a NEWER execution's content. Guard against that by validating the file's actual
- * byte length against this row's own recorded `node_output_original_bytes` before
- * trusting it — a mismatch means the file no longer describes this row, so fall
- * back to the bounded preview exactly like a missing spill would.
+ * New spills use a unique path per write. Historical events can still point at a
+ * reused node-scoped path; the byte-length check detects mismatched lengths but
+ * cannot identify an equal-length replacement of those historical spills.
  */
 async function readSpilledOutput(
   runId: string,

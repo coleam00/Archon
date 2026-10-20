@@ -59,8 +59,9 @@ Optional inputs, with their defaults in each workflow's YAML:
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
-The build and merge queues change their checkout, so each run needs its own worktree.
-A plain launch from a git checkout gets one.
+The build queue changes its checkout, so each run needs its own worktree. A plain
+launch from a git checkout gets one. The merge queue never changes its checkout and
+needs none.
 
 ## Intake
 
@@ -110,21 +111,29 @@ work the next item.
 ## Merge queue
 
 A sweep claims every waiting item up to `limit` and merges what policy allows, one
-at a time, through a gate that requires a Ready verdict and green CI at the head. A
-pull request that merges cleanly into the default branch merges directly, even when
-it is behind, so one sweep can land many. A pull request that conflicts, or that
-reshapes code across a package, is synced first and merges once CI at its synced
-head is green, usually in a later sweep. After a batch the sweep waits for the
-default branch's CI, which judges the combined result; red there is raised with the
-pull requests merged since it was last green.
-
-Run sweeps one after another, not in parallel: two sweeps would sync the same
-branches. Start the next sweep once CI on the pull requests it synced has finished.
+at a time, through a gate that requires a Ready verdict for the head, green CI there
+and a default branch whose CI is not red. A pull request that merges cleanly into the
+default branch merges, even when it is behind, so one sweep can land many. The queue
+never pushes or waits for CI: a conflict goes back to the build queue, and the default
+branch's CI on a merge is the next sweep's first fact. Claims keep two sweeps off the
+same item.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `merge: dev` and holds
+`return`, `park` and `other`. A red default branch pauses as `merge: base` and holds
 every merge until it is green.
+
+A maintainer's own pull request enrolled through `merge_queue: "own-prs"` has no
+build round to return to, so its question offers no `return`. Answering `park` or
+`other` stops queue work until a later sweep observes a head different from the
+head asked about. At the same head it stays parked, even after green CI or a new
+review. The `other` text is recorded as the ruling on the work item; it starts no
+build round. Recovery preserves the approval's original head and every merge gate.
+
+A build item parked by an answer waits for renewed build readiness. A pull request
+whose read fails twice consecutively is also parked: renewed build readiness can
+bring a build item back, but an unreadable own-PR park stays parked. Changed-head
+recovery applies only to answered own-PR parks, never merged or superseded items.
 
 ## Discoveries drain
 
@@ -146,9 +155,11 @@ does, and what happens if nobody answers. Answer them as `managing-runs.md`
 archon workflow respond <run-id> <choice> "<reason>" --detach
 ```
 
-The build and merge queues write the answer's text into the issue body as a dated
-"Current scope" section, and later rounds work from it. Write the reason as a ruling a
-later round can act on: what is in scope, what is not, and why. An answer that
+The build queue and merge items owned by a build write the ruling into the issue
+body as a dated "Current scope" section, and later rounds work from it. An enrolled
+own PR keeps the answer on its work item's merge decision entry; it writes no issue
+section. Write the reason as a ruling a later round can act on: what is in scope,
+what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
 run at once, on the run config the answered run started with, so you don't relaunch. A
 build round that decides `continue` on its own starts its next round the same way.

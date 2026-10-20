@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process';
 import { renameSync, writeFileSync } from 'node:fs';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
-import { assertDetachedRunProcessOwner } from '../detached-run-control';
+import { claimDetachedRunProcessOwner } from '../detached-run-control';
 
 const [runId, readyPath, leakPath, goPath] = process.argv.slice(2);
 if (!runId || !readyPath || !leakPath || !goPath) {
   throw new Error('Usage: detached-run-owner.ts <run-id> <ready-path> <leak-path> <go-path>');
 }
 
-assertDetachedRunProcessOwner();
+await claimDetachedRunProcessOwner();
 
 // The descendant leaks work only when an external go signal appears. The spec
 // decides whether that signal can exist, so a correct process-group kill ends

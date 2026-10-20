@@ -3,6 +3,7 @@ import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync 
 import { createServer, type Server, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { currentWindowsRunJob } from './windows-run-job';
 
 /** Idle lifetime for a connection that has not completed an owner handshake. */
 export const RUN_LIVE_OWNER_IPC_TIMEOUT_MS = 2_000;
@@ -17,8 +18,9 @@ const TERMINATE_READY = 'ready\n';
 /**
  * How long `close` waits for a controller holding a stop lease to release it before
  * dropping the lease. A committed lease has no lifetime of its own: it lasts while both
- * ends hold the connection open, because a stop can wait seconds on a Windows process
- * listing with nothing to send (#3516). This bounds only the owner's own shutdown.
+ * ends hold the connection open, because a stop can wait seconds terminating and
+ * confirming the tree with nothing to send (#3516). This bounds only the owner's own
+ * shutdown.
  */
 const OWNER_CLOSE_WAIT_MS = 10_000;
 const STARTUP_RECHECK_MS = 50;
@@ -49,13 +51,17 @@ export type RunLiveOwnerWatchResult =
 
 export interface RunLiveOwnerStopLease {
   readonly pid: number;
+  /** The Windows job object holding the owner's process tree, as the owner reported it. */
+  readonly windowsJob: string | undefined;
   /** Commit the lease before the caller starts terminating the process tree. */
   commit(): Promise<void>;
   release(): void;
   isLive(): boolean;
 }
 
-type StopResponse = { kind: 'unsupported' } | { kind: 'detached'; pid: number };
+type StopResponse =
+  | { kind: 'unsupported' }
+  | { kind: 'detached'; pid: number; windowsJob?: string };
 
 /**
  * Why a stop request got no termination lease.
@@ -325,7 +331,14 @@ export async function startRunLiveOwner(
           phase = 'lease';
           stopSockets.add(socket);
           socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => socket.destroy());
-          socket.write(stopResponseFrame({ kind: 'detached', pid: options.detachedProcessPid }));
+          // `JSON.stringify` drops an unclaimed (undefined) job, so POSIX frames carry none.
+          socket.write(
+            stopResponseFrame({
+              kind: 'detached',
+              pid: options.detachedProcessPid,
+              windowsJob: currentWindowsRunJob(),
+            })
+          );
         } else if (phase === 'lease' && frame === TERMINATE_REQUEST) {
           phase = 'terminating';
           socket.setTimeout(0);
@@ -538,7 +551,15 @@ function parseStopResponse(runId: string, raw: string): StopResponse {
   ) {
     throw new RunLiveOwnerStopUnavailableError(runId, 'owner returned an invalid PID', 'unproven');
   }
-  return { kind: 'detached', pid: parsed.pid };
+  if (!('windowsJob' in parsed)) return { kind: 'detached', pid: parsed.pid };
+  if (typeof parsed.windowsJob !== 'string' || parsed.windowsJob === '') {
+    throw new RunLiveOwnerStopUnavailableError(
+      runId,
+      'owner returned an invalid response',
+      'unproven'
+    );
+  }
+  return { kind: 'detached', pid: parsed.pid, windowsJob: parsed.windowsJob };
 }
 
 /** Ask the exact-run owner for the detached process's termination lease. */
@@ -610,6 +631,7 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
         };
         resolve({
           pid: stopResponse.pid,
+          windowsJob: stopResponse.windowsJob,
           commit: async (): Promise<void> => {
             if (committed) throw new Error('Run termination lease is already committed');
             if (released || socket.destroyed || socket.readableEnded) {

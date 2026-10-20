@@ -2,16 +2,15 @@ name: archon-merge-queue
 description: |
   The merge queue: merges the pull requests the build queue finished, and stops only
   for decisions that belong to a person. Each run claims every waiting item with
-  intake's claim, up to limit. One sweep agent orders their pull requests, merges a
-  Ready, green pull request that merges cleanly directly, syncs the default branch
-  into one that conflicts or reshapes code across a package (regenerating generated
-  files with their owning scripts), and merges what policy allows, one at a time,
-  through a gate script that refuses unless the trusted review verdict says Ready at
-  the head, CI is green there and the head contains the default branch or merges into
-  it cleanly, and merges pinned to that head. A pull request
-  whose verdict a push made stale gets a delta review in the same run. After a batch
-  the sweep checks the default branch's CI. A clear case acts on its own; anything
-  unclear pauses as one attention item whose answer is a declared choice.
+  intake's claim, up to limit. One sweep agent decides each pull request and merges
+  what policy allows, one at a time, through a gate script that refuses unless the
+  trusted review verdict says Ready at the head, CI is green there, the head contains
+  the default branch or merges into it cleanly, and the default branch's CI is not
+  red, and merges pinned to that head. The queue never pushes and never waits for CI:
+  a conflict, a stale verdict or red the change caused goes back to the build queue,
+  and the default branch's CI after a merge is the next sweep's first fact. A clear
+  case acts on its own; anything unclear pauses as one attention item whose answer is
+  a declared choice.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Merge queue").
@@ -48,7 +47,7 @@ nodes:
       properties:
         path: { type: string, enum: [idle, record, sweep] }
         # The default branch, its head and CI there, read once before the sweep.
-        base: { type: [object, 'null'] }
+        base: { type: object }
         # The claimed pull requests the sweep decides, each with its facts snapshot.
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
@@ -78,11 +77,10 @@ nodes:
             additionalProperties: false
             properties:
               number: { type: integer, minimum: 1 }
-              action: { type: string, enum: [merged, review, return, ask, wait] }
+              action: { type: string, enum: [merged, return, ask, wait] }
               class: { type: string, enum: [clear, unclear] }
-              # The head the decision is about: the merged head, or the head a sync pushed.
+              # The head the decision is about.
               head: { type: string, pattern: '^[0-9a-f]{7,64}$' }
-              synced: { type: boolean }
               reran: { type: boolean }
               reason: { type: string, pattern: '\S' }
               # On return, what the build queue's next round starts from; on ask, what a
@@ -120,19 +118,15 @@ nodes:
                   if_unanswered: &if_unanswered { type: string, pattern: '\S' }
                   links: &links { type: array, items: { type: string } }
                 required: [what, why, recommendation, choices, if_unanswered, links]
-            required: [number, action, class, head, synced, reran, reason, brief, attention]
-        # The pull request this run's delta review covers, and the report it continues
-        # from; both empty when no review is due. The patterns refuse a placeholder
-        # such as a quoted empty string, which `when:` would read as a review to run.
-        review_url: { type: string, pattern: '^(https://\S+)?$' }
-        review_prior: { type: string, pattern: '^(\S+\.md)?$' }
-        dev:
+            required: [number, action, class, head, reran, reason, brief, attention]
+        # The default branch as the sweep found it; an attention item only when its red holds merges.
+        base:
           type: object
           additionalProperties: false
           properties:
-            state: { type: string, enum: [unchecked, green, red] }
-            rerun: { type: string, enum: [none, green, red] }
             summary: { type: string }
+            # True when the sweep re-ran the default branch's failed jobs this run.
+            reran: { type: boolean }
             attention:
               type: [object, 'null']
               additionalProperties: false
@@ -156,33 +150,22 @@ nodes:
                 if_unanswered: *if_unanswered
                 links: *links
               required: [what, why, recommendation, choices, if_unanswered, links]
-          required: [state, rerun, summary, attention]
+          required: [summary, reran, attention]
         summary: { type: string }
-      required: [decisions, review_url, review_prior, dev, summary]
-
-  # The sweep left the checkout at the head of the pull request it names, so the
-  # review's own head check holds.
-  - id: review
-    include: archon-review-block
-    depends_on: [sweep]
-    when: "$sweep.output.review_url != ''"
-    with:
-      scope: "$sweep.output.review_url"
-      prior_report: "$sweep.output.review_prior"
+      required: [decisions, base, summary]
 
   # Checks the decisions, reads back every pull request and records one decision per
-  # item; raises at most one attention item.
-  # all_done: a failed delta review must not lose the record of what the sweep already
-  # merged; a failed facts or sweep still fails this node through its bindings.
+  # item; raises at most one attention item. It also runs when no sweep was due.
   - id: record
     script: record
     runtime: bun
-    depends_on: [facts, sweep, review]
-    trigger_rule: all_done
+    depends_on: [facts, sweep]
+    trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
       items: { from: "$facts.output.items" }
       settled: { from: "$facts.output.settled" }
+      base: { from: "$facts.output.base" }
       sweep: { from: "$sweep.output", if_skipped: null }
     output_format:
       type: object
@@ -199,7 +182,7 @@ nodes:
               id: { type: string }
               label: { type: string }
             required: [id, label]
-        class: { type: string, enum: ['', pr, dev] }
+        class: { type: string, enum: ['', pr, base] }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
       required: [merged, summary, attention, options, class, asked]

@@ -3,6 +3,7 @@
  */
 import { cancel } from '@clack/prompts';
 import { createLogger } from '@archon/paths';
+import type { PlatformSelection } from './setup-platform-selection';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 export function getLog(): ReturnType<typeof createLogger> {
@@ -37,11 +38,7 @@ export interface SetupConfig {
      *  model is collected in collectPiConfig). */
     defaultModel?: string;
   };
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
+  platforms: PlatformSelection;
   github?: GitHubConfig;
   telegram?: TelegramConfig;
   slack?: SlackConfig;

@@ -248,7 +248,7 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
     const before = await snapshot(env.pluginsDir);
     const result = await run(env, 'update', `${ID}@v4.0.0`);
     expect(result.code).toBe(1);
-    expect(result.err).toContain('does not match checksums.txt');
+    expect(result.err).toContain('does not match checksums.txt of release v4.0.0');
     expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 

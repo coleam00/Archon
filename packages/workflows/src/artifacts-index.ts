@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { prepareArtifactParent, writeArtifactFile } from './artifact-writes';
+import { readArtifactFile, writeArtifactFile } from './artifact-writes';
 import { join, sep } from 'node:path';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
@@ -77,17 +77,12 @@ function sameArtifactOwner(left: ArtifactOwner, right: ArtifactOwner): boolean {
 
 /**
  * Read the owner recorded in an existing `.meta.json`, or `undefined` if the
- * file is missing or corrupt. Used only by the collision guard in
- * `writeNodeArtifact`. Real filesystem failures remain visible to the caller.
+ * file is missing, corrupt, or a link under the container scope. Used only by the
+ * collision guard in `writeNodeArtifact`. Real filesystem failures remain visible.
  */
 async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | undefined> {
-  let rawMetadata: string;
-  try {
-    rawMetadata = await readFile(metaPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw err;
-  }
+  const rawMetadata = await readArtifactFile(metaPath);
+  if (rawMetadata === undefined) return undefined;
 
   try {
     const parsed = nodeArtifactOwnerSchema.safeParse(JSON.parse(rawMetadata));
@@ -128,7 +123,6 @@ export async function writeNodeArtifact(
   };
   const stem = artifactStem(owner);
   const metaPath = join(nodesDir, `${stem}.meta.json`);
-  await prepareArtifactParent(metaPath);
 
   // Collision guard: top-level safeSegment() can collapse distinct node ids (for
   // example `a.b` and `a_b`), and loop digests retain an ownership check rather

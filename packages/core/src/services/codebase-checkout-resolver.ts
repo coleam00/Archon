@@ -11,7 +11,7 @@ import {
 
 export interface CodebaseCheckoutResolverDeps {
   findCodebaseByDefaultCwd: (cwd: string) => Promise<Codebase | null>;
-  listCodebases: () => Promise<readonly Codebase[]>;
+  listCodebaseClaims: () => Promise<readonly Codebase[]>;
   getCanonicalRepoPath: (path: string) => Promise<string>;
   getGitCheckoutIdentity: (path: string) => Promise<GitCheckoutIdentity>;
 }
@@ -26,7 +26,7 @@ export interface CodebaseCheckoutResolverDeps {
  */
 export async function findCodebaseForCheckoutPath(
   cwd: string,
-  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> &
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebaseClaims'> &
     Partial<Pick<CodebaseCheckoutResolverDeps, 'getCanonicalRepoPath' | 'getGitCheckoutIdentity'>>
 ): Promise<Codebase | null> {
   cwd = await canonicalizeProjectPath(cwd);
@@ -48,7 +48,7 @@ export async function findCodebaseForCheckoutPath(
 
   const checkoutIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(cwd);
   const matches: Codebase[] = [];
-  for (const codebase of await deps.listCodebases()) {
+  for (const codebase of await deps.listCodebaseClaims()) {
     // A relative stored path would resolve against this process's directory.
     if (codebase.kind === 'folder' || !isAbsolute(codebase.default_cwd)) continue;
     try {
@@ -75,7 +75,7 @@ export async function findCodebaseForCheckoutPath(
 
 export async function resolveCodebaseForPath(
   cwd: string,
-  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> & {
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebaseClaims'> & {
     findCodebaseByPathPrefix: (cwd: string) => Promise<Codebase | null>;
   }
 ): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {

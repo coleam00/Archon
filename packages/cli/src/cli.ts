@@ -49,6 +49,7 @@ if (inheritedInstallContext) {
 import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
+import { escapeRunJobIfRequested } from './utils/run-job-escape';
 import { rejectConfigOutsideRun, RESUME_RUN_CONFIG_CONFLICT } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -589,4 +590,5 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
 // that swaps this call for a direct `process.exit` is caught by the
 // static-contract test in `safe-console.test.ts`, which reads this file
 // as text.
+await escapeRunJobIfRequested(process.argv.slice(2), inheritedEnv);
 withDrainedExit(main);

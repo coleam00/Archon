@@ -20,6 +20,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
+import { isNodeContextResume, type NodeContext } from '../schemas';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
@@ -327,4 +328,16 @@ export function sessionCheckpoint(
       provider_session_id: sessionId,
     });
   };
+}
+
+/**
+ * A loop_group body node that resumes a source outside its own body owns a private
+ * session cursor continued across iterations. A same-body source is forked afresh in
+ * every iteration, so its consumer never owns a cursor.
+ */
+export function ownsBodySessionCursor(
+  node: { context?: NodeContext },
+  bodyNodeIds: ReadonlySet<string>
+): boolean {
+  return isNodeContextResume(node.context) && !bodyNodeIds.has(node.context.resume);
 }

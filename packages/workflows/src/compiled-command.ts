@@ -115,6 +115,8 @@ export const COMPOSED_NODE = Symbol('archon.composed-node');
  * Every descendant carries a copy because load-time expansion removes the include node.
  */
 interface ComposedBlockBoundaryBase {
+  /** Number of loop bodies crossed since this include was authored. */
+  loopDepth?: number;
   dependsOn: string[];
   entryTriggerRules: [TriggerRule, ...TriggerRule[]];
   when?: string;
