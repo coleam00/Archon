@@ -428,7 +428,8 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       const workflowRun = makeWorkflowRun(`cleanup-${kind}`);
       const snapshots = new Map<string, Parameters<IWorkflowStore['setToolCallAttention']>[2]>();
       let firstStream: string | undefined;
-      let failures = 0;
+      const failedPhases: string[] = [];
+      let phase = 'turn';
       let recovered = false;
       let finishFirst!: () => void;
       const firstPublished = new Promise<void>(resolve => {
@@ -445,7 +446,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       store.setToolCallAttention.mockImplementation(async (_runId, streamId, calls) => {
         if (firstStream === undefined && calls.length) firstStream = streamId;
         if (streamId === firstStream && calls.length === 0 && !recovered) {
-          failures++;
+          failedPhases.push(phase);
           throw new Error('Transient cleanup outage');
         }
         snapshots.set(streamId, calls);
@@ -458,6 +459,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         await firstPublished;
         yield { type: 'result', sessionId: 's', structuredOutput: { done: true } };
         yield { type: 'tool_call_update', toolCallId: 'first', status: 'completed' };
+        phase = 'closing';
         yield { type: 'settled', reason: 'turn_complete' };
       });
       mockSendQueryDag.mockImplementationOnce(async function* () {
@@ -522,7 +524,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       );
       try {
         await secondStarted;
-        expect(failures).toBe(4);
+        expect(new Set(failedPhases)).toEqual(new Set(['turn', 'closing']));
         expect(snapshots.get(firstStream!)).toEqual([]);
         expect(workflowRun.status).toBe('running');
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
