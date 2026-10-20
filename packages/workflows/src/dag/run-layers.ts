@@ -165,7 +165,7 @@ async function admitNode(
     node,
     ctx.nodeOutputs,
     resolveRunInputs(ctx.workflowRun),
-    isCachedPriorSuccess
+    { evaluateEntryBoundary: isCachedPriorSuccess, loopPrevOutputs: ctx.loopPrevOutputs }
   );
 
   // 0. Skip if this node completed successfully in a prior run (resume path),

@@ -100,8 +100,12 @@ export function checkComposedBlockBoundaries(
   node: DagNode,
   nodeOutputs: Map<string, NodeOutput>,
   inputs?: Record<string, JsonValue>,
-  evaluateEntryBoundary = false
+  options: {
+    evaluateEntryBoundary?: boolean;
+    loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
+  } = {}
 ): TriggerRuleDecision {
+  const { evaluateEntryBoundary = false } = options;
   for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
     if (boundary.isEntry && !evaluateEntryBoundary) continue;
 
@@ -118,7 +122,7 @@ export function checkComposedBlockBoundaries(
 
     if (boundary.when !== undefined) {
       try {
-        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs);
+        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs, options);
         if (!condition.parsed) {
           return {
             decision: 'skip',

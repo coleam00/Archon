@@ -28,6 +28,8 @@ import {
   makeWorkflowRun,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
+import { checkComposedBlockBoundaries } from './trigger-rule';
+import { resolvedBodyNodes } from '../graph-plan';
 import { dryRunWorkflow } from '../dry-run';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import type {
@@ -334,6 +336,116 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     if (typeof output === 'object') throw new Error('Unexpected source release');
     return { events: eventList(mockDeps), output };
   }
+
+  function loopGatedWorkflow(when: string): ResolvedWorkflow {
+    const block = buildWf('block', [
+      { id: 'entry', bash: 'echo entry' },
+      { id: 'tail', bash: 'echo tail', depends_on: ['entry'], trigger_rule: 'all_done' },
+    ]);
+    const parent = buildWf('loop-gated', [
+      {
+        id: 'cycle',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 2,
+          nodes: [
+            { id: 'work', bash: 'echo go' },
+            { id: 'inc', include: 'block', depends_on: ['work'], when },
+            {
+              id: 'end',
+              bash: 'echo DONE',
+              when: "$LOOP_PREV.work.output == 'go'",
+              depends_on: ['inc'],
+              trigger_rule: 'all_done',
+            },
+          ],
+        },
+      },
+    ]);
+    const expanded = expandWorkflowIncludes(
+      new Map([
+        ['block', block],
+        ['loop-gated', parent],
+      ])
+    );
+    expect(expanded.errors).toEqual([]);
+    const workflow = expanded.workflows.get('loop-gated');
+    if (!workflow) throw new Error('loop-gated did not expand');
+    return workflow;
+  }
+
+  for (const value of ['go', '']) {
+    it(`shares loop scope across include entries and descendants for previous value '${value}'`, async () => {
+      const when = `$LOOP_PREV.work.output == '${value}'`;
+      const workflow = loopGatedWorkflow(when);
+      const { events } = await executeExpanded([...workflow.nodes], `loop-gated-${value}`);
+      const dryRun = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: testDir,
+        stubs: { work: 'go', inc__entry: 'entry', inc__tail: 'tail', end: 'DONE' },
+      });
+      expect(dryRun.outcome).toBe('completed');
+      for (const id of ['entry', 'tail']) {
+        const expected: Array<'skipped' | 'completed'> =
+          value === 'go' ? ['skipped', 'completed'] : ['completed', 'skipped'];
+        const nodeEvents = events.filter(
+          event =>
+            event.step_name === `cycle.inc__${id}` &&
+            ['node_completed', 'node_skipped'].includes(event.event_type)
+        );
+        expect(nodeEvents.map(event => event.event_type.replace('node_', ''))).toEqual(expected);
+        expect(nodeEvents.find(event => event.event_type === 'node_skipped')?.data?.cause).toEqual({
+          kind: 'condition',
+          expr: when,
+        });
+        const trace = dryRun.trace.filter(entry => entry.nodeId === `inc__${id}`);
+        expect(trace.map(entry => entry.state)).toEqual(
+          expected.map(state => (state === 'completed' ? 'stubbed' : state))
+        );
+        expect(trace.find(entry => entry.state === 'skipped')?.cause).toEqual({
+          kind: 'condition',
+          expr: when,
+        });
+      }
+    });
+  }
+
+  it('checks cached include entries against the supplied previous-iteration snapshot', () => {
+    const when = "$LOOP_PREV.work.output == 'go'";
+    const workflow = loopGatedWorkflow(when);
+    const group = workflow.nodes[0];
+    if (group?.kind !== 'loop_group') throw new Error('expected loop group');
+    const entry = resolvedBodyNodes(group.loop_group).find(node => node.id === 'inc__entry');
+    if (!entry) throw new Error('expected expanded entry');
+    const outputs = new Map([['work', { state: 'completed' as const, output: 'current' }]]);
+    for (const previous of ['go', 'stop', undefined]) {
+      const loopPrevOutputs = new Map(
+        previous === undefined ? [] : [['work', { state: 'completed' as const, output: previous }]]
+      );
+      expect(
+        checkComposedBlockBoundaries(entry, outputs, undefined, {
+          evaluateEntryBoundary: true,
+          loopPrevOutputs,
+        })
+      ).toEqual(
+        previous === 'go'
+          ? { decision: 'run' }
+          : {
+              decision: 'skip',
+              cause: { kind: 'condition', expr: when },
+            }
+      );
+    }
+    expect(
+      checkComposedBlockBoundaries(entry, outputs, undefined, {
+        evaluateEntryBoundary: true,
+      })
+    ).toEqual({
+      decision: 'skip',
+      cause: { kind: 'condition_parse_error', expr: when },
+    });
+  });
 
   it('skips every composed node when the include condition is false', async () => {
     const { events } = await executeExpanded(
