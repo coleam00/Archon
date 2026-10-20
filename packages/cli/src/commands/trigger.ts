@@ -157,22 +157,6 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
   );
 }
 
-async function loadEventInputs(
-  path: string | undefined
-): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
-  if (path === undefined) return undefined;
-  try {
-    return z
-      .record(z.string().min(1), jsonValueSchema)
-      .parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
-  } catch (error) {
-    throw new Error(
-      '--inputs must name a readable file containing a JSON object with non-empty input names.',
-      { cause: error }
-    );
-  }
-}
-
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -181,7 +165,19 @@ async function triggerFire(
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
     throw new Error('--delivery-id must not be empty.');
-  const eventInputs = await loadEventInputs(options.inputs);
+  let eventInputs: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
+  if (options.inputs !== undefined) {
+    try {
+      eventInputs = z
+        .record(z.string().min(1), jsonValueSchema)
+        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
+    } catch (error) {
+      throw new Error(
+        '--inputs must name a readable file containing a JSON object with non-empty input names.',
+        { cause: error }
+      );
+    }
+  }
   const config = await loadTimerConfig(options.config);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
