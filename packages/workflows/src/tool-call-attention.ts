@@ -5,20 +5,31 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import type { IWorkflowStore } from './store';
-import type { ToolCallAttention } from './schemas/workflow-run';
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  type ToolCallAttention,
+} from './schemas/workflow-run';
 
 interface ToolCallAttentionOptions {
-  store: Pick<IWorkflowStore, 'setToolCallAttention'>;
+  store: Pick<IWorkflowStore, 'setToolCallAttention' | 'getWorkflowRun'>;
   runId: string;
   nodeId: string;
   provider: string;
   reportedBackgroundWork: boolean;
   thresholdMs: number;
+  idleThresholdMs?: number;
   env: Readonly<Record<string, string | undefined>>;
   protectedEnvKeys?: readonly string[];
   protectedCredentialValues?: readonly string[];
   now?: () => number;
   streamId?: string;
+}
+
+/** A stream with published attention, and when its oldest active stall was raised. */
+export interface StreamStall {
+  streamId: string;
+  raisedAt: string;
 }
 
 const terminalSubtasks: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
@@ -50,7 +61,9 @@ function createToolCallAttention(
   options: ToolCallAttentionOptions,
   retainCleanup: (retry: () => Promise<boolean>) => void
 ): {
-  hasOpenTools(): boolean;
+  progress(at: number): void;
+  /** This stream's id and when its current stall was raised, while the run row shows one. */
+  stall(): StreamStall | undefined;
   observe(event: ProviderEvent): Promise<void>;
   refresh(): Promise<void>;
   clear(): Promise<void>;
@@ -67,9 +80,25 @@ function createToolCallAttention(
   const tools = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const subtasks = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const parents = new Map<string, string>();
-  let persisted = '[]';
+  const openedAt = new Date(now()).toISOString();
+  const turn = {
+    streamId,
+    nodeId: options.nodeId,
+    provider: options.provider,
+    kind: 'provider_turn' as const,
+    toolCallId: `turn:${streamId}`,
+    name: 'provider turn',
+    startedAt: openedAt,
+    lastProgressAt: openedAt,
+    thresholdMs: Math.ceil(options.idleThresholdMs ?? 0),
+  };
+  let turnRaisedAt: string | undefined;
+  let closed = false;
+  let persisted: string | undefined = '[]';
+  let stall: StreamStall | undefined;
 
-  async function persist(): Promise<boolean> {
+  function stalledCalls(): ToolCallAttention[] {
+    if (closed) return [];
     const time = now();
     const calls: ToolCallAttention[] = [];
     const independentSubtasks = [...subtasks]
@@ -88,15 +117,45 @@ function createToolCallAttention(
           calls.push({ ...tool, raisedAt: tool.raisedAt });
         }
       }
-    const snapshot = JSON.stringify(calls);
+    if (
+      tools.size === 0 &&
+      subtasks.size === 0 &&
+      turn.thresholdMs > 0 &&
+      (turnRaisedAt !== undefined || time - Date.parse(turn.lastProgressAt) >= turn.thresholdMs)
+    ) {
+      turnRaisedAt ??= new Date(time).toISOString();
+      calls.push({ ...turn, raisedAt: turnRaisedAt });
+    }
+    return calls;
+  }
+
+  async function persist(): Promise<boolean> {
+    const calls = stalledCalls();
+    const raisedAt = calls.map(call => call.raisedAt).sort()[0];
+    if (stall?.raisedAt !== raisedAt) stall = undefined;
+    const snapshot = JSON.stringify(toolCallAttentionArraySchema.parse(calls));
     if (snapshot === persisted) return true;
     try {
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
-      if (changed || calls.length === 0) {
+      let confirmed = changed || calls.length === 0;
+      if (!confirmed) {
+        // A lost COMMIT response can reject a write the database already committed.
+        const run = await options.store.getWorkflowRun(options.runId);
+        const stored = toolCallAttentionArraySchema.safeParse(
+          run?.metadata[TOOL_CALL_ATTENTION_METADATA_KEY]
+        );
+        confirmed =
+          (run?.status === 'running' || run?.status === 'paused') &&
+          stored.success &&
+          JSON.stringify(stored.data.filter(call => call.streamId === streamId)) === snapshot;
+      }
+      if (confirmed) {
         persisted = snapshot;
+        stall = raisedAt === undefined ? undefined : { streamId, raisedAt };
         return true;
       }
     } catch {
+      persisted = undefined;
       // Observability must never turn live work into node failure.
       createLogger('workflow.tool-attention').warn(
         { runId: options.runId, nodeId: options.nodeId, streamId, category: 'persistence' },
@@ -111,7 +170,11 @@ function createToolCallAttention(
   };
 
   return {
-    hasOpenTools: () => tools.size > 0,
+    progress(at): void {
+      turn.lastProgressAt = new Date(at).toISOString();
+      turnRaisedAt = undefined;
+    },
+    stall: () => stall,
     async observe(event: ProviderEvent): Promise<void> {
       if (event.type === 'tool_call' && !tools.has(event.toolCallId)) {
         const at = new Date(now()).toISOString();
@@ -166,6 +229,7 @@ function createToolCallAttention(
     },
     refresh,
     async clear(): Promise<void> {
+      closed = true;
       tools.clear();
       subtasks.clear();
       parents.clear();

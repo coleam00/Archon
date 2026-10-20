@@ -576,7 +576,7 @@ an identifier and `node_suspended` keeps it active, while `node_completed`, `nod
 `node_skipped_prior_success` remove it. Retries re-add the node in their new start position. This
 is node lifecycle state, not evidence that a process owner is alive.
 
-Tool-call advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running`; every overdue tool shows its node, provider, sanitized command/title, and elapsed/no-progress duration. The default is 30 minutes without reported progress; see [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
+Tool-call and silent-turn advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running` or `paused`; stalled siblings appear beside a paused node's primary attention as `stalledCalls`. Every stalled entry shows its node, provider, sanitized command/title, and elapsed/no-progress duration. Reported work defaults to 30 minutes without progress; silent turns use `idle_timeout`. See [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 
 ### `workflow runs`
 
@@ -609,10 +609,14 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
 - `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
   is `terminal`, `awaiting_response` (an approval or response gate), `attention` (a
   `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
-  usage limit, or a rate limit that outlasted its retries; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
+  usage limit, or a rate limit that outlasted its retries; the run continues by itself at `resumeAt`), `blocked_on_child` (waiting on the named child), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
-  work with overdue provider tools or reported subtasks), or `unreadable`.
-  It is read from the run row alone.
+  work with a silent provider turn, overdue tools or reported subtasks), or `unreadable`.
+  A paused primary reason can also carry `stalledCalls` for concurrent live siblings,
+  with their node, provider, work, timestamps, `elapsedMs` and `stalledForMs`.
+  `stalled_tool_calls` carries those descriptors in `calls` with status `running` or
+  `paused`. It is read from the run row alone; blocked parents retain child pointers
+  even when they have their own stalled siblings.
 
 The node events for every listed run are read in one query, so the cost does not grow with
 one query per run.
@@ -877,7 +881,18 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+A silent open turn or overdue reported work returns `result: "attention"`.
+With no primary paused reason, `attention.kind: "stalled_tool_calls"` carries
+`status: "running"` or `"paused"`, the affected `runId`, and `calls` naming nodes,
+providers, work, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`.
+A paused primary reason, such as a gate or usage limit, instead carries sibling stalls
+in `attention.stalledCalls`; its primary kind and answer commands remain unchanged.
+Exit `0` means attention was found; it does not mean the run completed.
+Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) records a
+request to end the stalled attempt, and `workflow cancel` stops the whole run.
+The stall itself grants no approve or resume action. Reattaching returns it immediately
+while active. A parent blocked on children reports its own stalled siblings first,
+using the parent's run ID; otherwise wait follows the children and names the affected child.
 
 ```bash
 archon workflow wait <run-id>
@@ -1009,9 +1024,10 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
-`item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
-item of the child that holds the pause, or to its own `unreadable` item when its sub-run
-tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
+`item` is null when there is no queue item. A parent blocked on sub-runs with its own
+stalled work returns its own `stalled_tool_calls` item, so recovery targets the parent run.
+Otherwise it resolves to the item of the child that holds the pause, or to its own
+`unreadable` item when its sub-run tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
@@ -1239,6 +1255,47 @@ strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+
+### `workflow end-turn`
+
+Record a request to end the AI turns named by a run's `stalled_tool_calls.calls` or
+concurrent `stalledCalls` advisory.
+
+```bash
+archon workflow end-turn <run-id>
+archon workflow end-turn <run-id> --json
+archon workflow wait <run-id> --json
+```
+
+An open provider turn with no events for its node's `idle_timeout` (30 minutes by
+default) raises attention with the node, provider, and idle duration. Every chunk,
+including thinking and result chunks, renews that interval. Reported tools and background
+work use `workflows.toolCallAttentionMs` instead, with their own progress timestamps and
+sanitized descriptions. Silence never ends the turn automatically.
+
+The command records the stream ids and stall timestamps the operator observed. A live
+owner checks about every ten seconds and aborts a matching turn only if that stall is
+still active. The attempt fails as `timeout`; its retry policy decides whether to start
+a fresh attempt. A recovered stream or a later attempt is not ended by an old request.
+A paused run can have live streaming siblings; their stalls can also be ended without
+answering its gate. Inspect `workflow get <run-id> --json` for their
+`attention.stalledCalls`, including node and idle duration; the gate remains the paused
+run's primary attention. The attention queue carries the same sibling calls. A paused
+wait with no primary attention reports `stalled_tool_calls` with `status: "paused"`.
+For a parent blocked on children, wait and queue views report its stalled siblings
+before following the children; `workflow get` retains the child pointers.
+
+Exit `0` means the request was recorded, not that an owner accepted it or that the run
+progressed. The owner might exit or the run might finish before it reads the request.
+Use `workflow wait <run-id>` to inspect the next attention or terminal result; it can
+return the same advisory while recovery is pending. An `owner_lost` result requires
+operator recovery of the run's ownership. Nothing is killed by the CLI itself.
+
+Exit `1` refuses an unknown run, a run outside `running` or `paused`, no stalled work,
+or unreadable attention. `--json` prints
+`{ ok: true, runId, action: "end_turn", requestRecorded: true, nodes }`, or
+`{ ok: false, runId, action: "end_turn", error }` with `error` one of `not_found`,
+`not_running`, `nothing_stalled`, and `unreadable_attention`.
 
 ### `workflow respond`
 

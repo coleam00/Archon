@@ -322,6 +322,27 @@ function formatTimestamp(val: Date | string): string {
   return typeof val === 'string' ? val : val.toISOString();
 }
 
+function formatStalledCalls(runId: string, attention: ReturnType<typeof runAttention>): string[] {
+  const lines: string[] = [];
+  const stalledCalls =
+    attention?.kind === 'stalled_tool_calls'
+      ? attention.calls
+      : attention && 'stalledCalls' in attention
+        ? (attention.stalledCalls ?? [])
+        : [];
+  if (stalledCalls.length > 0) {
+    lines.push('provider turns or reported work need attention; work remains running');
+    for (const call of stalledCalls)
+      lines.push(
+        `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
+      );
+    lines.push(
+      `inspect with archon workflow logs ${runId}; archon workflow end-turn ${runId} records a request to end the stalled attempt; workflow wait checks progress or owner_lost, or explicitly cancel`
+    );
+  }
+  return lines;
+}
+
 function formatRunDetail(run: WorkflowRun): string {
   const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
   if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
@@ -335,14 +356,7 @@ function formatRunDetail(run: WorkflowRun): string {
   const attention = runAttention(run);
   if (attention?.kind === 'awaiting_response' || attention?.kind === 'attention')
     parts.push(`occurrence: ${attention.occurrence}`);
-  if (attention?.kind === 'stalled_tool_calls') {
-    parts.push('tool calls need attention; work remains running');
-    for (const call of attention.calls)
-      parts.push(
-        `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
-      );
-    parts.push(`inspect with archon workflow logs ${run.id}, or explicitly cancel`);
-  }
+  parts.push(...formatStalledCalls(run.id, attention));
   if (attention?.kind === 'attention') {
     parts.push(`needs attention: ${attention.message.slice(0, 300)}`);
     parts.push(`form: ${attention.form}`);

@@ -27,6 +27,17 @@ import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
+import {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  toolCallAttentionSchema,
+} from './tool-call-attention';
+export {
+  TOOL_CALL_ATTENTION_METADATA_KEY,
+  toolCallAttentionArraySchema,
+  toolCallAttentionSchema,
+  type ToolCallAttention,
+} from './tool-call-attention';
 import { isAbsolute } from 'path';
 
 // ---------------------------------------------------------------------------
@@ -1235,25 +1246,6 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 // RunAttention — "what does this run need from outside, if anything"
 // ---------------------------------------------------------------------------
 
-export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
-
-export const toolCallAttentionSchema = z
-  .object({
-    streamId: z.string().min(1),
-    nodeId: z.string().min(1),
-    provider: z.string().min(1),
-    toolCallId: z.string().min(1),
-    name: z.string().min(1).max(1024),
-    title: z.string().max(1024).optional(),
-    startedAt: z.iso.datetime(),
-    lastProgressAt: z.iso.datetime(),
-    raisedAt: z.iso.datetime(),
-    thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  })
-  .strict();
-export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
-export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
-
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
 export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string() });
 export type GateAddress = z.infer<typeof gateAddressSchema>;
@@ -1288,18 +1280,21 @@ const terminalAttentionShape = {
   status: terminalWorkflowRunStatusSchema,
 };
 
+export const stalledCallsSchema = z.array(
+  toolCallAttentionSchema.extend({ elapsedMs: z.number(), stalledForMs: z.number() })
+);
+
 const nonTerminalRunAttentionSchemas = [
   z.object({
     kind: z.literal('stalled_tool_calls'),
     runId: z.string(),
-    status: z.literal('running'),
-    calls: z.array(
-      toolCallAttentionSchema.extend({ elapsedMs: z.number(), stalledForMs: z.number() })
-    ),
+    status: z.enum(['running', 'paused']),
+    calls: stalledCallsSchema,
   }),
   z.object({
     kind: z.literal('awaiting_response'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     respondTo: gateAddressSchema,
     message: z.string(),
     occurrence: z.string(),
@@ -1307,6 +1302,7 @@ const nonTerminalRunAttentionSchemas = [
   z.object({
     kind: z.literal('attention'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     nodeId: z.string(),
     message: z.string(),
     occurrence: z.string(),
@@ -1316,24 +1312,28 @@ const nonTerminalRunAttentionSchemas = [
   z.object({
     kind: z.literal('usage_limit'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     nodeId: z.string(),
     resumeAt: z.string().datetime(),
   }),
   z.object({
     kind: z.literal('blocked_on_child'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     childRunId: z.string(),
     nodeId: z.string(),
   }),
   z.object({
     kind: z.literal('blocked_on_children'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     nodeId: z.string(),
     childRunIds: z.array(z.string()),
   }),
   z.object({
     kind: z.literal('unreadable'),
     runId: z.string(),
+    stalledCalls: stalledCallsSchema.optional(),
     reason: runAttentionUnreadableReasonSchema,
     detail: z.string(),
   }),
@@ -1363,16 +1363,10 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
  * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
- * `blocked_on_child` is deliberately NOT an answer to "does someone need to respond".
- * A parent pauses blocked on a child whether that child is sitting on its own gate
- * or merely still running (`pauseParentOnChild` is reached from two sites in
- * `executeWorkflowNode`, the second on a child that is `paused`, `running`, OR `pending`),
- * and the parent row cannot tell those apart. Claiming `awaiting_response` here would
- * wake a host for normal progress; returning null would strand one when the child
- * really is on a gate. So the projection reports what it knows — this run is blocked
- * on that child — and a reader with database access resolves the chain.
- * `blocked_on_children` is the same for a fan-out node waiting on several children:
- * each child is its own queue item, never the parent's.
+ * A parent blocked on children cannot tell whether those children need an answer.
+ * Readers with store access resolve those pointers through `resolveRunAttention`.
+ * A stalled live sibling remains visible beside the pointer and puts the parent in
+ * the queue until its own stalled work recovers; otherwise the child owns the item.
  */
 export type RunAttention = z.infer<typeof runAttentionSchema>;
 
@@ -1388,7 +1382,7 @@ function unreadableAttention(
   runId: string,
   reason: RunAttentionUnreadableReason,
   detail: string
-): RunAttention {
+): Extract<RunAttention, { kind: 'unreadable' }> {
   return { kind: 'unreadable', runId, reason, detail };
 }
 
@@ -1402,49 +1396,39 @@ export function gateOccurrence(approval: Pick<ApprovalContext, 'nodeId' | 'pause
 }
 
 /**
- * The single derivation of "what does this run need from outside, if anything".
- *
- * No database or I/O. The clock computes display durations only. The run row is
- * the authority: attention is never derived from the event log. Every write that
- * changes it commits an event, which the attention watch uses only as a wake, because
- * a delivered event can later be retracted by recovery.
- *
- * Consumed by `assertApprovable`/`assertRejectable`, the server approve/reject/respond
- * routes, the orchestrator's paused-gate prompt section, `waitForRunAttention`, and the
- * attention queue (`attention-queue.ts`).
- * Before this existed each of those re-derived the same four steps independently, in
- * three different orders, and the load-bearing "act on the child, not this run"
- * conclusion survived only inside an error string.
+ * Derive operator attention from the run row, including live siblings of a paused node.
+ * The clock computes display durations only; persisted attention owns the occurrence.
+ * Events wake readers, but the row remains authoritative because recovery can retract them.
  */
 export function runAttention(run: RunAttentionInput, now = Date.now()): RunAttention | null {
   if (isTerminalRunStatus(run.status)) {
     return { kind: 'terminal', runId: run.id, status: run.status, at: run.completed_at ?? null };
   }
-  if (run.status === 'running') {
-    const raw = run.metadata?.[TOOL_CALL_ATTENTION_METADATA_KEY];
-    if (raw === undefined) return null;
-    const parsed = toolCallAttentionArraySchema.safeParse(raw);
-    if (!parsed.success)
-      return unreadableAttention(
-        run.id,
-        'malformed_tool_call_attention',
-        'running with unreadable tool-call attention'
-      );
-    return parsed.data.length === 0
-      ? null
-      : {
-          kind: 'stalled_tool_calls',
-          runId: run.id,
-          status: 'running',
-          calls: parsed.data.map(call => ({
-            ...call,
-            elapsedMs: Math.max(0, now - Date.parse(call.startedAt)),
-            stalledForMs: Math.max(0, now - Date.parse(call.lastProgressAt)),
-          })),
-        };
-  }
-  if (run.status !== 'paused') return null;
+  if (run.status !== 'running' && run.status !== 'paused') return null;
+  const primary = run.status === 'paused' ? pausedRunAttention(run) : null;
+  const raw = run.metadata?.[TOOL_CALL_ATTENTION_METADATA_KEY];
+  if (raw === undefined) return primary;
+  const parsed = toolCallAttentionArraySchema.safeParse(raw);
+  if (!parsed.success)
+    return unreadableAttention(
+      run.id,
+      'malformed_tool_call_attention',
+      `${run.status} with unreadable tool-call attention`
+    );
+  const calls = parsed.data.map(call => ({
+    ...call,
+    elapsedMs: Math.max(0, now - Date.parse(call.startedAt)),
+    stalledForMs: Math.max(0, now - Date.parse(call.lastProgressAt)),
+  }));
+  if (calls.length === 0) return primary;
+  return primary
+    ? { ...primary, stalledCalls: calls }
+    : { kind: 'stalled_tool_calls', runId: run.id, status: run.status, calls };
+}
 
+function pausedRunAttention(
+  run: RunAttentionInput
+): Exclude<RunAttention, { kind: 'terminal' | 'stalled_tool_calls' }> | null {
   // A release is written only by the running -> paused transition and cleared on resume,
   // so while it is present it is why the run is paused; any gate or wait beside it is
   // history. The host continues a released run, except a container run.
@@ -1477,6 +1461,12 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
     };
   }
 
+  return pausedGateAttention(run);
+}
+
+function pausedGateAttention(
+  run: RunAttentionInput
+): Exclude<RunAttention, { kind: 'terminal' | 'stalled_tool_calls' }> | null {
   const raw = run.metadata?.approval;
   if (raw === undefined) {
     // No gate recorded. A durable `wait:` owns its own resumption. Anything else is a
@@ -1559,15 +1549,14 @@ export function runAttention(run: RunAttentionInput, now = Date.now()): RunAtten
 /** The run-attention of a run the attention queue lists. */
 export type QueuedRunAttention = Extract<
   RunAttention,
-  { kind: 'attention' | 'awaiting_response' | 'usage_limit' | 'unreadable' }
+  { kind: 'attention' | 'awaiting_response' | 'usage_limit' | 'unreadable' | 'stalled_tool_calls' }
 >;
 
 /**
  * The run-attention that puts `run` in the attention queue, if any: a paused run with a
  * pause someone must answer, a paused run waiting for a provider usage or rate limit,
- * which an operator may want to see or cancel, or a paused run nothing can read or will
- * continue, which
- * needs someone to look. The queue's list and single read both build items by this one rule.
+ * which an operator may want to see or cancel, a live sibling with stalled work, or a
+ * paused run nothing can read or will continue, which needs someone to look. The queue's list and single read both build items by this one rule.
  */
 export function queuedRunAttention(
   run: RunAttentionInput,
@@ -1575,6 +1564,17 @@ export function queuedRunAttention(
 ): QueuedRunAttention | undefined {
   if (run.status !== 'paused' || attention === null) return undefined;
   switch (attention.kind) {
+    case 'blocked_on_child':
+    case 'blocked_on_children':
+      return attention.stalledCalls
+        ? {
+            kind: 'stalled_tool_calls',
+            runId: run.id,
+            status: 'paused',
+            calls: attention.stalledCalls,
+          }
+        : undefined;
+    case 'stalled_tool_calls':
     case 'attention':
     case 'awaiting_response':
     case 'usage_limit':

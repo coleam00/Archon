@@ -83,6 +83,9 @@
       "src/commands/workflow-inspect.test.ts"
     ],
     [
+      "src/commands/workflow-end-turn.test.ts"
+    ],
+    [
       "src/commands/workflow-runs.test.ts"
     ],
     [

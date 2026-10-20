@@ -15,7 +15,8 @@ provider-limit wait retries automatically at its deadline, the provider's `reset
 computed backoff, and pauses again if the limit persists. A person, an agent,
 or a workflow can list the items, follow them as a stream, and read one, all as JSON.
 Branch on `kind` before acting: only `attention` and `awaiting_response` accept answers;
-`usage_limit` needs no answer, and `unreadable` needs inspection. A single-run read returns
+`usage_limit` needs no answer; `stalled_tool_calls` and `unreadable` need inspection.
+Stalled live siblings can also appear in `stalledCalls` beside a primary pause. A single-run read returns
 null when there is no queue item. Archon routes nothing: every answerer sees every item,
 and a second answer to the same pause is refused.
 
@@ -82,14 +83,24 @@ they cannot disagree about what a run needs.
   `archon workflow resume <run-id>` tries sooner, and abandon stops it. If the limit is
   still there when the node runs again, the run pauses on a new wait. With
   `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead
-  of waiting. It has no `occurrence`. `unreadable` is a
-  paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
+  of waiting. It has no `occurrence`. `stalled_tool_calls` names a paused run with a
+  silent live sibling and no other primary queue item; `calls` names its node, provider,
+  work, timestamps, `elapsedMs` and `stalledForMs`. Inspect with `workflow logs`;
+  `archon workflow end-turn <run-id>` records a request to end the stalled attempt
+  without answering a gate or cancelling the run. Use `workflow wait <run-id>` to
+  check progress or `owner_lost`; it may return the same advisory while recovery is
+  pending. Silence alone never ends work. This kind has no `occurrence`.
+  `unreadable` is a paused run Archon cannot describe, or a parent whose sub-run tree it cannot read: a
   sub-run with no row, or a tree that revisits a run or exceeds 500 runs; `reason` and
   `detail` say why. A container paused because this host cannot read its frozen source
   also appears as `unreadable`, with reason `source_release_not_continued`. Resume it
   manually on a host where the recorded frozen source is readable; containers do not
   continue automatically after a source release. For other unreadable items, inspect
   the run and resume or abandon it.
+- **`stalledCalls`** carries concurrent live sibling stalls beside a primary
+  `attention`, `awaiting_response`, `usage_limit` or `unreadable` item. Each call
+  has the same fields as `stalled_tool_calls.calls`. The primary pause and its answer
+  commands remain in force; use `end-turn` on the item's run ID for its stalled siblings.
 - **`occurrence`** identifies an answerable pause (`attention` or `awaiting_response`).
   Pass it back with `--occurrence`; an answer or
   label write for a pause the run has left is refused. If the diagnostic read succeeds
@@ -107,8 +118,10 @@ they cannot disagree about what a run needs.
   key its state lives under. `project` is null only for a run with no trusted storage
   root.
 - **`fanOut`** is `{ parentRunId, nodeId, index }` for a child of a `fan_out:` node, and
-  null otherwise. A parent blocked on its children is never an item; reading it returns
-  the first actionable descendant item, not the complete set of questions.
+  null otherwise. A parent blocked on children with its own stalled live siblings
+  appears as `stalled_tool_calls`, taking precedence over child attention. Otherwise,
+  reading the parent returns the first actionable descendant item, not the complete
+  set of questions.
 - **`pausedAt`** is when the pause opened. Gates do not record it, so it is null for them,
   and they sort after timed items.
 - **`context`** holds pointers, never pasted content. Read what you need.
@@ -208,8 +221,8 @@ host on the same database.
 - **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's
   item, including when its kind or usage-limit `resetAt` changes while `revision` stays
   1. `resolved` removes the run's item. Its `occurrence` identifies an answerable pause;
-  it is null for `usage_limit` and `unreadable`. `reason` is `answered`, or `withdrawn`
-  when the run resumed, ended, was deleted, or moved to a different pause. A usage-limit
+  it is null for `usage_limit`, `stalled_tool_calls` and `unreadable`. `reason` is
+  `answered`, or `withdrawn` when the run resumed, ended, was deleted, or moved to a different pause. A usage-limit
   wait that resumes is withdrawn, with null occurrence. `answeredAt` is null when the
   row had moved past the answer before the stream read it.
 - **Readable deliveries are at least once.** Unreadable deliveries may be omitted after

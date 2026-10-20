@@ -477,7 +477,7 @@ Now the only way out is a passing suite.
 - `depends_on` — upstream dependencies
 - `when` — conditional execution
 - `trigger_rule` — join semantics
-- `idle_timeout` — per-iteration timeout (default: 30 minutes)
+- `idle_timeout` — per-iteration silence threshold for attention (default: 30 minutes); use `workflow end-turn` for explicit recovery
 - `provider` / `model` — node-level overrides are resolved and used for every iteration
 - `allowed_tools` / `denied_tools` — passed to the selected provider on every iteration,
   just as on a `prompt:` node. Enforcement depends on the provider's tool-restriction
@@ -522,7 +522,7 @@ If you need to accumulate results across iterations, write them to files in
 | Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error |
 | Workflow cancelled | Detected between iterations, node stops |
-| Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
+| Silent iteration | Raises advisory attention and stays live. An explicit `workflow end-turn` request ends the stalled attempt as a timeout; the normal retry policy applies |
 | `retry` configured on node | Applies to each failed iteration; successful iterations are not replayed |
 
 By default, each iteration gets two retries after its initial attempt, with a 3000 ms base delay that doubles on each ordinary transient retry. Configure the existing node-level `retry:` block to change the budget and base delay:

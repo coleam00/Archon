@@ -67,11 +67,19 @@ function runAttentionLines(
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
   const attention = runAttention(run);
   let msg = '';
-  if (attention?.kind === 'stalled_tool_calls') {
-    msg += '  Tool calls need attention; work remains running.\n';
-    for (const call of attention.calls)
+  const stalledCalls =
+    attention?.kind === 'stalled_tool_calls'
+      ? attention.calls
+      : attention && 'stalledCalls' in attention
+        ? (attention.stalledCalls ?? [])
+        : [];
+  if (stalledCalls.length > 0) {
+    msg += '  Provider turns or reported work need attention; work remains running.\n';
+    for (const call of stalledCalls)
       msg += `  ${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)\n`;
-  } else if (attention?.kind === 'attention') {
+    msg += `  Inspect with archon workflow logs ${run.id}; archon workflow end-turn ${run.id} records a request to end the stalled attempt; archon workflow wait ${run.id} checks progress or owner_lost.\n`;
+  }
+  if (attention?.kind === 'attention') {
     msg += `  Needs attention: ${attention.message}\n`;
     for (const line of attentionAnswerLines(surface, attention)) msg += `  ${line}\n`;
     msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;

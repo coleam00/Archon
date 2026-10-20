@@ -1,7 +1,7 @@
 /**
  * Resolve what a run's sub-run tree needs now, without waiting: the attention a waiter
- * would report, or whether the tree still needs a live owner. A parent blocked on
- * children is never an item of its own; the walk reports the child that is. Shared by
+ * would report, or whether the tree still needs a live owner. A parent with stalled
+ * siblings reports its own work first; otherwise the walk reports the child. Shared by
  * `workflow wait` (`waitForRunAttention`, @archon/core) and the attention queue's list and
  * single read, so they cannot disagree about which run an answer belongs to.
  */
@@ -12,6 +12,7 @@ import {
   isTerminalRunStatus,
   readExecutionOwner,
   runAttention,
+  queuedRunAttention,
   type ExecutionOwnerRecord,
   type RunAttention,
   type WorkflowRun,
@@ -85,7 +86,7 @@ async function ownerRequired(
 
 /**
  * Resolve the sub-run tree under `run` while retaining whether its current state needs a
- * live process. A parent blocked on children is never its own item: the walk goes depth
+ * live process. After checking the parent's own stalled siblings, the walk goes depth
  * first through the children in item order. The first child that has attention wins;
  * failing that, the first that needs an owner (any finished child's, once the gate is
  * released); otherwise nobody is needed.
@@ -97,13 +98,18 @@ export async function resolveRunAttention(
   return resolveFrom(store, run, [run], new Set([run.id]));
 }
 
+function ownRunAttention(run: WorkflowRun): RunAttention | null {
+  const projected = runAttention(run);
+  return queuedRunAttention(run, projected) ?? projected;
+}
+
 async function resolveFrom(
   store: RunAttentionReadStore,
   current: WorkflowRun,
   executionChain: readonly WorkflowRun[],
   visited: Set<string>
 ): Promise<RunResolution> {
-  const attention = runAttention(current);
+  const attention = ownRunAttention(current);
   const isRoot = executionChain.length === 1;
   if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
     const childRunIds =

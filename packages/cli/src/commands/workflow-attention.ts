@@ -1,3 +1,4 @@
+import { formatToolAttention } from './workflow-inspect';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
@@ -98,6 +99,16 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
       lines.push(`    needs a look: ${item.detail}`);
       break;
   }
+  const calls = item.kind === 'stalled_tool_calls' ? item.calls : item.stalledCalls;
+  if (calls)
+    lines.push(
+      formatToolAttention({
+        kind: 'stalled_tool_calls',
+        runId: item.runId,
+        status: 'paused',
+        calls,
+      })
+    );
   return lines;
 }
 

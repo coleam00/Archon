@@ -160,7 +160,7 @@ export type AttentionWatchStore = Pick<
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
-  return item.kind === 'unreadable' || item.kind === 'usage_limit' ? null : item.occurrence;
+  return item.kind === 'attention' || item.kind === 'awaiting_response' ? item.occurrence : null;
 }
 
 type Resolution =

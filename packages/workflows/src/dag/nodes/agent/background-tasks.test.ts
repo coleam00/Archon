@@ -10,7 +10,7 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
-import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -253,86 +253,6 @@ describe('background task completion gating (#2083)', () => {
     expect(findCompletedEvent(store)?.data.node_output).toBe('finished');
     expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
   });
-
-  // Only a provider that declares `reported` can vouch that a silent subtask is
-  // still alive; for any other provider a silent stream is a hung turn.
-  for (const kind of ['agent', 'loop'] as const) {
-    it(
-      `times out a silent ${kind} node whose unobserved provider left a subtask live`,
-      async () => {
-        let calls = 0;
-        let firstAttemptAborted = false;
-        mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
-          calls++;
-          if (calls > 1) {
-            // Complete the retry after the watchdog aborts the first attempt.
-            yield { type: 'result', sessionId: 's', text: '<promise>COMPLETE</promise>' };
-            yield { type: 'settled' };
-            return;
-          }
-          yield { type: 'subtask', taskId: 'hung', status: 'started', description: 'hung' };
-          await new Promise<void>(resolve => {
-            // Bounds the test if the watchdog never fires.
-            const bound = setTimeout(resolve, 1_000);
-            options?.abortSignal?.addEventListener(
-              'abort',
-              () => {
-                firstAttemptAborted = true;
-                clearTimeout(bound);
-                resolve();
-              },
-              { once: true }
-            );
-          });
-        });
-        const store = createMockStore();
-        const deps = createMockDeps(store);
-        deps.getAgentProvider = () => ({
-          ...mockGetAgentProviderDag('claude'),
-          getCapabilities: () => {
-            throw new Error('Instance capabilities are not the executor owner');
-          },
-        });
-        await executeDagWorkflow(
-          dagOptions({
-            deps,
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflow: {
-              name: 'unobserved-silent-subtask',
-              nodes: [
-                kind === 'agent'
-                  ? {
-                      id: 'step1',
-                      kind,
-                      source: { kind: 'command', name: 'step1' },
-                      idle_timeout: 30,
-                      retry: { max_attempts: 0 },
-                    }
-                  : {
-                      id: 'step1',
-                      kind,
-                      idle_timeout: 30,
-                      retry: { max_attempts: 1, delay_ms: 0 },
-                      loop: {
-                        prompt: 'Finish the work.',
-                        fresh_context: false,
-                        until: 'COMPLETE',
-                        max_iterations: 1,
-                      },
-                    },
-              ],
-            },
-            workflowRun: makeWorkflowRun(`unobserved-silent-${kind}`),
-          })
-        );
-        expect(firstAttemptAborted).toBe(true);
-        if (kind === 'agent') expect(findCompletedEvent(store)).toBeUndefined();
-        else expect(calls).toBe(2);
-      },
-      testTimeout(10_000)
-    );
-  }
 
   it('cancels a never-ending quiet task without waiting for another provider event', async () => {
     let silent = false;
