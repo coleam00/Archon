@@ -1,20 +1,32 @@
-/**
- * CLI chat command — send a message to the orchestrator agent
- *
- * Single-shot: streams response to stdout and exits.
- * Multi-turn conversations happen via the web UI.
- */
+import { createInterface } from 'node:readline';
+import type { Readable } from 'node:stream';
 import { generateConversationId } from '../utils/conversation-id';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { handleMessage } from '@archon/core';
 
-/**
- * Execute a single-shot orchestrator chat message.
- * Creates a unique conversation, streams the response to stdout, and returns.
- */
-export async function chatCommand(message: string): Promise<void> {
+export async function chatCommand(
+  message?: string,
+  input: Readable = process.stdin
+): Promise<void> {
   const adapter = new CLIAdapter({ streamingMode: 'batch' });
   const conversationId = generateConversationId('cli-chat');
-
-  await handleMessage(adapter, conversationId, message, { actor: { kind: 'operator' } });
+  const terminal = input === process.stdin && !!process.stdin.isTTY && !!process.stdout.isTTY;
+  const lines = createInterface({ input, output: process.stdout, terminal, prompt: 'archon> ' });
+  // Subscribe before the first turn: piped follow-ups can arrive while it is running.
+  const messages = lines[Symbol.asyncIterator]();
+  lines.on('SIGINT', () => lines.close());
+  const send = async (text: string): Promise<void> => {
+    await handleMessage(adapter, conversationId, text, { actor: { kind: 'operator' } });
+    if (terminal) lines.prompt();
+  };
+  try {
+    if (message) await send(message);
+    else if (terminal) lines.prompt();
+    for await (const text of messages) {
+      if (text.trim() === '/exit' || text.trim() === '/quit') break;
+      if (text.trim()) await send(text);
+    }
+  } finally {
+    lines.close();
+  }
 }

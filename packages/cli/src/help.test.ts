@@ -218,7 +218,7 @@ Commands:
   project list               List registered projects (id, kind, name, key, path)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
-  chat <message>             Send a message to the orchestrator
+  chat [message]             Interactive orchestrator chat
   setup                      Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
                              List compact workflow descriptions

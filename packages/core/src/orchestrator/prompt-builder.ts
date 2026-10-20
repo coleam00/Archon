@@ -548,11 +548,11 @@ export function buildRunManagementSection(codebaseId?: string): string {
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
-${codebaseId ? `Prefix every by-ID command below with \`${WORKFLOW_CODEBASE_ID_ENV}=${codebaseId}\` so the CLI refuses runs outside the selected project. ` : ''}Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Project scope applies to \`runs\` and \`status\`; use \`--all\` only when the user asks for install-wide visibility.
+${codebaseId ? `Prefix every command below with \`${WORKFLOW_CODEBASE_ID_ENV}=${codebaseId}\` so the CLI keeps queries and by-ID operations within the selected project. ` : ''}Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Queries and by-ID operations stay within this project; do not use \`--all\` or select another project with \`--project\`. Ask the user to switch projects with /setproject <name> when needed.
 
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
-- \`archon workflow status [--json]\` — active runs only (running/paused) for this project; add \`--all\` only for install-wide visibility
+- \`archon workflow status [--json]\` — active runs only (running/paused) for this project
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
 - \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Pass the user's own words as the comment or reason, never a summary: a workflow may read the comment as the gate node's output, and the reason is what an \`on_reject\` prompt reworks from. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
 - \`archon workflow respond <run-id> <decision> [text]\` — same shape as approve/reject, but for a gate that declares decisions beyond the default pair (check the paused run's message for the declared options). \`approve\`/\`reject\` remain the shortcuts above; use \`respond\` only when the gate offers a different vocabulary.

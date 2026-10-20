@@ -83,13 +83,18 @@ Start workflows from deployment bindings and inspect durable resource admission.
 | `trigger whoami` | Print the Archon user ID for your CLI identity, to use as a binding's `runAsUserId`. |
 
 
-### `chat <message>`
+### `chat [message]`
 
-Send a message to the orchestrator for a one-off AI interaction.
+Start an interactive orchestrator conversation. An optional message starts the conversation before reading further input. Every turn shares the same conversation, selected project and run-management capabilities as console chat. Use `/setproject <name>` to select or switch projects. Type `/exit` or `/quit`, press Ctrl-C, or end input (Ctrl-D on Unix) to leave.
 
 ```bash
+archon chat
 archon chat "What does the orchestrator do?"
+printf '/setproject my-app\n/status\n' | archon chat
+archon chat "Summarize my runs" </dev/null  # one response, then exit at EOF
 ```
+
+Chat prints text; `--json` is not supported.
 
 ### `setup`
 
@@ -562,17 +567,17 @@ Ambiguous workflow 'review'. Did you mean:
 
 ### `workflow status`
 
-Show **active** workflow runs (running and paused) for the current project. The project is resolved from `cwd` through the registered checkout, including linked git worktrees. Use `--all` for install-wide active runs. For full history (all statuses), use `workflow runs`.
+With inherited chat scope (`ARCHON_WORKFLOW_CODEBASE_ID`), show **active** workflow runs (running and paused) for the selected project regardless of `cwd`; `--all` is rejected. Without inherited scope, show active runs for the current project. The project is resolved from `cwd` through the registered checkout, including linked git worktrees. Without inherited scope, use `--all` for install-wide active runs. For full history (all statuses), use `workflow runs`.
 
 ```bash
 archon workflow status
 archon workflow status --json
-archon workflow status --all      # active runs across all projects
+archon workflow status --all      # without inherited chat scope: active runs across all projects
 archon workflow status --verbose   # add a per-node summary for each run
 archon workflow status --json --verbose
 ```
 
-If `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
+Without inherited chat scope, if `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
 
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
@@ -584,7 +589,7 @@ Tool-call advisories appear in nonverbose text and in the JSON `attention` field
 
 ### `workflow runs`
 
-List recent runs of **every** status (completed, failed, cancelled, running, paused) for the current project. The project is resolved from `cwd` the same way `workflow run` does. Complements `workflow status` (which is active-only).
+List recent runs of **every** status (completed, failed, cancelled, running, paused). With inherited chat scope (`ARCHON_WORKFLOW_CODEBASE_ID`), queries use the selected project regardless of `cwd` and reject `--all`. Otherwise the project is resolved from `cwd` the same way `workflow run` does. Complements `workflow status` (which is active-only).
 
 ```bash
 archon workflow runs
@@ -592,10 +597,10 @@ archon workflow runs --json
 archon workflow runs --json --verbose  # add per-node state and attention to each run
 archon workflow runs --status failed   # filter to one status
 archon workflow runs --limit 50        # cap rows (default 20)
-archon workflow runs --all             # list across all projects (ignore cwd scope)
+archon workflow runs --all             # without inherited chat scope: list across all projects
 ```
 
-If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
+Without inherited chat scope, if `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 The run-list JSON uses the same `active_nodes` contract as `workflow status`. The retained singular
 fields are compatibility fields: `current_step_name` and `current_step_status` are populated only
@@ -999,7 +1004,7 @@ archon workflow attention --watch --json --all                     # stream read
 archon workflow attention --watch --json --after <cursor>          # resume a stream
 ```
 
-- **Scope.** The default is the current project, resolved from the working directory as
+- **Scope.** With inherited chat scope (`ARCHON_WORKFLOW_CODEBASE_ID`), list, count and watch use the selected project regardless of the working directory. `--all` and `--project` selecting another project are rejected; the selected project's ID, name or key is accepted. Without inherited scope, the default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
   project key such as `@cwd/scratch-<digest>`; copy the exact key from
   `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when

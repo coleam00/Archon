@@ -387,7 +387,9 @@ describe('buildRunManagementSection', () => {
     const section = buildRunManagementSection();
     expect(section).toContain('registered project directory (repo or folder)');
     expect(section).toContain('not the projectless workspace');
-    expect(section).toContain('install-wide visibility');
+    expect(section).toContain('do not use `--all`');
+    expect(section).toContain('/setproject <name>');
+    expect(section).not.toContain('install-wide visibility');
   });
 
   test('tells the CLI-path providers to pass the user’s own words', () => {

@@ -3,6 +3,7 @@
  */
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import type { handleMessage } from '@archon/core';
+import { Readable, PassThrough } from 'node:stream';
 
 // Mock logger before any imports
 const mockLogger = {
@@ -22,11 +23,6 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Mock @archon/core/db/messages (used by CLIAdapter for persistence)
-mock.module('@archon/core/db/messages', () => ({
-  addMessage: mock(() => Promise.resolve()),
-}));
-
 // Mock handleMessage from @archon/core
 const mockHandleMessage = mock<typeof handleMessage>(() => Promise.resolve());
 
@@ -34,14 +30,17 @@ mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
 }));
 
-import { chatCommand } from './chat';
+import { chatCommand as runChat } from './chat';
 import { CLIAdapter } from '../adapters/cli-adapter';
 
-describe('chatCommand', () => {
-  beforeEach(() => {
-    mockHandleMessage.mockClear();
-  });
+const chatCommand = (message: string): Promise<void> => runChat(message, Readable.from([]));
 
+beforeEach(() => {
+  mockHandleMessage.mockReset();
+  mockHandleMessage.mockResolvedValue(undefined);
+});
+
+describe('chatCommand', () => {
   test('should call handleMessage with a CLIAdapter, unique conversationId, and the message', async () => {
     await chatCommand('Hello, agent!');
 
@@ -99,13 +98,61 @@ describe('chatCommand', () => {
     expect(adapter.getPlatformType()).toBe('cli');
   });
 
-  test('should not log to console for empty string message', async () => {
+  test('empty input exits without dispatching a turn', async () => {
     const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     try {
       await chatCommand('');
-      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+      expect(mockHandleMessage).not.toHaveBeenCalled();
     } finally {
       consoleSpy.mockRestore();
     }
   });
+});
+
+test('interactive input retains one adapter and conversation, awaits each turn, and exits explicitly', async () => {
+  const input = new PassThrough();
+  const received: string[] = [];
+  mockHandleMessage.mockImplementation(async (adapter, conversationId, message, options) => {
+    expect(options).toEqual({ actor: { kind: 'operator' } });
+    received.push(message);
+    await adapter.sendMessage(conversationId, `reply: ${message}`);
+  });
+  const logged = spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    const session = runChat(undefined, input);
+    input.end('/setproject alpha\n\ninspect runs\n/exit\nnever sent\n');
+    await session;
+    expect(received).toEqual(['/setproject alpha', 'inspect runs']);
+    const [first, second] = mockHandleMessage.mock.calls;
+    expect(first[0]).toBe(second[0]);
+    expect(first[1]).toBe(second[1]);
+    expect(logged.mock.calls.map(args => args[0])).toEqual([
+      'reply: /setproject alpha',
+      'reply: inspect runs',
+    ]);
+  } finally {
+    logged.mockRestore();
+    input.destroy();
+  }
+});
+
+test('piped follow-ups survive an initial async turn and EOF closes the session', async () => {
+  const received: string[] = [];
+  mockHandleMessage.mockImplementation(async (_adapter, _conversationId, message) => {
+    await Promise.resolve();
+    received.push(message);
+  });
+  await runChat('initial', Readable.from(['follow up\nlast turn\n']));
+  expect(received).toEqual(['initial', 'follow up', 'last turn']);
+  expect(new Set(mockHandleMessage.mock.calls.map(call => call[1])).size).toBe(1);
+});
+
+test('an interactive turn failure propagates and stops further dispatch', async () => {
+  mockHandleMessage
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error('turn failed'));
+  await expect(runChat(undefined, Readable.from(['first\nsecond\nthird\n']))).rejects.toThrow(
+    'turn failed'
+  );
+  expect(mockHandleMessage.mock.calls.map(call => call[2])).toEqual(['first', 'second']);
 });

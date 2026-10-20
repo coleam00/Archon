@@ -35,8 +35,11 @@ The [CLI reference](/reference/cli/#workflow-attention) lists every flag. The li
 single read, the stream and `workflow wait` all derive from the same run projection, so
 they cannot disagree about what a run needs.
 
-- **Scope.** The CLI defaults to the project of the working directory. `--project` names
-  another project and `--all` covers the install. Every `workflow attention` form runs from
+- **Scope.** With inherited chat scope (`ARCHON_WORKFLOW_CODEBASE_ID`), CLI list, count
+  and watch use the selected project regardless of the working directory. Its ID, name
+  or key is accepted by `--project`; other projects and `--all` are rejected. Without
+  inherited scope, the CLI defaults to the working directory's project, `--project`
+  names another project and `--all` covers the install. Every `workflow attention` form runs from
   any directory, registered or not. Over HTTP there is no working directory,
   so the default is the install.
 - **Filters.** `--label k=v` is an exact match on the label's value, and repeated filters

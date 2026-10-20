@@ -66,13 +66,18 @@ export async function attentionScope(
 ): Promise<AttentionQueueScope> {
   const inherited = await inheritedWorkflowCodebase(host, opts.all);
   if (inherited) {
+    const project = projectRefForCodebase(inherited);
     if (opts.project !== undefined) {
       const requested = await resolveAttentionProject(host.records.codebases, opts.project);
-      if (requested.codebaseId !== inherited.id) {
+      if (
+        requested.codebaseId !== null
+          ? requested.codebaseId !== inherited.id
+          : requested.key !== project.key
+      ) {
         throw new Error('--project cannot override the selected chat project.');
       }
     }
-    return { kind: 'project', project: projectRefForCodebase(inherited) };
+    return { kind: 'project', project };
   }
   if (opts.all) return { kind: 'all' };
   const project =

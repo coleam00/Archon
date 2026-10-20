@@ -123,6 +123,9 @@
       "src/commands/chat.test.ts"
     ],
     [
+      "src/commands/chat.integration.spec.ts"
+    ],
+    [
       "src/commands/serve.test.ts"
     ],
     [

@@ -644,7 +644,12 @@ test.each(['beta', 'scratch'])(
       const runs = (result.json as { runs: { id: string }[] }).runs.map(run => run.id).sort();
       expect(runs).toEqual((open ? [alpha.failed.id] : [alpha.run.id, alpha.failed.id]).sort());
     }
-    for (const project of [undefined, alpha.project.id, alpha.project.name]) {
+    for (const project of [
+      undefined,
+      alpha.project.id,
+      alpha.project.name,
+      projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
+    ]) {
       const result = await captured(() =>
         workflowAttentionCommand(host, cwd, undefined, {
           json: true,
@@ -659,6 +664,7 @@ test.each(['beta', 'scratch'])(
         json: true,
         labels: [],
         countBy: 'project',
+        project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
       })
     );
     expect(counts).toMatchObject({
@@ -671,6 +677,7 @@ test.each(['beta', 'scratch'])(
           json: true,
           labels: [],
           watch: true,
+          project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
         }),
       lines => lines.some(line => line.type === 'ready')
     );
@@ -693,6 +700,7 @@ test.each(['beta', 'scratch'])(
         { all: true },
         { project: beta.project.id },
         { project: beta.project.name },
+        { project: projectKeyForCodebase(beta.project, beta.project.default_cwd) },
       ]) {
         const refused = await captured(() =>
           workflowAttentionCommand(host, cwd, undefined, {
