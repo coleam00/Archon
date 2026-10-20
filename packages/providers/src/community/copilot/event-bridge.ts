@@ -170,7 +170,7 @@ const MCP_STATUS = {
   not_configured: 'failed',
 } as const satisfies Record<CopilotMcpStatus, McpServerStatusChunk['status']>;
 
-function mcpServerStatusOf(
+export function mcpServerStatusOf(
   server: string,
   status: CopilotMcpStatus,
   error: string | undefined

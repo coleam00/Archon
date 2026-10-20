@@ -18,6 +18,7 @@ import { createLogger } from '@archon/paths';
 import { sessionPreview } from '@archon/provider-contract';
 import type {
   CopilotClientOptions,
+  CopilotClient,
   CopilotSession,
   CustomAgentConfig,
   MCPServerConfig,
@@ -39,9 +40,10 @@ import { COPILOT_CAPABILITIES } from './capabilities';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
 import { clampEffort } from '@archon/provider-contract';
 import { resolveCopilotBinaryPath } from './binary-resolver';
-import { bridgeSession } from './event-bridge';
+import { bridgeSession, mcpServerStatusOf } from './event-bridge';
+import { readMcpStatuses, requireMcpConnections } from '../../mcp/readiness';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
-import { failureClassOfThrown, failureResult } from '../../shared/failure';
+import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -356,6 +358,7 @@ function isModelAccessError(errorMessage: string): boolean {
  * model-access / auth detail while the thrown error is generic.
  */
 function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): Error {
+  if (error instanceof ClassifiedProviderError) return error;
   const thrownMessage =
     error instanceof Error && error.message ? error.message : safeErrorString(error);
   const parts = [thrownMessage, lastSessionError].filter(
@@ -562,47 +565,45 @@ export class CopilotProvider implements IAgentProvider {
         session = await client.createSession(sessionConfig);
       }
     } catch (err) {
-      // Can't connect / create — surface a friendly error and stop the client.
-      try {
-        await client.stop();
-      } catch (stopErr) {
-        log.debug({ err: stopErr }, 'copilot.client_stop_failed_after_session_error');
-      }
+      await stopCopilotClient(client);
       throw buildFriendlyCopilotError(err);
     }
 
-    if (resumeFailed) {
-      yield {
-        type: 'warning',
-        code: 'copilot.resume_failed',
-        message: 'Could not resume Copilot session — starting a fresh conversation.',
-      };
-    } else if (forkedToFresh) {
-      yield {
-        type: 'warning',
-        code: 'copilot.fork_unsupported',
-        message:
-          'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
-      };
-    }
-
-    log.info(
-      {
-        sessionIdPreview: sessionPreview(session.sessionId),
-        model: sessionConfig.model,
-        cwd,
-        reasoningEffort: sessionConfig.reasoningEffort,
-        hasSystemMessage: sessionConfig.systemMessage !== undefined,
-        mcpServers: sessionConfig.mcpServers ? Object.keys(sessionConfig.mcpServers).length : 0,
-        skills: sessionConfig.skillDirectories?.length ?? 0,
-        agents: sessionConfig.customAgents?.length ?? 0,
-        tokenSource,
-        resumed: resumeSessionId !== undefined && !resumeFailed,
-      },
-      'copilot.session_started'
-    );
-
+    let bridgeStarted = false;
     try {
+      if (resumeFailed) {
+        yield {
+          type: 'warning',
+          code: 'copilot.resume_failed',
+          message: 'Could not resume Copilot session — starting a fresh conversation.',
+        };
+      } else if (forkedToFresh) {
+        yield {
+          type: 'warning',
+          code: 'copilot.fork_unsupported',
+          message:
+            'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
+        };
+      }
+
+      log.info(
+        {
+          sessionIdPreview: sessionPreview(session.sessionId),
+          model: sessionConfig.model,
+          cwd,
+          reasoningEffort: sessionConfig.reasoningEffort,
+          hasSystemMessage: sessionConfig.systemMessage !== undefined,
+          mcpServers: sessionConfig.mcpServers ? Object.keys(sessionConfig.mcpServers).length : 0,
+          skills: sessionConfig.skillDirectories?.length ?? 0,
+          agents: sessionConfig.customAgents?.length ?? 0,
+          tokenSource,
+          resumed: resumeSessionId !== undefined && !resumeFailed,
+        },
+        'copilot.session_started'
+      );
+
+      yield* prepareMcp(session, sessionConfig, requestOptions);
+      bridgeStarted = true;
       yield* closeOpenToolCalls(
         bridgeSession(
           session,
@@ -620,16 +621,53 @@ export class CopilotProvider implements IAgentProvider {
       );
       throw buildFriendlyCopilotError(err);
     } finally {
-      // Stop the client so its CLI subprocess shuts down; bridgeSession already
-      // handled session.abort() + session.disconnect() in its own finally.
-      try {
-        const stopErrors = await client.stop();
-        if (stopErrors.length > 0) {
-          log.warn({ errors: stopErrors.map(e => e.message) }, 'copilot.client_stop_errors');
+      if (!bridgeStarted) {
+        try {
+          await session.disconnect();
+        } catch (error) {
+          log.debug({ err: error }, 'copilot.preflight_disconnect_failed');
         }
-      } catch (stopErr) {
-        log.debug({ err: stopErr }, 'copilot.client_stop_threw');
       }
+      await stopCopilotClient(client);
     }
+  }
+}
+
+async function* prepareMcp(
+  session: CopilotSession,
+  sessionConfig: SessionConfig,
+  requestOptions: SendQueryOptions | undefined
+): AsyncGenerator<MessageChunk> {
+  const names = Object.keys(sessionConfig.mcpServers ?? {});
+  const readStatuses = async () =>
+    (await session.rpc.mcp.list()).servers
+      .filter(server => names.includes(server.name))
+      .map(server => mcpServerStatusOf(server.name, server.status, server.error));
+  if (requestOptions?.requireMcpConnections) {
+    yield* requireMcpConnections(names, readStatuses, requestOptions.abortSignal);
+  } else if (names.length > 0) {
+    try {
+      yield* await readMcpStatuses(readStatuses, requestOptions?.abortSignal);
+    } catch (error) {
+      requestOptions?.abortSignal?.throwIfAborted();
+      yield {
+        type: 'warning',
+        code: 'copilot.mcp_status_unavailable',
+        message: `Could not observe optional MCP connections: ${error instanceof Error ? error.message : safeErrorString(error)}`,
+      };
+    }
+  }
+  requestOptions?.abortSignal?.throwIfAborted();
+}
+
+async function stopCopilotClient(client: CopilotClient): Promise<void> {
+  const log = getLog();
+  try {
+    const stopErrors = await client.stop();
+    if (stopErrors.length > 0) {
+      log.warn({ errors: stopErrors.map(e => e.message) }, 'copilot.client_stop_errors');
+    }
+  } catch (stopErr) {
+    log.debug({ err: stopErr }, 'copilot.client_stop_threw');
   }
 }

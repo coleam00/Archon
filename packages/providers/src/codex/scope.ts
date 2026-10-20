@@ -84,13 +84,14 @@ const CONNECTION_STATUSES: Record<McpServerConnectionStatus, true> = {
   disabled: true,
 };
 type McpStatusPage = Pick<ListMcpServerStatusResponse, 'nextCursor'> & {
-  data: Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'>[];
+  data: Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus' | 'toolsError'>[];
 };
 const mcpStatusSchema: z.ZodType<McpStatusPage> = z.object({
   data: z.array(
     z.object({
       name: z.string(),
       pluginId: z.string().nullable(),
+      toolsError: z.string().nullable(),
       // A status this Codex version does not list reads as unknown (null), which the check
       // treats as live: it can pass only for a declared server.
       runtimeStatus: z
@@ -242,7 +243,7 @@ export function applyNodeScope(
 }
 
 /** The MCP servers the node declares: the `mcp_servers` the provider built from its `mcp:` file. */
-function declaredServers(config: ThreadConfig): JsonObject {
+export function declaredServers(config: ThreadConfig): JsonObject {
   return objectAt(config.mcp_servers);
 }
 
@@ -264,23 +265,13 @@ export async function checkThreadMcpScope(
 ): Promise<void> {
   const allowed = new Set(declared);
   const unexpected: string[] = [];
-  let cursor: string | null = null;
-  do {
-    const page: McpStatusPage = await requestScoped(
-      connection,
-      'mcpServerStatus/list',
-      { threadId, detail: 'toolsAndAuthOnly', cursor },
-      mcpStatusSchema
+  for (const server of await readThreadMcpStatuses(connection, threadId)) {
+    if (server.runtimeStatus === 'disabled') continue;
+    if (server.pluginId === null && allowed.has(server.name)) continue;
+    unexpected.push(
+      server.pluginId === null ? server.name : `${server.name} (plugin ${server.pluginId})`
     );
-    for (const server of page.data) {
-      if (server.runtimeStatus === 'disabled') continue;
-      if (server.pluginId === null && allowed.has(server.name)) continue;
-      unexpected.push(
-        server.pluginId === null ? server.name : `${server.name} (plugin ${server.pluginId})`
-      );
-    }
-    cursor = page.nextCursor;
-  } while (cursor !== null);
+  }
 
   if (unexpected.length > 0) {
     throw new ClassifiedProviderError(
@@ -289,4 +280,23 @@ export async function checkThreadMcpScope(
         'Declare each one the node needs in its mcp: file; Archon could not turn the others off for this Codex version.'
     );
   }
+}
+
+export async function readThreadMcpStatuses(
+  connection: AppServerConnection,
+  threadId: string
+): Promise<McpStatusPage['data']> {
+  const statuses: McpStatusPage['data'] = [];
+  let cursor: string | null = null;
+  do {
+    const page: McpStatusPage = await requestScoped(
+      connection,
+      'mcpServerStatus/list',
+      { threadId, detail: 'toolsAndAuthOnly', cursor },
+      mcpStatusSchema
+    );
+    statuses.push(...page.data);
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  return statuses;
 }

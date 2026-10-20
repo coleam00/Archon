@@ -1188,6 +1188,10 @@
         "forkSession": {
           "type": "boolean"
         },
+        "requireMcpConnections": {
+          "type": "boolean",
+          "const": true
+        },
         "purpose": {
           "type": "string",
           "const": "title-generation"

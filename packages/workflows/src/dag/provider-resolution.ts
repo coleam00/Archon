@@ -77,7 +77,7 @@ export type NodeMcpResolution =
   | Extract<McpPathResolution, { kind: 'read_error' }>
   | { kind: 'none' }
   /** The provider loads `path`; `servers` are the names the file declares, if readable. */
-  | { kind: 'load'; path: string; servers: Set<string> }
+  | { kind: 'load'; path: string; servers: Set<string>; optional: boolean }
   | { kind: 'missing'; path: string; servers: Set<string>; diagnostic: string }
   /** An optional declaration the node runs without. */
   | { kind: 'unavailable'; fullPath: string; record: McpUnavailable; diagnostic?: string };
@@ -127,7 +127,7 @@ export async function resolveNodeMcp(
     }
     return { kind: 'missing', path: fullPath, servers: new Set(), diagnostic };
   }
-  return { kind: 'load', path: fullPath, servers: new Set(servers) };
+  return { kind: 'load', path: fullPath, servers: new Set(servers), optional };
 }
 
 /**

@@ -84,7 +84,8 @@ export interface FakeTurnScript {
 }
 
 /** The `mcpServerStatus/list` fields a test sets; the rest are filled in. */
-export type ServerStatus = Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'>;
+export type ServerStatus = Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'> &
+  Partial<Pick<McpServerStatus, 'toolsError'>>;
 
 export interface FakeRequest {
   method: string;
@@ -548,7 +549,7 @@ function mcpStatusResponse(pages: ServerStatus[][], index: number): ListMcpServe
       serverInfo: null,
       serverCapabilities: null,
       tools: {},
-      toolsError: null,
+      toolsError: server.toolsError ?? null,
       resources: [],
       resourceTemplates: [],
       authStatus: 'unsupported',

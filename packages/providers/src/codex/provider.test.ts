@@ -2168,3 +2168,67 @@ test('Codex diagnostics carry binary resolution and legacy setup posture without
     else process.env.CODEX_ID_TOKEN = previous;
   }
 });
+
+describe('required MCP readiness', () => {
+  test('failure names the server and blocks turn/start; optional still starts', async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-ready-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'missing' } }));
+    for (const required of [true, false]) {
+      const { provider, server } = providerWith({
+        mcpStatusPages: [
+          [
+            {
+              name: 'declared',
+              pluginId: null,
+              runtimeStatus: 'failed',
+              toolsError: 'spawn ENOENT',
+            },
+          ],
+        ],
+      });
+      const chunks = await run(provider, {
+        nodeConfig: { nodeId: 'test', mcp },
+        ...(required ? { requireMcpConnections: true } : {}),
+      });
+      expect(paramsOf(server, 'turn/start') !== undefined).toBe(!required);
+      if (required) {
+        expect(resultOf(chunks).failure).toEqual({
+          class: 'misconfigured',
+          evidence: expect.stringContaining('declared'),
+        });
+        expect(resultOf(chunks).failure?.evidence).toContain('spawn ENOENT');
+      }
+    }
+  });
+});
+
+for (const continuation of ['fresh', 'resume', 'fork'] as const) {
+  test(`required MCP connects before a ${continuation} turn, across status pages`, async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-mcp-connected-')));
+    const mcp = join(dir, 'mcp.json');
+    await writeFile(mcp, JSON.stringify({ declared: { command: 'fixture' } }));
+    const { provider, server } = providerWith({
+      mcpStatusPages: [[], [{ name: 'declared', pluginId: null, runtimeStatus: 'connected' }]],
+    });
+    const chunks = await run(
+      provider,
+      {
+        requireMcpConnections: true,
+        nodeConfig: { nodeId: 'test', mcp },
+        forkSession: continuation === 'fork',
+      },
+      continuation === 'fresh' ? undefined : THREAD_ID
+    );
+    expect(resultOf(chunks).isError).not.toBe(true);
+    expect(chunks).toContainEqual({
+      type: 'mcp_server_status',
+      server: 'declared',
+      status: 'connected',
+    });
+    const methods = server.processes[0].requests.map(r => r.method);
+    expect(methods.indexOf('turn/start')).toBeGreaterThan(
+      methods.lastIndexOf('mcpServerStatus/list')
+    );
+  });
+}

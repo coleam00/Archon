@@ -64,6 +64,7 @@ import {
   failureResultChunk,
 } from './failure';
 import { applyNodeConfig, isWorkflowNode } from './node-config';
+import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -436,7 +437,7 @@ async function* buildQueryOptions(
   resumeSessionId: string | undefined,
   requestOptions: SendQueryOptions | undefined,
   run: QueryRun
-): AsyncGenerator<MessageChunk, { options: Options; env: NodeJS.ProcessEnv }> {
+): AsyncGenerator<MessageChunk, { options: Options; env: NodeJS.ProcessEnv; mcpNames: string[] }> {
   const isContainerRun = requestOptions?.execContext?.kind === 'container';
   const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
@@ -504,11 +505,12 @@ async function* buildQueryOptions(
   }
   options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
+  const mcpNames = Object.keys(options.mcpServers ?? {});
   if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
     registerNativeTools(options, requestOptions.nativeTools);
   }
   setResumeTarget(options, cwd, resumeSessionId, requestOptions?.forkSession);
-  return { options, env };
+  return { options, env, mcpNames };
 }
 
 /**
@@ -549,6 +551,37 @@ function trackSubtask(
 ): void {
   if (chunk.status === 'started' || chunk.status === 'running') openSubtaskIds.add(chunk.taskId);
   else openSubtaskIds.delete(chunk.taskId);
+}
+
+function createQueryInput(
+  prompt: string,
+  resumeSessionId: string | undefined,
+  signal: AbortSignal
+): {
+  messages: AsyncGenerator<SDKUserMessage>;
+  admit: () => void;
+  close: () => void;
+} {
+  const admission = Promise.withResolvers<boolean>();
+  const closed = Promise.withResolvers<void>();
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    if (!(await admission.promise) || signal.aborted) return;
+    yield {
+      type: 'user',
+      message: { role: 'user', content: prompt },
+      parent_tool_use_id: null,
+      session_id: resumeSessionId ?? '',
+    };
+    await closed.promise;
+  }
+  return {
+    messages: messages(),
+    admit: () => admission.resolve(true),
+    close: () => {
+      admission.resolve(false);
+      closed.resolve();
+    },
+  };
 }
 
 // ─── Claude Provider ───────────────────────────────────────────────────────
@@ -616,11 +649,10 @@ export class ClaudeProvider implements IAgentProvider {
     const onAbort = (): void => {
       controller.abort();
     };
-    if (requestOptions?.abortSignal) {
-      requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
-    }
+    requestOptions?.abortSignal?.addEventListener('abort', onAbort, { once: true });
     let resultReported = false;
     let closeInput: (() => void) | undefined;
+    let preparedQuery: ReturnType<typeof query> | undefined;
     const openSubtaskIds = new Set<string>();
 
     try {
@@ -628,26 +660,20 @@ export class ClaudeProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
       const toolResultQueue: ToolResultEntry[] = [];
-      const { options, env } = yield* buildQueryOptions(cwd, resumeSessionId, requestOptions, {
-        controller,
-        stderrLines,
-        toolResultQueue,
-      });
+      const { options, env, mcpNames } = yield* buildQueryOptions(
+        cwd,
+        resumeSessionId,
+        requestOptions,
+        {
+          controller,
+          stderrLines,
+          toolResultQueue,
+        }
+      );
 
-      const { promise: inputClosed, resolve: finishInput } = Promise.withResolvers<undefined>();
-      closeInput = (): void => {
-        finishInput(undefined);
-      };
+      const input = createQueryInput(prompt, resumeSessionId, controller.signal);
+      closeInput = input.close;
       controller.signal.addEventListener('abort', closeInput, { once: true });
-      async function* input(): AsyncGenerator<SDKUserMessage> {
-        yield {
-          type: 'user',
-          message: { role: 'user', content: prompt },
-          parent_tool_use_id: null,
-          session_id: resumeSessionId ?? '',
-        };
-        await inputClosed;
-      }
       const spendBaseline = await readSessionSpendBaseline(resumeSessionId, {
         cwd,
         env,
@@ -655,7 +681,24 @@ export class ClaudeProvider implements IAgentProvider {
         signal: controller.signal,
       });
       controller.signal.throwIfAborted();
-      const rawEvents = query({ prompt: input(), options });
+      const rawEvents = query({ prompt: input.messages, options });
+      if (requestOptions?.requireMcpConnections) {
+        preparedQuery = rawEvents;
+        await rawEvents.initializationResult();
+        yield* requireMcpConnections(
+          mcpNames,
+          async () =>
+            (await rawEvents.mcpServerStatus()).map(({ name, status, error }) => ({
+              type: 'mcp_server_status' as const,
+              server: name,
+              status: status === 'needs-auth' ? ('needs_auth' as const) : status,
+              ...(error !== undefined ? { error } : {}),
+            })),
+          controller.signal
+        );
+        controller.signal.throwIfAborted();
+      }
+      input.admit();
       const diagnostics = buildFirstEventHangDiagnostics(
         options.env as Record<string, string>,
         options.model
@@ -710,6 +753,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
     } finally {
       closeInput?.();
+      preparedQuery?.close();
       if (closeInput) controller.signal.removeEventListener('abort', closeInput);
       requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
     }

@@ -273,3 +273,26 @@ test('a field newer than the pinned plugin fails instead of being dropped', asyn
     await agent.close();
   }
 });
+
+test('a baseline plugin rejects required MCP readiness before invoking its provider', async () => {
+  const pair = streamPair();
+  const { agent, requests } = pinnedPlugin(pair.provider);
+  const client = await connectProvider(pair.host);
+  try {
+    await expect(
+      client
+        .sendQuery('turn', '/workspace', undefined, {
+          requireMcpConnections: true,
+          nodeConfig: { mcp: 'servers.json' },
+        })
+        .next()
+    ).rejects.toMatchObject({
+      code: -32602,
+      message: expect.stringContaining('Upgrade the plugin'),
+    });
+    expect(requests).toHaveLength(1);
+  } finally {
+    await client.close();
+    await agent.close();
+  }
+});

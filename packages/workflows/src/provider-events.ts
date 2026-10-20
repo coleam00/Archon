@@ -155,9 +155,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await sendWarning(`⚠️ ${event.message}`, { code: event.code });
           return;
         case 'mcp_server_status':
-          // Servers the user's own config adds (e.g. a plugin MCP inherited from
-          // ~/.claude/) routinely fail inside the headless subprocess and are not
-          // actionable for the workflow author, so only the node's own servers surface.
+          // Only declared servers surface here. Providers enforce required connection
+          // readiness before delivering input; optional failures remain warnings.
           if (
             (event.status === 'failed' || event.status === 'needs_auth') &&
             deps.configuredMcpServers.has(event.server)
