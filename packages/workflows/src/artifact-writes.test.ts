@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
+import { closeSync, constants, openSync, writeSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -87,6 +88,68 @@ const dirtyManifestPath = engineDir(
 
 describe('in a container-mounted artifacts directory', () => {
   const contained = <T>(operation: () => T): T => withContainerArtifactsRoot(root, operation);
+
+  test('replaces metadata links without reading their foreign owner', async () => {
+    const target = join(outside, 'sentinel');
+    const foreignOwner = JSON.stringify({ nodeId: 'another-node' });
+    await writeFile(target, foreignOwner);
+    await mkdir(join(root, 'nodes'));
+    const path = join(root, 'nodes', 'probe.meta.json');
+    await symlink(target, path);
+
+    await contained(() => writeNodeArtifact(root, meta, 'output'));
+
+    expect((await lstat(path)).isFile()).toBe(true);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject(meta);
+    expect(await readFile(target, 'utf8')).toBe(foreignOwner);
+  });
+
+  test('regular metadata preserves collisions and same-owner rewrites', async () => {
+    await contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a.b' }, 'first'));
+    await expect(
+      contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a_b' }, 'collision'))
+    ).rejects.toThrow('collision');
+    expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('first');
+    await contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a.b' }, 'second'));
+    expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('second');
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'refuses FIFO metadata without waiting for input',
+    async () => {
+      await mkdir(join(root, 'nodes'));
+      const path = join(root, 'nodes', 'probe.meta.json');
+      expect(Bun.spawnSync(['mkfifo', path]).exitCode).toBe(0);
+      const descriptor = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
+      let released = false;
+      // Bound a broken reader's wait so the regression fails without leaving blocked I/O.
+      const release = setTimeout(() => {
+        released = true;
+        writeSync(descriptor, JSON.stringify({ nodeId: 'another-node' }));
+        closeSync(descriptor);
+      }, 1000);
+      try {
+        await expect(contained(() => writeNodeArtifact(root, meta, 'output'))).rejects.toThrow(
+          ArtifactWriteError
+        );
+        expect(released).toBe(false);
+        expect((await lstat(path)).isFIFO()).toBe(true);
+        expect(await readdir(join(root, 'nodes'))).toEqual(['probe.meta.json']);
+      } finally {
+        clearTimeout(release);
+        if (!released) closeSync(descriptor);
+      }
+    }
+  );
+
+  test('refuses directory metadata before replacing output', async () => {
+    await mkdir(join(root, 'nodes', 'probe.meta.json'), { recursive: true });
+    await writeFile(join(root, 'nodes', 'probe.md'), 'first');
+    await expect(contained(() => writeNodeArtifact(root, meta, 'second'))).rejects.toThrow(
+      ArtifactWriteError
+    );
+    expect(await readFile(join(root, 'nodes', 'probe.md'), 'utf8')).toBe('first');
+  });
 
   // Every engine writer under the mount, each against a planted symlinked parent.
   const refusing: { parent: string; write: () => Promise<unknown> }[] = [
@@ -221,6 +284,19 @@ test('host-only writes keep following links as before', async () => {
   await symlink(outside, join(root, 'nodes'));
   await withContainerArtifactsRoot(undefined, () => writeNodeArtifact(root, meta, 'host output'));
   expect(await readFile(join(outside, 'probe.md'), 'utf8')).toBe('host output');
+});
+
+test('host-only collision checks still read ownership through metadata links', async () => {
+  await mkdir(join(root, 'nodes'));
+  const target = join(outside, 'sentinel');
+  await writeFile(target, JSON.stringify({ nodeId: 'another-node' }));
+  const path = join(root, 'nodes', 'probe.meta.json');
+  await symlink(target, path);
+  await expect(
+    withContainerArtifactsRoot(undefined, () => writeNodeArtifact(root, meta, 'output'))
+  ).rejects.toThrow('collision');
+  expect((await lstat(path)).isSymbolicLink()).toBe(true);
+  expect(await readdir(join(root, 'nodes'))).toEqual(['probe.meta.json']);
 });
 
 test('concurrent host and container scopes keep their own write policy', async () => {

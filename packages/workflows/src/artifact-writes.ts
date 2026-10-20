@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -82,11 +82,26 @@ function checkParents({ root, parts }: ContainedParent, create: boolean): boolea
   return true;
 }
 
-/** Create `path`'s parent directory, refusing a symlinked parent under the scoped root. */
-export async function prepareArtifactParent(path: string): Promise<void> {
+/**
+ * Read prior ownership metadata. Scoped links have no owner: the checked writer
+ * replaces them. Other non-files are refused before any artifact is overwritten.
+ */
+export async function readArtifactFile(path: string): Promise<string | undefined> {
   const contained = containedParent(path);
-  if (contained === undefined) await mkdir(dirname(path), { recursive: true });
-  else checkParents(contained, true);
+  if (contained !== undefined) {
+    if (!checkParents(contained, false)) return undefined;
+    const entry = lstatIfPresent(path);
+    if (entry === undefined || entry.isSymbolicLink()) return undefined;
+    if (!entry.isFile()) {
+      throw new ArtifactWriteError(`Refusing artifact owner read: '${path}' is not a regular file`);
+    }
+  }
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return undefined;
+    throw error;
+  }
 }
 
 function temporarySibling(path: string): string {
