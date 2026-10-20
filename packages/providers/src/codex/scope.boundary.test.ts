@@ -615,7 +615,7 @@ describe('Codex capability scope on the real binary', () => {
   );
 
   test(
-    'a declared server that fails to start is reported as failed',
+    'a declared server that fails to start fails the node before a model request',
     async () => {
       await writeFile(
         join(repo, 'broken-mcp.json'),
@@ -629,6 +629,11 @@ describe('Codex capability scope on the real binary', () => {
           status: 'failed',
         })
       );
+      expect(modelRequests).toHaveLength(0);
+      expect(resultOf(chunks).failure).toEqual({
+        class: 'misconfigured',
+        evidence: expect.stringContaining('broken_srv'),
+      });
     },
     testTimeout(20_000)
   );
