@@ -2058,7 +2058,11 @@ export const dagNodeSchema: z.ZodType<DagNode | IncludeDirective> = z
       }),
     ])
   )
-  .transform(node => ('include' in node ? { ...node, include: node.include.trim() } : node))
+  .transform(node =>
+    'include' in node && node.include !== undefined
+      ? { ...node, include: node.include.trim() }
+      : node
+  )
   .meta({ id: 'DagNode' });
 
 // ---------------------------------------------------------------------------
