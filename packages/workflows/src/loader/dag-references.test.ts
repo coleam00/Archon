@@ -78,7 +78,7 @@ nodes:
       max_iterations: 2
       nodes:
         - id: work
-          prompt: work
+          bash: echo work
         - id: guarded
           prompt: guarded
           depends_on: [work]
@@ -335,6 +335,124 @@ ${producers}
     depends_on: [${dependsOn}]
     when: "${when}"
 `;
+
+  describe('$LOOP_PREV whole-output comparisons', () => {
+    const loopGated = (producer: string, when: string): string => `name: prior-output
+description: Gates on previous loop output
+nodes:
+  - id: cycle
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+${producer
+  .split('\n')
+  .map(line => `      ${line}`)
+  .join('\n')}
+        - id: decide
+          bash: echo decision
+          when: "${when}"
+`;
+
+    it.each([
+      ['prompt', '  - id: analyze\n    prompt: Analyze'],
+      ['command', '  - id: analyze\n    command: analyze-issue'],
+      [
+        'loop',
+        '  - id: analyze\n    loop:\n      prompt: Analyze\n      until: DONE\n      max_iterations: 2',
+      ],
+      [
+        'loop group',
+        '  - id: analyze\n    loop_group:\n      until: DONE\n      max_iterations: 2\n      nodes:\n        - id: work\n          prompt: Analyze',
+      ],
+    ])('rejects previous whole output of a %s producer', (_, producer) => {
+      const message = parseError(loopGated(producer, "$LOOP_PREV.analyze.output == 'BUG'"));
+      expect(message).toContain("whole output of AI node 'analyze'");
+      if (!producer.includes('loop_group:')) {
+        expect(message).toContain("$LOOP_PREV.analyze.output.status == 'BUG'");
+      } else {
+        expect(message).toContain("compute the decision in a 'bash:'/'script:' node");
+      }
+    });
+
+    it('checks every atom in compound expressions', () => {
+      expect(
+        parseError(
+          loopGated(
+            '  - id: analyze\n    prompt: Analyze',
+            "$LOOP_PREV.absent.output == '' || $LOOP_PREV.analyze.output != 'BUG'"
+          )
+        )
+      ).toContain("whole output of AI node 'analyze'");
+    });
+
+    it.each([
+      ['bash output', '  - id: analyze\n    bash: echo BUG', "$LOOP_PREV.analyze.output == 'BUG'"],
+      [
+        'script output',
+        '  - id: analyze\n    runtime: bun\n    script: console.log(1)',
+        '$LOOP_PREV.analyze.output > 0',
+      ],
+      [
+        'a field',
+        '  - id: analyze\n    prompt: Analyze',
+        "$LOOP_PREV.analyze.output.status == 'BUG'",
+      ],
+      [
+        'schema-certified output',
+        '  - id: analyze\n    prompt: Analyze\n    output_format:\n      type: object\n      properties:\n        status: { type: string }',
+        "$LOOP_PREV.analyze.output == '{}'",
+      ],
+      [
+        'an absent prior producer',
+        '  - id: analyze\n    prompt: Analyze',
+        "$LOOP_PREV.absent.output == ''",
+      ],
+    ])('accepts %s', (_, producer, when) => {
+      parseWorkflowYaml(loopGated(producer, when));
+    });
+
+    it('does not mistake an outer AI node for a previous body producer', () => {
+      parseWorkflowYaml(`name: outer-producer
+description: An absent prior producer is empty
+nodes:
+  - id: analyze
+    prompt: Analyze
+  - id: cycle
+    depends_on: [analyze]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+          when: "$LOOP_PREV.analyze.output == ''"
+`);
+    });
+
+    const root = useTempWorkflowRoot();
+    it('rejects a whole-output AI comparison on an include gate', async () => {
+      const result = await discoverFiles(root(), {
+        'prior-block.yaml': `name: prior-block
+description: Included block
+nodes:
+  - id: entry
+    bash: echo entry
+  - id: tail
+    bash: echo tail
+    depends_on: [entry]
+`,
+        'prior-parent.yaml': loopGated(
+          '  - id: analyze\n    prompt: Analyze',
+          "$LOOP_PREV.analyze.output == 'BUG'"
+        ).replace('bash: echo decision', 'include: prior-block'),
+      });
+      expect(result.workflows.find(w => w.workflow.name === 'prior-output')).toBeUndefined();
+      expect(result.errors.find(e => e.filename.includes('prior-parent'))?.error).toContain(
+        "whole output of AI node 'analyze'"
+      );
+    });
+  });
 
   it('rejects a bare $node.output comparison when the producer is a prompt node', () => {
     const message = parseError(

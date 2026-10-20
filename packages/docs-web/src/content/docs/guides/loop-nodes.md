@@ -774,8 +774,8 @@ This is a condition reference, not text substitution. On iteration 1 it resolves
 `''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 
 An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
-entire block, including cached entries and descendants on resume. A false gate
-skips the whole block; when true, each node still follows its own conditions and
+entire block. Loop bodies rerun in full on resume; completed body nodes are not
+reused as cached entries. A false gate skips the whole block; when true, each node still follows its own conditions and
 trigger rule. If the block contains a nested loop, the include's gate
 still reads the previous iteration of the loop containing that include.
 

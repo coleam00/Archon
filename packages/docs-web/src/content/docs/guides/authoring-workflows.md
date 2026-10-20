@@ -591,9 +591,10 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   (see [Reading across a skipped branch](#reading-across-a-skipped-branch))
 
 :::danger[You cannot compare a whole AI output to a literal]
-A `when:` that compares the **entire output** of a `prompt:` or `command:` node with no
-`output_format` — or of any `loop:`/`loop_group:` node — against a literal is
-**rejected at load time**:
+A `when:` that compares the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
+`output_format`, or of any `loop_group:` node, against a literal is
+**rejected at load time**. The same rule applies to previous-iteration references
+such as `$LOOP_PREV.analyze.output` in a loop body or include gate:
 
 ```yaml
 # REJECTED — $analyze is an AI node with no output_format
@@ -1788,8 +1789,9 @@ nodes; an include in a `loop_group` body produces body-local nodes. There is no 
   so a paused loop can still resume from its persisted, validated prompt snapshot.
   The include node's `depends_on` and default `trigger_rule` wire the block's
   **entry** nodes (those with no upstream inside the block). The include's `when:`
-  gates the **whole block**, including descendants and cached nodes on resume.
-  Inside a `loop_group`, that gate reads `$LOOP_PREV` from the loop containing the
+  gates the **whole block**, including descendants. Top-level cached nodes on resume
+  are checked against the gate again; loop bodies rerun in full rather than reusing
+  completed body nodes. Inside a `loop_group`, that gate reads `$LOOP_PREV` from the loop containing the
   include, even when a descendant runs inside a nested loop.
   If both the include and an entry define `when:` and either condition contains `||`,
   loading fails because the grammar cannot
