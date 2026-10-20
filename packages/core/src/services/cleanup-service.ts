@@ -37,7 +37,7 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
-  inspectRemoteBranches,
+  inspectPushRemoteBranches,
   isRevCoveredBy,
   countCommitsMissingFromRemotes,
   getLastCommitDate,
@@ -1369,7 +1369,7 @@ async function judgePublishedBranch(
 ): Promise<WorktreeDisposition> {
   // Ask the remote: a push by URL or refspec need not leave a remote-tracking ref.
   const remote = configuredRemote(await loadRepoConfig(repo));
-  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath: repo, remote });
+  const advertised = await inspectPushRemoteBranches(repo, remote);
   if (advertised.status === 'unavailable') {
     throw new Error(`cannot read branches on remote '${remote}': ${advertised.evidence}`);
   }

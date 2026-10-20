@@ -1587,9 +1587,16 @@ leading or trailing spaces, into `push_url`. Run these commands in Bash:
 push_url='<push-url>'
 branch='<branch>'
 endpoint="archon-cleanup-$$-$RANDOM:"
-git -c "url.${push_url}.insteadOf=$endpoint" \
-    -c "url.${push_url}.pushInsteadOf=$endpoint" \
-    ls-remote --refs -- "$endpoint" "refs/heads/$branch"
+git_at_endpoint() (
+    config_index=${GIT_CONFIG_COUNT:-0}
+    export "GIT_CONFIG_KEY_${config_index}=url.${push_url}.insteadOf"
+    export "GIT_CONFIG_VALUE_${config_index}=$endpoint"
+    export "GIT_CONFIG_KEY_$((config_index + 1))=url.${push_url}.pushInsteadOf"
+    export "GIT_CONFIG_VALUE_$((config_index + 1))=$endpoint"
+    export GIT_CONFIG_COUNT=$((config_index + 2))
+    git "$@"
+)
+git_at_endpoint ls-remote --refs -- "$endpoint" "refs/heads/$branch"
 ```
 
 Inspect the advertised OID and verify that commit belongs to the completed work.
@@ -1598,13 +1605,15 @@ and `endpoint`, then enter the verified OID:
 
 ```bash
 verified_oid='<verified-oid>'
-git -c "url.${push_url}.insteadOf=$endpoint" \
-    -c "url.${push_url}.pushInsteadOf=$endpoint" \
-    push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
+git_at_endpoint push --force-with-lease="refs/heads/$branch:$verified_oid" -- "$endpoint" ":refs/heads/$branch"
 ```
 
 The temporary alias maps directly to the resolved URL for both commands, preventing
 another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
+Separate config keys and values preserve URLs containing `=`. The destination
+listing is line-delimited; if a configured URL contains a newline,
+do not split it into destinations. Inspect the NUL-delimited configuration with
+`git config --null --list` and verify the exact destination before proceeding.
 
 The explicit lease refuses deletion if the tip changes after inspection. It cannot
 detect a same-commit republish, so delete only while no one is reusing or publishing

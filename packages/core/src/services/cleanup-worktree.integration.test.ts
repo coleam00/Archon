@@ -698,6 +698,47 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
 
+  test.each(['published', 'unavailable'] as const)(
+    'completion inspects every push destination: %s',
+    async outcome => {
+      const empty = join(root, 'empty.git');
+      const destination = join(root, 'push=one.git ');
+      await git(root, 'init', '--bare', '-q', empty);
+      await git(root, 'init', '--bare', '-q', destination);
+      await git(repo, 'push', '-q', destination, `HEAD:refs/heads/${env.branch_name}`);
+      await git(repo, 'remote', 'set-url', '--push', 'upstream', empty);
+      await git(
+        repo,
+        'remote',
+        'set-url',
+        '--add',
+        '--push',
+        'upstream',
+        outcome === 'published' ? destination : join(root, 'missing.git')
+      );
+      expect(await git(repo, 'ls-remote', 'upstream', `refs/heads/${env.branch_name}`)).toBe('');
+      expect(await assess()).toMatchObject({
+        disposition: 'retained',
+        reason: outcome === 'published' ? 'published_branch' : 'check_failed',
+      });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow();
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
+
+  test('completion refuses ambiguous newline push destinations', async () => {
+    await git(repo, 'remote', 'set-url', '--push', 'upstream', 'first.git\nsecond.git');
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow('Newlines');
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a remote that cannot be read keeps the checkout', async () => {
     await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));
     expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });

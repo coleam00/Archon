@@ -1,3 +1,4 @@
+import { pinGitDestination, resolvePushDestinations } from './push-destinations';
 import { execFileAsync } from './exec';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { validateCloneUrl, type CloneCredentials } from './repo';
@@ -64,46 +65,64 @@ export async function inspectRemoteBranches(target: RemoteBranchTarget): Promise
     credentials = target.credentials;
   }
   const { args, env } = gitCredentialOptions(httpUrl, credentials);
+  return readAdvertisement([...prefix, ...args], source, env, credentials, target.kind === 'local');
+}
+
+export async function inspectPushRemoteBranches(
+  repoPath: RepoPath,
+  remote: string
+): Promise<RemoteBranches> {
+  const branches = new Set<BranchName>();
+  for (const destination of await resolvePushDestinations(repoPath, remote)) {
+    const { endpoint, env } = pinGitDestination(destination);
+    const advertised = await readAdvertisement(['-C', repoPath], endpoint, env);
+    if (advertised.status === 'unavailable') return advertised;
+    for (const branch of advertised.branches) branches.add(branch);
+  }
+  return { status: 'available', defaultBranch: null, branches: [...branches] };
+}
+
+async function readAdvertisement(
+  prefix: string[],
+  source: string,
+  env: NodeJS.ProcessEnv,
+  credentials?: CloneCredentials,
+  localFailure = false
+): Promise<RemoteBranches> {
   try {
     const { stdout } = await execFileAsync(
       'git',
-      [
-        ...prefix,
-        ...args,
-        'ls-remote',
-        '--symref',
-        '--quiet',
-        '--',
-        source,
-        'HEAD',
-        'refs/heads/*',
-      ],
+      [...prefix, 'ls-remote', '--symref', '--quiet', '--', source, 'HEAD', 'refs/heads/*'],
       { timeout: 10000, env }
     );
-    let head: string | null = null;
-    let hasHeadCommit = false;
-    const branches: BranchName[] = [];
-    for (const line of stdout.split('\n')) {
-      const [value, ref] = line.split('\t');
-      if (ref === 'HEAD') {
-        if (value.startsWith('ref: refs/heads/')) head = value.slice('ref: refs/heads/'.length);
-        else if (/^[0-9a-f]+$/.test(value)) hasHeadCommit = true;
-      } else if (ref?.startsWith('refs/heads/') && /^[0-9a-f]+$/.test(value)) {
-        branches.push(toBranchName(ref.slice('refs/heads/'.length)));
-      }
-    }
-    return {
-      status: 'available',
-      defaultBranch: head && hasHeadCommit ? toBranchName(head) : null,
-      branches,
-    };
+    return parseAdvertisement(stdout);
   } catch (error) {
     const err = error as Error & { code?: string | number; killed?: boolean };
     if (typeof err.code !== 'number' && !err.killed) throw error;
     return {
       status: 'unavailable',
       evidence: sanitizeGitError(error, credentials),
-      ...(target.kind === 'local' && error instanceof Error ? { failure: error } : {}),
+      ...(localFailure && error instanceof Error ? { failure: error } : {}),
     };
   }
+}
+
+function parseAdvertisement(stdout: string): RemoteBranches {
+  let head: string | null = null;
+  let hasHeadCommit = false;
+  const branches: BranchName[] = [];
+  for (const line of stdout.split('\n')) {
+    const [value, ref] = line.split('\t');
+    if (ref === 'HEAD') {
+      if (value.startsWith('ref: refs/heads/')) head = value.slice('ref: refs/heads/'.length);
+      else if (/^[0-9a-f]+$/.test(value)) hasHeadCommit = true;
+    } else if (ref?.startsWith('refs/heads/') && /^[0-9a-f]+$/.test(value)) {
+      branches.push(toBranchName(ref.slice('refs/heads/'.length)));
+    }
+  }
+  return {
+    status: 'available',
+    defaultBranch: head && hasHeadCommit ? toBranchName(head) : null,
+    branches,
+  };
 }
