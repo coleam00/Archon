@@ -28,11 +28,7 @@ import {
   deleteCodebase,
   createCodebase as realCreateCodebase,
   getCodebase as realGetCodebase,
-  listCodebaseClaims as realListCodebaseClaims,
-  listCodebases as realListCodebases,
 } from '@archon/core/db/codebases';
-import type { Codebase } from '@archon/core/schemas/codebase';
-import { InvalidCodebaseDefaultCwdError } from '@archon/core/db/codebase-path';
 import { ProjectRegistrationError } from '@archon/core/handlers/clone';
 import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
@@ -64,8 +60,6 @@ const realCodebaseStore = {
   createCodebase: realCreateCodebase,
   getCodebase: realGetCodebase,
   deleteCodebase,
-  listCodebaseClaims: realListCodebaseClaims,
-  listCodebases: realListCodebases,
 };
 const fsPromises = await import('fs/promises');
 const mockRm = mock<typeof realRm>(removeRealDirectory);
@@ -89,7 +83,7 @@ const mockGetCodebase = mock(
 type MockCodebase = Omit<typeof MOCK_CODEBASE, 'repository_url'> & {
   repository_url: string | null;
 };
-const mockListCodebaseClaims = mock(async (): Promise<readonly (MockCodebase | Codebase)[]> => []);
+const mockListCodebaseClaims = mock(async (): Promise<readonly MockCodebase[]> => []);
 const mockDeleteCodebase = mock<typeof deleteCodebase>(async () => {});
 const mockRenameCodebase = mock(async (_id: string, _name: string) => ({
   ...MOCK_CODEBASE,
@@ -212,7 +206,6 @@ mock.module('@archon/core/db/conversations', () => ({
 }));
 
 mock.module('@archon/core/db/codebases', () => ({
-  listCodebases: realCodebaseStore.listCodebases,
   listCodebaseClaims: mockListCodebaseClaims,
   getCodebase: mockGetCodebase,
   deleteCodebase: mockDeleteCodebase,
@@ -447,20 +440,10 @@ describe('GET /api/codebases', () => {
     }));
     const healthy = { ...MOCK_CODEBASE, id: 'healthy', name: 'healthy' };
     const rows = [...invalid, healthy].sort((a, b) => a.name.localeCompare(b.name));
-    const querySpy = spyOn(connection.pool, 'query').mockResolvedValue({
-      rows,
-      rowCount: rows.length,
-    });
+    mockListCodebaseClaims.mockResolvedValueOnce(rows);
     const warningSpy = spyOn(getLog(), 'warn');
     warningSpy.mockClear();
     try {
-      mockListCodebaseClaims.mockResolvedValueOnce(rows);
-      await expect(realCodebaseStore.listCodebases()).rejects.toBeInstanceOf(
-        InvalidCodebaseDefaultCwdError
-      );
-      mockListCodebaseClaims.mockImplementationOnce(async () => [
-        ...(await realCodebaseStore.listCodebaseClaims()),
-      ]);
       const response = await makeApp().request('/api/codebases');
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(rows);
@@ -480,7 +463,6 @@ describe('GET /api/codebases', () => {
         );
       }
     } finally {
-      querySpy.mockRestore();
       warningSpy.mockRestore();
     }
   });
