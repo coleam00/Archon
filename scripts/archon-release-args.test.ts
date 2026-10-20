@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluateCondition } from '../packages/workflows/src/condition-evaluator';
 import { certifyExecOutput } from '../packages/workflows/src/dag/nodes/exec/exec-output';
-import { declaredOutputPathsFromSchema } from '../packages/workflows/src/output-ref';
+import {
+  declaredOutputPathsFromSchema,
+  type JsonValue,
+} from '../packages/workflows/src/output-ref';
 import { execNodeSchema, type ExecNode, type NodeOutput } from '../packages/workflows/src/schemas';
 import { parseWhenExpression, type WhenAtom } from '../packages/workflows/src/when-atom';
 
@@ -85,8 +88,8 @@ function runParseArgs(message: string | undefined): string {
 }
 
 /** The producer's printed JSON. */
-function parseArgsJson(message: string | undefined): Record<string, unknown> {
-  return JSON.parse(runParseArgs(message)) as Record<string, unknown>;
+function parseArgsJson(message: string | undefined): JsonValue {
+  return JSON.parse(runParseArgs(message)) as JsonValue;
 }
 
 /** The producer node as the engine runs it: its body and the contract it declares. */
@@ -102,7 +105,7 @@ function parseArgsNode(): ExecNode {
 }
 
 /** The run messages the workflow documents, and the output each one must produce. */
-const MESSAGES: readonly (readonly [string, Record<string, unknown>])[] = [
+const MESSAGES: readonly (readonly [string, JsonValue])[] = [
   ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
   // The workflow's description offers both spellings, in any position.
   ['dry-run minor', { bump: 'minor', dryRun: 'true' }],
@@ -113,12 +116,9 @@ const MESSAGES: readonly (readonly [string, Record<string, unknown>])[] = [
 ];
 
 describe('archon-release argument parsing', () => {
-  test.each(MESSAGES)(
-    'reads %p from the run message',
-    (message: string, expected: Record<string, unknown>) => {
-      expect(parseArgsJson(message)).toEqual(expected);
-    }
-  );
+  test.each(MESSAGES)('reads %p from the run message', (message: string, expected: JsonValue) => {
+    expect(parseArgsJson(message)).toEqual(expected);
+  });
 
   test('defaults to a patch release when the run message is unset', () => {
     expect(parseArgsJson(undefined)).toEqual({ bump: 'patch', dryRun: 'false' });
@@ -145,7 +145,7 @@ describe('the parse-args output contract', () => {
 
   test.each(MESSAGES)(
     'the output for %p satisfies the declared contract',
-    (message: string, expected: Record<string, unknown>) => {
+    (message: string, expected: JsonValue) => {
       const certified = certifyExecOutput(parseArgsNode(), runParseArgs(message), []);
       expect(certified.structuredOutput).toEqual(expected);
     }
