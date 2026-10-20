@@ -12,7 +12,7 @@
  */
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { providerRegistry } from '@archon/providers';
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
 const mockErrorLog = mock((..._args: unknown[]) => {});
+beforeEach(() => mockErrorLog.mockClear());
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,
