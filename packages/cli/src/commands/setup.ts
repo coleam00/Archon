@@ -203,7 +203,11 @@ async function openSetupTerminal(options: SetupOptions): Promise<void> {
         ? `cd /d "${options.repoPath}"`
         : `cd '${options.repoPath.replaceAll("'", "'\"'\"'")}'`;
     console.log('');
-    console.log('Next step: run the setup wizard in a separate terminal.');
+    console.log(
+      process.platform === 'win32'
+        ? 'Next step: run the setup wizard in Command Prompt (cmd.exe).'
+        : 'Next step: run the setup wizard in a separate terminal.'
+    );
     console.log('');
     console.log(`    ${changeDirectory} && ${setupLaunchCommand(options)}`);
     console.log('');

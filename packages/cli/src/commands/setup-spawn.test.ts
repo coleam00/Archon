@@ -157,7 +157,7 @@ describe('setup terminal spawning', () => {
     }
     const output = log.mock.calls.map(call => call.join(' ')).join('\n');
     if (successAt === -1) {
-      expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
+      expect(output).toContain('Next step: run the setup wizard in Command Prompt (cmd.exe).');
       expect(output).toContain(`cd /d "${repoPath}" && ${command}`);
       expect(output).not.toContain('Setup wizard opened.');
     } else {
@@ -174,6 +174,7 @@ describe('setup terminal spawning', () => {
       const log = spyOn(console, 'log').mockImplementation(() => undefined);
       expect(await setupCommand({ spawn: true, repoPath: "/repo's path with spaces" })).toBe(0);
       const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
       expect(output).toContain(`cd '/repo'"'"'s path with spaces' && archon setup`);
     }
   );
