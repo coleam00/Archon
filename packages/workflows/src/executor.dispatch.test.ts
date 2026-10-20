@@ -150,6 +150,41 @@ describe('container resume guard', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
+  describe.each([undefined, { kind: 'host' }] as const)(
+    'container backend with execution context %j',
+    execContext => {
+      it.each(['fresh', 'pending', 'resumed'] as const)(
+        'rejects a %s dispatch before admission or source release',
+        async phase => {
+          const store = makeStore();
+          const run = containerRun('inconsistent', {
+            status: phase === 'pending' ? 'pending' : 'running',
+          });
+          await expect(
+            startWorkflow({
+              store,
+              options: {
+                ...(phase === 'resumed'
+                  ? resumeOf(run)
+                  : phase === 'pending'
+                    ? { preCreatedRun: run }
+                    : {}),
+                container: inContainer().container,
+                execContext,
+              },
+            })
+          ).rejects.toThrow('Container backend requires a container execution context');
+          expect(store.createWorkflowRun).not.toHaveBeenCalled();
+          expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+          expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+          expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        }
+      );
+    }
+  );
+
   it('proceeds when the container context is provided', async () => {
     const result = await startWorkflow({
       cwd: '/tmp/ops',

@@ -1,3 +1,5 @@
+import type { ExecutionContext } from '@archon/provider-contract';
+
 /**
  * Container run context shared by the executor and the DAG engine (Phase C).
  *
@@ -119,9 +121,25 @@ export interface ContainerRunContext {
 /** Synthetic node id for the engine-level write-back gate (there is no DAG node). */
 export const WRITEBACK_GATE_NODE_ID = '__writeback__';
 
-export function requireContainerRunContext(
-  container: ContainerRunContext | undefined
-): ContainerRunContext {
-  if (!container) throw new Error('Container execution requires a container backend context');
-  return container;
+export type RunExecutionMode =
+  | { kind: 'host'; execContext: Extract<ExecutionContext, { kind: 'host' }>; container?: never }
+  | {
+      kind: 'container';
+      execContext: Extract<ExecutionContext, { kind: 'container' }>;
+      container: ContainerRunContext;
+    };
+
+export function resolveRunExecutionMode(
+  execContext: ExecutionContext = { kind: 'host' },
+  container?: ContainerRunContext,
+  recordedIsolation?: unknown
+): RunExecutionMode {
+  if (execContext.kind === 'container') {
+    if (!container) throw new Error('Container execution requires a container backend context');
+    return { kind: 'container', execContext, container };
+  }
+  if (container || recordedIsolation === 'container') {
+    throw new Error('Container backend requires a container execution context');
+  }
+  return { kind: 'host', execContext };
 }

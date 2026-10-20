@@ -1,4 +1,4 @@
-import { requireContainerRunContext } from './container-context';
+import { resolveRunExecutionMode, type RunExecutionMode } from './container-context';
 import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { requireProvider } from '@archon/provider-contract';
@@ -37,6 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** What a run executes with, settled before its row is created or claimed. */
 export interface RunDispatch {
+  execution: RunExecutionMode;
   /** The row's owner on a continuation, the invoking user otherwise. */
   executionUserId: string | undefined;
   /** A resume of a run that already started; a pre-created pending row is a fresh dispatch. */
@@ -63,7 +64,7 @@ export async function resolveRunDispatch(
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions
 ): Promise<RunPhase<RunDispatch>> {
-  if (opts.execContext?.kind === 'container') requireContainerRunContext(opts.container);
+  const execution = resolveRunExecutionMode(opts.execContext, opts.container);
   const { preCreatedRun } = opts;
   const isContinuation =
     preCreatedRun !== undefined &&
@@ -132,6 +133,7 @@ export async function resolveRunDispatch(
   return {
     stopped: false,
     value: {
+      execution,
       executionUserId,
       isContinuation,
       prepared,

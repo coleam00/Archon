@@ -13,7 +13,7 @@ import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
-import type { ContainerRunContext } from './container-context';
+import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
@@ -435,8 +435,7 @@ export async function executeDagWorkflow(
         error: error.message,
         retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
       },
-      execContext,
-      containerCtx
+      resolveRunExecutionMode(execContext, containerCtx, workflowRun.metadata.isolation)
     );
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');

@@ -15,7 +15,7 @@ import {
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { releaseUnreadableRunSource } from './source-release';
 import type { SourceReleaseWrite } from './store';
-import type { ContainerWriteBackBackend } from './container-context';
+import { resolveRunExecutionMode, type ContainerWriteBackBackend } from './container-context';
 
 const roots = trackTempRoots();
 const release: SourceReleaseWrite = {
@@ -37,8 +37,15 @@ function setup() {
     discardChanges: mock(async () => undefined),
   } satisfies ContainerWriteBackBackend;
   const container = { envId: 'env', writeBack: 'approve' as const, backend };
-  const run = (context: Parameters<typeof releaseUnreadableRunSource>[5] = execContext) =>
-    releaseUnreadableRunSource(deps, platform, 'conv', 'run', release, context, container);
+  const run = () =>
+    releaseUnreadableRunSource(
+      deps,
+      platform,
+      'conv',
+      'run',
+      release,
+      resolveRunExecutionMode(execContext, container)
+    );
   return { deps, platform, stop, backend, run };
 }
 
@@ -70,8 +77,7 @@ describe('source release suspension', () => {
             'conv',
             active.id,
             { ...release, claimId: executionClaim(active.metadata) },
-            execContext,
-            { envId: 'env', writeBack: 'approve', backend }
+            resolveRunExecutionMode(execContext, { envId: 'env', writeBack: 'approve', backend })
           )
         ).toEqual({ released: true });
         expect(await store.getWorkflowRun(active.id)).toMatchObject({
@@ -91,6 +97,51 @@ describe('source release suspension', () => {
       }
     }
   );
+
+  it('releases a resumed claim through the real store and stops its container once', async () => {
+    const { deps, platform, backend, stop } = setup();
+    const root = roots(await mkdtemp(join(tmpdir(), 'source-release-resumed-')));
+    const store = await createFileWorkflowStore({ root });
+    const pending = await store.createWorkflowRun({
+      workflow_name: 'unreadable',
+      user_message: '',
+    });
+    const active = await store.claimPendingWorkflowRun(pending.id);
+    if (!active) throw new Error('run was not claimed');
+    await store.pauseWorkflowRun(active.id, {
+      nodeId: 'review',
+      message: 'Choose',
+      type: 'approval',
+      pauseId: 'first',
+    });
+    const resumed = await store.resumeWorkflowRun(active.id);
+    const claimId = executionClaim(resumed.metadata);
+    expect(claimId).not.toBeNull();
+    expect(
+      await releaseUnreadableRunSource(
+        { ...deps, store: { ...store, createWorkflowEvent: deps.store.createWorkflowEvent } },
+        platform,
+        'conv',
+        resumed.id,
+        { ...release, claimId },
+        resolveRunExecutionMode(execContext, { envId: 'env', writeBack: 'approve', backend })
+      )
+    ).toEqual({ released: true });
+    expect(await store.getWorkflowRun(resumed.id)).toMatchObject({
+      status: 'paused',
+      metadata: {
+        pause_cause: 'source_release',
+        continuation_retry_at: release.retryAt,
+        source_release: { nodeId: release.nodeId },
+      },
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    const events = await store.listWorkflowEvents(resumed.id);
+    expect(events.filter(event => event.event_type === 'source_released')).toHaveLength(1);
+    expect(
+      persistedEvents(deps.store).filter(event => event.event_type === 'container_stopped')
+    ).toHaveLength(1);
+  });
 
   it('reports a stopped container only after the source pause commits', async () => {
     const { deps, platform, stop, backend, run } = setup();
@@ -112,17 +163,16 @@ describe('source release suspension', () => {
     expect(backend.suspend).not.toHaveBeenCalled();
   });
 
-  it('rejects container execution without its backend before releasing the source', async () => {
-    const { deps, platform } = setup();
-    await expect(
-      releaseUnreadableRunSource(deps, platform, 'conv', 'run', release, execContext)
-    ).rejects.toThrow('Container execution requires a container backend context');
-    expect(deps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
-  });
-
   it('host execution does no backend preparation or suspension', async () => {
-    const { deps, backend, stop, run } = setup();
-    await run({ kind: 'host' });
+    const { deps, platform, backend, stop } = setup();
+    await releaseUnreadableRunSource(
+      deps,
+      platform,
+      'conv',
+      'run',
+      release,
+      resolveRunExecutionMode()
+    );
     expect(backend.prepareSuspend).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
     expect(deps.store.releaseRunForUnreadableSource.mock.calls[0]?.[2]).toBeUndefined();

@@ -1,3 +1,4 @@
+import type { RunExecutionMode } from './container-context';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { randomUUID } from 'crypto';
@@ -424,10 +425,9 @@ export async function establishAdoptedRunSource(
     | 'priorCompletedNodes'
     | 'preparedSource'
     | 'capturedSourceOwner'
-    | 'execContext'
-    | 'container'
   >,
-  isContinuation: boolean
+  isContinuation: boolean,
+  execution: RunExecutionMode
 ): Promise<
   RunPhase<{
     adoptedRunDir: () => string | undefined;
@@ -452,7 +452,8 @@ export async function establishAdoptedRunSource(
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts
+    opts,
+    execution
   );
   if (sourced.stopped) return sourced;
   return {
@@ -486,8 +487,9 @@ export async function establishRunSource(
   workflowSourceDir: string,
   opts: Pick<
     ExecuteWorkflowOptions,
-    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner' | 'execContext' | 'container'
-  >
+    'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner'
+  >,
+  execution: RunExecutionMode
 ): Promise<RunPhase<WorkflowSourceRoots | undefined>> {
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
   const isResume = opts.priorCompletedNodes !== undefined;
@@ -547,8 +549,7 @@ export async function establishRunSource(
             error: error instanceof Error ? error.message : String(error),
             retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
           },
-          opts.execContext,
-          opts.container
+          execution
         );
         if (released) {
           await safeSendMessage(

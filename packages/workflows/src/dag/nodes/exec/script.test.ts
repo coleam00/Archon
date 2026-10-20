@@ -553,12 +553,16 @@ describe('executeDagWorkflow -- script nodes', () => {
   });
 
   it.each([
-    [true, true],
-    [false, true],
-    [true, false],
+    [true, true, 'container'],
+    [false, true, 'container'],
+    [true, false, 'container'],
+    [true, true, 'host'],
+    [true, true, 'absent'],
+    [true, true, 'no-backend'],
+    [true, true, 'no-context'],
   ] as const)(
-    'container source release won=%s matching container=%s exits without generic pause cleanup',
-    async (released, matches) => {
+    'container source release won=%s matching container=%s execution=%s',
+    async (released, matches, execution) => {
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
       const marker = join(testDir, 'never-ran');
@@ -597,7 +601,7 @@ describe('executeDagWorkflow -- script nodes', () => {
         }
       );
       try {
-        const result = await executeDagWorkflow(
+        const executing = executeDagWorkflow(
           dagOptions({
             deps: mockDeps,
             platform,
@@ -606,13 +610,35 @@ describe('executeDagWorkflow -- script nodes', () => {
               name: 'unreadable-container',
               nodes: [{ id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }],
             },
-            workflowRun: makeWorkflowRun('unreadable-container'),
+            workflowRun: makeWorkflowRun('unreadable-container', {
+              metadata: { isolation: 'container' },
+            }),
             workflowSourceRoots: capturedSourceRoots(capture.anchor),
-            execContext: { kind: 'container', containerId: 'cid' },
-            containerCtx: { envId: 'env', writeBack: 'approve', backend },
+            execContext:
+              execution === 'host'
+                ? { kind: 'host' }
+                : execution === 'absent' || execution === 'no-context'
+                  ? undefined
+                  : { kind: 'container', containerId: 'cid' },
+            containerCtx:
+              execution === 'no-backend' || execution === 'no-context'
+                ? undefined
+                : { envId: 'env', writeBack: 'approve', backend },
           })
         );
-        expect(result).toEqual({ kind: 'source_release', released });
+        if (execution !== 'container') {
+          await expect(executing).rejects.toThrow(
+            execution === 'no-backend'
+              ? 'Container execution requires a container backend context'
+              : 'Container backend requires a container execution context'
+          );
+          expect(mockDeps.store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
+          expect(backend.prepareSuspend).not.toHaveBeenCalled();
+          expect(stop).not.toHaveBeenCalled();
+          expect(backend.suspend).not.toHaveBeenCalled();
+          return;
+        }
+        expect(await executing).toEqual({ kind: 'source_release', released });
         expect(backend.prepareSuspend).toHaveBeenCalledWith('env', 'cid', 2_000);
         expect(stop).toHaveBeenCalledTimes(released && matches ? 1 : 0);
         const events = persistedEvents(mockDeps.store);

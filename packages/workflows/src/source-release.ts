@@ -1,5 +1,4 @@
-import type { ExecutionContext } from '@archon/provider-contract';
-import { requireContainerRunContext, type ContainerRunContext } from './container-context';
+import type { RunExecutionMode } from './container-context';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { reportContainerSuspension, type ContainerSuspendOutcome } from './dag/container-gate';
 import type { SourceReleaseWrite } from './store';
@@ -10,13 +9,12 @@ export async function releaseUnreadableRunSource(
   conversationId: string,
   runId: string,
   release: SourceReleaseWrite,
-  execContext?: ExecutionContext,
-  container?: ContainerRunContext
+  execution: RunExecutionMode
 ): Promise<{ released: boolean }> {
-  if (execContext?.kind !== 'container') {
+  if (execution.kind === 'host') {
     return deps.store.releaseRunForUnreadableSource(runId, release);
   }
-  const containerCtx = requireContainerRunContext(container);
+  const { execContext, container: containerCtx } = execution;
   let beforePublish: (() => Promise<void>) | undefined;
   let outcome: ContainerSuspendOutcome | undefined;
   try {
