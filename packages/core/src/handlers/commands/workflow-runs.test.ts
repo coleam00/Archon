@@ -214,6 +214,9 @@ describe('CommandHandler', () => {
           cancel_reason: 'operator',
           reason:
             'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          warnings: [
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          ],
         });
       });
 

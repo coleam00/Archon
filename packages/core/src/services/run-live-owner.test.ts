@@ -498,13 +498,22 @@ describe('detached owner preparation', () => {
   });
 
   test('rejects malformed and oversized preparation frames instead of acknowledging a stop', async () => {
-    for (const frame of [
-      '{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}',
-      'x'.repeat(257),
+    for (const [frame, expectedError] of [
+      ['{"group":{"pgid":1,"leaderReaped":true,"signalAttempted":true}}', 'Invalid input'],
+      ['x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
     ]) {
       const runId = `invalid-preparation-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
+      const sockets = new Set<Socket>();
+      const socketErrors: Error[] = [];
       const server = createServer(socket => {
+        sockets.add(socket);
+        socket.once('close', () => sockets.delete(socket));
+        // Rejection can close a Windows pipe while this fixture is still writing.
+        socket.on('error', error => {
+          socketErrors.push(error);
+          socket.destroy();
+        });
         socket.once('data', () => {
           socket.write('{"kind":"detached","pid":12345}\n');
           socket.once('data', () => socket.write(`preparing\n${frame}\nready\n`));
@@ -513,10 +522,14 @@ describe('detached owner preparation', () => {
       await listen(server, path);
       const lease = await requestRunLiveOwnerStop(runId);
       try {
-        await expect(lease.commit()).rejects.toThrow();
+        await expect(lease.commit()).rejects.toThrow(expectedError);
       } finally {
         lease.release();
+        for (const socket of sockets) socket.destroy();
         await close(server);
+      }
+      for (const error of socketErrors) {
+        expect(error).toMatchObject({ code: expect.stringMatching(/^(EPIPE|ECONNRESET)$/) });
       }
     }
   });

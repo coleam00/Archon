@@ -3,7 +3,6 @@ import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
-import { TERMINATION_GRACE_MS } from '@archon/core/services/run-stop-bounds';
 import { exitWithDrain } from './exit-with-drain';
 
 // The signals this handler settles a run on are the ones it records as the stop
@@ -41,41 +40,8 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   const detachedTrees = detached ? recordNodeProcessTrees({ mode: 'detached-posix' }) : undefined;
   const nodeTrees =
     detachedTrees ?? (input.detachedProcessOwner ? undefined : recordNodeProcessTrees());
-  let teardown: Promise<void> | undefined;
-  const teardownOnce = (signal: TerminationSignal): Promise<void> => {
-    teardown ??= Promise.resolve().then(() => input.teardown?.(signal));
-    return teardown;
-  };
-  const prepareTeardown = async (): Promise<string[]> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        teardownOnce('SIGTERM').then(() => [] as string[]),
-        new Promise<string[]>(resolve => {
-          timer = setTimeout(
-            () =>
-              resolve([
-                'Run-owner cleanup exceeded its termination grace; resources may remain allocated.',
-              ]),
-            TERMINATION_GRACE_MS
-          );
-        }),
-      ]);
-    } catch (error) {
-      log.error({ err: error, runId }, 'workflow.termination_teardown_failed');
-      return ['Run-owner cleanup failed; resources may remain allocated.'];
-    } finally {
-      clearTimeout(timer);
-    }
-  };
   const unregisterPreparation = detachedTrees
-    ? liveOwner.registerTerminationPreparation(() => {
-        const prepared = detachedTrees.prepareTermination();
-        return {
-          ...prepared,
-          ready: Promise.all([prepared.ready, prepareTeardown()]).then(results => results.flat()),
-        };
-      })
+    ? liveOwner.registerTerminationPreparation(() => detachedTrees.prepareTermination())
     : undefined;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
@@ -121,7 +87,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
-      .then(() => teardownOnce(signal))
+      .then(() => input.teardown?.(signal))
       .catch(() => undefined)
       .then(async () => {
         // A detached cancel already rang the handoff frame and must keep its lease

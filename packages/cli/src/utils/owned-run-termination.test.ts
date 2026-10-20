@@ -50,6 +50,7 @@ async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise
   let descendant = 0;
   let descendantAliveAtFail = false;
   let failedWith: unknown;
+  const teardownSignals: string[] = [];
   let exited!: () => void;
   const exitCalled = new Promise<void>(resolve => {
     exited = resolve;
@@ -76,6 +77,9 @@ async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise
       registerTerminationPreparation: () => () => undefined,
     },
     detachedProcessOwner,
+    teardown: async signal => {
+      teardownSignals.push(signal);
+    },
   });
   try {
     const node = runSubprocess(
@@ -100,6 +104,7 @@ async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise
 
     process.emit('SIGTERM', 'SIGTERM');
     await exitCalled;
+    expect(teardownSignals).toEqual(['SIGTERM']);
 
     return { descendant, descendantAliveAtFail, failedWith };
   } finally {
@@ -125,71 +130,44 @@ posixOnly('a genuine interrupt also ends detached command groups', async () => {
   await waitUntil('the detached descendant to exit', () => !processExists(result.descendant));
 });
 
-for (const outcome of ['success', 'failure', 'expiry'] as const) {
-  posixOnly(
-    `detached preparation waits for once-only teardown and reports ${outcome}`,
-    async () => {
-      const { startRunLiveOwner, requestRunLiveOwnerStop } = await import(
-        '@archon/core/services/run-live-owner'
-      );
-      const runId = `teardown-${crypto.randomUUID()}`;
-      const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
-      let calls = 0;
-      let finish!: () => void;
-      const cleanup = new Promise<void>((resolve, reject) => {
-        finish = () =>
-          outcome === 'failure' ? reject(new Error('fixture cleanup failure')) : resolve();
-      });
-      const deregister = registerOwnedRunTermination({
-        store: {
-          getWorkflowRunStatus: async () => 'running',
-          failWorkflowRun: async () => {
-            throw new Error('Controller owns the terminal write');
-          },
+posixOnly(
+  'detached preparation leaves owner resources intact when a stop is released and retried',
+  async () => {
+    const { startRunLiveOwner, requestRunLiveOwnerStop } = await import(
+      '@archon/core/services/run-live-owner'
+    );
+    const runId = `teardown-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+    let teardownCalls = 0;
+    const deregister = registerOwnedRunTermination({
+      store: {
+        getWorkflowRunStatus: async () => 'running',
+        failWorkflowRun: async () => {
+          throw new Error('Controller owns the terminal write');
         },
-        runId,
-        logModule: 'owned-run-termination.test',
-        liveOwner: owner,
-        detachedProcessOwner: true,
-        teardown: async signal => {
-          expect(signal).toBe('SIGTERM');
-          calls++;
-          await cleanup;
-        },
-      });
-      const lease = await requestRunLiveOwnerStop(runId);
-      try {
-        let acknowledged = false;
-        const committed = lease.commit().then(result => {
-          acknowledged = true;
-          return result;
-        });
-        await waitUntil('teardown to start', () => calls === 1);
-        expect(acknowledged).toBe(false);
-        if (outcome !== 'expiry') finish();
-        const prepared = await committed;
-        expect(prepared?.warnings).toHaveLength(outcome === 'success' ? 0 : 1);
-        expect(calls).toBe(1);
-        if (outcome === 'success') {
+      },
+      runId,
+      logModule: 'owned-run-termination.test',
+      liveOwner: owner,
+      detachedProcessOwner: true,
+      teardown: async () => {
+        teardownCalls++;
+      },
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const lease = await requestRunLiveOwnerStop(runId);
+        try {
+          expect(await lease.commit()).toEqual({ groups: [], warnings: [] });
+          expect(teardownCalls).toBe(0);
+        } finally {
           lease.release();
-          await waitUntil('the controller to disconnect', () => !owner.isStopRequested());
-          const retry = await requestRunLiveOwnerStop(runId);
-          try {
-            expect((await retry.commit())?.warnings).toEqual([]);
-          } finally {
-            retry.release();
-          }
-          expect(calls).toBe(1);
         }
-        if (outcome === 'failure') expect(prepared?.warnings[0]).toContain('cleanup failed');
-        if (outcome === 'expiry') expect(prepared?.warnings[0]).toContain('exceeded');
-      } finally {
-        finish();
-        lease.release();
-        deregister();
-        await owner.close();
+        await waitUntil('the controller to disconnect', () => !owner.isStopRequested());
       }
-    },
-    8000
-  );
-}
+    } finally {
+      deregister();
+      await owner.close();
+    }
+  }
+);
