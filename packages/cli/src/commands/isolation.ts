@@ -167,7 +167,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         continue;
       }
 
-      await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
+      const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
         const result = await provider.destroy(env.working_path, {
           // A stale environment's branch is deleted only when the environment created it;
           // an existing branch it checked out may hold commits that exist nowhere else.
@@ -185,7 +185,9 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
           );
         }
         await markDestroyed();
+        return result;
       });
+      for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
       console.log(
         lock.kind === 'released'
           ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`

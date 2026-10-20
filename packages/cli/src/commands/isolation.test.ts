@@ -1298,6 +1298,25 @@ describe('isolationCleanupCommand', () => {
     }
   );
 
+  it('reports a stale branch deletion warning after retiring the registration', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
+    const warning = "Cannot delete branch 'feature-branch': checked out elsewhere";
+    mockDestroyWorktree.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: false,
+      remoteBranchDeleted: null,
+      warnings: [warning],
+    });
+    await isolationCleanupCommand(7);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(mockEnv);
+    expect(consoleLogSpy).toHaveBeenCalledWith(`  Warning: ${warning}`);
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Status: Cleaned');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '\nCleanup complete: 1 cleaned, 0 skipped, 0 failed'
+    );
+  });
+
   it.each(['refusal', 'partial'])(
     'reports %s without marking the stale environment destroyed',
     async mode => {
