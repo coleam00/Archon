@@ -557,7 +557,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Platform Adapters -- Slack
 
-These variables take effect only when the `chat-slack` plugin is installed. See the [Slack guide](/adapters/slack/).
+These variables configure the `chat-slack` plugin. In Docker, a nonempty `SLACK_BOT_TOKEN` declares installation of the image-provided release offline at startup; both tokens are required to connect. Existing installed releases are retained. Remove the tokens from every effective env source and remove the plugin to keep Slack off across Docker restarts. Outside Docker, install the plugin manually. See the [Slack guide](/adapters/slack/).
 
 | Variable | Description | Default |
 | --- | --- | --- |

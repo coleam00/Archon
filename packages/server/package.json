@@ -5,6 +5,7 @@
   "main": "./src/index.ts",
   "scripts": {
     "dev": "bun --watch src/index.ts",
+    "provision:docker": "bun ../../scripts/provision-docker-plugins.ts",
     "start": "bun src/index.ts",
     "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit",
