@@ -113,14 +113,20 @@ test('malformed guard declarations fail at start, drain and failed-resume decisi
   ).toThrow('expected a boolean');
 });
 
-test('local holders project registered aliases for guarded and read-only branch starts', () => {
-  const local = heldCheckouts(
-    [{ id: 'local', working_path: '/shared', launch: launch() }],
-    [{ codebaseId: 'codebase', branch: 'reusable', workingPath: '/shared' }]
-  );
-  for (const guard of [true, false]) {
-    expect(
-      resourceStartBlocker({ ...slot(), heldCheckouts: local }, launch(guard, 'reusable'))
-    ).toEqual({ kind: 'run', id: 'local' });
+test('local holders project registered path and branch aliases before and after claiming', () => {
+  for (const working_path of [undefined, '/shared']) {
+    for (const heldLaunch of [launch(), launch(true, 'reusable')]) {
+      const local = heldCheckouts(
+        [{ id: 'local', working_path, launch: heldLaunch }],
+        [{ codebaseId: 'codebase', branch: 'reusable', workingPath: '/shared' }]
+      );
+      for (const guard of [true, false]) {
+        for (const incoming of [launch(guard), launch(guard, 'reusable')])
+          expect(resourceStartBlocker({ ...slot(), heldCheckouts: local }, incoming)).toEqual({
+            kind: 'run',
+            id: 'local',
+          });
+      }
+    }
   }
 });

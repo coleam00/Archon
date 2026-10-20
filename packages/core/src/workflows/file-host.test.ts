@@ -556,8 +556,13 @@ for (const { late, local } of [
       expect(await store.admitResourceStart(input(incoming))).toMatchObject({ status: 'queued' });
     const holder = makeLaunch();
     holder.execution.cwd = workingPath;
-    if (local) await store.admitResourceStart(input(holder));
-    else await store.createWorkflowRun(holder.run);
+    if (local) {
+      await store.admitResourceStart(input(holder));
+      expect(await store.admitResourceStart(input(incoming))).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.run.id },
+      });
+    } else await store.createWorkflowRun(holder.run);
     await store.claimPendingWorkflowRun(holder.run.id, workingPath);
     if (late) {
       await register();
