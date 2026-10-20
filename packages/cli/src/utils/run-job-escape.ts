@@ -27,6 +27,7 @@ import { writeStderr, writeStdout } from './stdout';
 
 /** In a Windows run owner and its descendants: the pipe of the owner's broker. */
 export const RUN_JOB_ESCAPE_ENV = 'ARCHON_RUN_JOB_ESCAPE';
+export const RUN_JOB_ESCAPE_BUN_CONFIG_ARG = `--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`;
 /** In the broker process only: the pipe it serves. */
 const BROKER_ENV = 'ARCHON_RUN_JOB_ESCAPE_BROKER';
 const BROKER_READY = 'ready\n';
@@ -118,9 +119,7 @@ function runInvocation(
   // Release binaries disable bunfig autoload at build time; source Bun needs it here.
   const child = spawn(
     command,
-    BUNDLED_IS_BINARY
-      ? args
-      : [`--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, ...args],
+    BUNDLED_IS_BINARY ? args : [RUN_JOB_ESCAPE_BUN_CONFIG_ARG, ...args],
     {
       cwd: invocation.cwd,
       env,

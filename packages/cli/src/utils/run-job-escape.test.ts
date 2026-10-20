@@ -307,6 +307,70 @@ nodes:
     }
   }, 30_000);
 
+  it('launches a detached source CLI with a relative Bun config and a different --cwd', async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-relative-bun-config-')));
+    const project = join(dir, 'project');
+    const home = join(dir, 'home');
+    const marker = join(project, 'executed');
+    mkdirSync(home);
+    mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+    writeFileSync(join(dir, 'config.toml'), '');
+    writeFileSync(join(home, 'config.yaml'), 'store: files\n');
+    writeFileSync(
+      join(project, '.archon', 'workflows', 'finish.yaml'),
+      `name: finish
+description: Relative Bun config fixture
+worktree:
+  enabled: false
+nodes:
+  - id: finish
+    runtime: bun
+    script: ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'done');`)}
+`
+    );
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        '--config=./config.toml',
+        join(import.meta.dir, '..', 'cli.ts'),
+        'workflow',
+        'run',
+        'finish',
+        '--folder',
+        '--detach',
+        '--json',
+        '--cwd',
+        project,
+      ],
+      {
+        cwd: dir,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+          BUN_OPTIONS: '',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [exit, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(exit, stdout + stderr).toBe(0);
+    const ack: { runId: string } = JSON.parse(stdout);
+    const store = await createFileWorkflowStore({ root: join(home, 'store') });
+    const deadline = Date.now() + 15_000;
+    while ((await store.getWorkflowRun(ack.runId))?.status !== 'completed') {
+      if (Date.now() >= deadline) throw new Error('Detached executor did not complete');
+      await Bun.sleep(25);
+    }
+    expect(existsSync(marker)).toBe(true);
+  }, 30_000);
+
   it('kills a broker that never becomes ready and reports its stderr', async () => {
     const broker = await bootBrokerStub(
       "console.error('startup stuck'); setInterval(() => {}, 1000)"

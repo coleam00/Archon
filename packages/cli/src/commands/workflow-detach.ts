@@ -26,6 +26,7 @@ import {
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
 import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
   getLog,
@@ -132,10 +133,10 @@ export function buildDetachedRunCmd(
   execArgv: readonly string[] = []
 ): string[] {
   // The escape broker disables project startup hooks with an explicit Bun config.
-  // Keep that config across the second spawn, before the executor claims its owner.
+  // Keep only that cwd-independent config; caller config paths belong to the launch cwd.
   const baseCmd = isBinary
     ? [execPath]
-    : [execPath, ...execArgv.filter(arg => arg.startsWith('--config=')), argv[1]];
+    : [execPath, ...execArgv.filter(arg => arg === RUN_JOB_ESCAPE_BUN_CONFIG_ARG), argv[1]];
   // User args always start at argv[2] in BOTH modes. A Bun single-file
   // executable does have an argv[1] — the virtual entry path
   // (`/$bunfs/root/<name>`, `B:/~BUN/root/<name>.exe` on Windows) — so slicing

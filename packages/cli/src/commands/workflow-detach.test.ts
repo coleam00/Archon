@@ -1786,6 +1786,15 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
 
 describe('buildDetachedRunCmd', () => {
   for (const delimiter of [[], ['--', 'message']]) {
+    it(`drops caller Bun configs before changing cwd with delimiter=${delimiter.length > 0}`, () => {
+      const argv = ['bun', '/cli.ts', 'workflow', 'run', 'hold', '--detach', ...delimiter];
+      for (const config of ['--config=./config.toml', '--config=/caller/config.toml']) {
+        const source = buildDetachedRunCmd(false, '/bun', argv, '/project', [], [config]);
+        expect(source.slice(0, 2)).toEqual(['/bun', '/cli.ts']);
+        expect(source).not.toContain(config);
+      }
+    });
+
     it(`preserves the broker's Bun config with delimiter=${delimiter.length > 0}`, () => {
       const config = `--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`;
       const argv = ['bun', '/cli.ts', 'workflow', 'run', 'hold', '--detach', ...delimiter];
