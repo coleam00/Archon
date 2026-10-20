@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, openSync, writeSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
@@ -113,6 +122,26 @@ describe('in a container-mounted artifacts directory', () => {
     await contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a.b' }, 'second'));
     expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('second');
   });
+
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    "unreadable regular metadata rejects without replacing another producer's output",
+    async () => {
+      await contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a.b' }, 'first'));
+      const path = join(root, 'nodes', 'a_b.meta.json');
+      const originalMetadata = await readFile(path, 'utf8');
+      await chmod(path, 0o000);
+      try {
+        expect((await lstat(path)).isFile()).toBe(true);
+        await expect(
+          contained(() => writeNodeArtifact(root, { ...meta, nodeId: 'a_b' }, 'second'))
+        ).rejects.toMatchObject({ code: 'EACCES' });
+        expect(await readFile(join(root, 'nodes', 'a_b.md'), 'utf8')).toBe('first');
+      } finally {
+        await chmod(path, 0o600);
+      }
+      expect(await readFile(path, 'utf8')).toBe(originalMetadata);
+    }
+  );
 
   test.skipIf(process.platform === 'win32')(
     'refuses FIFO metadata without waiting for input',
