@@ -26,11 +26,14 @@ interface ToolCallAttentionOptions {
   streamId?: string;
 }
 
-/** A stream with published attention, and when its oldest active stall was raised. */
+/** The stall occurrences currently published by a stream. */
 export interface StreamStall {
   streamId: string;
-  raisedAt: string;
+  stallIds: string[];
 }
+
+type StallIdentity = Required<Pick<ToolCallAttention, 'raisedAt' | 'stallId'>>;
+type TrackedCall = Omit<ToolCallAttention, keyof StallIdentity> & { stall?: StallIdentity };
 
 const terminalSubtasks: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
@@ -62,7 +65,7 @@ function createToolCallAttention(
   retainCleanup: (retry: () => Promise<boolean>) => void
 ): {
   progress(at: number): void;
-  /** This stream's id and when its current stall was raised, while the run row shows one. */
+  /** Current stall identities, while the run row shows them. */
   stall(): StreamStall | undefined;
   observe(event: ProviderEvent): Promise<void>;
   refresh(): Promise<void>;
@@ -77,8 +80,8 @@ function createToolCallAttention(
   );
   const display = (value: string): string =>
     Array.from(redactCredentialValues(value, credentials)).slice(0, 512).join('');
-  const tools = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
-  const subtasks = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
+  const tools = new Map<string, TrackedCall>();
+  const subtasks = new Map<string, TrackedCall>();
   const parents = new Map<string, string>();
   const openedAt = new Date(now()).toISOString();
   const turn = {
@@ -92,15 +95,15 @@ function createToolCallAttention(
     lastProgressAt: openedAt,
     thresholdMs: Math.ceil(options.idleThresholdMs ?? 0),
   };
-  let turnRaisedAt: string | undefined;
+  let turnStall: StallIdentity | undefined;
   let closed = false;
   let persisted: string | undefined = '[]';
   let stall: StreamStall | undefined;
 
-  function stalledCalls(): ToolCallAttention[] {
+  function stalledCalls(): (ToolCallAttention & StallIdentity)[] {
     if (closed) return [];
     const time = now();
-    const calls: ToolCallAttention[] = [];
+    const calls: (ToolCallAttention & StallIdentity)[] = [];
     const independentSubtasks = [...subtasks]
       .filter(([id]) => {
         const parent = parents.get(id);
@@ -110,21 +113,22 @@ function createToolCallAttention(
     if (options.thresholdMs > 0)
       for (const tool of [...tools.values(), ...independentSubtasks]) {
         if (
-          tool.raisedAt !== undefined ||
+          tool.stall !== undefined ||
           time - Date.parse(tool.lastProgressAt) >= options.thresholdMs
         ) {
-          tool.raisedAt ??= new Date(time).toISOString();
-          calls.push({ ...tool, raisedAt: tool.raisedAt });
+          tool.stall ??= { raisedAt: new Date(time).toISOString(), stallId: crypto.randomUUID() };
+          const { stall, ...call } = tool;
+          calls.push({ ...call, ...stall });
         }
       }
     if (
       tools.size === 0 &&
       subtasks.size === 0 &&
       turn.thresholdMs > 0 &&
-      (turnRaisedAt !== undefined || time - Date.parse(turn.lastProgressAt) >= turn.thresholdMs)
+      (turnStall !== undefined || time - Date.parse(turn.lastProgressAt) >= turn.thresholdMs)
     ) {
-      turnRaisedAt ??= new Date(time).toISOString();
-      calls.push({ ...turn, raisedAt: turnRaisedAt });
+      turnStall ??= { raisedAt: new Date(time).toISOString(), stallId: crypto.randomUUID() };
+      calls.push({ ...turn, ...turnStall });
     }
     return calls;
   }
@@ -141,17 +145,26 @@ function createToolCallAttention(
     );
   }
 
-  async function persist(): Promise<boolean> {
+  let persistence = Promise.resolve(true);
+
+  function persist(): Promise<boolean> {
+    persistence = persistence.then(writeSnapshot);
+    return persistence;
+  }
+
+  async function writeSnapshot(): Promise<boolean> {
     const calls = stalledCalls();
-    const raisedAt = calls.map(call => call.raisedAt).sort()[0];
-    if (stall?.raisedAt !== raisedAt) stall = undefined;
+    stall = undefined;
+    const stallIds = calls.map(call => call.stallId);
     const snapshot = JSON.stringify(toolCallAttentionArraySchema.parse(calls));
     if (snapshot === persisted && calls.length === 0) return true;
     try {
       // Resume clears old attention; only streams still alive can publish it again.
       if (snapshot === persisted) {
-        if (await storedSnapshotMatches(snapshot)) return true;
-        stall = undefined;
+        if (await storedSnapshotMatches(snapshot)) {
+          stall = { streamId, stallIds };
+          return true;
+        }
       }
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
       let confirmed = changed || calls.length === 0;
@@ -161,7 +174,7 @@ function createToolCallAttention(
       }
       if (confirmed) {
         persisted = snapshot;
-        stall = raisedAt === undefined ? undefined : { streamId, raisedAt };
+        stall = stallIds.length === 0 ? undefined : { streamId, stallIds };
         return true;
       }
     } catch {
@@ -182,7 +195,7 @@ function createToolCallAttention(
   return {
     progress(at): void {
       turn.lastProgressAt = new Date(at).toISOString();
-      turnRaisedAt = undefined;
+      turnStall = undefined;
     },
     stall: () => stall,
     async observe(event: ProviderEvent): Promise<void> {
@@ -207,7 +220,7 @@ function createToolCallAttention(
         const tool = parent ? tools.get(parent) : undefined;
         if (tool) {
           tool.lastProgressAt = new Date(now()).toISOString();
-          delete tool.raisedAt;
+          delete tool.stall;
         }
         if (options.reportedBackgroundWork) {
           if (terminalSubtasks.has(event.status)) subtasks.delete(event.taskId);
@@ -217,7 +230,7 @@ function createToolCallAttention(
             if (task) {
               if (event.status === 'running') {
                 task.lastProgressAt = at;
-                delete task.raisedAt;
+                delete task.stall;
               }
             } else {
               subtasks.set(event.taskId, {

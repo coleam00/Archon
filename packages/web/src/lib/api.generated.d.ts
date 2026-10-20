@@ -4608,6 +4608,7 @@ export interface components {
           status: 'running' | 'paused';
           calls: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4632,6 +4633,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4662,6 +4664,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4695,6 +4698,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4722,6 +4726,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4748,6 +4753,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -4774,6 +4780,7 @@ export interface components {
           runId: string;
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -5621,6 +5628,7 @@ export interface components {
     WorkflowRunMetadata: {
       tool_call_attention?: {
         streamId: string;
+        stallId?: string;
         nodeId: string;
         provider: string;
         /** @enum {string} */
@@ -6328,6 +6336,7 @@ export interface components {
           kind: 'stalled_tool_calls';
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6371,6 +6380,7 @@ export interface components {
           };
           calls: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6394,6 +6404,7 @@ export interface components {
           kind: 'attention';
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6450,6 +6461,7 @@ export interface components {
           kind: 'awaiting_response';
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6500,6 +6512,7 @@ export interface components {
           kind: 'usage_limit';
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6550,6 +6563,7 @@ export interface components {
           kind: 'unreadable';
           stalledCalls?: {
             streamId: string;
+            stallId?: string;
             nodeId: string;
             provider: string;
             /** @enum {string} */
@@ -6634,6 +6648,7 @@ export interface components {
             kind: 'stalled_tool_calls';
             stalledCalls?: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */
@@ -6677,6 +6692,7 @@ export interface components {
             };
             calls: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */
@@ -6700,6 +6716,7 @@ export interface components {
             kind: 'attention';
             stalledCalls?: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */
@@ -6756,6 +6773,7 @@ export interface components {
             kind: 'awaiting_response';
             stalledCalls?: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */
@@ -6806,6 +6824,7 @@ export interface components {
             kind: 'usage_limit';
             stalledCalls?: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */
@@ -6856,6 +6875,7 @@ export interface components {
             kind: 'unreadable';
             stalledCalls?: {
               streamId: string;
+              stallId?: string;
               nodeId: string;
               provider: string;
               /** @enum {string} */

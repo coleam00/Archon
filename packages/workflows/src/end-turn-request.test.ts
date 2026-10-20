@@ -5,6 +5,7 @@ import type { ToolCallAttention, WorkflowRun } from './schemas/workflow-run';
 
 const call = (streamId: string, raisedAt: string): ToolCallAttention => ({
   streamId,
+  stallId: `${streamId}:${raisedAt}`,
   nodeId: 'ci',
   provider: 'codex',
   toolCallId: `subtask:${streamId}`,
@@ -39,6 +40,17 @@ describe('planEndTurn', () => {
     expect(planEndTurn(run('running', []))).toEqual({ kind: 'refused', reason: 'nothing_stalled' });
   });
 
+  it.each(['running', 'paused'] as const)(
+    'refuses legacy attention without a stall identity in a %s run',
+    status => {
+      const { stallId: _stallId, ...legacy } = call('a', '2026-10-18T06:55:59.000Z');
+      expect(planEndTurn(run(status, [legacy]))).toEqual({
+        kind: 'refused',
+        reason: 'unreadable_attention',
+      });
+    }
+  );
+
   it('accepts a paused run with a live stalled sibling', () => {
     expect(planEndTurn(run('paused', [call('a', '2026-10-18T06:55:59.000Z')])).kind).toBe(
       'request'
@@ -52,7 +64,7 @@ describe('planEndTurn', () => {
     });
   });
 
-  it('names every stalled stream once', () => {
+  it('records every observed stall in each stream', () => {
     const plan = planEndTurn(
       run('running', [
         call('a', '2026-10-18T06:55:59.000Z'),
@@ -62,61 +74,41 @@ describe('planEndTurn', () => {
     );
     expect(plan.kind === 'request' && plan.metadata).toEqual({
       end_turn_request: {
-        stalls: { a: '2026-10-18T06:56:10.000Z', b: '2026-10-18T07:00:00.000Z' },
+        stalls: {
+          a: ['a:2026-10-18T06:55:59.000Z', 'a:2026-10-18T06:56:10.000Z'],
+          b: ['b:2026-10-18T07:00:00.000Z'],
+        },
       },
     });
   });
 });
 
 describe('isEndTurnRequested', () => {
-  it.each([{}, { stalls: { a: 'bad' } }, { stalls: [] }])(
-    'rejects malformed persisted requests %j',
-    async request => {
-      expect(
-        await isEndTurnRequested(storeWith({ end_turn_request: request }), 'run', {
-          streamId: 'a',
-          raisedAt: '2026-10-18T06:55:59.000Z',
-        })
-      ).toBe(false);
-    }
-  );
-
-  it('matches only the observed stall', async () => {
-    const plan = planEndTurn(run('running', [call('a', '2026-10-18T06:55:59.000Z')]));
-    if (plan.kind !== 'request') throw new Error('expected a request');
-    const store = storeWith(plan.metadata);
+  it.each([
+    {},
+    { stalls: { a: 'bad' } },
+    { stalls: [] },
+    { stalls: { a: [''] } },
+    { stalls: { a: '2026-10-18T06:55:59.000Z' }, requestedAt: '2026-10-18T05:00:00.000Z' },
+  ])('rejects malformed or obsolete timestamp requests %j', async request => {
     expect(
-      await isEndTurnRequested(store, 'run', {
+      await isEndTurnRequested(storeWith({ end_turn_request: request }), 'run', {
         streamId: 'a',
-        raisedAt: '2026-10-18T06:55:59.000Z',
-      })
-    ).toBe(true);
-    expect(
-      await isEndTurnRequested(store, 'run', {
-        streamId: 'a',
-        raisedAt: '2026-10-18T07:00:00.000Z',
-      })
-    ).toBe(false);
-    expect(
-      await isEndTurnRequested(store, 'run', {
-        streamId: 'b',
-        raisedAt: '2026-10-18T06:55:59.000Z',
+        stallIds: ['stall'],
       })
     ).toBe(false);
   });
 
-  it('accepts previously persisted requests with a requester timestamp', async () => {
-    const store = storeWith({
-      end_turn_request: {
-        stalls: { a: '2026-10-18T06:55:59.000Z' },
-        requestedAt: '2026-10-18T05:00:00.000Z',
-      },
-    });
-    expect(
-      await isEndTurnRequested(store, 'run', {
-        streamId: 'a',
-        raisedAt: '2026-10-18T06:55:59.000Z',
-      })
-    ).toBe(true);
+  it('matches any observed occurrence still active in its stream', async () => {
+    const store = storeWith({ end_turn_request: { stalls: { a: ['first', 'second'] } } });
+    for (const stallIds of [['first'], ['second'], ['first', 'new']]) {
+      expect(await isEndTurnRequested(store, 'run', { streamId: 'a', stallIds })).toBe(true);
+    }
+    for (const stall of [
+      { streamId: 'a', stallIds: ['new'] },
+      { streamId: 'a', stallIds: [] },
+      { streamId: 'b', stallIds: ['first'] },
+    ])
+      expect(await isEndTurnRequested(store, 'run', stall)).toBe(false);
   });
 });

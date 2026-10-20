@@ -105,7 +105,7 @@ describe('tool call attention', () => {
     expect(h.snapshots.at(-1)).toEqual([]);
     h.advance(100);
     await h.tracker.refresh();
-    expect(h.tracker.stall()?.raisedAt).not.toEqual(original?.raisedAt);
+    expect(h.tracker.stall()?.stallIds).not.toEqual(original?.stallIds);
     await h.tracker.clear();
     h.advance(1000);
     await h.tracker.refresh();
@@ -188,6 +188,116 @@ describe('tool call attention', () => {
     await h.tracker.clear();
     expect(h.snapshots.at(-1)).toEqual([]);
   });
+
+  test.each(['turn', 'tool', 'subtask'] as const)(
+    'an old request cannot end a renewed %s stall after the clock moves backward or repeats',
+    async kind => {
+      const h = harness(100, true, 100);
+      if (kind === 'tool') await h.tracker.observe(start);
+      if (kind === 'subtask')
+        await h.tracker.observe({ type: 'subtask', taskId: 'task', status: 'started' });
+      h.advance(100);
+      await h.tracker.refresh();
+      const requested = async () => {
+        const stall = h.tracker.stall();
+        if (!stall) throw new Error('expected published stall');
+        return isEndTurnRequested({ getWorkflowRun: h.read }, 'run', stall);
+      };
+      for (const jump of [-1000, -100]) {
+        const plan = planEndTurn({
+          ...h.run,
+          metadata: { tool_call_attention: h.snapshots.at(-1) },
+        });
+        if (plan.kind !== 'request') throw new Error(plan.reason);
+        Object.assign(h.run.metadata, plan.metadata);
+        expect(await requested()).toBe(true);
+        h.advance(jump);
+        if (kind === 'turn') {
+          h.tracker.progress(h.now());
+          await h.tracker.refresh();
+        } else if (kind === 'tool') {
+          await h.tracker.observe({
+            type: 'subtask',
+            taskId: 'child',
+            parentToolCallId: 'call',
+            status: 'running',
+          });
+        } else {
+          await h.tracker.observe({ type: 'subtask', taskId: 'task', status: 'running' });
+        }
+        expect(h.tracker.stall()).toBeUndefined();
+        h.advance(100);
+        await h.tracker.refresh();
+        expect(await requested()).toBe(false);
+      }
+    }
+  );
+
+  test('an observed call remains endable while siblings progress, but successor calls do not', async () => {
+    const h = harness();
+    await h.tracker.observe(start);
+    h.advance(50);
+    await h.tracker.observe({ ...start, toolCallId: 'second' });
+    h.advance(100);
+    await h.tracker.refresh();
+    const plan = planEndTurn({ ...h.run, metadata: { tool_call_attention: h.snapshots.at(-1) } });
+    if (plan.kind !== 'request') throw new Error(plan.reason);
+    Object.assign(h.run.metadata, plan.metadata);
+    await h.tracker.observe({ type: 'tool_call_update', toolCallId: 'call', status: 'completed' });
+    const remaining = h.tracker.stall();
+    if (!remaining) throw new Error('expected remaining stall');
+    expect(await isEndTurnRequested({ getWorkflowRun: h.read }, 'run', remaining)).toBe(true);
+    await h.tracker.observe({
+      type: 'tool_call_update',
+      toolCallId: 'second',
+      status: 'completed',
+    });
+    await h.tracker.observe(start);
+    h.advance(100);
+    await h.tracker.refresh();
+    const successor = h.tracker.stall();
+    if (!successor) throw new Error('expected successor stall');
+    expect(await isEndTurnRequested({ getWorkflowRun: h.read }, 'run', successor)).toBe(false);
+  });
+
+  test.each(['read', 'write'] as const)(
+    'clear finishes after an in-flight persistence %s and leaves no attention',
+    async boundary => {
+      const h = harness();
+      await h.tracker.observe(start);
+      h.advance(100);
+      await h.tracker.refresh();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      if (boundary === 'read') {
+        h.read.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { ...h.run, metadata: {} };
+        });
+      } else {
+        h.advance(100);
+        await h.tracker.observe({ ...start, toolCallId: 'second' });
+        h.advance(100);
+        h.write.mockImplementationOnce(async (_run, _stream, calls) => {
+          entered.resolve();
+          await release.promise;
+          h.snapshots.push(calls);
+          return true;
+        });
+      }
+      const refresh = h.tracker.refresh();
+      await entered.promise;
+      const clear = h.tracker.clear();
+      release.resolve();
+      await Promise.all([refresh, clear]);
+      expect(h.snapshots.at(-1)).toEqual([]);
+      expect(h.tracker.stall()).toBeUndefined();
+      h.advance(100);
+      await h.tracker.refresh();
+      expect(h.snapshots.at(-1)).toEqual([]);
+    }
+  );
 
   test('a backward clock jump cannot clear an already raised advisory', async () => {
     const h = harness();
@@ -486,9 +596,11 @@ describe('tool call attention', () => {
     h.write.mockResolvedValueOnce(false);
     await h.tracker.refresh();
     expect(h.read).toHaveBeenCalledTimes(1);
+    const published = h.snapshots[0][0];
+    if (!published.stallId) throw new Error('expected stall identity');
     expect(h.tracker.stall()).toEqual({
-      streamId: h.snapshots[0][0].streamId,
-      raisedAt: h.snapshots[0][0].raisedAt,
+      streamId: published.streamId,
+      stallIds: [published.stallId],
     });
     const plan = planEndTurn({ ...h.run, metadata: { tool_call_attention: h.snapshots[0] } });
     if (plan.kind !== 'request') throw new Error(plan.reason);

@@ -13,7 +13,7 @@ import type { StreamStall } from './tool-call-attention';
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
 export const endTurnRequestSchema = z.object({
-  stalls: z.record(z.string().min(1), z.iso.datetime()),
+  stalls: z.record(z.string().min(1), z.array(z.string().min(1)).min(1)),
 });
 
 type EndTurnMetadata = {
@@ -36,12 +36,12 @@ export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndT
   if (!parsed.success) return { kind: 'refused', reason: 'unreadable_attention' };
   const calls = parsed.data;
   if (calls.length === 0) return { kind: 'refused', reason: 'nothing_stalled' };
-  const stalls = new Map<string, string>();
+  const stalls = new Map<string, string[]>();
   for (const call of calls) {
-    const observed = stalls.get(call.streamId);
-    if (observed === undefined || call.raisedAt > observed) {
-      stalls.set(call.streamId, call.raisedAt);
-    }
+    if (call.stallId === undefined) return { kind: 'refused', reason: 'unreadable_attention' };
+    const observed = stalls.get(call.streamId) ?? [];
+    observed.push(call.stallId);
+    stalls.set(call.streamId, observed);
   }
   return {
     kind: 'request',
@@ -54,7 +54,7 @@ export function planEndTurn(run: Pick<WorkflowRun, 'status' | 'metadata'>): EndT
   };
 }
 
-/** Match against owner timestamps the operator observed, independent of the CLI clock. */
+/** Match any observed occurrence that remains stalled, independent of wall clocks. */
 export async function isEndTurnRequested(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   runId: string,
@@ -65,6 +65,6 @@ export async function isEndTurnRequested(
   return (
     request.success &&
     Object.hasOwn(request.data.stalls, stall.streamId) &&
-    stall.raisedAt <= request.data.stalls[stall.streamId]
+    stall.stallIds.some(id => request.data.stalls[stall.streamId].includes(id))
   );
 }

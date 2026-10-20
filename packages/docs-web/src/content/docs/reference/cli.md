@@ -1273,10 +1273,11 @@ including thinking and result chunks, renews that interval. Reported tools and b
 work use `workflows.toolCallAttentionMs` instead, with their own progress timestamps and
 sanitized descriptions. Silence never ends the turn automatically.
 
-The command records the stream ids and stall timestamps the operator observed. A live
+The command records the stream ids and unique stall identities the operator observed. A live
 owner checks about every ten seconds and aborts a matching turn only if that stall is
 still active. The attempt fails as `timeout`; its retry policy decides whether to start
-a fresh attempt. A recovered stream or a later attempt is not ended by an old request.
+a fresh attempt. A recovered stream or a later attempt is not ended by an old request, even if the
+owner's wall clock moves backward.
 A paused run can have live streaming siblings; their stalls can also be ended without
 answering its gate. Inspect `workflow get <run-id> --json` for their
 `attention.stalledCalls`, including node and idle duration; the gate remains the paused
@@ -1292,6 +1293,9 @@ progressed. The owner might exit or the run might finish before it reads the req
 Use `workflow wait <run-id>` to inspect the next attention or terminal result; it can
 return the same advisory while recovery is pending. An `owner_lost` result requires
 operator recovery of the run's ownership. Nothing is killed by the CLI itself.
+
+Attention from older owners without stall identities remains visible but returns
+`unreadable_attention` from this command. New owners ignore older timestamp-based requests.
 
 Exit `1` refuses an unknown run, a run outside `running` or `paused`, no stalled work,
 or unreadable attention. `--json` prints

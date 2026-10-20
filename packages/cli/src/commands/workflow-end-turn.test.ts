@@ -9,6 +9,7 @@ const RUN_ID = '8b465df4-ec97-4d6a-9d59-26b0e74d6a6c';
 
 const stalledCall = {
   streamId: 'stream-1',
+  stallId: 'stall-1',
   nodeId: 'ci',
   provider: 'codex',
   toolCallId: 'subtask:command:thread:exec-1',
@@ -53,7 +54,7 @@ describe('workflow end-turn', () => {
     expect(updateWorkflowRun).toHaveBeenCalledWith(RUN_ID, {
       metadata: {
         end_turn_request: {
-          stalls: { 'stream-1': stalledCall.raisedAt },
+          stalls: { 'stream-1': [stalledCall.stallId] },
         },
       },
     });
