@@ -450,13 +450,11 @@ async function consumeIterationStream(
     )) {
       if (msg.type === 'result') applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
       else if (msg.type !== 'settled') await providerEvents.handle(msg);
-      if (await shouldStopStream()) break;
+      const stopped = await shouldStopStream();
+      if (msg.type === 'result' && (!stopped || attempt.cutOff)) throwOnResultFailure(run, i, msg);
+      if (stopped) break;
 
-      if (msg.type === 'result') {
-        throwOnResultFailure(run, i, msg);
-        // A result is not the end of the iteration; `settled` is. See the
-        // AI-node stream loop for the full rationale.
-      } else if (msg.type === 'settled') {
+      if (msg.type === 'settled') {
         attempt.settled =
           capabilities.backgroundWork !== 'reported' ||
           providerEvents.liveSubtaskIds().length === 0;

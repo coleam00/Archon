@@ -138,13 +138,13 @@ export async function runStreamPass(
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);
       else if (msg.type !== 'settled') await providerEvents.handle(msg);
-      if (await shouldStopStream()) break;
+      const stopped = await shouldStopStream();
+      if (msg.type === 'result' && (!stopped || state.cutOff)) throwOnResultError(pc, msg);
+      if (stopped) break;
 
       await heartbeat(pc, tickNow);
 
-      if (msg.type === 'result') {
-        throwOnResultError(pc, msg);
-      } else if (msg.type === 'settled') {
+      if (msg.type === 'settled') {
         state.settled =
           pc.capabilities.backgroundWork !== 'reported' ||
           providerEvents.liveSubtaskIds().length === 0;

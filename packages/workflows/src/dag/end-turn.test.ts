@@ -279,11 +279,18 @@ describe('ending a stalled turn', () => {
     { kind: 'loop', work: 'subtask' },
     { kind: 'agent', work: 'result' },
     { kind: 'loop', work: 'result' },
+    { kind: 'agent', work: 'failure' },
+    { kind: 'loop', work: 'failure' },
+    { kind: 'agent', work: 'cancelled failure' },
+    { kind: 'loop', work: 'cancelled failure' },
   ] as const)(
     '$kind processes delivered $work before matching a request',
     async ({ kind, work }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`recovery-${kind}-${work}`);
+      const result = work !== 'tool' && work !== 'subtask';
+      const failure = { class: 'misconfigured', evidence: 'Missing MCP config' } as const;
+      store.getWorkflowRunStatus.mockImplementation(async () => workflowRun.status);
       store.getWorkflowRun.mockImplementation(async () => workflowRun);
       store.setToolCallAttention.mockImplementation(async (_run, _stream, calls) => {
         workflowRun.metadata.tool_call_attention = calls;
@@ -304,9 +311,11 @@ describe('ending a stalled turn', () => {
         if (plan.kind !== 'request') throw new Error(plan.reason);
         Object.assign(workflowRun.metadata, plan.metadata);
         setSystemTime(new Date(Date.now() + CANCEL_CHECK_INTERVAL_MS + 1000));
-        if (work === 'result') {
+        if (work === 'cancelled failure') workflowRun.status = 'cancelled';
+        if (result) {
           yield {
             type: 'result',
+            ...(work !== 'result' ? { failure } : {}),
             sessionId: 'delivered',
             cost: 7,
             tokens: { input: 100, output: 10 },
@@ -346,14 +355,14 @@ describe('ending a stalled turn', () => {
                 ? {
                     id: 'ci',
                     kind: 'agent',
-                    retry: { max_attempts: 0 },
+                    retry: { max_attempts: work === 'failure' ? 1 : 0, delay_ms: 1 },
                     idle_timeout: 10,
                     source: { kind: 'command', name: 'my-cmd' },
                   }
                 : {
                     id: 'ci',
                     kind: 'loop',
-                    retry: { max_attempts: 0 },
+                    retry: { max_attempts: work === 'failure' ? 1 : 0, delay_ms: 1 },
                     idle_timeout: 10,
                     ...structuredLoop(false),
                   },
@@ -361,15 +370,21 @@ describe('ending a stalled turn', () => {
           },
         })
       );
-      if (work === 'result') {
+      if (result) {
         expect(signal?.aborted).toBe(true);
         const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
         expect(failed?.data).toMatchObject({
-          failure_kind: 'timeout',
+          failure_kind:
+            work === 'cancelled failure' ? 'cancelled' : work === 'failure' ? 'fatal' : 'timeout',
+          ...(work === 'failure' ? { provider_failure: failure } : {}),
           cost_usd: 7,
           session_id: 'delivered',
           tokens: { input: 100, output: 10 },
         });
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+        expect(persistedEvents(store).some(e => e.event_type === 'node_retry_scheduled')).toBe(
+          false
+        );
         expect(runUsageWrites(store).at(-1)).toMatchObject({
           total_cost_usd: 7,
           total_tokens_in: 100,
