@@ -16,7 +16,7 @@ This guide explains how to create workflows that orchestrate multiple commands i
 A workflow is a **YAML file** that defines a directed acyclic graph (DAG) of commands to execute. Workflows enable:
 
 - **Multi-step automation**: Chain multiple AI agents together
-- **Parallel execution**: Independent nodes run concurrently
+- **Parallel execution**: Independent nodes normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 - **Conditional branching**: Route to different paths based on node output
 - **Artifact passing**: Output from one node becomes input for downstream nodes
 - **Iterative loops**: Loop nodes repeat until a declared completion condition is met
@@ -106,7 +106,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
 ```
 
-Nodes without `depends_on` run immediately. Nodes in the same topological layer run concurrently via `Promise.allSettled`. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
+Nodes without `depends_on` enter the first topological layer. Nodes in the same layer normally run concurrently. [Loop bodies settle ordinary work before interactions](/guides/loop-nodes/#how-it-works), and mixed checkout-guard layers run sequentially. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
 
 > **Note:** The `steps:` (sequential) format has been removed. All workflows use `nodes:` (DAG) format exclusively.
 
@@ -461,7 +461,7 @@ nodes:
 | `all_success` | Run only if all upstream deps completed successfully (default) |
 | `one_success` | Run if at least one upstream dep completed successfully |
 | `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
-| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
+| `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped), except an interaction in a loop body after a body failure (see [loop failure behavior](/guides/loop-nodes/#how-it-works)) |
 
 `none_failed_min_one_success` blocks failure-cascade skips by default, including
 across dependency chains and includes. The skipped join retains the original failed
@@ -2368,10 +2368,14 @@ for it:
   table](/reference/cli/#base-branch-precedence): `worktree.baseBranch` in
   `.archon/config.yaml`, else the codebase's stored default branch, else git
   auto-detection. Level 1 is missing on purpose — **the per-dispatch `--base` / `--from`
-  overrides apply only to the run they were passed to and do not reach its sub-run
-  children**, so `archon workflow run parent --base release/2.0` still cuts every isolated
-  child from the repo's configured base. An isolated child therefore sees neither the
-  parent's uncommitted edits **nor the commits the parent made on its own branch**.
+  overrides do not change an isolated child's cut-from**, so
+  `archon workflow run parent --base release/2.0` still cuts every isolated child from the
+  repo's configured base. Its `$BASE_BRANCH` reports that provisioning base. If the branch
+  is reused without a surviving child run record, its original base is unavailable and
+  `$BASE_BRANCH` stays unresolved. Fresh shared-checkout children (`inherit` or omitted) instead inherit the parent's
+  resolved `$BASE_BRANCH`, including `--base`. Existing child runs retain their recorded
+  base on resume. An isolated child therefore sees neither the parent's uncommitted edits
+  **nor the commits the parent made on its own branch**.
   Everything the child needs has to arrive through `input:`, artifacts, or the repo's base
   branch.
 - **Nothing merges it back.** The child's commits stay on the child's branch. Landing them
@@ -3365,7 +3369,7 @@ All workflows support variable substitution in prompts and commands. The most co
 | `$ARGUMENTS` / `$USER_MESSAGE` | The user's input message that triggered the workflow |
 | `$WORKFLOW_ID` | Unique ID for this workflow run |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
-| `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch; see [resolution and child inheritance rules](/reference/variables/#workflow-variables) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$CONTEXT` | GitHub issue/PR context (if available) |
 | `$nodeId.output` | Output of a completed upstream node |
@@ -3765,7 +3769,7 @@ Before deploying a workflow:
 2. **`nodes:` define the graph** — each node runs a command, inline prompt, bash script, or loop
 3. **Artifacts are the glue** — commands communicate via files, not in-memory context
 4. **`context: fresh`** — forces a fresh AI session for a node (works from artifacts only)
-5. **Parallel by default** — nodes in the same topological layer run concurrently
+5. **Parallel by default** — nodes in the same topological layer normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from an AI node, or from a `bash:`/`script:` node's stdout, for reliable branching
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)

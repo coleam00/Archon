@@ -169,7 +169,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.
-- Check what you changed: run the tests that cover it, and lint and type-check the packages you touched.
+- Check what you changed: run the tests that cover it, lint and type-check the packages you touched, and run `bun run check:ratchet` before you push. CI refuses a change the ratchet refuses, and it takes seconds locally against a fetched `origin/dev`.
 - CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`.
 - Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.

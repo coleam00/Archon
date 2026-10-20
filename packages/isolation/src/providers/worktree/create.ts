@@ -49,7 +49,7 @@ import {
 } from './shared';
 
 type BranchCheckout =
-  | { kind: 'checked_out'; cutFromCommit?: string; branchCreated: boolean }
+  | ({ kind: 'checked_out' } & Awaited<ReturnType<typeof createNewBranch>>)
   | { kind: 'adopted'; environment: WorktreeCreationEnvironment };
 
 type WorktreeCreationResult =
@@ -57,6 +57,7 @@ type WorktreeCreationResult =
       kind: 'created';
       warnings: string[];
       cutFromCommit?: string;
+      resolvedBaseBranch?: string;
       creationId: string;
       branchCreated: boolean;
     }
@@ -124,6 +125,9 @@ export async function createWorktreeEnvironment(
       request,
       ...(creation.cutFromCommit !== undefined ? { cutFromCommit: creation.cutFromCommit } : {}),
     },
+    ...(creation.resolvedBaseBranch !== undefined
+      ? { resolvedBaseBranch: creation.resolvedBaseBranch }
+      : {}),
     ...(creation.warnings.length > 0 ? { warnings: creation.warnings } : {}),
   };
 }
@@ -225,6 +229,9 @@ async function createWorktree(
     branchCreated: checkout.branchCreated,
     warnings,
     ...(checkout.cutFromCommit !== undefined ? { cutFromCommit: checkout.cutFromCommit } : {}),
+    ...(checkout.resolvedBaseBranch !== undefined
+      ? { resolvedBaseBranch: checkout.resolvedBaseBranch }
+      : {}),
   };
 }
 
