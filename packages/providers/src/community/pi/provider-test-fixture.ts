@@ -348,45 +348,9 @@ export function scriptedAgentEnd(): FakeEvent[] {
 }
 
 beforeEach(() => {
-  mockLogger.fatal.mockClear();
-  mockLogger.error.mockClear();
-  mockLogger.warn.mockClear();
-  mockLogger.info.mockClear();
-  mockLogger.debug.mockClear();
-  mockLogger.trace.mockClear();
-  mockPrompt.mockClear();
-  mockAbort.mockClear();
-  mockDispose.mockClear();
-  mockSubscribe.mockClear();
-  mockBindExtensions.mockClear();
-  mockSetModel.mockClear();
-  mockSetFlagValue.mockClear();
-  mockResourceLoaderReload.mockClear();
-  mockGetAgentDir.mockClear();
-  mockGetExtensions.mockClear();
+  mock.clearAllMocks();
   mockLoaderRuntime.pendingProviderRegistrations = [];
-  mockCreateAgentSession.mockClear();
-  mockModelRuntimeCreate.mockClear();
-  mockModelRegistryConstruct.mockClear();
-  mockModelRegistryFind.mockClear();
-  mockSetRuntimeApiKey.mockClear();
-  mockGetAuth.mockClear();
-  mockHasConfiguredAuth.mockClear();
-  MockDefaultResourceLoader.mockClear();
-  mockCreateReadTool.mockClear();
-  mockCreateBashTool.mockClear();
-  mockCreateEditTool.mockClear();
-  mockCreateWriteTool.mockClear();
-  mockCreateGrepTool.mockClear();
-  mockCreateFindTool.mockClear();
-  mockCreateLsTool.mockClear();
-  mockSessionCreate.mockClear();
-  mockSessionOpen.mockClear();
-  mockSessionForkFrom.mockClear();
-  mockSessionList.mockClear();
   mockSessionList.mockImplementation(async () => []);
-  mockSettingsManagerInMemory.mockClear();
-  mockSettingsManagerCreate.mockClear();
   mockSettingsManagerDrainErrors.mockReset();
   mockSettingsManagerDrainErrors.mockImplementation(() => []);
   mockSettingsManagerGetGlobalSettings.mockReset();
