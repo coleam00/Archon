@@ -10,8 +10,6 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
 import {
-  deleteRemoteBranchTracked,
-  getGitCommandAnchors,
   readWorktreeBranchCreated,
   readWorktreeCreationId,
   WorktreeLeftoverError,
@@ -52,6 +50,7 @@ import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
 import { loadRepoConfig } from '../config/config-loader';
+import { prepareRemoteBranchCleanup } from './cleanup-remote-branch';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -441,16 +440,18 @@ export async function removeEnvironment(
 
   // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
-  let remote: string | undefined;
-  let remoteRepoPath: string | undefined;
+  let cleanRemoteBranch: Awaited<ReturnType<typeof prepareRemoteBranchCleanup>> | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
     // Resolve the configured remote only when remote-branch deletion is requested —
     // that's the one destroy path that pushes to a remote.
     if (options?.deleteRemoteBranch && codebase?.default_cwd) {
-      remote = configuredRemote(await loadRepoConfig(codebase.default_cwd));
-      remoteRepoPath = (await getGitCommandAnchors(codebase.default_cwd)).durable;
+      cleanRemoteBranch = await prepareRemoteBranchCleanup(
+        codebase.default_cwd,
+        env.branch_name,
+        configuredRemote(await loadRepoConfig(codebase.default_cwd))
+      );
     }
   }
 
@@ -489,9 +490,7 @@ export async function removeEnvironment(
     );
 
     const removed = destroyResult.worktreeRemoved && destroyResult.directoryClean;
-    if (removed && remoteRepoPath) {
-      await deleteRemoteBranchTracked(remoteRepoPath, env.branch_name, destroyResult, remote);
-    }
+    if (removed) await cleanRemoteBranch?.(destroyResult);
     if (destroyResult.warnings.length > 0) {
       getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
     }

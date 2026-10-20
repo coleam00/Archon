@@ -185,6 +185,7 @@ mock.module('@archon/git', () => ({
 }));
 
 const mockDestroy = mock<IIsolationProvider['destroy']>();
+const mockReadRemoteBranchOid = mock<typeof Isolation.readRemoteBranchOid>();
 const mockDeleteRemoteBranch = mock<typeof Isolation.deleteRemoteBranchTracked>();
 const mockGetPrState = mock<typeof Isolation.getPrState>();
 const mockContainerDestroy = mock<ContainerBackend['destroy']>();
@@ -202,6 +203,7 @@ mock.module('@archon/isolation', () => ({
   }),
   getPrState: mockGetPrState,
   deleteRemoteBranchTracked: mockDeleteRemoteBranch,
+  readRemoteBranchOid: mockReadRemoteBranchOid,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -293,6 +295,7 @@ beforeEach(() => {
     directoryClean: true,
     warnings: [],
   });
+  mockReadRemoteBranchOid.mockReset().mockResolvedValue('a'.repeat(40));
   mockDeleteRemoteBranch.mockReset().mockResolvedValue(true);
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
@@ -509,6 +512,18 @@ describe('removeEnvironment', () => {
     );
   });
 
+  test('remote inspection failure retains the remote branch but permits local cleanup', async () => {
+    mockGetById.mockResolvedValue(makeEnvironment());
+    mockReadRemoteBranchOid.mockRejectedValue(new Error('remote unavailable'));
+    const result = await removeEnvironment(await selectedEnvironment(), {
+      deleteRemoteBranch: true,
+    });
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.warnings).toEqual(['Remote branch cleanup skipped: remote unavailable']);
+    expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalled();
+  });
+
   test.each([
     { config: {}, remote: 'origin' },
     { config: { worktree: { remote: 'upstream' } }, remote: 'upstream' },
@@ -529,7 +544,8 @@ describe('removeEnvironment', () => {
       '/workspace/repo',
       'feature-branch',
       expect.any(Object),
-      remote
+      remote,
+      'a'.repeat(40)
     );
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
@@ -690,7 +706,8 @@ describe('runScheduledCleanup', () => {
         '/workspace/repo',
         'pr-99',
         expect.any(Object),
-        'origin'
+        'origin',
+        'a'.repeat(40)
       );
     }
   );
@@ -1299,7 +1316,8 @@ describe('cleanupMergedWorktrees', () => {
       '/workspace/repo',
       'merged-branch',
       expect.any(Object),
-      'origin'
+      'origin',
+      'a'.repeat(40)
     );
   });
 

@@ -1485,7 +1485,10 @@ records that lack branch-creation tracking. Merged cleanup (`--merged`, includin
 `--include-closed`) and `archon complete` can delete those local branches after
 their checks. Completion with `--force` bypasses commit-safety checks, so it can
 delete a branch with unmerged commits. Merged cleanup and completion also attempt
-remote branch deletion. A remote deletion failure produces a warning;
+remote branch deletion. Cleanup reads the remote ref before claiming the registration,
+then deletes it with an explicit Git lease after retirement. A ref that advances
+in the meantime is retained, including with `--force`. A remote inspection or
+deletion failure produces a warning;
 local removal and registration retirement can still complete while the remote
 branch remains. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 

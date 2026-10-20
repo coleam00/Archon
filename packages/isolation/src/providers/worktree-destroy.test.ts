@@ -26,6 +26,12 @@ const ownedDestroyOptions = { canonicalRepoPath: REPO, creationId: 'test-creatio
 // A registered checkout that carries this creation's proof and is gone once removed.
 beforeEach(() => {
   resetWorktreeMocks();
+  execSpy.mockImplementation(async (_file, args) => ({
+    stdout: args.includes('ls-remote')
+      ? `${'a'.repeat(40)}\trefs/heads/${args.at(-1)?.replace('refs/heads/', '')}\n`
+      : '',
+    stderr: '',
+  }));
   mockAccess.mockResolvedValue(undefined);
   mockReadFile.mockResolvedValue('test-creation');
   readWorktreeRegistrationSpy.mockResolvedValueOnce({ lockReason: null });
@@ -135,7 +141,14 @@ describe('ownership and removal', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/workspace/repo', 'push', 'origin', '--delete', 'feature-branch'],
+      [
+        '-C',
+        '/workspace/repo',
+        'push',
+        'origin',
+        `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
+        ':refs/heads/feature-branch',
+      ],
       expect.any(Object)
     );
     expect(result).toEqual({
@@ -173,7 +186,14 @@ describe('ownership and removal', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/metadata/repository', 'push', 'origin', '--delete', branchName],
+      [
+        '-C',
+        '/metadata/repository',
+        'push',
+        'origin',
+        `--force-with-lease=refs/heads/${branchName}:${'a'.repeat(40)}`,
+        `:refs/heads/${branchName}`,
+      ],
       expect.any(Object)
     );
     expect(result.branchDeleted).toBe(true);
@@ -270,7 +290,14 @@ describe('a checkout that is already gone', () => {
     );
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/workspace/repo', 'push', 'origin', '--delete', 'feature-branch'],
+      [
+        '-C',
+        '/workspace/repo',
+        'push',
+        'origin',
+        `--force-with-lease=refs/heads/feature-branch:${'a'.repeat(40)}`,
+        ':refs/heads/feature-branch',
+      ],
       expect.any(Object)
     );
     expect(result.worktreeRemoved).toBe(true); // Already gone counts as removed
@@ -316,7 +343,7 @@ describe('branch cleanup', () => {
         }),
         args =>
           args.includes('ls-remote') || args.includes('rev-parse')
-            ? 'abc123\trefs/heads/feature-branch\n'
+            ? `${'a'.repeat(40)}\trefs/heads/feature-branch\n`
             : ''
       );
 
@@ -385,7 +412,14 @@ describe('branch cleanup', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       'git',
-      ['-C', '/workspace/repo', 'push', 'upstream', '--delete', 'archon/issue-42'],
+      [
+        '-C',
+        '/workspace/repo',
+        'push',
+        'upstream',
+        `--force-with-lease=refs/heads/archon/issue-42:${'a'.repeat(40)}`,
+        ':refs/heads/archon/issue-42',
+      ],
       expect.any(Object)
     );
   });

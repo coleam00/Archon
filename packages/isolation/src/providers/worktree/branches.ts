@@ -450,6 +450,26 @@ export async function deleteBranchTracked(
   }
 }
 
+/** Read the exact advertised ref; an empty value means the branch is absent. */
+export async function readRemoteBranchOid(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin'
+): Promise<string> {
+  const ref = `refs/heads/${branchName}`;
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'ls-remote', '--refs', '--', remote, ref],
+    { timeout: GIT_OPERATION_TIMEOUT_MS }
+  );
+  for (const line of stdout.trim().split('\n')) {
+    const [oid, name] = line.split('\t');
+    if (name === ref && /^[0-9a-f]{40,64}$/.test(oid)) return oid;
+  }
+  if (stdout.trim()) throw new Error(`Invalid remote advertisement for '${branchName}'`);
+  return '';
+}
+
 /**
  * Delete a remote branch and track the result. Never throws - remote branch deletion is best-effort.
  * Returns true if branch was deleted or already gone, false if deletion failed.
@@ -458,12 +478,27 @@ export async function deleteRemoteBranchTracked(
   repoPath: string,
   branchName: string,
   result: DestroyResult,
-  remote = 'origin'
+  remote = 'origin',
+  expectedOid?: string
 ): Promise<boolean> {
   try {
-    await execFileAsync('git', ['-C', repoPath, 'push', remote, '--delete', branchName], {
-      timeout: GIT_OPERATION_TIMEOUT_MS,
-    });
+    // Delayed cleanup supplies the ref observed before releasing its registration claim.
+    const oid = expectedOid ?? (await readRemoteBranchOid(repoPath, branchName, remote));
+    if (!oid) return true;
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'push',
+        remote,
+        `--force-with-lease=refs/heads/${branchName}:${oid}`,
+        `:refs/heads/${branchName}`,
+      ],
+      {
+        timeout: GIT_OPERATION_TIMEOUT_MS,
+      }
+    );
     getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
     return true;
   } catch (error) {
