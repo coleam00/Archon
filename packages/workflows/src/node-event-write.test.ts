@@ -148,6 +148,35 @@ describe('node-event-write', () => {
     expect(deriveTranscriptEvent(node, event)).toMatchObject({ content: packaged });
   });
 
+  it.each(['node_completed', 'node_failed'] as const)(
+    'keeps unknown cost out of numeric transcript and emitter fields for legacy %s',
+    eventType => {
+      const node = {
+        id: 'build',
+        kind: 'exec' as const,
+        runtime: 'sh' as const,
+        script: 'echo ok',
+      };
+      for (const cost of [null, 0, 0.2]) {
+        const event: NodeStateEventInput = {
+          workflow_run_id: 'old-run',
+          step_name: 'build',
+          event_type: eventType,
+          data: { node_output: 'done', error: 'failed', cost_usd: cost },
+        };
+        const transcript = deriveTranscriptEvent(node, event);
+        const emitted = deriveEmitterEvent(node, event);
+        if (cost === null) {
+          expect(transcript).not.toHaveProperty('cost_usd');
+          expect(emitted).not.toHaveProperty('costUsd');
+        } else {
+          expect(transcript).toHaveProperty('cost_usd', cost);
+          if (eventType === 'node_completed') expect(emitted).toHaveProperty('costUsd', cost);
+        }
+      }
+    }
+  );
+
   it('derives an old transactional wait completion without inventing metadata or duration', async () => {
     const waitNode = { id: 'wait-for-ci', kind: 'wait' as const, wait: { duration_ms: 1 } };
     const event: NodeStateEventInput = {

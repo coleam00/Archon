@@ -37,7 +37,7 @@ export const serializedNodeDataSchema = z.object({
   effort: executionBindingSchema.shape.effort,
   duration_ms: z.number().optional(),
   tokens: executionSpendSchema.shape.tokens.options[0].shape.value.optional(),
-  cost_usd: z.number().optional(),
+  cost_usd: z.number().nullable().optional(),
   stop_reason: z.string().optional(),
   num_turns: z.number().optional(),
   model_usage: z.object({ requested: z.string().optional(), resolved: z.string() }).optional(),

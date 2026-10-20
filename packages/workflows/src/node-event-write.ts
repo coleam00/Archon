@@ -86,7 +86,7 @@ export function deriveTranscriptEvent(
         step: node.id,
         content,
         ...(record.data.duration_ms !== undefined ? { duration_ms: record.data.duration_ms } : {}),
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
+        ...(typeof record.data.cost_usd === 'number' ? { cost_usd: record.data.cost_usd } : {}),
         ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
       };
     case 'node_failed':
@@ -94,7 +94,7 @@ export function deriveTranscriptEvent(
         type: 'node_error',
         step: node.id,
         error: record.data.error ?? '',
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
+        ...(typeof record.data.cost_usd === 'number' ? { cost_usd: record.data.cost_usd } : {}),
         ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
       };
     case 'node_skipped':
@@ -168,7 +168,7 @@ function emitterEventFromRecord(
         nodeId: node.id,
         nodeName,
         ...(record.data.duration_ms !== undefined ? { duration: record.data.duration_ms } : {}),
-        ...(record.data.cost_usd !== undefined ? { costUsd: record.data.cost_usd } : {}),
+        ...(typeof record.data.cost_usd === 'number' ? { costUsd: record.data.cost_usd } : {}),
         ...(record.data.stop_reason !== undefined ? { stopReason: record.data.stop_reason } : {}),
         ...(record.data.num_turns !== undefined ? { numTurns: record.data.num_turns } : {}),
       };

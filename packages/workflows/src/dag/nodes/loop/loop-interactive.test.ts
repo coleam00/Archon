@@ -18,6 +18,7 @@ import {
   makeWorkflowRun,
   expectLoopGateEvidence,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -730,6 +731,67 @@ describe('interactive loop node', () => {
       });
       expect(runUsageWrites(resumingDeps.store).at(-1)?.total_cost_usd).toBeNull();
       expect(mockSendQueryDag).toHaveBeenCalledTimes(feedback ? 1 : 0);
+    }
+  );
+
+  it.each([false, true])(
+    'preserves legacy unknown loop cost through approval (feedback=%s)',
+    async feedback => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'APPROVED' };
+        yield { type: 'result', sessionId: 's', cost: 0.3 };
+      });
+      const deps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow: {
+            name: 'legacy-loop',
+            nodes: [
+              {
+                id: 'refine',
+                kind: 'loop',
+                loop: {
+                  prompt: 'Refine',
+                  until: 'APPROVED',
+                  max_iterations: 3,
+                  fresh_context: false,
+                  interactive: true,
+                  gate_message: 'Review',
+                },
+              },
+              {
+                id: 'paid',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Work' },
+                depends_on: ['refine'],
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('legacy-loop', {
+            metadata: {
+              approval: {
+                type: 'interactive_loop',
+                nodeId: 'refine',
+                message: 'Review',
+                iteration: 1,
+                completionSignaled: true,
+                signaledOutput: 'APPROVED',
+                signaledCostUsd: null,
+              },
+              loop_feedback_given: feedback,
+              loop_user_input: feedback ? 'Improve' : 'Approved',
+            },
+          }),
+        })
+      );
+      expect(deps.store.completeWorkflowRun).toHaveBeenCalled();
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(feedback ? 2 : 1);
+      expect(runUsageWrites(deps.store).at(-1)?.total_cost_usd).toBeNull();
+      expect(
+        (await foldDagResumeSnapshot(persistedEvents(deps.store), 'legacy-loop')).costUsd
+      ).toBeNull();
     }
   );
 

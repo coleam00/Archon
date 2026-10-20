@@ -421,7 +421,10 @@ function readLoopResume(
         : gate !== undefined
           ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
           : undefined,
-    costPartial: savedExecution !== undefined && exactExecutionCost(savedExecution.spend) === null,
+    costPartial:
+      savedExecution !== undefined
+        ? exactExecutionCost(savedExecution.spend) === null
+        : gate?.signaledCostUsd === null,
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)

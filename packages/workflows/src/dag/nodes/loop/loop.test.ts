@@ -999,6 +999,48 @@ describe('loop node execution', () => {
     }
   );
 
+  it('retains partial reported spend when a mixed-cost loop reaches its iteration limit', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Still working' };
+      yield { type: 'result', sessionId: 's', ...(calls++ === 0 ? { cost: 0.2 } : {}) };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'failed-mixed-loop',
+          nodes: [
+            {
+              id: 'mixed',
+              kind: 'loop',
+              loop: {
+                prompt: 'Work',
+                until: 'COMPLETE',
+                max_iterations: 2,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('failed-mixed-loop'),
+      })
+    );
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const failed = persistedEvents(store).find(
+      e => e.event_type === 'node_failed' && e.step_name === 'mixed'
+    );
+    expect(failed?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.2, partial: true },
+    });
+    expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+    expect(
+      (await foldDagResumeSnapshot(persistedEvents(store), 'failed-mixed-loop')).costUsd
+    ).toBeNull();
+  });
+
   it('marks loop cost unknown when a later result in the same iteration is non-finite', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield {

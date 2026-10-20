@@ -1820,6 +1820,30 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
     );
   });
 
+  it.each(['node_completed', 'node_failed', 'node_deferred_usage'] as const)(
+    'keeps metadata-free unpriced %s usage unknown through resume',
+    async eventType => {
+      providerCosts(undefined);
+      const prior = ai('prior');
+      const store = await run({ name: 'legacy-cost', nodes: [prior, sh('anchor')] });
+      const event = persistedEvents(store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'prior'
+      )!;
+      const data = event.data as Record<string, unknown>;
+      for (const key of nodeExecutionMetadataPayloadSchema.keyof().options) delete data[key];
+      delete data.cost_usd;
+      data.tokens = { input: 10, output: 2 };
+      data.error = 'historical failure';
+      event.event_type = eventType;
+      const resume = await resumeOptions(store);
+      expect(resume.priorUsage?.costUsd).toBeNull();
+      providerCosts(0.3);
+      store.updateWorkflowRun.mockClear();
+      await run({ name: 'legacy-cost', nodes: [prior, ai('remaining', ['prior'])] }, store, resume);
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeNull();
+    }
+  );
+
   it.each([
     ['bash', undefined, false],
     ['unpriced AI', undefined, true],

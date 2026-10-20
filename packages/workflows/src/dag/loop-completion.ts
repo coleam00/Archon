@@ -117,6 +117,7 @@ export async function finalizeLoopFromSignal(
   }
   // Older paused loop gates may lack execution identity and observed start time.
   // Preserve their completion without inventing historical execution metadata.
+  const costUsd = finalizeUsage?.costPartial ? null : finalizeUsage?.costUsd;
   const event: import('../store').NodeStateEventInput = {
     workflow_run_id: workflowRun.id,
     event_type: 'node_completed',
@@ -129,7 +130,7 @@ export async function finalizeLoopFromSignal(
       ...(output.declaredOutputPaths !== undefined
         ? persistedOutputContract(output.declaredOutputPaths)
         : {}),
-      ...(typeof finalizeUsage?.costUsd === 'number' ? { cost_usd: finalizeUsage.costUsd } : {}),
+      ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
   };
@@ -145,6 +146,7 @@ export async function finalizeLoopFromSignal(
       ? { declaredOutputPaths: output.declaredOutputPaths }
       : {}),
     ...finalizeUsage,
+    ...(costUsd !== undefined ? { costUsd } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
   };
 }
