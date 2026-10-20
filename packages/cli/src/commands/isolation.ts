@@ -1,7 +1,6 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { sameWorktreeRegistration } from '@archon/isolation/types';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -15,7 +14,6 @@ import {
   getDefaultBranch,
   getUniqueCommitCount,
   isPatchEquivalent,
-  GitFailure,
 } from '@archon/git';
 import {
   getIsolationProvider,
@@ -283,321 +281,6 @@ export async function isolationCleanupMergedCommand(
   );
 }
 
-type CompletionEnvironment = NonNullable<
-  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
->;
-type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
-type CompletionOutcome = 'completed' | 'failed' | 'notFound';
-
-async function checkCompletionWorktree(
-  env: CompletionEnvironment,
-  branch: string,
-  blockers: string[]
-): Promise<void> {
-  try {
-    const workingPath = toWorktreePath(env.working_path);
-    if ((await worktreeExists(workingPath)) && (await hasUncommittedChangesStrict(workingPath))) {
-      blockers.push('uncommitted changes in worktree');
-    }
-  } catch (error) {
-    getLog().warn({ err: error as Error, branch }, 'isolation.complete_uncommitted_check_failed');
-    blockers.push('could not verify uncommitted changes (worktree path may be missing)');
-  }
-}
-
-async function checkCompletionLiveRun(
-  env: CompletionEnvironment,
-  branch: string,
-  blockers: string[]
-): Promise<void> {
-  try {
-    const liveRun = await getLiveRunBlocker(env.id);
-    if (liveRun) blockers.push(liveRun.display);
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, branch }, 'isolation.complete_live_run_check_failed');
-    blockers.push(`could not check for a run that owns this environment (${err.message})`);
-  }
-}
-
-async function checkCompletionPullRequests(
-  env: CompletionEnvironment,
-  branch: string,
-  blockers: string[]
-): Promise<void> {
-  try {
-    const ghResult = await execFileAsync(
-      'gh',
-      ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,title'],
-      { timeout: 15000, cwd: env.codebase_default_cwd }
-    );
-    const prs = JSON.parse(ghResult.stdout) as { number: number; title: string }[];
-    for (const pr of prs) {
-      blockers.push(`open PR #${pr.number} — "${pr.title}"`);
-    }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
-    const reason = isNotInstalled ? 'gh CLI not available' : `gh error: ${err.message}`;
-    console.warn(`  Warning: ${reason} — skipping open PR check`);
-    getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
-  }
-}
-
-async function checkMissingRemoteBranch(
-  env: CompletionEnvironment,
-  branch: string,
-  remote: string,
-  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>> | undefined,
-  blockers: string[]
-): Promise<void> {
-  try {
-    const configuredBase = repoConfig?.worktree?.baseBranch?.trim();
-    const baseBranch = configuredBase
-      ? toBranchName(configuredBase)
-      : await getDefaultBranch(toRepoPath(env.codebase_default_cwd), remote);
-    const remoteBaseRef = `${remote}/${baseBranch}`;
-    if (
-      await isPatchEquivalent(
-        toRepoPath(env.codebase_default_cwd),
-        toBranchName(branch),
-        remoteBaseRef,
-        { throwOnExpectedError: true }
-      )
-    ) {
-      console.log(
-        `  Note: no ${remote}/${branch} on the remote; content is already on ` +
-          `${remoteBaseRef} (squash-merged, or merged locally and never pushed).`
-      );
-    } else {
-      blockers.push(
-        `no ${remote}/${branch} on the remote (deleted or never pushed) ` +
-          `and content not found on ${remoteBaseRef}`
-      );
-    }
-  } catch (patchCheckError) {
-    const patchCheckErr = patchCheckError as Error;
-    getLog().warn(
-      { err: patchCheckErr, branch },
-      'isolation.complete_remote_deleted_branch_check_failed'
-    );
-    blockers.push(
-      `could not verify whether ${branch}'s content is already on the base branch ` +
-        `(${patchCheckErr.message})`
-    );
-  }
-}
-
-async function isCompletionRemoteRefMissing(
-  env: CompletionEnvironment,
-  branch: string,
-  remote: string
-): Promise<boolean> {
-  try {
-    await execFileAsync(
-      'git',
-      [
-        '-C',
-        env.codebase_default_cwd,
-        'show-ref',
-        '--verify',
-        '--quiet',
-        `refs/remotes/${remote}/${branch}`,
-      ],
-      { timeout: 15000 }
-    );
-    return false;
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 1) return true;
-    getLog().warn({ err: error, branch }, 'isolation.complete_remote_ref_check_failed');
-    return false;
-  }
-}
-
-async function checkCompletionUnpushedCommits(
-  env: CompletionEnvironment,
-  branch: string,
-  remote: string,
-  uniqueCommitCount: number | undefined,
-  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>> | undefined,
-  blockers: string[]
-): Promise<void> {
-  try {
-    const unpushedResult = await execFileAsync(
-      'git',
-      ['-C', env.codebase_default_cwd, 'log', `${remote}/${branch}..${branch}`, '--oneline'],
-      { timeout: 15000 }
-    );
-    const unpushedLines = unpushedResult.stdout.trim().split('\n').filter(Boolean);
-    if (unpushedLines.length > 0) {
-      blockers.push(`${unpushedLines.length} commit(s) not pushed to remote`);
-    }
-    if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
-      blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
-    }
-  } catch (error) {
-    const err = error as Error;
-    if (
-      !(err instanceof GitFailure && err.kind === 'timeout') &&
-      (await isCompletionRemoteRefMissing(env, branch, remote))
-    ) {
-      if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
-        await checkMissingRemoteBranch(env, branch, remote, repoConfig, blockers);
-      }
-      return;
-    }
-    if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
-      blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
-    }
-    blockers.push(
-      `could not verify unpushed commits (${err.message}) — refusing to delete unverified`
-    );
-    getLog().warn({ err, branch }, 'isolation.complete_unpushed_check_failed');
-  }
-}
-
-async function checkCompletionCommits(
-  env: CompletionEnvironment,
-  branch: string,
-  blockers: string[]
-): Promise<void> {
-  let remote = 'origin';
-  let uniqueCommitCount: number | undefined;
-  let repoConfig: Awaited<ReturnType<typeof loadRepoConfig>> | undefined;
-  try {
-    repoConfig = await loadRepoConfig(env.codebase_default_cwd);
-    remote = repoConfig.worktree?.remote?.trim() || remote;
-    uniqueCommitCount = await getUniqueCommitCount(
-      toRepoPath(env.codebase_default_cwd),
-      toBranchName(branch),
-      remote
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, branch }, 'isolation.complete_unique_commit_check_failed');
-    blockers.push(
-      `could not determine unique commits (${err.message}) — refusing to delete unverified`
-    );
-  }
-
-  await checkCompletionUnpushedCommits(
-    env,
-    branch,
-    remote,
-    uniqueCommitCount,
-    repoConfig,
-    blockers
-  );
-}
-
-async function getCompletionBlockers(
-  env: CompletionEnvironment,
-  branch: string
-): Promise<string[]> {
-  const blockers: string[] = [];
-  // Collect every blocker in safety-check order before attempting removal.
-  await checkCompletionWorktree(env, branch, blockers);
-  await checkCompletionLiveRun(env, branch, blockers);
-  await checkCompletionPullRequests(env, branch, blockers);
-  await checkCompletionCommits(env, branch, blockers);
-  return blockers;
-}
-
-function reportCompletionResult(
-  branch: string,
-  result: RemoveEnvironmentResult
-): CompletionOutcome {
-  for (const warning of result.warnings) {
-    console.warn(`  Warning: ${warning}`);
-  }
-
-  if (result.skippedReason) {
-    console.error(`  Blocked: ${branch} — ${result.skippedReason}`);
-    if (result.skippedReason === 'has uncommitted changes') {
-      console.error('    Use --force to override.');
-    }
-    return 'failed';
-  }
-  if (!result.worktreeRemoved) {
-    const parts: string[] = [];
-    if (result.branchDeleted) parts.push('branch deleted');
-    parts.push('DB updated');
-    console.error(
-      `  Partial: ${branch} — worktree was not removed from disk (${parts.join(', ')})`
-    );
-    for (const warning of result.warnings) {
-      console.error(`    ⚠ ${warning}`);
-    }
-    return 'failed';
-  }
-  console.log(`  Completed: ${branch}`);
-  return 'completed';
-}
-
-async function completeBranch(
-  branch: string,
-  options: CompletionOptions
-): Promise<CompletionOutcome> {
-  let env: CompletionEnvironment | null;
-  try {
-    const matches = (await isolationDb.listActive()).filter(
-      candidate => candidate.branch_name === branch
-    );
-    if (matches.length > 1) {
-      console.error(
-        `  Failed: ${branch} — multiple active environments match this branch; refusing ambiguous deletion`
-      );
-      return 'failed';
-    }
-    const selected = matches[0];
-    env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
-    // Hydration adds codebase fields; legacy registration identity compares the whole row.
-    const observed = selected && {
-      ...selected,
-      codebase_default_cwd: env?.codebase_default_cwd,
-      codebase_name: env?.codebase_name,
-    };
-    if (env && observed && !sameWorktreeRegistration(env, observed)) {
-      throw new Error('environment changed during lookup; refusing ambiguous deletion');
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, branch }, 'isolation.lookup_failed');
-    console.error(`  Failed: ${branch} — DB lookup error: ${err.message}`);
-    return 'failed';
-  }
-
-  if (!env) {
-    console.log(`  Not found: ${branch} (no active isolation environment)`);
-    return 'notFound';
-  }
-
-  if (!options.force) {
-    const blockers = await getCompletionBlockers(env, branch);
-    if (blockers.length > 0) {
-      console.error(`  Blocked: ${branch}`);
-      for (const blocker of blockers) {
-        console.error(`    ✗ ${blocker}`);
-      }
-      console.error('  Use --force to override.');
-      return 'failed';
-    }
-  }
-
-  try {
-    const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
-      force: options.force,
-      deleteRemoteBranch: options.deleteRemote ?? true,
-    });
-    return reportCompletionResult(branch, result);
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn({ err, branch, envId: env.id }, 'isolation.complete_failed');
-    console.error(`  Failed: ${branch} — ${err.message}`);
-    return 'failed';
-  }
-}
-
 /**
  * Complete branch lifecycle — remove worktree, local branch, remote branch, mark DB as destroyed
  */
@@ -605,15 +288,215 @@ export async function isolationCompleteCommand(
   branchNames: string[],
   options: { force?: boolean; deleteRemote?: boolean }
 ): Promise<void> {
-  const counts = { completed: 0, failed: 0, notFound: 0 };
+  let completed = 0;
+  let failed = 0;
+  let notFound = 0;
+
   for (const branch of branchNames) {
-    counts[await completeBranch(branch, options)]++;
+    let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
+    try {
+      env = await isolationDb.findActiveByBranchName(branch);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, branch }, 'isolation.lookup_failed');
+      console.error(`  Failed: ${branch} — DB lookup error: ${err.message}`);
+      failed++;
+      continue;
+    }
+
+    if (!env) {
+      console.log(`  Not found: ${branch} (no active isolation environment)`);
+      notFound++;
+      continue;
+    }
+
+    // Run all safety checks before removing — collect all blockers, report at once.
+    // Skipped entirely when --force is set.
+    if (!options.force) {
+      const blockers: string[] = [];
+
+      // Check 1: uncommitted changes in worktree
+      try {
+        const workingPath = toWorktreePath(env.working_path);
+        if (
+          (await worktreeExists(workingPath)) &&
+          (await hasUncommittedChangesStrict(workingPath))
+        ) {
+          blockers.push('uncommitted changes in worktree');
+        }
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, branch },
+          'isolation.complete_uncommitted_check_failed'
+        );
+        blockers.push('could not verify uncommitted changes (worktree path may be missing)');
+      }
+
+      // Check 2: a run that can still claim this environment
+      try {
+        const liveRun = await getLiveRunBlocker(env.id);
+        if (liveRun) blockers.push(liveRun.display);
+      } catch (error) {
+        const err = error as Error;
+        getLog().warn({ err, branch }, 'isolation.complete_live_run_check_failed');
+        blockers.push(`could not check for a run that owns this environment (${err.message})`);
+      }
+
+      // Check 3: open PRs on this branch (requires gh CLI)
+      try {
+        const ghResult = await execFileAsync(
+          'gh',
+          ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,title'],
+          { timeout: 15000 }
+        );
+        const prs = JSON.parse(ghResult.stdout) as { number: number; title: string }[];
+        for (const pr of prs) {
+          blockers.push(`open PR #${pr.number} — "${pr.title}"`);
+        }
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
+        const reason = isNotInstalled ? 'gh CLI not available' : `gh error: ${err.message}`;
+        console.warn(`  Warning: ${reason} — skipping open PR check`);
+        getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
+      }
+
+      // Check 4: commits that would become unreachable after branch deletion.
+      let remote = 'origin';
+      let uniqueCommitCount: number | undefined;
+      let repoConfig: Awaited<ReturnType<typeof loadRepoConfig>> | undefined;
+      try {
+        repoConfig = await loadRepoConfig(env.codebase_default_cwd);
+        remote = repoConfig.worktree?.remote?.trim() || remote;
+        uniqueCommitCount = await getUniqueCommitCount(
+          toRepoPath(env.codebase_default_cwd),
+          toBranchName(branch),
+          remote
+        );
+      } catch (error) {
+        const err = error as Error;
+        getLog().warn({ err, branch }, 'isolation.complete_unique_commit_check_failed');
+        blockers.push(
+          `could not determine unique commits (${err.message}) — refusing to delete unverified`
+        );
+      }
+
+      // Check 5: unpushed commits and remote-deleted branches.
+      try {
+        const unpushedResult = await execFileAsync(
+          'git',
+          ['-C', env.codebase_default_cwd, 'log', `${remote}/${branch}..${branch}`, '--oneline'],
+          { timeout: 15000 }
+        );
+        const unpushedLines = unpushedResult.stdout.trim().split('\n').filter(Boolean);
+        if (unpushedLines.length > 0) {
+          blockers.push(`${unpushedLines.length} commit(s) not pushed to remote`);
+        }
+        if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
+          blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
+        }
+      } catch (error) {
+        const err = error as Error;
+        // git gives the same "unknown revision" for a ref GitHub deleted after a
+        // squash merge and for one that was never pushed. The safety decision is the
+        // same either way — is the content on the base? — but the operator's message
+        // must not assert a deletion that may never have happened.
+        if (err.message.includes('unknown revision') || err.message.includes('bad revision')) {
+          if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
+            try {
+              const configuredBase = repoConfig?.worktree?.baseBranch?.trim();
+              const baseBranch = configuredBase
+                ? toBranchName(configuredBase)
+                : await getDefaultBranch(toRepoPath(env.codebase_default_cwd), remote);
+              const remoteBaseRef = `${remote}/${baseBranch}`;
+              if (
+                await isPatchEquivalent(
+                  toRepoPath(env.codebase_default_cwd),
+                  toBranchName(branch),
+                  remoteBaseRef,
+                  { throwOnExpectedError: true }
+                )
+              ) {
+                console.log(
+                  `  Note: no ${remote}/${branch} on the remote; content is already on ` +
+                    `${remoteBaseRef} (squash-merged, or merged locally and never pushed).`
+                );
+              } else {
+                blockers.push(
+                  `no ${remote}/${branch} on the remote (deleted or never pushed) ` +
+                    `and content not found on ${remoteBaseRef}`
+                );
+              }
+            } catch (patchCheckError) {
+              const patchCheckErr = patchCheckError as Error;
+              getLog().warn(
+                { err: patchCheckErr, branch },
+                'isolation.complete_remote_deleted_branch_check_failed'
+              );
+              blockers.push(
+                `could not verify whether ${branch}'s content is already on the base branch ` +
+                  `(${patchCheckErr.message})`
+              );
+            }
+          }
+        } else {
+          if (uniqueCommitCount !== undefined && uniqueCommitCount > 0) {
+            blockers.push(`${String(uniqueCommitCount)} commit(s) unique to this branch`);
+          }
+          getLog().warn({ err, branch }, 'isolation.complete_unpushed_check_failed');
+        }
+      }
+
+      if (blockers.length > 0) {
+        console.error(`  Blocked: ${branch}`);
+        for (const blocker of blockers) {
+          console.error(`    ✗ ${blocker}`);
+        }
+        console.error('  Use --force to override.');
+        failed++;
+        continue;
+      }
+    }
+
+    try {
+      const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
+        force: options.force,
+        deleteRemoteBranch: options.deleteRemote ?? true,
+      });
+
+      // Surface warnings from partial cleanup
+      for (const warning of result.warnings) {
+        console.warn(`  Warning: ${warning}`);
+      }
+
+      if (result.skippedReason) {
+        console.error(`  Blocked: ${branch} — ${result.skippedReason}`);
+        if (result.skippedReason === 'has uncommitted changes') {
+          console.error('    Use --force to override.');
+        }
+        failed++;
+      } else if (!result.worktreeRemoved) {
+        const parts: string[] = [];
+        if (result.branchDeleted) parts.push('branch deleted');
+        parts.push('DB updated');
+        console.error(
+          `  Partial: ${branch} — worktree was not removed from disk (${parts.join(', ')})`
+        );
+        for (const warning of result.warnings) {
+          console.error(`    ⚠ ${warning}`);
+        }
+        failed++;
+      } else {
+        console.log(`  Completed: ${branch}`);
+        completed++;
+      }
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn({ err, branch, envId: env.id }, 'isolation.complete_failed');
+      console.error(`  Failed: ${branch} — ${err.message}`);
+      failed++;
+    }
   }
 
-  console.log(
-    `\nComplete: ${counts.completed} completed, ${counts.failed} failed, ${counts.notFound} not found`
-  );
-  if (counts.failed > 0) {
-    throw new Error(`Failed to complete ${String(counts.failed)} branch(es)`);
-  }
+  console.log(`\nComplete: ${completed} completed, ${failed} failed, ${notFound} not found`);
 }
