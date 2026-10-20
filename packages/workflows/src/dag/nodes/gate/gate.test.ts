@@ -415,6 +415,9 @@ describe('executeDagWorkflow -- approval node', () => {
       });
 
       const store = createMockStore();
+      store.getDagResumeSnapshot.mockImplementation(async runId =>
+        foldDagResumeSnapshot(persistedEvents(store), runId)
+      );
       const pauseWorkflowRun = store.pauseWorkflowRun;
       if (external) {
         let pauseAttempted = false;

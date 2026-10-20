@@ -6,7 +6,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import * as git from '@archon/git';
+import * as subprocess from '../../../subprocess';
 import {
   type MockWorkflowStore,
   mockSendQueryDag,
@@ -1154,7 +1154,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       ],
     };
 
-    const execSpy = spyOn(git, 'execFileAsync');
+    const execSpy = spyOn(subprocess, 'execOwnedProcessGroup');
     let resumeProbeTimeout: number | undefined;
     try {
       await executeDagWorkflow(
@@ -1242,7 +1242,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       ],
     };
 
-    const execSpy = spyOn(git, 'execFileAsync');
+    const execSpy = spyOn(subprocess, 'execOwnedProcessGroup');
     try {
       await executeDagWorkflow(
         dagOptions({
