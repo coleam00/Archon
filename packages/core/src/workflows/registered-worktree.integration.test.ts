@@ -91,7 +91,11 @@ afterEach(async () => {
       const trace = rollbackTrace;
       rollbackTrace = undefined;
       console.error(`[rollback timing] ${trace.label} Git Trace2 perf begin`);
-      console.error(await readFile(trace.path, 'utf8'));
+      try {
+        console.error(await readFile(trace.path, 'utf8'));
+      } catch (error) {
+        console.error(`[rollback timing] ${trace.label} Trace2 read failed: ${String(error)}`);
+      }
       console.error(`[rollback timing] ${trace.label} Git Trace2 perf end`);
     }
   } finally {
