@@ -45,6 +45,8 @@ The overlay's upper layer **is** the diff by overlayfs construction, so computin
 
    Rebuild existing runner images after upgrading Archon, including custom images with their own tags. The current entrypoint reports FUSE mount failure with exit status 78; older entrypoints that return a generic status cannot authorize native fallback.
 
+   Custom images also need `setsid` (Debian: `util-linux`), POSIX `sh`, `cat`, `rm`, `sleep`, and a writable `/tmp` for the execution user. Archon uses these to own and cancel bash and script process groups inside the container. Images missing these capabilities cannot reliably execute or cancel those nodes.
+
 ## Running
 
 ```bash
