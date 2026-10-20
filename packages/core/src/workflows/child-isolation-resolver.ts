@@ -121,8 +121,8 @@ export function createCodebaseChildResolver(
      * of the canonical repo no matter what the parent run was dispatched with. Which
      * also means a child sees neither the parent's uncommitted work nor its commits —
      * what reaches a child travels through `input:` and `$ARTIFACTS_DIR`, not the tree.
-     * Threading `--base` down is a real design question (stacked-from-parent vs
-     * cut-from-base) rather than an oversight; documented in the authoring guide.
+     * The provider returns the selected base for a new branch. A reused branch
+     * without a surviving child run record leaves its original base unavailable.
      */
     baseBranch: string | undefined;
     /** Platform recorded on the `isolation_environments` row (e.g. `'cli'`, `'web'`). */
@@ -192,6 +192,7 @@ export function createCodebaseChildResolver(
         );
 
         return {
+          baseBranch: env.resolvedBaseBranch,
           cwd: env.workingPath,
           envId: created.envId,
           ...(created.ownedWorktree ? { ownedWorktree: created.ownedWorktree } : {}),

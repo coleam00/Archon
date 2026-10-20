@@ -154,6 +154,23 @@ test('mismatched store, absent project and invalid identity refuse without write
     )
   ).toBe(1);
   expect(output.at(-1)).toMatchObject({ error: 'The run has no resolvable project root' });
+  expect(
+    await invoke(
+      'put',
+      '{"shared":true}',
+      { ifRevision: '0', install: true },
+      {
+        WORKFLOW_ID: unscoped.id,
+        ARCHON_NODE_EXECUTION: JSON.stringify({ runId: unscoped.id, path: 'commit' }),
+      }
+    )
+  ).toBe(0);
+  expect(output.at(-1)).toMatchObject({ scope: { kind: 'install' }, revision: 1 });
+  expect(await store.getStateDocument({ kind: 'install' }, 'review/123')).toMatchObject({
+    revision: 1,
+    value: { shared: true },
+    writer: { kind: 'run', runId: unscoped.id, nodePath: 'commit' },
+  });
   expect(await store.listStateRevisions(project, 'review/123')).toEqual([]);
 });
 test('usage, cap and patch errors have distinct codes and write nothing', async () => {

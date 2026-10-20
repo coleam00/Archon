@@ -145,172 +145,186 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
 }
 
 async function runSetup(options: SetupOptions): Promise<void> {
-  // Handle --spawn flag
   if (options.spawn) {
-    console.log('Opening setup wizard in a new terminal window...');
-    const result = spawnTerminalWithSetup(options.repoPath, options.providers);
-
-    if (result.success) {
-      console.log('Setup wizard opened. Complete the setup in the new terminal window.');
-    } else {
-      console.log('');
-      console.log('Next step: run the setup wizard in a separate terminal.');
-      console.log('');
-      console.log(
-        `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
-      );
-      console.log('');
-      console.log(
-        'Come back here and let me know when you finish so I can verify your configuration.'
-      );
-    }
+    openSetupTerminal(options);
     return;
   }
 
-  // Interactive setup flow
   intro('Archon Setup Wizard');
 
-  // Resolve scope + target path up-front so everything downstream (existing-
-  // config check, merge, write) agrees on which file we're touching.
-  const scope: 'home' | 'project' = options.scope ?? 'home';
+  const scope = options.scope ?? 'home';
   const force = options.force ?? false;
   const targetEnvPath = resolveScopedEnvPath(scope, options.repoPath);
+  const target = { scope, force, repoPath: options.repoPath, targetEnvPath };
 
-  // If a pre-existing <repo>/.env is present, tell the operator once that
-  // archon does NOT manage it — avoids confusion for users upgrading from
-  // versions that used to write there.
-  const legacyRepoEnv = join(options.repoPath, '.env');
+  reportLegacyRepoEnv(options.repoPath);
+  const existing = checkExistingConfig(targetEnvPath);
+  const mode = await selectSetupMode(existing, force);
+  const s = spinner();
+  const ai = await collectAIConfig(options);
+  let config: SetupConfig;
+  if (mode === 'add') {
+    config = await collectAdditionalConfig(ai, existing, force, s);
+  } else {
+    const platforms = await collectPlatforms();
+    config = { ai, platforms, botDisplayName: 'Archon' };
+    await collectPlatformCredentials(config, platforms);
+    config.botDisplayName = await collectBotDisplayName();
+  }
+  const writeResult = await writeConfiguration(
+    config,
+    target,
+    options.inheritedEnv ?? process.env,
+    s
+  );
+
+  writePiModelPreference(config.ai);
+  // The Pi writer must run first: it refuses to append once an assistants block
+  // exists, and writeInstallDefaults can materialize that block.
+  await writeInstallDefaults(config.ai);
+  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
+  reportEnvWrite(writeResult);
+
+  const installation = await installProjectSkill(options.repoPath, s);
+  await configureDocsPath(installation.projectPath);
+  showSetupSummary(config, scope, writeResult.targetPath, installation);
+  await finishSetup();
+}
+
+function openSetupTerminal(options: SetupOptions): void {
+  console.log('Opening setup wizard in a new terminal window...');
+  const result = spawnTerminalWithSetup(options.repoPath, options.providers);
+
+  if (result.success) {
+    console.log('Setup wizard opened. Complete the setup in the new terminal window.');
+  } else {
+    console.log('');
+    console.log('Next step: run the setup wizard in a separate terminal.');
+    console.log('');
+    console.log(
+      `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
+    );
+    console.log('');
+    console.log(
+      'Come back here and let me know when you finish so I can verify your configuration.'
+    );
+  }
+}
+
+function reportLegacyRepoEnv(repoPath: string): void {
+  const legacyRepoEnv = join(repoPath, '.env');
   if (existsSync(legacyRepoEnv)) {
     log.info(
       `Note: ${legacyRepoEnv} exists but is not managed by archon.\n` +
         '      Values there are stripped from the archon process at runtime (safety guard).\n' +
         '      Put archon env vars in ~/.archon/.env (home scope) or ' +
-        `${join(options.repoPath, '.archon', '.env')} (project scope).`
+        `${join(repoPath, '.archon', '.env')} (project scope).`
     );
   }
+}
 
-  // Check for existing configuration at the selected scope (not unconditionally
-  // ~/.archon/.env) so the Add/Update/Fresh decision reflects the actual target.
-  const existing = checkExistingConfig(targetEnvPath);
+type SetupMode = 'fresh' | 'add' | 'update';
+type ExistingConfig = ReturnType<typeof checkExistingConfig>;
 
-  type SetupMode = 'fresh' | 'add' | 'update';
-  let mode: SetupMode = 'fresh';
+async function selectSetupMode(existing: ExistingConfig, force: boolean): Promise<SetupMode> {
+  if (!existing) return 'fresh';
+  const platforms = platformNames(existing.platforms);
+  const summary = [
+    `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
+    `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+    `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
+    `Platforms: ${platforms.length > 0 ? platforms.join(', ') : 'None'}`,
+  ].join('\n');
 
-  if (existing) {
-    const configuredPlatforms: string[] = [];
-    if (existing.platforms.github) configuredPlatforms.push('GitHub');
-    if (existing.platforms.telegram) configuredPlatforms.push('Telegram');
-    if (existing.platforms.slack) configuredPlatforms.push('Slack');
+  note(summary, 'Existing Configuration Found');
 
-    const summary = [
-      `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
-      `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
-      `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
-      `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
-    ].join('\n');
-
-    note(summary, 'Existing Configuration Found');
-
-    const modeChoice = await select({
-      message: 'What would you like to do?',
-      options: [
-        {
-          value: 'add',
-          label: 'Add providers or platforms',
-          hint: force
-            ? 'Re-enter existing platform credentials and configure additions before replacing the file'
-            : 'Keep existing credentials, configure selected providers and new platforms',
-        },
-        { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
-        { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
-      ],
-    });
-
-    if (isCancel(modeChoice)) cancelSetup();
-
-    mode = modeChoice as SetupMode;
-  }
-
-  // Collect configuration based on mode
-  const s = spinner();
-  const ai = await collectAIConfig(options);
-
-  let config: SetupConfig;
-
-  if (mode === 'add') {
-    s.start('Loading existing configuration...');
-
-    config = {
-      ai,
-      platforms: {
-        github: existing?.platforms.github ?? false,
-        telegram: existing?.platforms.telegram ?? false,
-        slack: existing?.platforms.slack ?? false,
+  const modeChoice = await select({
+    message: 'What would you like to do?',
+    options: [
+      {
+        value: 'add',
+        label: 'Add providers or platforms',
+        hint: force
+          ? 'Re-enter existing platform credentials and configure additions before replacing the file'
+          : 'Keep existing credentials, configure selected providers and new platforms',
       },
-      botDisplayName: 'Archon',
-    };
-
-    s.stop('Existing configuration loaded');
-
-    // Collect only new platforms
-    log.info('Select additional platforms to configure');
-    const newPlatforms = await collectPlatforms();
-
-    // Merge with existing
-    config.platforms = {
-      github: config.platforms.github || newPlatforms.github,
-      telegram: config.platforms.telegram || newPlatforms.telegram,
-      slack: config.platforms.slack || newPlatforms.slack,
-    };
-
-    if (force) {
-      log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
-    }
-
-    if (config.platforms.github && (force || !existing?.platforms.github)) {
-      config.github = await collectGitHubConfig();
-    }
-    if (config.platforms.telegram && (force || !existing?.platforms.telegram)) {
-      config.telegram = await collectTelegramConfig();
-    }
-    if (config.platforms.slack && (force || !existing?.platforms.slack)) {
-      config.slack = await collectSlackConfig();
-    }
-  } else {
-    const platforms = await collectPlatforms();
-
-    config = {
-      ai,
-      platforms,
-      botDisplayName: 'Archon',
-    };
-
-    // Collect platform credentials
-    if (platforms.github) {
-      config.github = await collectGitHubConfig();
-    }
-    if (platforms.telegram) {
-      config.telegram = await collectTelegramConfig();
-    }
-    if (platforms.slack) {
-      config.slack = await collectSlackConfig();
-    }
-
-    // Collect bot display name
-    config.botDisplayName = await collectBotDisplayName();
-  }
-
-  const githubAuth = await reconcileGitHubAuth(config, {
-    scope,
-    force,
-    repoPath: options.repoPath,
-    targetEnvPath,
+      { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
+      { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
+    ],
   });
 
-  // Generate and write configuration. Wrap in try/catch so any fs exception
-  // (permission denied, read-only FS, backup copy failure, etc.) stops the
-  // spinner cleanly and surfaces an actionable error instead of a raw stack
-  // trace after the user has filled out the entire wizard.
+  if (isCancel(modeChoice)) cancelSetup();
+
+  return modeChoice;
+}
+
+function platformNames(platforms: SetupConfig['platforms']): string[] {
+  const names: string[] = [];
+  if (platforms.github) names.push('GitHub');
+  if (platforms.telegram) names.push('Telegram');
+  if (platforms.slack) names.push('Slack');
+  return names;
+}
+
+async function collectAdditionalConfig(
+  ai: SetupConfig['ai'],
+  existing: ExistingConfig,
+  force: boolean,
+  s: ReturnType<typeof spinner>
+): Promise<SetupConfig> {
+  s.start('Loading existing configuration...');
+
+  const config: SetupConfig = {
+    ai,
+    platforms: {
+      github: existing?.platforms.github ?? false,
+      telegram: existing?.platforms.telegram ?? false,
+      slack: existing?.platforms.slack ?? false,
+    },
+    botDisplayName: 'Archon',
+  };
+
+  s.stop('Existing configuration loaded');
+
+  log.info('Select additional platforms to configure');
+  const newPlatforms = await collectPlatforms();
+
+  config.platforms = {
+    github: config.platforms.github || newPlatforms.github,
+    telegram: config.platforms.telegram || newPlatforms.telegram,
+    slack: config.platforms.slack || newPlatforms.slack,
+  };
+
+  if (force) {
+    log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
+  }
+
+  await collectPlatformCredentials(config, {
+    github: config.platforms.github && (force || !existing?.platforms.github),
+    telegram: config.platforms.telegram && (force || !existing?.platforms.telegram),
+    slack: config.platforms.slack && (force || !existing?.platforms.slack),
+  });
+  return config;
+}
+
+async function collectPlatformCredentials(
+  config: SetupConfig,
+  platforms: SetupConfig['platforms']
+): Promise<void> {
+  if (platforms.github) config.github = await collectGitHubConfig();
+  if (platforms.telegram) config.telegram = await collectTelegramConfig();
+  if (platforms.slack) config.slack = await collectSlackConfig();
+}
+
+async function writeConfiguration(
+  config: SetupConfig,
+  target: Parameters<typeof reconcileGitHubAuth>[1],
+  inheritedEnv: NodeJS.ProcessEnv,
+  s: ReturnType<typeof spinner>
+): Promise<ReturnType<typeof writeScopedEnv>> {
+  const { scope, force, repoPath, targetEnvPath } = target;
+  const githubAuth = await reconcileGitHubAuth(config, target);
+
   s.start('Writing configuration...');
 
   let writeResult: ReturnType<typeof writeScopedEnv>;
@@ -320,12 +334,12 @@ async function runSetup(options: SetupOptions): Promise<void> {
       scope,
       force,
       targetEnvPath,
-      inheritedEnv: options.inheritedEnv ?? process.env,
+      inheritedEnv,
       ...githubAuth,
     });
     writeResult = writeScopedEnv(envContent, {
       scope,
-      repoPath: options.repoPath,
+      repoPath,
       force,
       replaceGitHubAuth: githubAuth.replaceGitHubAuth,
     });
@@ -339,36 +353,24 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   s.stop('Configuration written');
 
-  // Pi model ref lives in ~/.archon/config.yaml, not the .env file, because
-  // it's a structured user preference rather than a secret.
-  if (config.ai.pi && config.ai.piModel) {
-    try {
-      writeHomePiModelConfig(config.ai.piModel);
-    } catch (err) {
-      // Non-fatal: env write already succeeded, so the user can hand-edit
-      // ~/.archon/config.yaml later. Surface the error so it's not silent.
-      const e = err as NodeJS.ErrnoException;
-      const code = e.code ? ` (${e.code})` : '';
-      log.warning(`Could not write Pi model config: ${e.message}${code}`);
-      getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
-    }
+  return writeResult;
+}
+
+function writePiModelPreference(ai: SetupConfig['ai']): void {
+  if (!ai.pi || !ai.piModel) return;
+  try {
+    writeHomePiModelConfig(ai.piModel);
+  } catch (err) {
+    // Non-fatal: env write already succeeded, so the user can hand-edit
+    // ~/.archon/config.yaml later. Surface the error so it's not silent.
+    const e = err as NodeJS.ErrnoException;
+    const code = e.code ? ` (${e.code})` : '';
+    log.warning(`Could not write Pi model config: ${e.message}${code}`);
+    getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
   }
+}
 
-  // Default assistant (+ optional chat model) → ~/.archon/config.yaml through
-  // the SAME install-scope write path as `archon ai default <provider>
-  // [<model>]` (#1998/#1999). Must run AFTER the Pi block above:
-  // writeHomePiModelConfig refuses to append once an `assistants:` block
-  // exists, and updateGlobalConfig can materialize one — the merge-write here
-  // preserves whatever the Pi writer produced.
-  await writeInstallDefaults(config.ai);
-
-  // Model tiers: confirm built-in defaults (claude/codex) or point providers
-  // without built-ins at the owning config surfaces before anything runs.
-  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
-
-  // Tell the operator exactly what happened — especially that <repo>/.env was
-  // NOT touched, because prior versions wrote there and this is the biggest
-  // behavior change for returning users.
+function reportEnvWrite(writeResult: ReturnType<typeof writeScopedEnv>): void {
   if (writeResult.preservedKeys.length > 0) {
     log.info(
       `Preserved ${writeResult.preservedKeys.length} existing value(s) (use --force to overwrite): ${writeResult.preservedKeys.join(', ')}`
@@ -377,51 +379,55 @@ async function runSetup(options: SetupOptions): Promise<void> {
   if (writeResult.backupPath) {
     log.info(`Backup written to ${writeResult.backupPath}`);
   }
+}
 
-  const { skillInstalledPath, projectPath, projectConfigCreatedPath } = await installProjectSkill(
-    options.repoPath,
-    s
-  );
-
-  await configureDocsPath(projectPath);
-
-  // Summary
-  const configuredPlatforms: string[] = [];
-  if (config.platforms.github) configuredPlatforms.push('GitHub');
-  if (config.platforms.telegram) configuredPlatforms.push('Telegram');
-  if (config.platforms.slack) configuredPlatforms.push('Slack');
-
+function configuredProviderNames(ai: SetupConfig['ai']): string[] {
   const aiConfigured: string[] = [];
-  if (config.ai.claude) {
+  if (ai.claude) {
     const authMethod =
-      config.ai.claudeAuthType === 'global'
+      ai.claudeAuthType === 'global'
         ? 'global auth'
-        : config.ai.claudeAuthType === 'apiKey'
+        : ai.claudeAuthType === 'apiKey'
           ? 'API key'
           : 'OAuth token';
     aiConfigured.push(`Claude (${authMethod})`);
   }
-  if (config.ai.codex && config.ai.codexTokens) {
+  if (ai.codex && ai.codexTokens) {
     aiConfigured.push('Codex');
   }
-  if (config.ai.pi) {
-    aiConfigured.push(config.ai.piApiKey ? `Pi (${config.ai.piApiKeyEnvVar})` : 'Pi');
+  if (ai.pi) {
+    aiConfigured.push(ai.piApiKey ? `Pi (${ai.piApiKeyEnvVar})` : 'Pi');
   }
 
+  return aiConfigured;
+}
+
+function showSetupSummary(
+  config: SetupConfig,
+  scope: NonNullable<SetupOptions['scope']>,
+  targetPath: string,
+  {
+    skillInstalledPath,
+    projectPath,
+    projectConfigCreatedPath,
+  }: Awaited<ReturnType<typeof installProjectSkill>>
+): void {
+  const platforms = platformNames(config.platforms);
+  const aiConfigured = configuredProviderNames(config.ai);
   const summaryLines = [
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
     `Default: ${config.ai.defaultAssistant ?? 'unset'}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
-    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
+    `Platforms: ${platforms.length > 0 ? platforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,
-    `  ${writeResult.targetPath}`,
+    `  ${targetPath}`,
   ];
 
   if (config.platforms.github && config.github) {
     summaryLines.push('');
     summaryLines.push('GitHub Webhook Setup:');
     summaryLines.push(
-      `  Use WEBHOOK_SECRET from ${writeResult.targetPath} in your GitHub webhook configuration.`
+      `  Use WEBHOOK_SECRET from ${targetPath} in your GitHub webhook configuration.`
     );
   }
 
@@ -439,8 +445,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   note(summaryLines.join('\n'), 'Configuration Complete');
+}
 
-  // Additional options note
+async function finishSetup(): Promise<void> {
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
       '  - PORT (default: 3090)\n' +

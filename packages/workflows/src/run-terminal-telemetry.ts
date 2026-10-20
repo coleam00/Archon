@@ -5,7 +5,12 @@ import { readNodeRecordData } from './node-record-reader';
 import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
 import { terminalStatusSchema } from './schemas/terminal-record';
-import { readRunDispatchMetadata, type WorkflowRun } from './schemas/workflow-run';
+import {
+  readRunDispatchMetadata,
+  TERMINAL_RUN_EVENT_TYPE,
+  TERMINAL_RUN_EVENT_TYPES,
+  type WorkflowRun,
+} from './schemas/workflow-run';
 import { telemetryNodeType } from './telemetry-node-type';
 import { getTerminalRecord } from './terminal-record';
 
@@ -16,9 +21,7 @@ import { getTerminalRecord } from './terminal-record';
  */
 export const RUN_TELEMETRY_EVENT_TYPES = [
   'workflow_started',
-  'workflow_completed',
-  'workflow_failed',
-  'workflow_cancelled',
+  ...TERMINAL_RUN_EVENT_TYPES,
   'node_failed',
   'loop_iteration_completed',
 ] as const;
@@ -48,7 +51,10 @@ export function buildRunTerminalTelemetry(input: {
   const status = terminalStatusSchema.safeParse(run.status);
   if (!status.success) return undefined;
 
-  const terminalEvent = lastEvent(events, e => e.event_type === `workflow_${status.data}`);
+  const terminalEvent = lastEvent(
+    events,
+    e => e.event_type === TERMINAL_RUN_EVENT_TYPE[status.data]
+  );
   const terminalData = terminalEvent ? readNodeRecordData(terminalEvent.data) : {};
   const started = events.find(e => e.event_type === 'workflow_started');
   const startedData = started ? readNodeRecordData(started.data) : {};

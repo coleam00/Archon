@@ -294,7 +294,7 @@ export async function createNewBranch(
   baseBranch: string,
   setupLockReason: string,
   remote = 'origin'
-): Promise<{ cutFromCommit?: string; branchCreated: boolean }> {
+): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
   const fromBranch =
     request.workflowType === 'task' && request.taskBranch?.kind === 'new'
       ? request.taskBranch.fromBranch
@@ -304,7 +304,14 @@ export async function createNewBranch(
   const localExists = await localBranchExists(repoPath, branchName);
   const remoteExists = await remoteBranchExists(repoPath, remote, branchName);
   if (!localExists && !remoteExists) {
-    return cutBranch(repoPath, worktreePath, branchName, startPoint, setupLockReason);
+    const checkout = await cutBranch(
+      repoPath,
+      worktreePath,
+      branchName,
+      startPoint,
+      setupLockReason
+    );
+    return { ...checkout, resolvedBaseBranch: baseBranch };
   }
 
   if (fromBranch) {
