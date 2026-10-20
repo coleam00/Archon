@@ -624,9 +624,10 @@ for (const persistence of ['sql', 'file'] as const) {
         }
       }
       // Trace2 keeps Git's internal waits and child-process timings even when exec captures stderr.
-      rollbackTrace = { label, path: join(root, 'rollback-git.perf') };
-      await writeFile(rollbackTrace.path, '');
-      process.env.GIT_TRACE2_PERF = rollbackTrace.path;
+      const tracePath = join(root, 'rollback-git.perf');
+      await writeFile(tracePath, '');
+      rollbackTrace = { label, path: tracePath };
+      process.env.GIT_TRACE2_PERF = tracePath;
       const store = await phase('open store', async () =>
         persistence === 'sql'
           ? isolation
