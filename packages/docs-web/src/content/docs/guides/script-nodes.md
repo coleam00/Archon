@@ -64,8 +64,9 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, and
    upstream `$nodeId.output` references are substituted into the `script` text
    before execution. User-controlled workflow variables like `$ARGUMENTS` and
-   `$USER_MESSAGE` are not substituted: they arrive as environment variables
-   instead (`process.env.ARGUMENTS`, `process.env.USER_MESSAGE`), so
+   `$USER_MESSAGE` are not substituted into a `script:` body: they arrive as
+   environment variables instead (`process.env.ARGUMENTS`, `process.env.USER_MESSAGE`
+   in bun; `os.environ['ARGUMENTS']`, `os.environ['USER_MESSAGE']` in uv/python), so
    user-controlled text never becomes script source — see
    [Environment and Isolation](#environment-and-isolation).
 2. **Detect inline vs named.** If the `script` value contains a newline or any
@@ -360,7 +361,7 @@ literally embedded into the code string at execution time.
 ## Environment and Isolation
 
 :::note[Shell injection prevention]
-User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection. `script:` nodes receive these values the same way via `process.env`.
+User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection — read them as `"$ARGUMENTS"`. `script:` nodes receive these values the same way (`process.env.USER_MESSAGE`, `process.env.ARGUMENTS` in bun; `os.environ['USER_MESSAGE']`, `os.environ['ARGUMENTS']` in uv/python).
 :::
 
 Script subprocesses receive `process.env` merged with any codebase-scoped env
