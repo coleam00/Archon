@@ -98,4 +98,8 @@ export type { RemoteBranchTarget, RemoteBranches } from './remote-branches';
 
 export { githubTokenCredentials } from './credentials';
 
-export { resolvePushDestinations, pinGitDestination } from './push-destinations';
+export {
+  type PushDestination,
+  resolvePushDestinations,
+  pinGitDestination,
+} from './push-destinations';

@@ -542,6 +542,7 @@ describe('CommandHandler', () => {
         test('should report merged worktree cleanup results', async () => {
           mockCleanupMergedWorktrees.mockResolvedValueOnce({
             removed: ['feat-old', 'feat-done'],
+            warnings: [{ branchName: 'feat-done', message: "Remote branch retained 'feat-done'" }],
             skipped: [{ branchName: 'feat-protected', reason: 'has uncommitted changes' }],
             releasedFailedRuns: [
               { branchName: 'feat-done', runId: 'run-failed-1', reason: 'merged' },
@@ -557,6 +558,9 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('Cleaned up 2 merged worktree(s)');
+          expect(result.message).toContain(
+            "Warning: feat-done: Remote branch retained 'feat-done'"
+          );
           expect(result.message).toContain('feat-old');
           expect(result.message).toContain('feat-done');
           expect(result.message).toContain('Released failed run run-fail (merged): feat-done');

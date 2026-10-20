@@ -9,6 +9,7 @@ import {
   execFileAsync,
   resolvePushDestinations,
   pinGitDestination,
+  type PushDestination,
   fetchWithRetry,
   listWorktrees,
   syncWorkspace,
@@ -504,7 +505,7 @@ async function deleteRemoteBranchAtDestination(
   repoPath: string,
   branchName: string,
   result: DestroyResult,
-  destination: string
+  destination: PushDestination
 ): Promise<boolean> {
   const { endpoint, env } = pinGitDestination(destination);
   const gitArgs = ['-C', repoPath];

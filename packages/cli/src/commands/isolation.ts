@@ -267,6 +267,9 @@ export async function isolationCleanupMergedCommand(
       for (const { branchName, runId, reason } of result.releasedFailedRuns) {
         console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
       }
+      for (const { branchName, message } of result.warnings) {
+        console.log(`  Warning: ${branchName}: ${message}`);
+      }
       for (const skip of result.skipped) {
         console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
       }

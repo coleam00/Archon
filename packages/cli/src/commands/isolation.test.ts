@@ -70,6 +70,7 @@ const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorkt
     removed: [],
     skipped: [],
     releasedFailedRuns: [],
+    warnings: [],
     baseRef: toBranchName('origin/dev'),
   })
 );
@@ -121,6 +122,7 @@ const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMer
       removed: [],
       skipped: [],
       releasedFailedRuns: [],
+      warnings: [],
       baseRef: toBranchName('origin/dev'),
     })
 );
@@ -1134,6 +1136,7 @@ describe('isolationCleanupMergedCommand', () => {
       removed: [],
       skipped: [],
       releasedFailedRuns: [],
+      warnings: [],
       baseRef: toBranchName('origin/dev'),
     });
   });
@@ -1161,6 +1164,7 @@ describe('isolationCleanupMergedCommand', () => {
     mockCleanupMergedEnvironments.mockResolvedValueOnce({
       removed: ['settled'],
       skipped: [],
+      warnings: [],
       releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'PR closed' }],
       baseRef: toBranchName('origin/dev'),
     });
@@ -1169,6 +1173,20 @@ describe('isolationCleanupMergedCommand', () => {
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '  Released failed run run-fail (PR closed): settled'
+    );
+  });
+
+  it('shows retained remote branch warnings from merged cleanup', async () => {
+    mockCleanupMergedEnvironments.mockResolvedValueOnce({
+      removed: ['settled'],
+      skipped: [],
+      releasedFailedRuns: [],
+      warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
+      baseRef: toBranchName('origin/dev'),
+    });
+    await isolationCleanupMergedCommand();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      "  Warning: settled: Remote branch retained 'settled'"
     );
   });
 

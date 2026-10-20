@@ -1104,7 +1104,7 @@ describe('cleanup environment configuration', () => {
 
     const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
 
-    expect(result).toEqual({ removed: [], skipped: [], releasedFailedRuns: [] });
+    expect(result).toEqual({ removed: [], skipped: [], warnings: [], releasedFailedRuns: [] });
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -1664,6 +1664,22 @@ describe('cleanupStaleWorktrees', () => {
     }
   );
 
+  test('preserves provider warnings for a removed stale worktree', async () => {
+    const env = staleWorktree({ created_by_platform: 'web', days_since_activity: 100 });
+    mockDestroy.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: false,
+      remoteBranchDeleted: null,
+      warnings: ['Local branch retained'],
+    });
+    const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual([env.branch_name]);
+    expect(result.warnings).toEqual([
+      { branchName: env.branch_name, message: 'Local branch retained' },
+    ]);
+  });
+
   test('skips retain-policy worktrees even if old', async () => {
     staleWorktree({ created_by_platform: RETAINING_PLATFORM, days_since_activity: 100 });
 
@@ -1749,6 +1765,7 @@ describe('cleanup after a chat plugin is removed', () => {
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
     expect(stale).toEqual({
       removed: [],
+      warnings: [],
       skipped: [{ branchName: env.branch_name, reason }],
       releasedFailedRuns: [],
     });

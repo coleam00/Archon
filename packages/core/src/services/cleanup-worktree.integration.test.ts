@@ -50,6 +50,7 @@ const { claimPendingWorkflowRun } = await import('../db/workflows');
 const {
   assessCompletedRunWorktree,
   cleanupStaleWorktrees,
+  cleanupMergedWorktrees,
   onConversationClosed,
   reclaimRunWorktree,
   releaseCompletedRunWorktree,
@@ -698,6 +699,44 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
 
+  test.each(['uploadpack', 'receivepack'] as const)(
+    'completion refuses a valueless remote %s service',
+    async service => {
+      const configPath = join(repo, '.git', 'config');
+      await writeFile(
+        configPath,
+        `${await readFile(configPath, 'utf8')}\n[remote "upstream"]\n${service}\n`
+      );
+      expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow();
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
+
+  test('completion preserves the named remote upload service', async () => {
+    const published = join(root, 'service.git');
+    await git(root, 'init', '--bare', '-q', published);
+    const ref = `refs/heads/${env.branch_name}`;
+    await git(repo, 'push', '-q', published, `HEAD:${ref}`);
+    await git(
+      repo,
+      'config',
+      'remote.upstream.uploadpack',
+      `git-upload-pack '${published.replaceAll('\\', '/').replaceAll("'", "'\"'\"'")}' #`
+    );
+    expect(await git(repo, 'ls-remote', 'upstream', ref)).toContain(ref);
+    expect(await git(repo, 'ls-remote', join(root, 'remote.git'), ref)).toBe('');
+    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow();
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test.each(['alias-insteadOf', 'alias-pushInsteadOf', 'empty', 'mixed'] as const)(
     'completion releases a clean checkout with Git-compatible destinations (%s)',
     async kind => {
@@ -1000,6 +1039,26 @@ test.each(['worktreeRemoved', 'directoryClean'] as const)(
     }
   }
 );
+
+test('merged cleanup retires locally and reports the retained published branch', async () => {
+  await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  await git(repo, 'push', '-q', 'origin', env.branch_name);
+  const ref = `refs/heads/${env.branch_name}`;
+  const published = await git(repo, 'ls-remote', 'origin', ref);
+  expect(published).toContain(ref);
+  const result = await cleanupMergedWorktrees(codebaseId, repo);
+  expect(result.removed).toEqual([env.branch_name]);
+  expect(result.warnings).toEqual([
+    {
+      branchName: env.branch_name,
+      message: expect.stringContaining('Remote branch retained'),
+    },
+  ]);
+  expect(await status()).toBe('destroyed');
+  expect(existsSync(env.working_path)).toBe(false);
+  expect(await git(repo, 'ls-remote', 'origin', ref)).toBe(published);
+});
 
 test.each([false, true].flatMap(force => [false, true].map(split => ({ force, split }))))(
   'local cleanup retains an unchanged remote ref with a warning (force=$force, split=$split)',

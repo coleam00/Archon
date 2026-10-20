@@ -202,5 +202,7 @@ test.each(cases)('snapshot resolution conforms to Git: $name', async ({ settings
   const expected = (await git('remote', 'get-url', '--push', '--all', 'origin'))
     .split('\n')
     .filter(Boolean);
-  expect(await resolvePushDestinations(repo, 'origin')).toEqual(expected);
+  expect(
+    (await resolvePushDestinations(repo, 'origin')).map(destination => destination.url)
+  ).toEqual(expected);
 });

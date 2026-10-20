@@ -449,6 +449,7 @@ export const emptyCleanup = (): CleanupOperationResult => ({
   removed: [],
   skipped: [],
   releasedFailedRuns: [],
+  warnings: [],
 });
 export const mockCleanupMergedWorktrees = mock(() => Promise.resolve(emptyCleanup()));
 export const mockCleanupStaleWorktrees = mock(() => Promise.resolve(emptyCleanup()));

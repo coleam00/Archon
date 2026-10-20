@@ -393,6 +393,10 @@ async function cleanupWorktrees(
       msg += `No ${cleanupType} worktrees to clean up.\n`;
     }
 
+    for (const { branchName, message } of result.warnings) {
+      msg += `  Warning: ${branchName}: ${message}\n`;
+    }
+
     if (result.skipped.length > 0) {
       msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
       for (const { branchName, reason } of result.skipped) {

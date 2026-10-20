@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { execFileAsync } from './exec';
 
-export async function resolvePushDestinations(repoPath: string, remote: string): Promise<string[]> {
+export interface PushDestination {
+  url: string;
+  uploadPack?: string;
+  receivePack?: string;
+}
+
+export async function resolvePushDestinations(
+  repoPath: string,
+  remote: string
+): Promise<PushDestination[]> {
   const { stdout: config } = await execFileAsync(
     'git',
     ['-C', repoPath, 'config', '--null', '--list'],
@@ -30,12 +39,26 @@ export async function resolvePushDestinations(repoPath: string, remote: string):
     if (rewritten) destinations.push(rewritten);
     else destinations.length = 0;
   }
-  if (destinations.length) return destinations;
   const fallbackUrls = urls.length ? urls : [remote];
-  return fallbackUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
+  const effectiveUrls = destinations.length
+    ? destinations
+    : fallbackUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
+  const uploadPack = configuredService(settings, `remote.${remote}.uploadpack`);
+  const receivePack = configuredService(settings, `remote.${remote}.receivepack`);
+  return effectiveUrls.map(url => ({ url, uploadPack, receivePack }));
 }
 
 type GitSetting = { key: string; value: string | undefined };
+
+function configuredService(settings: GitSetting[], key: string): string | undefined {
+  let command: string | undefined;
+  for (const setting of settings) {
+    if (setting.key !== key) continue;
+    if (setting.value === undefined) throw new Error('Remote service requires a command value');
+    command = setting.value;
+  }
+  return command;
+}
 
 function configuredUrls(settings: GitSetting[], key: string): string[] {
   const urls: string[] = [];
@@ -78,19 +101,34 @@ function rewriteUrl(url: string, rewrites: Map<string, string[]>): string | unde
   return destination;
 }
 
-/** Pin Git's single URL rewrite to an already resolved endpoint for reads and pushes. */
-export function pinGitDestination(destination: string): {
+/**
+ * A named remote preserves service overrides; its alias receives one URL rewrite,
+ * so Git does not rewrite the already resolved destination a second time.
+ */
+export function pinGitDestination(destination: PushDestination): {
   endpoint: string;
   env: NodeJS.ProcessEnv;
 } {
-  const endpoint = `archon-cleanup-${randomUUID()}:`;
+  const endpoint = `archon-cleanup-${randomUUID()}`;
+  const alias = `${endpoint}:`;
   const env = { ...process.env };
   const count = Number(env.GIT_CONFIG_COUNT ?? '0');
   if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid GIT_CONFIG_COUNT');
-  for (const [offset, setting] of ['insteadOf', 'pushInsteadOf'].entries()) {
-    env[`GIT_CONFIG_KEY_${String(count + offset)}`] = `url.${destination}.${setting}`;
-    env[`GIT_CONFIG_VALUE_${String(count + offset)}`] = endpoint;
+  const settings = [
+    [`url.${destination.url}.insteadOf`, alias],
+    [`url.${destination.url}.pushInsteadOf`, alias],
+    [`remote.${endpoint}.url`, alias],
+    ...(destination.uploadPack === undefined
+      ? []
+      : [[`remote.${endpoint}.uploadpack`, destination.uploadPack]]),
+    ...(destination.receivePack === undefined
+      ? []
+      : [[`remote.${endpoint}.receivepack`, destination.receivePack]]),
+  ];
+  for (const [offset, [key, value]] of settings.entries()) {
+    env[`GIT_CONFIG_KEY_${String(count + offset)}`] = key;
+    env[`GIT_CONFIG_VALUE_${String(count + offset)}`] = value;
   }
-  env.GIT_CONFIG_COUNT = String(count + 2);
+  env.GIT_CONFIG_COUNT = String(count + settings.length);
   return { endpoint, env };
 }

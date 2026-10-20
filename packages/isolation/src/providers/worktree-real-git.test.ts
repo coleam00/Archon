@@ -564,6 +564,104 @@ describe('WorktreeProvider against real git', () => {
     }
   );
 
+  test.each([false, true])(
+    'remote destruction preserves named services (force=%s)',
+    async force => {
+      const intended = join(root, 'service.git');
+      const unrelated = join(root, 'url.git');
+      for (const destination of [intended, unrelated])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', unrelated);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      const ref = `refs/heads/${created.branchName}`;
+      for (const destination of [intended, unrelated])
+        await git(repoPath, 'push', '-q', destination, created.branchName);
+      const published = await git(root, 'ls-remote', intended, ref);
+      const servicePath = intended.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
+      await git(
+        repoPath,
+        'config',
+        'remote.origin.uploadpack',
+        `git-upload-pack '${servicePath}' #`
+      );
+      await git(
+        repoPath,
+        'config',
+        'remote.origin.receivepack',
+        `git-receive-pack '${servicePath}' #`
+      );
+      expect(await git(repoPath, 'ls-remote', 'origin', ref)).toBe(published);
+      await git(repoPath, 'push', '-q', 'origin', 'HEAD:refs/heads/native-probe');
+      expect(await git(root, 'ls-remote', intended, 'refs/heads/native-probe')).toContain(
+        'refs/heads/native-probe'
+      );
+      expect(await git(root, 'ls-remote', unrelated, 'refs/heads/native-probe')).toBe('');
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.remoteBranchDeleted).toBe(true);
+      expect(result.warnings).toEqual([]);
+      expect(await git(root, 'ls-remote', intended, ref)).toBe('');
+      expect(await git(root, 'ls-remote', unrelated, ref)).toBe(published);
+    }
+  );
+
+  test.each(
+    [false, true].flatMap(force =>
+      ['uploadpack', 'receivepack'].map(service => ({ force, service }))
+    )
+  )(
+    'remote destruction refuses a valueless service (force=$force, service=$service)',
+    async ({ force, service }) => {
+      const destination = join(root, 'remote.git');
+      await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', destination);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      await git(repoPath, 'push', '-q', 'origin', created.branchName);
+      const ref = `refs/heads/${created.branchName}`;
+      const published = await git(root, 'ls-remote', destination, ref);
+      const configPath = join(repoPath, '.git', 'config');
+      await writeFile(
+        configPath,
+        `${await readFile(configPath, 'utf8')}\n[remote "origin"]\n${service}\n`
+      );
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.remoteBranchDeleted).toBe(false);
+      expect(result.warnings).toEqual([
+        `Failed to delete remote branch '${created.branchName}': could not resolve push destinations`,
+      ]);
+      expect(await git(root, 'ls-remote', destination, ref)).toBe(published);
+    }
+  );
+
   test.each(
     [false, true].flatMap(force =>
       [

@@ -32,7 +32,13 @@ mock.module('../db/isolation-environments', () => ({
 
 const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [], releasedFailedRuns: [], baseRef: MERGED_BASE_REF })
+  Promise.resolve({
+    removed: [],
+    skipped: [],
+    releasedFailedRuns: [],
+    warnings: [],
+    baseRef: MERGED_BASE_REF,
+  })
 );
 const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
   Promise.resolve(null)
@@ -249,6 +255,7 @@ describe('cleanupMergedEnvironments', () => {
       removed: ['feat-a', 'feat-b'],
       skipped: [],
       releasedFailedRuns: [],
+      warnings: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -263,6 +270,7 @@ describe('cleanupMergedEnvironments', () => {
       removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
       releasedFailedRuns: [],
+      warnings: [],
       baseRef: MERGED_BASE_REF,
     });
 
@@ -276,6 +284,7 @@ describe('cleanupMergedEnvironments', () => {
       removed: ['feat'],
       skipped: [],
       releasedFailedRuns: [],
+      warnings: [],
       baseRef: MERGED_BASE_REF,
     });
 

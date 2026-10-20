@@ -1034,6 +1034,7 @@ async function isEnvironmentStale(
  */
 export interface CleanupOperationResult {
   removed: string[];
+  warnings: { branchName: string; message: string }[];
   skipped: { branchName: string; reason: string }[];
   /** Removed environments that a failed run no longer locked. */
   releasedFailedRuns: ({ branchName: string } & ReleasedFailedRun)[];
@@ -1134,7 +1135,12 @@ export async function cleanupStaleWorktrees(
   codebaseId: string,
   mainRepoPath: string
 ): Promise<CleanupOperationResult> {
-  const result: CleanupOperationResult = { removed: [], skipped: [], releasedFailedRuns: [] };
+  const result: CleanupOperationResult = {
+    removed: [],
+    skipped: [],
+    warnings: [],
+    releasedFailedRuns: [],
+  };
   const repoPath = toRepoPath(mainRepoPath);
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
@@ -1162,6 +1168,9 @@ export async function cleanupStaleWorktrees(
         continue;
       }
       const removeResult = await removeEnvironment(env);
+      result.warnings.push(
+        ...removeResult.warnings.map(message => ({ branchName: env.branch_name, message }))
+      );
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
@@ -1196,6 +1205,7 @@ export async function cleanupMergedWorktrees(
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const result: MergedCleanupResult = {
     removed: [],
+    warnings: [],
     skipped: [],
     releasedFailedRuns: [],
     baseRef: remoteMainRef,
@@ -1249,6 +1259,9 @@ export async function cleanupMergedWorktrees(
       const removeResult = await removeEnvironment(env, {
         deleteRemoteBranch: true,
       });
+      result.warnings.push(
+        ...removeResult.warnings.map(message => ({ branchName: env.branch_name, message }))
+      );
       if (removeResult.skippedReason) {
         result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
       } else {
