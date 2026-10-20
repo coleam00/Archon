@@ -58,7 +58,7 @@ async function tryPersistSessionId(
 export interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
-  /** The turn ended in a provider error result; a launch queued during it is dropped. */
+  /** A failed turn drops any launch queued during it. */
   failed: boolean;
 }
 
@@ -203,7 +203,7 @@ async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> 
   const { platform, conversationId, aiClient, requestOptions, turn } = input;
   await platform.sendMessage(
     conversationId,
-    'A tool failed or was cancelled, and the assistant returned no reply. The requested action may not have completed. Check the run status before retrying.'
+    'A tool failed or was cancelled, and the assistant returned no follow-up reply. The requested action may not have completed. Check the run status before retrying.'
   );
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
