@@ -3,6 +3,7 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
@@ -83,7 +84,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
     // A nested interaction can persist a pause before its ordinary sibling settles.
     // Settle ordinary peers first inside loop bodies so admission sees their failures.
-    const phases = ctx.loopBodyFailure
+    const phases = ctx.interactionAdmission
       ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
       : [layer];
     for (const phase of phases) {
@@ -113,12 +114,17 @@ async function runLayerPhase(
   serializeLayer: boolean,
   guardedLayerSnapshots: Set<string> | undefined
 ): Promise<boolean> {
+  const peers =
+    ctx.interactionAdmission && layer.some(canSuspend)
+      ? peerAdmissions(ctx.interactionAdmission, layer.length)
+      : undefined;
   const nodeThunks = layer.map(
-    (node): (() => Promise<LayerNodeResult>) =>
+    (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,
+          interactionAdmission: peers?.[index].admission ?? ctx.interactionAdmission,
           guardedLayerSnapshots,
           nodeInvocation:
             ctx.unfinishedInvocations?.get(
@@ -126,18 +132,24 @@ async function runLayerPhase(
             )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
         };
         try {
-          return (
-            (await admitNode(nodeCtx, node)) ?? (await dispatchNode(nodeCtx, node, isParallelLayer))
-          );
+          const result =
+            (await admitNode(nodeCtx, node)) ??
+            (await dispatchNode(nodeCtx, node, isParallelLayer));
+          if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
+          return result;
         } catch (error) {
-          return recordPreExecutionFailure(nodeCtx, node, error);
+          nodeCtx.interactionAdmission?.failed(node.id);
+          return await recordPreExecutionFailure(nodeCtx, node, error);
+        } finally {
+          peers?.[index].finished();
         }
       }
   );
   // Mixed checkout guards still require sequential execution within each phase.
-  const layerResults = serializeLayer
-    ? await settleSequentially(nodeThunks)
-    : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+  const layerResults =
+    serializeLayer && layer.some(isCheckoutGuarded)
+      ? await settleSequentially(nodeThunks)
+      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
   settledValuesOrThrow(layerResults, ctx.workflowRun.id);
@@ -179,18 +191,8 @@ async function admitNode(
   ctx: RunLayersContext,
   node: DagNode
 ): Promise<LayerNodeResult | undefined> {
-  const origin = ctx.loopBodyFailure?.();
-  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
-    const output = await recordNodeState(
-      { store: ctx.deps.store, logDir: ctx.logDir },
-      finishNodeExecution(beginExecution(ctx, node), {
-        status: 'skipped',
-        reason: 'trigger_rule',
-        cause: { kind: 'upstream_failed', origin },
-      })
-    );
-    return { nodeId: node.id, output };
-  }
+  const suppressed = await suppressFailedLoopInteraction(ctx, node);
+  if (suppressed !== undefined) return suppressed;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
@@ -289,6 +291,28 @@ async function admitNode(
       );
       return { nodeId: node.id, output };
     }
+  }
+  return undefined;
+}
+
+async function suppressFailedLoopInteraction(
+  ctx: RunLayersContext,
+  node: DagNode
+): Promise<LayerNodeResult | undefined> {
+  if (node.kind === 'gate' || node.kind === 'wait') {
+    await ctx.interactionAdmission?.beforeInteraction();
+  }
+  const origin = ctx.interactionAdmission?.failure();
+  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+    const output = await recordNodeState(
+      { store: ctx.deps.store, logDir: ctx.logDir },
+      finishNodeExecution(beginExecution(ctx, node), {
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin },
+      })
+    );
+    return { nodeId: node.id, output };
   }
   return undefined;
 }

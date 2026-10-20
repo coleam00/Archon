@@ -594,7 +594,10 @@ warning.
   *encapsulated* inside it — the outer DAG stays acyclic.
 - Each iteration runs the body's topological layers in full. Within a layer,
   ordinary nodes settle before nodes that can suspend, including nested groups
-  containing interactions. Nodes within each phase can run in parallel.
+  containing interactions. Nodes within each phase can run in parallel. Before an
+  interaction pauses the run, sibling work must either finish or reach its own
+  interaction, including work inside nested groups. Any failure skips those
+  interactions.
 - The body is **sealed**: a body node's `depends_on` may only reference sibling
   body nodes, not outer-DAG nodes. Outer context is still reachable via `$nodeId.output`
   refs in body prompts.

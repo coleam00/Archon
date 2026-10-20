@@ -1,4 +1,5 @@
 /** The state one dry-run simulation threads through every node, and the helpers each node kind shares. */
+import type { InteractionAdmission } from '../interaction-admission';
 import { join } from 'node:path';
 import {
   nodeTemplateReferences,
@@ -106,7 +107,7 @@ export interface DryRunContext {
   /** Always a subset of `missingStubs` — see {@link dryRunResultSchema}'s field doc. */
   toleratedMissingStubs: Set<string>;
   halted?: 'paused' | 'cancelled';
-  loopBodyFailure?: () => string | undefined;
+  interactionAdmission?: InteractionAdmission;
   /** Workflow-level provider/model fallbacks, for the per-node resolution report. */
   scope: WorkflowModelScope;
   assistantModels: Readonly<Record<string, string | undefined>>;

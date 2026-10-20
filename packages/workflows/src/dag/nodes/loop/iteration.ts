@@ -101,6 +101,15 @@ export async function runLoopIteration(
   // On a non-completing gate, the user's feedback feeds the next iteration, which exits
   // above once any declared completion channel fires.
   if (loop.interactive && loop.gate_message) {
+    await ctx.interactionAdmission?.beforeInteraction();
+    const origin = ctx.interactionAdmission?.failure();
+    if (origin !== undefined)
+      return {
+        state: 'skipped',
+        output: '',
+        cause: { kind: 'upstream_failed', origin },
+        ...loopSpend(state),
+      };
     const honestMessage = buildHonestGateMessage(
       completionChecks,
       state.lastOutput,

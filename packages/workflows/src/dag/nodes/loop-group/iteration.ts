@@ -1,3 +1,4 @@
+import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import {
@@ -104,7 +105,7 @@ export async function runLoopGroupIteration(
     (await suspendedBody(run, state, i, body, postBodyStatus));
   if (halted !== undefined) return halted;
 
-  const origin = ctx.loopBodyFailure?.();
+  const origin = ctx.interactionAdmission?.failure();
   if (origin !== undefined && canSuspend(node)) {
     return {
       state: 'skipped',
@@ -286,13 +287,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
-    loopBodyFailure: () =>
-      ctx.loopBodyFailure?.() ??
-      bodyNodes.find(n => {
-        const output = scopedNodeOutputs.get(n.id);
-        // Inherited entries retain their identity until a local execution replaces them.
-        return output?.state === 'failed' && output !== ctx.nodeOutputs.get(n.id);
-      })?.id,
+    interactionAdmission: loopBodyAdmission(ctx.interactionAdmission),
     nodeOutputs: scopedNodeOutputs,
     priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,
@@ -638,6 +633,16 @@ async function pauseAtGroupGate(
   const { ctx, node, resume } = run;
   const { deps, platform, conversationId, workflowRun } = ctx;
   const { honestMessage, completionDetected } = gate;
+  await ctx.interactionAdmission?.beforeInteraction();
+  const failure = ctx.interactionAdmission?.failure();
+  if (failure !== undefined)
+    return {
+      state: 'skipped',
+      output: '',
+      cause: { kind: 'upstream_failed', origin: failure },
+      ...run.progress.usage,
+      loopIterations: i,
+    };
   const suspended = finishNodeExecution(
     run.execution,
     { status: 'suspended', point: 'interactive_loop' },

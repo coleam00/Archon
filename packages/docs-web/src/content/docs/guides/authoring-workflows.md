@@ -16,7 +16,7 @@ This guide explains how to create workflows that orchestrate multiple commands i
 A workflow is a **YAML file** that defines a directed acyclic graph (DAG) of commands to execute. Workflows enable:
 
 - **Multi-step automation**: Chain multiple AI agents together
-- **Parallel execution**: Independent nodes run concurrently
+- **Parallel execution**: Independent nodes normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 - **Conditional branching**: Route to different paths based on node output
 - **Artifact passing**: Output from one node becomes input for downstream nodes
 - **Iterative loops**: Loop nodes repeat until a declared completion condition is met
@@ -106,7 +106,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
 ```
 
-Nodes without `depends_on` run immediately. Nodes in the same topological layer run concurrently via `Promise.allSettled`. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
+Nodes without `depends_on` enter the first topological layer. Nodes in the same layer normally run concurrently. [Loop bodies settle ordinary work before interactions](/guides/loop-nodes/#how-it-works), and mixed checkout-guard layers run sequentially. Skipped nodes (failed `when:` condition or `trigger_rule`) propagate their skipped state to dependants.
 
 > **Note:** The `steps:` (sequential) format has been removed. All workflows use `nodes:` (DAG) format exclusively.
 
@@ -3765,7 +3765,7 @@ Before deploying a workflow:
 2. **`nodes:` define the graph** — each node runs a command, inline prompt, bash script, or loop
 3. **Artifacts are the glue** — commands communicate via files, not in-memory context
 4. **`context: fresh`** — forces a fresh AI session for a node (works from artifacts only)
-5. **Parallel by default** — nodes in the same topological layer run concurrently
+5. **Parallel by default** — nodes in the same topological layer normally run concurrently, subject to [loop-body interaction ordering](/guides/loop-nodes/#how-it-works) and checkout guards
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from an AI node, or from a `bash:`/`script:` node's stdout, for reliable branching
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)

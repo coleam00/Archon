@@ -1,3 +1,4 @@
+import { loopBodyAdmission } from '../../interaction-admission';
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
@@ -40,7 +41,7 @@ export async function simulateLoopGroup(
   // the body sets it — so a spread copy would swallow a pause and let the run continue past
   // it. Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
   // nests correctly when a body contains another loop_group.
-  const outerBodyFailure = ctx.loopBodyFailure;
+  const outerAdmission = ctx.interactionAdmission;
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
   const outerLoopBodyScopes = ctx.loopBodyScopes;
@@ -55,15 +56,10 @@ export async function simulateLoopGroup(
     ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
-      ctx.loopBodyFailure = () =>
-        outerBodyFailure?.() ??
-        bodyNodes.find(n => {
-          const output = bodyOutputs.get(n.id);
-          return output?.state === 'failed' && output !== outputs.get(n.id);
-        })?.id;
+      ctx.interactionAdmission = loopBodyAdmission(outerAdmission);
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
-      ctx.loopBodyFailure = outerBodyFailure;
+      ctx.interactionAdmission = outerAdmission;
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
       ctx.loopBodyScopes = outerLoopBodyScopes;
@@ -83,7 +79,7 @@ export async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
-    const origin = outerBodyFailure?.();
+    const origin = outerAdmission?.failure();
     if (origin !== undefined && canSuspend(node)) {
       recordSkipped(
         node,

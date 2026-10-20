@@ -1,4 +1,5 @@
 /** Walks a graph plan node by node: the reach checks every node shares, then its kind's simulator. */
+import { peerAdmissions } from '../interaction-admission';
 import { checkComposedBlockBoundaries, checkTriggerRule } from '../dag/trigger-rule';
 import { evaluateCondition } from '../condition-evaluator';
 import { observeCheckout } from '../checkout-observation';
@@ -125,10 +126,37 @@ export async function simulateNodes(
   iteration?: number
 ): Promise<void> {
   for (const layer of plan.layers) {
-    const ordered = ctx.loopBodyFailure
-      ? [...layer.filter(node => !canSuspend(node)), ...layer.filter(canSuspend)]
-      : layer;
-    for (const node of ordered) {
+    const phases = ctx.interactionAdmission
+      ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
+      : [layer];
+    for (const phase of phases) {
+      if (ctx.halted) return;
+      await simulatePhase(phase, outputs, ctx, iteration);
+    }
+  }
+}
+
+async function simulatePhase(
+  phase: readonly DagNode[],
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext,
+  iteration?: number
+): Promise<void> {
+  if (ctx.interactionAdmission && phase.some(canSuspend)) {
+    const peers = peerAdmissions(ctx.interactionAdmission, phase.length);
+    await Promise.all(
+      phase.map(async (node, index) => {
+        const nodeCtx = { ...ctx, interactionAdmission: peers[index].admission };
+        try {
+          await simulateLayerNode(node, outputs, nodeCtx, iteration);
+          if (nodeCtx.halted) ctx.halted = nodeCtx.halted;
+        } finally {
+          peers[index].finished();
+        }
+      })
+    );
+  } else {
+    for (const node of phase) {
       if (ctx.halted) return;
       await simulateLayerNode(node, outputs, ctx, iteration);
     }
@@ -141,7 +169,10 @@ async function simulateLayerNode(
   ctx: DryRunContext,
   iteration?: number
 ): Promise<void> {
-  const origin = ctx.loopBodyFailure?.();
+  if (node.kind === 'gate' || node.kind === 'wait') {
+    await ctx.interactionAdmission?.beforeInteraction();
+  }
+  const origin = ctx.interactionAdmission?.failure();
   if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
     recordSkipped(
       node,
@@ -156,6 +187,7 @@ async function simulateLayerNode(
   const execution = await simulatedExecution(node, ctx);
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);
+  if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
     outputs.set(node.id, { ...result, execution });
   }
