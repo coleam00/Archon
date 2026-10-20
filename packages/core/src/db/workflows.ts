@@ -77,6 +77,7 @@ export {
 } from './workflow-run-transitions';
 export {
   updateWorkflowRun,
+  updateWorkflowRunMetadataIfRunning,
   updateWorkflowActivity,
   recordWorkflowRunCheckoutBaseline,
   setToolCallAttention,

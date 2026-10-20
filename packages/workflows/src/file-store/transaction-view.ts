@@ -329,6 +329,13 @@ export function createTransactionView(
         working_path: run.working_path ?? updates.working_path ?? null,
       });
     },
+    updateWorkflowRunMetadataIfRunning: async (id, metadata) => {
+      validateWorkflowWaitMetadata(metadata);
+      const run = runs.get(id);
+      if (run?.status !== 'running') return false;
+      Object.assign(run.metadata, structuredClone(metadata));
+      return true;
+    },
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
       const run = runs.get(id);
       if (run) run.last_activity_at = new Date();

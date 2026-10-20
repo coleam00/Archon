@@ -920,6 +920,11 @@ export interface IWorkflowStore
       working_path?: string;
     }
   ): Promise<void>;
+  /** Atomically merge metadata only while running; false means nothing was written. */
+  updateWorkflowRunMetadataIfRunning(
+    id: string,
+    metadata: WorkflowRun['metadata']
+  ): Promise<boolean>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
   /**

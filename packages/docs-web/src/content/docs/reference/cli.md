@@ -880,7 +880,7 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs` or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`, request recovery with [`workflow end-turn`](#workflow-end-turn), or explicitly cancel if appropriate. This advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
 ```bash
 archon workflow wait <run-id>
@@ -1260,6 +1260,45 @@ strings when reclamation fails; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
+
+### `workflow end-turn`
+
+Record a request to end the stalled tools or reported background work named by a
+running run's `stalled_tool_calls.calls` advisory.
+
+```bash
+archon workflow end-turn <run-id>
+archon workflow end-turn <run-id> --json
+archon workflow wait <run-id> --json
+```
+
+Open tools and reported background work remain running when silent. After
+`workflows.toolCallAttentionMs` without progress (30 minutes by default), attention
+shows their node, provider, sanitized description and idle duration. A silent turn
+with no open tool or reported background work still fails after its node's
+`idle_timeout` and follows its existing retry policy.
+
+The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.
+A live owner checks about every ten seconds and aborts only one of its own current
+stalls that matches all three fields by equality. The attempt fails as `timeout`;
+its retry policy decides whether to start a fresh attempt. Progress clears an
+occurrence, and a later stall gets a new `raisedAt`. The requester's clock is not
+used to decide whether a request applies.
+
+Exit `0` means the request was recorded, not that an owner accepted it or the run
+progressed. The owner might exit or the run might finish before it reads the request.
+Use `workflow wait <run-id>` to inspect attention or the terminal result; it can
+return the same advisory while recovery is pending. An `owner_lost` result requires
+operator recovery of the run's ownership. The CLI itself kills nothing and does not
+cancel the run or answer a gate.
+
+Exit `1` refuses an unknown run, any run outside `running` (including paused runs),
+no stalled work, or unreadable attention. `--json` prints
+`{ ok: true, runId, action: "end_turn", requestRecorded: true, nodes }`, or
+`{ ok: false, runId, action: "end_turn", error }` with `error` one of `not_found`,
+`not_running`, `nothing_stalled`, and `unreadable_attention`. Thrown failures use the
+same failure envelope with the error message; `runId` is the resolved id, or the
+supplied argument if resolution failed.
 
 ### `workflow respond`
 

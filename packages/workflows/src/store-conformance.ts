@@ -277,6 +277,40 @@ export function describeWorkflowStoreConformance(
       await harness?.close();
     });
 
+    test.each(['paused', 'completed', 'failed', 'cancelled'] as const)(
+      'running metadata write refuses a run that became %s after observation',
+      async status => {
+        const run = await running(store, { metadata: { preserved: true } });
+        expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+        if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+        else if (status === 'completed')
+          await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+        else if (status === 'failed') await store.failWorkflowRun(run.id, 'failure');
+        else await store.cancelWorkflowRun(run.id);
+        const before = await store.getWorkflowRun(run.id);
+        expect(
+          await store.updateWorkflowRunMetadataIfRunning(run.id, { end_turn_request: {} })
+        ).toBe(false);
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      }
+    );
+
+    test('running metadata write merges only into a running run', async () => {
+      const pending = await create(store);
+      expect(await store.updateWorkflowRunMetadataIfRunning(pending.id, { request: true })).toBe(
+        false
+      );
+      expect(
+        await store.updateWorkflowRunMetadataIfRunning(crypto.randomUUID(), { request: true })
+      ).toBe(false);
+      const run = await running(store, { metadata: { preserved: true } });
+      expect(await store.updateWorkflowRunMetadataIfRunning(run.id, { request: true })).toBe(true);
+      expect((await store.getWorkflowRun(run.id))?.metadata).toMatchObject({
+        preserved: true,
+        request: true,
+      });
+    });
+
     type Lane = PreparedWorkflowLaunch['execution']['isolation'];
     /** Each launch runs in a checkout of its own unless `checkout` names a shared one. */
     const launch = (

@@ -187,6 +187,7 @@ export function createWorkflowStore(): IWorkflowStore {
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
+    updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
     // DB returns string | null; IWorkflowStore declares WorkflowRunStatus | null.
     // The remote_agent_workflow_runs.status column is constrained to valid enum values

@@ -208,6 +208,9 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     recordWorkflowRunCheckoutBaseline: mock(
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
+    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
+      async () => true
+    ),
     updateWorkflowRun: mock(async () => undefined),
     failWorkflowRun: mock(async () => ({ failed: true })),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
