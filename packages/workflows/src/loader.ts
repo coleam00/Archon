@@ -93,9 +93,8 @@ function parseWorkflowHeader(
     return "Missing required field 'description'";
   }
 
-  // Reject legacy steps-based workflows
-  if (Array.isArray(raw.steps) && raw.steps.length > 0) {
-    return '`steps:` format has been removed. Workflows now use `nodes:` (DAG) format exclusively. Your bundled defaults are already updated — custom workflows need manual migration. See docs/sequential-dag-migration-guide.md for conversion patterns, or run: claude "Read docs/sequential-dag-migration-guide.md then convert .archon/workflows/<file> to nodes: format"';
+  if (Object.hasOwn(raw, 'steps')) {
+    return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/guides/authoring-workflows/ for the workflow language reference.';
   }
 
   if (!Array.isArray(raw.nodes) || raw.nodes.length === 0) {

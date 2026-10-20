@@ -273,7 +273,7 @@ export async function writeDryRunStubScaffold(
   let handle;
   try {
     handle = await open(path, 'wx');
-    await handle.writeFile(Bun.YAML.stringify(stubs));
+    await handle.writeFile(Bun.YAML.stringify(stubs, null, 2));
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'EEXIST') {

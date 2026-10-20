@@ -3319,8 +3319,8 @@ WARNING [parse_warning] Node 'plan': unknown key 'contxt' will be ignored.
 A key that belongs to a different node type is not dropped: it is a **load error** naming the node, the key and the node types that support it, because the node would silently not do what the key says. That covers `runtime:` and `deps:` off a `script:` node; `timeout:` off `bash:`, `script:`, `loop:` and `loop_group:`; `on_timeout:` off `bash:` and `script:`; `with:` off `command:`, `script:`, `include:` and `workflow:`; `input:` and `isolation:` off `workflow:`; and `fan_out:` off `workflow:` and `include:`. A loop setting such as `until_bash:`, `max_iterations:` or `interactive:` written at the top level of a node, instead of inside `loop:` or `loop_group:`, is a load error too. A node-level `interactive: true` reads like a pause and is not one:
 
 ```text
-Node 'plan': 'interactive' 'interactive' is only honoured inside 'loop:' or 'loop_group:';
-  at the top level of node 'plan' nothing reads it. Nothing on this node pauses. To ask
+Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
+  at the top level nothing reads it. Nothing on this node pauses. To ask
   for an answer, add a 'wait: { attention: <message> }' node; to ask on each iteration
   of a loop, use a 'loop_group' whose body ends in one.
 ```
