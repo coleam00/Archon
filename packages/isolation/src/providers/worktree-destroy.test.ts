@@ -287,6 +287,45 @@ describe('branch cleanup', () => {
   const destroyBranch = (deleteRemoteBranch = false) =>
     provider.destroy(WORKTREE, { ...ownedDestroyOptions, branchName: BRANCH, deleteRemoteBranch });
 
+  test.each(['deleted', 'absent', 'surviving', 'unreachable'] as const)(
+    'bounds remote cleanup while preserving the %s result',
+    async outcome => {
+      execSpy.mockImplementation(async (_cmd, args) => {
+        if (args.includes('push') && outcome !== 'deleted') throw new Error('push timed out');
+        if (args.includes('ls-remote')) {
+          if (outcome === 'unreachable') throw new Error('inspection timed out');
+          return {
+            stdout: outcome === 'surviving' ? 'abc123\trefs/heads/feature-branch\n' : '',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await destroyBranch(true);
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', REPO, 'push', 'origin', '--delete', BRANCH],
+        { timeout: 10_000 }
+      );
+      if (outcome !== 'deleted') {
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          ['-C', REPO, 'ls-remote', 'origin', `refs/heads/${BRANCH}`],
+          { timeout: 10_000 }
+        );
+      }
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.directoryClean).toBe(true);
+      expect(result.branchDeleted).toBe(true);
+      expect(result.remoteBranchDeleted).toBe(outcome === 'deleted' || outcome === 'absent');
+      expect(result.warnings).toHaveLength(
+        outcome === 'surviving' || outcome === 'unreachable' ? 1 : 0
+      );
+    }
+  );
+
   test('a local branch that is already gone counts as deleted', async () => {
     // Git's wording is ignored; the branch's absence afterwards decides.
     failGit('-D', new Error('error: branch not found'));

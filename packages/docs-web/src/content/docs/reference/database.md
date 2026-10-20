@@ -133,6 +133,12 @@ Worktree cleanup transactions do not retry automatically: they include filesyste
 which cannot safely be replayed. If cleanup fails with `SQLITE_BUSY`, resolve the contention
 and explicitly retry cleanup.
 
+Cleanup holds registration exclusion through checkout and branch removal. Remote branch
+deletion and its follow-up existence check each use a ten-second subprocess timeout so
+best-effort network cleanup does not use the five-minute worktree-operation timeout while
+holding the database writer. A failed remote cleanup is reported as a warning; local
+removal and registration retirement can still complete.
+
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 
 Set your remote connection string in `.env`:
