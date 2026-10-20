@@ -253,7 +253,7 @@ function assertPromisedNamesAreDelivered(document: Document): void {
       if (EXEC_NODE_ENVIRONMENT_NAMES.has(name)) continue;
       if (isBindingName(name)) continue;
       throw new Error(
-        `${document.file} promises the environment variable ${name}, which the exec node does not deliver`
+        `${document.file} promises the environment variable ${name} for the user-controlled variables, which the exec node does not deliver`
       );
     }
   }
