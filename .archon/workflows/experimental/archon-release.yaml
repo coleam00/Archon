@@ -12,8 +12,11 @@ description: |
   NOT for: Hotfix recovery from a broken release CI run (manual recovery
            path), publishing release notes only, retroactive tagging.
 
-  Pass `--dry-run` (or `dry-run`) anywhere in the message to preview every
-  step without touching git, GitHub, the filesystem, or any remote state.
+  Pass `--dry-run` (or `dry-run`) anywhere in the message to preview the
+  release without releasing it: no version bump on disk, no commit, pull
+  request, tag, GitHub release or tap update. The preview still fetches and
+  fast-forwards the live dev checkout, compiles the binary and drafts the
+  changelog with a provider call.
   Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
 
   Examples:
@@ -924,7 +927,8 @@ nodes:
       } else if (args.dryRun === "true") {
         lines.push(`DRY RUN COMPLETE — would have released v${ver.newVersion} (from v${ver.oldVersion})`);
         lines.push("");
-        lines.push("No files were written. No commits were made. No PR was created.");
+        lines.push("No release files were written. No commits were made. No PR was created.");
+        lines.push("The live dev checkout was fetched and brought up to date with origin/dev.");
         lines.push("Re-run without --dry-run to actually cut the release.");
       } else {
         lines.push(`RELEASE COMPLETE — v${ver.newVersion} (from v${ver.oldVersion}, ${ver.bump})`);
