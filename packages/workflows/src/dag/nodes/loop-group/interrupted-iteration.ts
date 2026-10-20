@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { recordNodeState } from '../../../node-event-write';
 import { getLog } from '../../log';
 import { getStaleCachedDependencies } from '../../stale-dependencies';
 import { planGraph } from '../../../graph-plan';
@@ -26,7 +27,7 @@ export interface InterruptedIteration {
   previousSequentialSession?: SessionCursor;
 }
 
-function canRestoreInterruptedIteration(run: LoopGroupRun): boolean {
+async function canRestoreInterruptedIteration(run: LoopGroupRun): Promise<boolean> {
   const { ctx, resume, node } = run;
   // Answered loop gates start a new iteration; their outputs are history, not cache.
   if (ctx.priorCompletedNodes === undefined || resume.isLoopResume || node.always_run) return false;
@@ -40,6 +41,16 @@ function canRestoreInterruptedIteration(run: LoopGroupRun): boolean {
     getLog().info(
       { nodeId: node.id, invalidatingDeps: staleDeps },
       'dag.loop_group_prior_cache_invalidated'
+    );
+    await recordNodeState(
+      { store: ctx.deps.store, logDir: ctx.logDir },
+      {
+        runId: ctx.workflowRun.id,
+        path: run.stepName,
+        node: run.execution.node,
+        // The body cache must stay invalid across retries, even without a completed group output.
+        cache: { action: 'invalidated', prior: { text: '' }, invalidatingDeps: staleDeps },
+      }
     );
     return false;
   }
@@ -58,7 +69,7 @@ function canRestoreInterruptedIteration(run: LoopGroupRun): boolean {
 export async function restoreInterruptedIteration(
   run: LoopGroupRun
 ): Promise<InterruptedIteration | undefined> {
-  if (!canRestoreInterruptedIteration(run)) return undefined;
+  if (!(await canRestoreInterruptedIteration(run))) return undefined;
   const { ctx, resume, node } = run;
   const rows = await ctx.deps.store.listWorkflowEvents(ctx.workflowRun.id);
   const { byIteration, mutableSpillIterations, sessions, completedSessions } =
@@ -131,30 +142,18 @@ function recordCompletedSession(
   sessions: Map<string, SessionCursor>,
   completedSessions: Map<number, Map<string, SessionCursor | undefined>>
 ): void {
-  if (
-    record.eventType === 'node_completed' &&
-    record.data.session_id &&
-    record.metadata?.binding.provider
-  ) {
-    sessions.set(record.path, {
-      sessionId: record.data.session_id,
-      provider: record.metadata.binding.provider,
-    });
-  }
-  if (
-    (record.eventType === 'node_completed' && record.data.session_id) ||
-    (record.eventType === 'node_skipped_prior_success' && sessions.has(record.path))
-  ) {
-    const iterationSessions =
-      completedSessions.get(iteration) ?? new Map<string, SessionCursor | undefined>();
-    iterationSessions.set(
-      record.path,
-      record.eventType === 'node_completed' && !record.metadata?.binding.provider
-        ? undefined
-        : sessions.get(record.path)
-    );
-    completedSessions.set(iteration, iterationSessions);
-  }
+  if (record.eventType !== 'node_completed') return;
+  const session =
+    record.data.session_id && record.metadata?.binding.provider
+      ? { sessionId: record.data.session_id, provider: record.metadata.binding.provider }
+      : undefined;
+  if (session) sessions.set(record.path, session);
+  else sessions.delete(record.path);
+  const iterationSessions =
+    completedSessions.get(iteration) ?? new Map<string, SessionCursor | undefined>();
+  if (record.data.session_id) iterationSessions.set(record.path, session);
+  else iterationSessions.delete(record.path);
+  completedSessions.set(iteration, iterationSessions);
 }
 
 function collectIterationHistory(run: LoopGroupRun, rows: readonly WorkflowEventRow[]) {
@@ -166,6 +165,17 @@ function collectIterationHistory(run: LoopGroupRun, rows: readonly WorkflowEvent
   const completedSessions = new Map<number, Map<string, SessionCursor | undefined>>();
   const ownerKey = nodeInvocationKey(run.stepName, ctx.loopGroupPath);
   for (const row of rows) {
+    if (
+      row.event_type === 'node_prior_cache_invalidated' &&
+      row.step_name &&
+      (row.step_name === run.stepName || run.stepName.startsWith(`${row.step_name}.`))
+    ) {
+      byIteration.clear();
+      mutableSpillIterations.clear();
+      pathIterations.clear();
+      sessions.clear();
+      completedSessions.clear();
+    }
     if (!row.step_name?.startsWith(run.bodyStepNamePrefix)) continue;
     const record = readNodeRecordEvent(row);
     if (!record) continue;

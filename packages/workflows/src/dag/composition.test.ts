@@ -755,13 +755,13 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
           id: 'cycle',
           depends_on: ['source'],
           loop_group: {
-            max_iterations: 1,
+            max_iterations: 2,
             until: 'DONE',
             nodes: [
               { id: 'entry', bash: 'echo $source.output' },
               {
                 id: 'tail',
-                bash: `if [ ! -f '${retry}' ]; then touch '${retry}'; exit 1; fi; echo DONE`,
+                bash: `if [ '$source.output' = A ] && [ '$LOOP_PREV.entry.output' = '' ]; then echo continue; elif [ ! -f '${retry}' ]; then exit 1; else echo DONE; fi`,
                 depends_on: ['entry'],
               },
             ],
@@ -813,6 +813,41 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
             e.event_type === 'node_skipped_prior_success' && e.step_name === `${prefix}cycle.entry`
         )
       ).toBe(false);
+      expect(
+        resumed.some(e => e.event_type === 'node_failed' && e.step_name === `${prefix}cycle.tail`)
+      ).toBe(true);
+      await writeFile(retry, '1');
+      const secondRows = persistedEvents(deps.store);
+      const secondSnapshot = await foldDagResumeSnapshot(secondRows, workflowRun.id);
+      deps.store.getDagResumeSnapshot.mockResolvedValue(secondSnapshot);
+      deps.store.listWorkflowEvents.mockResolvedValue(
+        secondRows.map((e, index) => ({
+          ...e,
+          id: String(index),
+          created_at: new Date().toISOString(),
+          step_index: null,
+          step_name: e.step_name ?? null,
+          data: e.data ?? {},
+        }))
+      );
+      const secondStart = secondRows.length;
+      await executeDagWorkflow({
+        ...options,
+        priorCompletedNodes: secondSnapshot.completedNodeOutputs,
+      });
+      const secondResume = persistedEvents(deps.store).slice(secondStart);
+      expect(
+        secondResume.find(
+          e =>
+            e.event_type === 'node_skipped_prior_success' && e.step_name === `${prefix}cycle.entry`
+        )?.data?.node_output
+      ).toBe('B');
+      expect(
+        secondResume.find(
+          e => e.event_type === 'loop_iteration_started' && e.step_name === `${prefix}cycle`
+        )?.data?.iteration
+      ).toBe(1);
+      expect(secondResume.filter(e => e.event_type === 'node_failed')).toEqual([]);
     });
   }
 
@@ -922,10 +957,11 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
       let follows = 0;
       mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session) {
         if (prompt === 'lead') leads++;
-        if (prompt === 'follow' && ++follows === 2) throw new Error('interrupted iteration');
+        if (prompt === 'follow' && ++follows >= 2 && follows <= 3)
+          throw new Error('interrupted iteration');
         yield {
           type: 'agent_message_chunk',
-          text: prompt === 'follow' && follows === 3 ? 'DONE' : 'continue',
+          text: prompt === 'follow' && follows === 4 ? 'DONE' : 'continue',
         };
         yield {
           type: 'result',
@@ -969,31 +1005,39 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
           throw new Error('expected completion binding');
         Reflect.deleteProperty(data.binding, 'provider');
       }
-      const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
-      deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
-      deps.store.listWorkflowEvents.mockResolvedValue(
-        rows.map((e, index) => ({
-          ...e,
-          id: String(index),
-          created_at: new Date().toISOString(),
-          step_index: null,
-          step_name: e.step_name ?? null,
-          data: e.data ?? {},
-        }))
-      );
-      const before = rows.length;
-      const callCount = mockSendQueryDag.mock.calls.length;
-      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
-      const resumed = persistedEvents(deps.store).slice(before);
-      expect(
-        resumed.some(
-          e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'cycle.lead'
-        )
-      ).toBe(true);
-      expect(resumed.filter(e => e.event_type === 'node_failed')).toEqual([]);
-      const calls = mockSendQueryDag.mock.calls.slice(callCount);
-      expect(calls.map(c => c[0])).toEqual(['follow']);
-      expect(calls[0]?.[2]).toBe(attestation === 'attested' ? 'CURRENT' : undefined);
+      for (const retry of [1, 2]) {
+        const retryRows = persistedEvents(deps.store);
+        const snapshot = await foldDagResumeSnapshot(retryRows, workflowRun.id);
+        deps.store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+        deps.store.listWorkflowEvents.mockResolvedValue(
+          retryRows.map((e, index) => ({
+            ...e,
+            id: String(index),
+            created_at: new Date().toISOString(),
+            step_index: null,
+            step_name: e.step_name ?? null,
+            data: e.data ?? {},
+          }))
+        );
+        const before = retryRows.length;
+        const callCount = mockSendQueryDag.mock.calls.length;
+        await executeDagWorkflow({
+          ...options,
+          priorCompletedNodes: snapshot.completedNodeOutputs,
+        });
+        const resumed = persistedEvents(deps.store).slice(before);
+        expect(
+          resumed.some(
+            e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'cycle.lead'
+          )
+        ).toBe(true);
+        expect(
+          resumed.filter(e => e.event_type === 'node_failed' && e.step_name === 'cycle.follow')
+        ).toHaveLength(retry === 1 ? 1 : 0);
+        const calls = mockSendQueryDag.mock.calls.slice(callCount);
+        expect(calls.map(c => c[0])).toEqual(['follow']);
+        expect(calls[0]?.[2]).toBe(attestation === 'attested' ? 'CURRENT' : undefined);
+      }
     });
   }
 
