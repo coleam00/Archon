@@ -569,7 +569,8 @@ describe('WorktreeProvider against real git', () => {
     async force => {
       const intended = join(root, 'service.git');
       const unrelated = join(root, 'url.git');
-      for (const destination of [intended, unrelated])
+      const secondUrl = join(root, 'second-url.git');
+      for (const destination of [intended, unrelated, secondUrl])
         await git(root, 'init', '--bare', '-q', destination);
       await git(repoPath, 'remote', 'add', 'origin', repoPath);
       const created = await provider.create({
@@ -583,10 +584,12 @@ describe('WorktreeProvider against real git', () => {
       });
       if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
       const ref = `refs/heads/${created.branchName}`;
-      for (const destination of [intended, unrelated])
+      for (const destination of [intended, unrelated, secondUrl])
         await git(repoPath, 'push', '-q', destination, created.branchName);
       const published = await git(root, 'ls-remote', intended, ref);
       await git(repoPath, 'remote', 'set-url', 'origin', unrelated);
+      await git(repoPath, 'config', '--add', 'remote.origin.pushurl', unrelated);
+      await git(repoPath, 'config', '--add', 'remote.origin.pushurl', secondUrl);
       const servicePath = intended.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
       await git(
         repoPath,
@@ -606,6 +609,7 @@ describe('WorktreeProvider against real git', () => {
         'refs/heads/native-probe'
       );
       expect(await git(root, 'ls-remote', unrelated, 'refs/heads/native-probe')).toBe('');
+      expect(await git(root, 'ls-remote', secondUrl, 'refs/heads/native-probe')).toBe('');
       const result = await provider.destroy(created.workingPath, {
         canonicalRepoPath: request.canonicalRepoPath,
         creationId: created.metadata.creationId,
@@ -617,6 +621,53 @@ describe('WorktreeProvider against real git', () => {
       expect(result.warnings).toEqual([]);
       expect(await git(root, 'ls-remote', intended, ref)).toBe('');
       expect(await git(root, 'ls-remote', unrelated, ref)).toBe(published);
+      expect(await git(root, 'ls-remote', secondUrl, ref)).toBe(published);
+    }
+  );
+
+  test.each([false, true])(
+    'remote destruction refuses a receive-only service (force=%s)',
+    async force => {
+      const intended = join(root, 'service.git');
+      const unrelated = join(root, 'url.git');
+      for (const destination of [intended, unrelated])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      await git(repoPath, 'remote', 'set-url', 'origin', unrelated);
+      const servicePath = intended.replaceAll('\\', '/').replaceAll("'", "'\"'\"'");
+      await git(
+        repoPath,
+        'config',
+        'remote.origin.receivepack',
+        `git-receive-pack '${servicePath}' #`
+      );
+      await git(repoPath, 'push', '-q', 'origin', created.branchName);
+      const ref = `refs/heads/${created.branchName}`;
+      const published = await git(root, 'ls-remote', intended, ref);
+      expect(published).toContain(ref);
+      expect(await git(repoPath, 'ls-remote', 'origin', ref)).toBe('');
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.remoteBranchDeleted).toBe(false);
+      expect(result.warnings).toEqual([
+        `Failed to delete remote branch '${created.branchName}': could not resolve push destinations`,
+      ]);
+      expect(await git(root, 'ls-remote', intended, ref)).toBe(published);
     }
   );
 

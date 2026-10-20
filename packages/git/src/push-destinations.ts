@@ -45,6 +45,11 @@ export async function resolvePushDestinations(
     : fallbackUrls.map(url => rewriteUrl(url, insteadOf) ?? url);
   const uploadPack = configuredService(settings, `remote.${remote}.uploadpack`);
   const receivePack = configuredService(settings, `remote.${remote}.receivepack`);
+  // ls-remote uses upload-pack, so its advertisement cannot establish absence
+  // at a separately configured receive-only service.
+  if (receivePack !== undefined && uploadPack === undefined) {
+    throw new Error('Cannot inspect a remote receivepack override without an uploadpack service');
+  }
   return effectiveUrls.map(url => ({ url, uploadPack, receivePack }));
 }
 
