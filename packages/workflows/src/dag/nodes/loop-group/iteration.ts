@@ -11,7 +11,7 @@ import { recordDerivedExecution } from '../../../node-event-write';
 import { spellWorkflowCommand } from '../../../deps';
 import { gateOccurrence } from '../../../schemas/workflow-run';
 import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../schemas';
-import { isGateNode, isWorkflowWaitContext } from '../../../schemas';
+import { canSuspend, isGateNode, isWorkflowWaitContext } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
@@ -31,7 +31,6 @@ import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
-  findLoopGroupTerminalInteraction,
   logGroupIterationEventError,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
@@ -104,6 +103,17 @@ export async function runLoopGroupIteration(
     (await failedBody(run, state, i, body)) ??
     (await suspendedBody(run, state, i, body, postBodyStatus));
   if (halted !== undefined) return halted;
+
+  const origin = ctx.loopBodyFailure?.();
+  if (origin !== undefined && canSuspend(node)) {
+    return {
+      state: 'skipped',
+      output: '',
+      cause: { kind: 'upstream_failed', origin },
+      ...run.progress.usage,
+      loopIterations: i,
+    };
+  }
 
   // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
   state.loopPrevOutputs = new Map(body.scopedNodeOutputs);
@@ -222,7 +232,6 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const scopedNodeOutputs = new Map<string, NodeOutput>(ctx.nodeOutputs);
 
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
-  const terminalInteraction = findLoopGroupTerminalInteraction(bodyNodes);
   const iterCtx: RunLayersContext = {
     toolAttention: ctx.toolAttention,
     bodyGateOwner:
@@ -277,21 +286,13 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
     layers: iterBodyLayers,
-    // A terminal interaction commits its pause before failedBody can settle the group.
-    // Earlier all_done cleanup must still run after a body failure.
-    stopBeforeLayer: layer => {
-      if (
-        terminalInteraction === undefined ||
-        !layer.some(n => n.id === terminalInteraction.id) ||
-        !bodyNodes.some(
-          n => n.id !== terminalInteraction.id && scopedNodeOutputs.get(n.id)?.state === 'failed'
-        )
-      )
-        return false;
-      // The skipped sink never ran; an inherited outer output is not its result.
-      scopedNodeOutputs.delete(terminalInteraction.id);
-      return true;
-    },
+    loopBodyFailure: () =>
+      ctx.loopBodyFailure?.() ??
+      bodyNodes.find(n => {
+        const output = scopedNodeOutputs.get(n.id);
+        // Inherited entries retain their identity until a local execution replaces them.
+        return output?.state === 'failed' && output !== ctx.nodeOutputs.get(n.id);
+      })?.id,
     nodeOutputs: scopedNodeOutputs,
     priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
     claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,

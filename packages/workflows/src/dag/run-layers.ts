@@ -8,7 +8,12 @@ import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SkipCause } from '../schemas';
-import { nodeUsesPersistedScope, readSubrunMetadata, isNodeContextResume } from '../schemas';
+import {
+  canSuspend,
+  nodeUsesPersistedScope,
+  readSubrunMetadata,
+  isNodeContextResume,
+} from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
@@ -58,7 +63,6 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
-    if (ctx.stopBeforeLayer?.(layer)) break;
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
@@ -152,6 +156,18 @@ async function admitNode(
   ctx: RunLayersContext,
   node: DagNode
 ): Promise<LayerNodeResult | undefined> {
+  const origin = ctx.loopBodyFailure?.();
+  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+    const output = await recordNodeState(
+      { store: ctx.deps.store, logDir: ctx.logDir },
+      finishNodeExecution(beginExecution(ctx, node), {
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin },
+      })
+    );
+    return { nodeId: node.id, output };
+  }
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;

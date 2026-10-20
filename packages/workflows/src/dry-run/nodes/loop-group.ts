@@ -1,13 +1,10 @@
 import { planGraph, resolvedBodyNodes } from '../../graph-plan';
 import { describeUnmetCompletion, stripCompletionTags } from '../../executor-shared';
 import { loopBodyScope } from '../../dag/loop-scope';
-import {
-  findLoopGroupTerminalInteraction,
-  loopGroupIterationOutput,
-} from '../../dag/nodes/loop-group/loop-group-state';
+import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-state';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
-import type { LoopGroupNode, NodeOutput } from '../../schemas';
-import { recordFailed, withResolution, type DryRunContext } from '../context';
+import { canSuspend, type LoopGroupNode, type NodeOutput } from '../../schemas';
+import { recordSkipped, recordFailed, withResolution, type DryRunContext } from '../context';
 import { completionReason, loopIterationCompletes } from '../loop-completion';
 import { simulateNodes } from '../simulate';
 
@@ -18,7 +15,6 @@ export async function simulateLoopGroup(
   iteration?: number
 ): Promise<void> {
   const bodyNodes = resolvedBodyNodes(node.loop_group);
-  const terminalInteraction = findLoopGroupTerminalInteraction(bodyNodes);
   // The executor builds the body's per-iteration context from the group's OWN resolved
   // provider and model (dag/dispatch.ts), so the body must simulate against those rather
   // than the enclosing workflow's scope. Everything the executor leaves alone — the
@@ -44,6 +40,7 @@ export async function simulateLoopGroup(
   // the body sets it — so a spread copy would swallow a pause and let the run continue past
   // it. Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
   // nests correctly when a body contains another loop_group.
+  const outerBodyFailure = ctx.loopBodyFailure;
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
   const outerLoopBodyScopes = ctx.loopBodyScopes;
@@ -58,19 +55,15 @@ export async function simulateLoopGroup(
     ctx.loopPrevOutputs = loopPrevOutputs ?? new Map();
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
     try {
-      await simulateNodes(bodyPlan, bodyOutputs, ctx, current, layer => {
-        if (
-          terminalInteraction === undefined ||
-          !layer.some(n => n.id === terminalInteraction.id) ||
-          !bodyNodes.some(
-            n => n.id !== terminalInteraction.id && bodyOutputs.get(n.id)?.state === 'failed'
-          )
-        )
-          return false;
-        bodyOutputs.delete(terminalInteraction.id);
-        return true;
-      });
+      ctx.loopBodyFailure = () =>
+        outerBodyFailure?.() ??
+        bodyNodes.find(n => {
+          const output = bodyOutputs.get(n.id);
+          return output?.state === 'failed' && output !== outputs.get(n.id);
+        })?.id;
+      await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
+      ctx.loopBodyFailure = outerBodyFailure;
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
       ctx.loopBodyScopes = outerLoopBodyScopes;
@@ -90,6 +83,18 @@ export async function simulateLoopGroup(
       return;
     }
     if (ctx.halted) return;
+    const origin = outerBodyFailure?.();
+    if (origin !== undefined && canSuspend(node)) {
+      recordSkipped(
+        node,
+        outputs,
+        ctx,
+        'loop body failed',
+        { kind: 'upstream_failed', origin },
+        iteration
+      );
+      return;
+    }
     const groupCompletion = loopIterationCompletes(node.loop_group, { output: iterationOutput });
     if (groupCompletion.kind !== 'incomplete') {
       const output = stripCompletionTags(iterationOutput, node.loop_group.until);

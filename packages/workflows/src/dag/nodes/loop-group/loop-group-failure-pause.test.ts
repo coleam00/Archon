@@ -114,117 +114,172 @@ for (const [name, suspension] of [
     )
   ),
 ] as const) {
-  for (const failed of 'wait' in suspension || name === 'gate' ? [true, false] : [true]) {
-    test(`${name}: ${failed ? 'body failure prevents suspension' : 'clean body still pauses'} without losing cleanup or usage`, async () => {
-      const root = await mkdtemp(join(tmpdir(), 'archon-loop-failure-pause-'));
-      try {
-        mockSendQueryDag.mockImplementation(async function* () {
-          yield { type: 'agent_message_chunk', text: 'work done' };
-          yield { type: 'result', sessionId: 'work', cost: 0.02, tokens: { input: 20, output: 3 } };
-        });
-        const store = await createFileWorkflowStore({ root });
-        const pauseWait = spyOn(store, 'pauseWorkflowRunForWait');
-        const pauseGate = spyOn(store, 'pauseWorkflowRun');
-        const created = await store.createWorkflowRun({
-          workflow_name: 'failed-pause',
-          user_message: '',
-        });
-        const run = await store.claimPendingWorkflowRun(created.id, root);
-        if (!run) throw new Error('Claim failed');
-        const offChain = name.includes('before exec') || name.includes('beside exec');
-        const outerId = offChain ? 'outer-pause' : 'pause';
-        const options = dagOptions({
-          deps: createMockDeps(store),
-          platform: createMockPlatform(),
-          cwd: root,
-          workflowRun: run,
-          workflow: {
-            name: 'failed-pause',
-            nodes: [
-              dagNodeSchema.parse({ id: outerId, bash: 'exit 8' }),
-              dagNodeSchema.parse({
-                id: 'cycle',
-                depends_on: [outerId],
-                trigger_rule: 'all_done',
-                loop_group: {
-                  max_iterations: 2,
-                  until_bash: 'exit 1',
-                  nodes: [
-                    { id: 'work', prompt: 'Work' },
-                    {
-                      id: 'broken',
-                      bash: failed ? 'exit 7' : 'echo success',
-                      depends_on: ['work'],
-                    },
-                    {
-                      id: 'cleanup',
-                      bash: 'echo cleaned',
-                      depends_on: ['broken'],
-                      trigger_rule: 'all_done',
-                    },
-                    {
-                      id: 'pause',
-                      ...suspension,
-                      depends_on: ['cleanup'],
-                      trigger_rule: 'all_done',
-                    },
-                  ],
-                },
-              }),
-            ],
-          },
-        });
-        if (offChain) expect(validateDagStructure(options.workflow.nodes)).toBeNull();
-        await executeDagWorkflow(options);
-        const persisted = await store.getWorkflowRun(run.id);
-        const events = await store.listWorkflowEvents(run.id);
-        const bodyError = events.find(
-          event => event.event_type === 'node_failed' && event.step_name === 'cycle.broken'
-        )?.data.error;
-        const groupFailure = events.find(
-          event => event.event_type === 'node_failed' && event.step_name === 'cycle'
-        );
-        if (failed) {
-          expect(bodyError).toBe("Bash node 'broken' failed [exit 7]: no diagnostic output");
-          expect(groupFailure?.data.error).toBe(
-            `Loop-group node 'cycle' failed at iteration 1: 'broken': ${String(bodyError)}`
+  for (const outerTopology of [
+    'sole sink',
+    ...(name === 'nested gate' ||
+    name === 'interactive group' ||
+    name === 'interactive loop' ||
+    name.endsWith('sole sink')
+      ? ['before exec', 'beside exec']
+      : []),
+  ]) {
+    for (const failed of 'wait' in suspension || name === 'gate' ? [true, false] : [true]) {
+      test(`${name} outer ${outerTopology}: ${failed ? 'body failure prevents suspension' : 'clean body still pauses'} without losing cleanup or usage`, async () => {
+        const root = await mkdtemp(join(tmpdir(), 'archon-loop-failure-pause-'));
+        try {
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'work done' };
+            yield {
+              type: 'result',
+              sessionId: 'work',
+              cost: 0.02,
+              tokens: { input: 20, output: 3 },
+            };
+          });
+          const store = await createFileWorkflowStore({ root });
+          const pauseWait = spyOn(store, 'pauseWorkflowRunForWait');
+          const pauseGate = spyOn(store, 'pauseWorkflowRun');
+          const created = await store.createWorkflowRun({
+            workflow_name: 'failed-pause',
+            user_message: '',
+          });
+          const run = await store.claimPendingWorkflowRun(created.id, root);
+          if (!run) throw new Error('Claim failed');
+          const offChain =
+            outerTopology !== 'sole sink' ||
+            name.includes('before exec') ||
+            name.includes('beside exec');
+          const outerId = offChain ? 'outer-pause' : 'pause';
+          const options = dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: root,
+            workflowRun: run,
+            workflow: {
+              name: 'failed-pause',
+              nodes: [
+                dagNodeSchema.parse({ id: outerId, bash: 'exit 8' }),
+                dagNodeSchema.parse({
+                  id: 'cycle',
+                  depends_on: [outerId],
+                  trigger_rule: 'all_done',
+                  loop_group: {
+                    max_iterations: 2,
+                    until_bash: 'exit 1',
+                    nodes: [
+                      { id: 'work', prompt: 'Work' },
+                      {
+                        id: 'broken',
+                        bash: failed ? 'exit 7' : 'echo success',
+                        depends_on: ['work'],
+                      },
+                      {
+                        id: 'cleanup',
+                        bash: 'echo cleaned',
+                        depends_on: ['broken'],
+                        trigger_rule: 'all_done',
+                      },
+                      {
+                        id: 'pause',
+                        ...suspension,
+                        depends_on: ['cleanup'],
+                        trigger_rule: 'all_done',
+                      },
+                      ...(outerTopology === 'sole sink'
+                        ? []
+                        : [
+                            {
+                              id: 'outer-finish',
+                              bash: 'echo done',
+                              depends_on: outerTopology === 'before exec' ? ['pause'] : ['cleanup'],
+                              trigger_rule: 'all_done',
+                            },
+                          ]),
+                    ],
+                  },
+                }),
+              ],
+            },
+          });
+          if (offChain) expect(validateDagStructure(options.workflow.nodes)).toBeNull();
+          await executeDagWorkflow(options);
+          const persisted = await store.getWorkflowRun(run.id);
+          const events = await store.listWorkflowEvents(run.id);
+          const bodyError = events.find(
+            event => event.event_type === 'node_failed' && event.step_name === 'cycle.broken'
+          )?.data.error;
+          const groupFailure = events.find(
+            event => event.event_type === 'node_failed' && event.step_name === 'cycle'
           );
-          expect(groupFailure?.data.cost_usd).toBe(0.02);
-          expect(persisted?.status).toBe('failed');
-          expect(persisted?.metadata.wait).toBeUndefined();
-          expect(persisted?.metadata.approval).toBeUndefined();
-          expect(await listAttentionQueue({ store, branchOf: async () => null })).toEqual([]);
-          expect(events.some(event => event.step_name === 'cycle.pause')).toBe(false);
-          expect(pauseWait).not.toHaveBeenCalled();
-          expect(pauseGate).not.toHaveBeenCalled();
-          expect(events.some(event => event.event_type === 'workflow_failed')).toBe(true);
-        } else {
-          expect(bodyError).toBeUndefined();
-          expect(groupFailure).toBeUndefined();
-          expect(persisted?.status).toBe('paused');
-          if (!('wait' in suspension)) {
-            expect(pauseGate).toHaveBeenCalledTimes(1);
+          if (failed) {
+            expect(bodyError).toBe("Bash node 'broken' failed [exit 7]: no diagnostic output");
+            expect(groupFailure?.data.error).toBe(
+              `Loop-group node 'cycle' failed at iteration 1: 'broken': ${String(bodyError)}`
+            );
+            expect(groupFailure?.data.cost_usd).toBe(0.02);
+            expect(persisted?.status).toBe('failed');
+            expect(persisted?.metadata.wait).toBeUndefined();
+            expect(persisted?.metadata.approval).toBeUndefined();
+            expect(await listAttentionQueue({ store, branchOf: async () => null })).toEqual([]);
+            expect(
+              events.some(
+                event =>
+                  event.step_name?.startsWith('cycle.pause') && event.event_type === 'node_failed'
+              )
+            ).toBe(false);
+            if (name.includes('beside exec'))
+              expect(
+                events.some(
+                  event =>
+                    event.step_name === 'cycle.pause.finish' &&
+                    event.event_type === 'node_completed'
+                )
+              ).toBe(true);
+            if (name.includes('before exec'))
+              expect(
+                events.find(event => event.step_name === 'cycle.pause.finish')?.event_type
+              ).toBe('node_skipped');
+            if (outerTopology !== 'sole sink')
+              expect(
+                events.some(
+                  event =>
+                    event.step_name === 'cycle.outer-finish' &&
+                    event.event_type === 'node_completed'
+                )
+              ).toBe(true);
+            expect(pauseWait).not.toHaveBeenCalled();
+            expect(pauseGate).not.toHaveBeenCalled();
+            expect(events.some(event => event.event_type === 'workflow_failed')).toBe(true);
           } else {
-            expect(pauseWait).toHaveBeenCalledTimes(1);
+            expect(bodyError).toBeUndefined();
+            expect(groupFailure).toBeUndefined();
+            expect(persisted?.status).toBe('paused');
+            if (!('wait' in suspension)) {
+              expect(pauseGate).toHaveBeenCalledTimes(1);
+            } else {
+              expect(pauseWait).toHaveBeenCalledTimes(1);
+            }
           }
+          expect(persisted?.metadata).toMatchObject({
+            total_cost_usd: 0.02,
+            total_tokens_in: 20,
+            total_tokens_out: 3,
+          });
+          expect(
+            events.some(
+              event => event.step_name === 'cycle.cleanup' && event.event_type === 'node_completed'
+            )
+          ).toBe(true);
+          expect(
+            events.filter(
+              event => event.event_type === 'loop_iteration_started' && event.step_name === 'cycle'
+            )
+          ).toHaveLength(1);
+        } finally {
+          await removeTempTree(root);
         }
-        expect(persisted?.metadata).toMatchObject({
-          total_cost_usd: 0.02,
-          total_tokens_in: 20,
-          total_tokens_out: 3,
-        });
-        expect(
-          events.some(
-            event => event.step_name === 'cycle.cleanup' && event.event_type === 'node_completed'
-          )
-        ).toBe(true);
-        expect(events.filter(event => event.event_type === 'loop_iteration_started')).toHaveLength(
-          1
-        );
-      } finally {
-        await removeTempTree(root);
-      }
-    });
+      });
+    }
   }
 }
 
@@ -348,7 +403,9 @@ test('included cleanup failure fails the run and group before included attention
     ).toBe(
       "Loop-group node 'cycle' failed at iteration 1: 'stage__prune-scratch': Bash node 'stage__prune-scratch' failed [exit 7]: no diagnostic output"
     );
-    expect(events.some(event => event.step_name === 'cycle.attend__ask')).toBe(false);
+    expect(events.find(event => event.step_name === 'cycle.attend__ask')?.event_type).toBe(
+      'node_skipped'
+    );
     expect(events.some(event => event.event_type === 'workflow_failed')).toBe(true);
   } finally {
     await removeTempTree(root);

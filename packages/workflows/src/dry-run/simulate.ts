@@ -5,6 +5,7 @@ import { observeCheckout } from '../checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from '../node-execution';
 import type { NodeExecutionMetadata } from '../schemas/node-execution';
 import {
+  canSuspend,
   isAgentNode,
   isExecNode,
   isLoopNode,
@@ -121,13 +122,23 @@ export async function simulateNodes(
   plan: GraphPlan,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
-  iteration?: number,
-  stopBeforeLayer?: (layer: GraphPlan['layers'][number]) => boolean
+  iteration?: number
 ): Promise<void> {
   for (const layer of plan.layers) {
-    if (stopBeforeLayer?.(layer)) return;
     for (const node of layer) {
       if (ctx.halted) return;
+      const origin = ctx.loopBodyFailure?.();
+      if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+        recordSkipped(
+          node,
+          outputs,
+          ctx,
+          'loop body failed',
+          { kind: 'upstream_failed', origin },
+          iteration
+        );
+        continue;
+      }
       const execution = await simulatedExecution(node, ctx);
       await simulateNode(node, outputs, ctx, iteration, execution);
       const result = outputs.get(node.id);

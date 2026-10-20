@@ -106,6 +106,7 @@ export interface DryRunContext {
   /** Always a subset of `missingStubs` — see {@link dryRunResultSchema}'s field doc. */
   toleratedMissingStubs: Set<string>;
   halted?: 'paused' | 'cancelled';
+  loopBodyFailure?: () => string | undefined;
   /** Workflow-level provider/model fallbacks, for the per-node resolution report. */
   scope: WorkflowModelScope;
   assistantModels: Readonly<Record<string, string | undefined>>;

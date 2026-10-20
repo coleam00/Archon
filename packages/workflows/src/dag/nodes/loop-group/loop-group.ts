@@ -111,6 +111,8 @@ export async function executeLoopGroupNode(
       ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
       ...(result.providerFailure !== undefined ? { providerFailure: result.providerFailure } : {}),
     };
+  } else if (result.state === 'skipped') {
+    lifecycle = { status: 'skipped', reason: 'trigger_rule', cause: result.cause };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
     // A deferred body gate or terminal wait leaves the group running; keep the spend its
