@@ -51,9 +51,9 @@ export function runStatusLabel(run: Run): string {
   return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
 }
 
-// A stalled tool call outranks the owner state: it is the one the operator can act on.
+// Stalled work outranks the owner state: it is what the operator can act on.
 function runningStatusLabel(run: Run): string {
-  if (run.toolCallAttention?.length) return 'Running · tool call needs attention';
+  if (run.toolCallAttention?.length) return 'Running · needs attention';
   if (run.ownerObservation === 'unreachable') return 'Running · owner not answering';
   if (run.ownerObservation === 'unknown') return 'Running · owner unknown';
   return statusLabel.running;

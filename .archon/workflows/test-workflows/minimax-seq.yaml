@@ -3,7 +3,9 @@ description: |
   Sequential RCA for the MiniMax-M3 / Pi stall — nodes chained (no concurrency)
   so the concurrency confound from minimax-isolate is removed. Disentangles
   reasoning level (default vs effort:low) from output_format. Each node: 45s
-  idle_timeout + max_attempts 1 (fail fast). Runs a → b → c → d.
+  idle_timeout + max_attempts 1. Silence raises attention; use
+  `archon workflow end-turn <run-id>` to end a stalled turn and allow its retry.
+  Runs a → b → c → d as preceding nodes finish, including after failure.
 
   Decisive read:
     - b (default + structured) STALLS while c (effort:low + structured) PASSES

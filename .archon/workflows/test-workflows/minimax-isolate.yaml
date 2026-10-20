@@ -2,7 +2,8 @@ name: minimax-isolate
 description: |
   RCA isolation for the MiniMax-M3 / Pi stall (the classify hang in
   a MiniMax issue-fix workflow). Four independent nodes, each with a 90s
-  idle_timeout so a stall fails fast instead of waiting 30 min. Disambiguates
+  idle_timeout that raises attention for a silent turn. Use
+  `archon workflow end-turn <run-id>` to end a stalled turn explicitly. Disambiguates
   whether the trigger is `output_format` (structured-output augmentation) or
   prompt size — and whether forcing low thinking unblocks it.
 

@@ -630,59 +630,63 @@ describe('toRun — terminal record', () => {
   });
 });
 
-test('live advisories use projected attention and disappear for terminal rows', () => {
-  const call = {
-    streamId: 's',
-    nodeId: 'node',
-    provider: 'codex',
-    toolCallId: 'call',
-    name: 'bash',
-    startedAt: '2026-10-01T00:00:00Z',
-    lastProgressAt: '2026-10-01T00:00:00Z',
-    raisedAt: '2026-10-01T00:30:00Z',
-    thresholdMs: 1800000,
-  };
-  const metadata = { tool_call_attention: [call] };
-  const sibling = { ...call, elapsedMs: 1800000, stalledForMs: 1800000 };
-  const projected = (status: 'running' | 'paused'): Raw =>
-    raw({
-      id: 'live',
-      workflow_name: 'work',
-      status,
-      metadata,
-      attention: { kind: 'stalled_tool_calls', runId: 'live', status, calls: [sibling] },
-    });
-  const live = toRun(projected('running'));
-  expect(live.toolCallAttention).toEqual([sibling]);
-  expect(toRun(projected('paused')).toolCallAttention).toEqual([sibling]);
-  const composite = toRun(
-    raw({
-      id: 'paused',
-      workflow_name: 'work',
-      status: 'paused',
-      attention: {
-        kind: 'awaiting_response',
-        runId: 'paused',
-        occurrence: 'gate',
-        respondTo: { runId: 'paused', nodeId: 'review' },
-        message: 'Ship it?',
-        stalledCalls: [sibling],
-      },
-    })
-  );
-  expect(composite.toolCallAttention).toEqual([sibling]);
-  expect(composite.attention?.kind).toBe('awaiting_response');
-  expect(runStatusLabel(live)).toBe('Running · tool call needs attention');
-  // A stalled tool call keeps naming its cause when the owner is also gone or unobservable.
-  for (const observation of ['unreachable', 'unknown'] as const)
-    expect(runStatusLabel({ ...live, ownerObservation: observation })).toBe(
-      'Running · tool call needs attention'
+test.each([undefined, 'provider_turn'] as const)(
+  'live %s advisories use projected attention and disappear for terminal rows',
+  kind => {
+    const call = {
+      streamId: 's',
+      nodeId: 'node',
+      provider: 'codex',
+      toolCallId: 'call',
+      kind,
+      name: kind === 'provider_turn' ? 'provider turn' : 'bash',
+      startedAt: '2026-10-01T00:00:00Z',
+      lastProgressAt: '2026-10-01T00:00:00Z',
+      raisedAt: '2026-10-01T00:30:00Z',
+      thresholdMs: 1800000,
+    };
+    const metadata = { tool_call_attention: [call] };
+    const sibling = { ...call, elapsedMs: 1800000, stalledForMs: 1800000 };
+    const projected = (status: 'running' | 'paused'): Raw =>
+      raw({
+        id: 'live',
+        workflow_name: 'work',
+        status,
+        metadata,
+        attention: { kind: 'stalled_tool_calls', runId: 'live', status, calls: [sibling] },
+      });
+    const live = toRun(projected('running'));
+    expect(live.toolCallAttention).toEqual([sibling]);
+    expect(toRun(projected('paused')).toolCallAttention).toEqual([sibling]);
+    const composite = toRun(
+      raw({
+        id: 'paused',
+        workflow_name: 'work',
+        status: 'paused',
+        attention: {
+          kind: 'awaiting_response',
+          runId: 'paused',
+          occurrence: 'gate',
+          respondTo: { runId: 'paused', nodeId: 'review' },
+          message: 'Ship it?',
+          stalledCalls: [sibling],
+        },
+      })
     );
-  expect(
-    toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
-      .toolCallAttention
-  ).toEqual([]);
-});
+    expect(composite.toolCallAttention).toEqual([sibling]);
+    expect(composite.attention?.kind).toBe('awaiting_response');
+    expect(runStatusLabel(live)).toBe('Running · needs attention');
+    // A stalled turn keeps its attention label when the owner is also gone or unobservable.
+    for (const observation of ['unreachable', 'unknown'] as const)
+      expect(runStatusLabel({ ...live, ownerObservation: observation })).toBe(
+        'Running · needs attention'
+      );
+    expect(
+      toRun(raw({ id: 'done', workflow_name: 'work', status: 'completed', metadata }))
+        .toolCallAttention
+    ).toEqual([]);
+  }
+);
 
 for (const status of ['running', 'paused'] as const) {
   test.each([{ value: 'corrupt' }, { value: null }, { value: {} }, { value: [{}] }])(

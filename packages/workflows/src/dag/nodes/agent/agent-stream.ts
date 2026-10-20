@@ -155,11 +155,8 @@ export async function runStreamPass(
     await providerEvents.clearAttention();
   }
 
-  // Stream ended with subtasks still live: the SDK subprocess died or the idle
-  // timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
-  // Record them for the audit trail. The operator hears about it once, from the
-  // node's failure: a stream that produced output and never settled fails the node
-  // and names these tasks (see unsettledTurnError).
+  // Unfinished background work may leave artifacts missing (#2083). Retain its
+  // task ids for the node failure's audit trail (see unsettledTurnError).
   if (providerEvents.liveSubtaskIds().length > 0) {
     state.backgroundTasksIncomplete = providerEvents.liveSubtaskIds();
     getLog().warn(
