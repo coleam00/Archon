@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import type { Codebase } from '@archon/core/schemas/codebase';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,6 +34,8 @@ async function invoke(
   options: {
     missing?: boolean;
     lookupError?: boolean;
+    getError?: boolean;
+    detachedStatus?: 'pending' | 'running' | 'completed' | 'failed';
     json?: boolean;
   } = {}
 ) {
@@ -41,26 +44,42 @@ async function invoke(
   const run = mock<typeof commands.workflowRunCommand>(async () => {});
   let exitCode: number | undefined;
   let stdout = '';
+  let storedRun: WorkflowRun | null | undefined;
   const write = spyOn(process.stdout, 'write').mockImplementation((chunk, callback) => {
     stdout += String(chunk);
     if (typeof callback === 'function') callback();
     return true;
   });
   const result = await captureWorkflowCommand(home, async host => {
+    const handedOver = options.detachedStatus
+      ? await host.deps.store.createWorkflowRun({ workflow_name: 'probe', user_message: '' })
+      : undefined;
+    if (handedOver && options.detachedStatus !== 'pending') {
+      await host.deps.store.claimPendingWorkflowRun(handedOver.id);
+      if (options.detachedStatus === 'completed') {
+        await host.deps.store.completeWorkflowRun(handedOver.id, { duration_ms: 1 });
+      } else if (options.detachedStatus === 'failed') {
+        await host.deps.store.failWorkflowRun(handedOver.id, 'original failure');
+      }
+    }
     const list = spyOn(host.records.codebases, 'listCodebaseClaims').mockImplementation(
       async () => {
         if (options.lookupError) throw new Error('registry unavailable');
         return rows;
       }
     );
-    const get = spyOn(host.records.codebases, 'getCodebase').mockImplementation(async id =>
-      options.missing ? null : (rows.find(row => row.id === id) ?? null)
-    );
+    const get = spyOn(host.records.codebases, 'getCodebase').mockImplementation(async id => {
+      if (options.getError) throw new Error('project read unavailable');
+      return options.missing ? null : (rows.find(row => row.id === id) ?? null);
+    });
     try {
       exitCode = await runWorkflowRun({
         host,
         commands: { ...commands, workflowRunCommand: run },
-        values,
+        values: {
+          ...values,
+          ...(handedOver ? { 'internal-detached-run-id': handedOver.id } : {}),
+        },
         positionals: ['workflow', 'run', 'probe', 'message'],
         command: 'workflow',
         subcommand: 'run',
@@ -71,6 +90,7 @@ async function invoke(
         inheritedEnv: {},
         forgeTrustedEnv: {},
       });
+      if (handedOver) storedRun = await host.deps.store.getWorkflowRun(handedOver.id);
     } finally {
       list.mockRestore();
       get.mockRestore();
@@ -78,7 +98,7 @@ async function invoke(
   });
   write.mockRestore();
   expect(result.status, result.output).toBe(0);
-  return { run, exitCode, output: result.output, stdout };
+  return { run, exitCode, output: result.output, stdout, storedRun };
 }
 
 test.each(['acme/app', 'registered-id'])(
@@ -171,3 +191,83 @@ test('registry failure preserves evidence in the JSON refusal', async () => {
   });
   expect(result.run).not.toHaveBeenCalled();
 });
+
+test('refuses --project with --resume before calling the run command', async () => {
+  const result = await invoke({ project: repo.name, resume: true });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('Error: --project cannot be combined with --resume.');
+  expect(result.run).not.toHaveBeenCalled();
+});
+
+test.each([
+  { name: 'missing claim', rows: [], options: {}, error: 'is not registered' },
+  { name: 'missing row', rows: [repo], options: { missing: true }, error: 'no longer exists' },
+  {
+    name: 'list failure',
+    rows: [repo],
+    options: { lookupError: true },
+    error: 'registry unavailable',
+  },
+  {
+    name: 'get failure',
+    rows: [repo],
+    options: { getError: true },
+    error: 'project read unavailable',
+  },
+  {
+    name: 'changed kind',
+    rows: [{ ...repo, kind: 'folder' as const }],
+    options: {},
+    error: 'requires a registered repository',
+  },
+  {
+    name: 'ambiguous name',
+    rows: [repo, { ...repo, id: 'duplicate' }],
+    options: {},
+    error: 'matches 2 codebases',
+  },
+])('records a detached project resolution refusal: $name', async ({ rows, options, error }) => {
+  const result = await invoke({ project: repo.name }, [...rows], {
+    ...options,
+    detachedStatus: 'pending',
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(error);
+  expect(result.run).not.toHaveBeenCalled();
+  expect(result.storedRun).toMatchObject({
+    status: 'failed',
+    metadata: {
+      error: expect.stringContaining(error),
+      stop_reason: { reason: 'launch_failed' },
+    },
+  });
+});
+
+test.each(['running', 'completed', 'failed'] as const)(
+  'project refusal leaves a %s detached run alone',
+  async detachedStatus => {
+    const result = await invoke({ project: 'missing' }, [], { detachedStatus });
+    expect(result.exitCode).toBe(1);
+    expect(result.storedRun?.status).toBe(detachedStatus);
+    expect(result.storedRun?.metadata?.error).toBe(
+      detachedStatus === 'failed' ? 'original failure' : undefined
+    );
+  }
+);
+
+test.each([...RUN_PROJECT_CONFLICT_FLAGS])(
+  'records a detached --project conflict with --%s',
+  async flag => {
+    const result = await invoke(
+      { project: repo.name, [flag]: flag === 'base-branch' ? 'main' : true },
+      [repo],
+      { detachedStatus: 'pending' }
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.run).not.toHaveBeenCalled();
+    expect(result.storedRun).toMatchObject({
+      status: 'failed',
+      metadata: { error: expect.stringContaining(`--${flag}`) },
+    });
+  }
+);

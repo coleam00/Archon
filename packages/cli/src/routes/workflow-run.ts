@@ -99,9 +99,18 @@ async function resolveRunProject({
 }: WorkflowRoute): Promise<string | undefined | 1> {
   const project = values.project as string | undefined;
   if (project === undefined) return undefined;
+  async function refuse(message: string): Promise<1> {
+    const { recordDetachedChildStartupFailure } = await import('../commands/workflow-detach');
+    await recordDetachedChildStartupFailure(
+      host,
+      values['internal-detached-run-id'] as string | undefined,
+      new Error(message)
+    );
+    return await fail(json, message);
+  }
   for (const flag of RUN_PROJECT_CONFLICT_FLAGS) {
     if (values[flag] !== undefined && values[flag] !== false) {
-      return await fail(json, `Error: --project cannot be combined with --${flag}.`);
+      return await refuse(`Error: --project cannot be combined with --${flag}.`);
     }
   }
   try {
@@ -115,23 +124,20 @@ async function resolveRunProject({
     }
     const [selected] = matches;
     if (!selected) {
-      return await fail(
-        json,
+      return await refuse(
         `Error: Project '${project}' is not registered. Use archon project list to find a registered repository.`
       );
     }
     const codebase = await host.records.codebases.getCodebase(selected.id);
-    if (!codebase) return await fail(json, `Error: Project '${project}' no longer exists.`);
+    if (!codebase) return await refuse(`Error: Project '${project}' no longer exists.`);
     if (codebase.kind !== 'repo') {
-      return await fail(
-        json,
+      return await refuse(
         'Error: --project requires a registered repository; folder projects run from their registered directory.'
       );
     }
     return codebase.id;
   } catch (error) {
-    return await fail(
-      json,
+    return await refuse(
       `Error: Cannot select registered project '${project}': ${error instanceof Error ? error.message : String(error)}\nUse archon project list to find a registered repository.`
     );
   }
