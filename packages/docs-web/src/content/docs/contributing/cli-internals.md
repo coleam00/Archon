@@ -329,7 +329,8 @@ archon isolation cleanup [days] (default: 7)
 ```
 
 A remote deletion failure or timeout can leave the remote branch behind even after
-local removal and registration retirement complete. The cleanup report includes the warning.
+local removal and registration retirement complete. The failure is logged, but the
+merged-cleanup report does not include the warning.
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or
