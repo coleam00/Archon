@@ -107,6 +107,7 @@ async function recordAbandonment(
   // A cancelled run reaches here only with creation proof: the retry finishes a
   // worktree release that an earlier abandonment reported as failed.
   if (run.status === 'cancelled') {
+    await persistCleanupWarnings(ctx, run, stopWarnings);
     const tree = await collectAbandonmentTree(ctx, run);
     return {
       run,
@@ -149,6 +150,7 @@ async function releaseAbandonedWorktrees(
       continue;
     }
     const ownerCheck = await checkWorktreeOwner(ctx, row, run, owner);
+    await persistCleanupWarnings(ctx, row, ownerCheck.warnings);
     warnings.push(...ownerCheck.warnings);
     if (!ownerCheck.safe) {
       unsafeDescendant = true;
@@ -226,13 +228,20 @@ async function checkWorktreeOwner(
   if (outcome.kind === 'not_stopped')
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
   const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
+  return { safe: warnings.length === 0, warnings };
+}
+
+async function persistCleanupWarnings(
+  ctx: OperationContext,
+  run: WorkflowRun,
+  warnings: string[]
+): Promise<void> {
   if (warnings.length)
     await ctx.store.persistWorkflowEvent({
-      workflow_run_id: row.id,
+      workflow_run_id: run.id,
       event_type: 'workflow_cleanup_warning',
       data: { warnings },
     });
-  return { safe: warnings.length === 0, warnings };
 }
 
 /** Why abandon cannot account for `row`'s execution owner from here, or undefined when it can. */
@@ -307,9 +316,10 @@ export async function abandonResumableRunsForConversation(
   let blockedParentRunId: string | null = null;
   const cleanupWarnings: string[] = [];
   const releasedWorktrees: ReleasedWorktree[] = [];
-  for (const run of runs) {
+  const ownerChecks = await checkBatchWorktreeOwners(ctx, runs);
+  for (const { run, ...ownerCheck } of ownerChecks) {
+    await persistCleanupWarnings(ctx, run, ownerCheck.warnings);
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
-    const ownerCheck = await checkWorktreeOwner(ctx, run);
     cleanupWarnings.push(...ownerCheck.warnings);
     if (ownerCheck.safe) {
       const release = await releaseRunWorktree(ctx, run);
@@ -331,4 +341,32 @@ export async function abandonResumableRunsForConversation(
     ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
     ...(releasedWorktrees.length > 0 ? { releasedWorktrees } : {}),
   };
+}
+
+async function checkBatchWorktreeOwners(ctx: OperationContext, runs: WorkflowRun[]) {
+  const ownerChecks: {
+    run: WorkflowRun;
+    ownerKey: string | undefined;
+    check: Awaited<ReturnType<typeof checkWorktreeOwner>>;
+  }[] = [];
+  for (const run of runs) {
+    const owner = readExecutionOwner(run.metadata);
+    ownerChecks.push({
+      run,
+      ownerKey: owner ? JSON.stringify([owner.host, owner.uid, owner.pid]) : undefined,
+      check: await checkWorktreeOwner(ctx, run),
+    });
+  }
+  return ownerChecks.map(({ run, ownerKey, check }) => {
+    // An endpoint can disappear when a sibling stops their shared owner. Resolve
+    // the whole batch before releasing any checkout so those warnings survive.
+    const sharedChecks = ownerKey
+      ? ownerChecks.filter(other => other.ownerKey === ownerKey).map(other => other.check)
+      : [check];
+    return {
+      run,
+      safe: sharedChecks.every(other => other.safe),
+      warnings: [...new Set(sharedChecks.flatMap(other => other.warnings))],
+    };
+  });
 }

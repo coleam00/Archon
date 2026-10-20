@@ -728,8 +728,8 @@ checkout and is logged. Otherwise it is
 
 | Reason | Meaning |
 |---|---|
-| `resumable` | The run failed and can resume; `workflow abandon` or the stale sweep releases it |
-| `cancelled` | The run was cancelled; `workflow abandon` releases it |
+| `resumable` | The run failed and can resume; `workflow abandon` attempts release, retaining owner warnings for inspection, or the stale sweep can release eligible checkouts |
+| `cancelled` | The run was cancelled; `workflow abandon` attempts release, retaining checkouts with owner warnings for inspection and retry |
 | `workspace_retained` | The originating platform keeps its workspaces |
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
@@ -1245,8 +1245,10 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
-Abandon also removes the worktree Archon created for this run, and for each cancelled
-`workflow:` sub-run. Abandon is final for that checkout: removal is forced, so
+Abandon also attempts to remove the worktree Archon created for this run, and for each
+cancelled `workflow:` sub-run. Owner warnings retain affected checkouts for inspection;
+use `lsof` on the checkout when output is still held, then retry abandonment after
+resolving the warning. When removal proceeds, it is forced, so
 uncommitted, untracked, and ignored files (including copied `.env` files) and
 initialized submodules are deleted with it. The branch is kept, so committed work,
 pushed or not, stays recoverable. The result lists each removed worktree and its
@@ -1479,11 +1481,12 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 ### `isolation cleanup [days]`
 
-To explicitly discard a resumable run and remove the worktree it created, use
+To explicitly discard a resumable run and attempt removal of the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
 of this section. Abandon removes a checkout only when the run holds its matching creation
-proof, even if the checkout has since been adopted. It deletes uncommitted work there and
-keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
+proof, even if the checkout has since been adopted. Owner warnings retain the checkout:
+inspect it (`lsof` when output is still held), resolve the warning, then retry abandonment.
+When removal proceeds, it deletes uncommitted work there and keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,

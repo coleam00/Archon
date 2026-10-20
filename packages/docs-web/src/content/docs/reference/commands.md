@@ -37,7 +37,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow get <id>` | Show one run, whatever its status |
 | `/workflow cancel [id]` | Cancel a running workflow (default: this conversation's). Refuses when no owner answers; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
 | `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
-| `/workflow abandon <id>` | Discard a run (running, paused, or failed) and remove the worktree it created, keeping the branch. Run it again on a cancelled run to retry a failed removal |
+| `/workflow abandon <id>` | Discard a run (running, paused, or failed) and attempt removal of the worktree it created, keeping the branch. Owner warnings retain the checkout: inspect it (`lsof` when output is still held), resolve the warning, then run abandon again on the cancelled run to retry removal |
 | `/workflow approve <id> [comment]` | Answer `approve` to a paused run: an attention wait, or a deprecated approval gate (deprecated interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Answer `reject` to a paused run (attention wait or deprecated approval gate). Rejecting an attention wait continues the run with `decision: reject` |
 | `/workflow run <name> [args]` | Run a workflow directly |
