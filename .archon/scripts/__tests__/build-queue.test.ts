@@ -374,6 +374,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   writes.push(op);
   if (['refused', 'unknown', 'diagnostic-failed'].includes(scenario)) {
     correctionFailed = true;
+    if (scenario === 'refused') current.head_revision = '${HEAD_C}';
     return response(op, 'draft permission denied; mutation evidence retained');
   }
   current.is_draft = true;
@@ -417,7 +418,8 @@ function expectCorrectionError(result: ScriptRun, observed: ReadyObservation, sc
     expect(result.stderr).toContain('final state unknown');
     expect(result.stderr).toContain('diagnostic unavailable');
   } else {
-    expect(result.stderr).toContain(`observed ${observed.current.state}, draft=${String(observed.current.is_draft)}`);
+    expect(result.stderr).toContain(`observed ${observed.current.state}, draft=${String(observed.current.is_draft)} at ${observed.current.head_revision}`);
+    if (scenario === 'refused') expect(observed.current.head_revision).toBe(HEAD_C);
   }
 }
 
