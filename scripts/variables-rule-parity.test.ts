@@ -152,7 +152,7 @@ describe('the user-controlled variable rule', () => {
   test('every copy states that the variables are not substituted into the source', () => {
     for (const copy of copies) {
       for (const statement of ruleStatements(copy)) {
-        assertNamesTheClass(copy, statement);
+        assertNamesItsVariables(copy, statement);
         assertNotSubstituted(copy, statement);
       }
     }
@@ -218,7 +218,7 @@ describe('the user-controlled variable rule', () => {
 });
 
 /** A statement that speaks about the class must say which variables it means. */
-function assertNamesTheClass(copy: Document, statement: Statement): void {
+function assertNamesItsVariables(copy: Document, statement: Statement): void {
   if (classClaim(statement).size === 0) {
     throw new Error(
       `${copy.file} speaks about the user-controlled variables without naming which variables it means`
