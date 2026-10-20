@@ -1304,9 +1304,12 @@ describe('cleanupMergedWorktrees', () => {
     );
   });
 
-  test('logs a warn before skipping an environment when the merge check fails', async () => {
+  test.each([
+    { check: 'isBranchMerged', mock: mockIsBranchMerged },
+    { check: 'isPatchEquivalent', mock: mockIsPatchEquivalent },
+  ])('logs a warn before skipping an environment when $check fails', async ({ mock }) => {
     mergedSweepFinds(worktreeEnv('flaky-branch'));
-    mockIsBranchMerged.mockRejectedValue(new Error('network unreachable'));
+    mock.mockRejectedValue(new Error('network unreachable'));
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
