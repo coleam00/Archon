@@ -1620,16 +1620,26 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a detached marker when this process does not own its process group', async () => {
+  it.each([
+    'does not own process group',
+    'Windows run job broker did not become ready within 10000 ms',
+  ])('records a failed detached owner claim: %s', async message => {
     process.env.ARCHON_DETACHED_RUN_OWNER = '1';
-    mockClaimDetachedRunProcessOwner.mockImplementationOnce(() =>
-      Promise.reject(new Error('does not own process group'))
-    );
+    const workflowsDb = require('@archon/core/db/workflows');
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('pending');
+    mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
 
     await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {})
-    ).rejects.toThrow('does not own process group');
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        detachedRunId: 'pending-child',
+      })
+    ).rejects.toThrow(message);
 
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'pending-child',
+      `Detached run failed to start: ${message}`,
+      { exitReason: 'launch_failed' }
+    );
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
   });

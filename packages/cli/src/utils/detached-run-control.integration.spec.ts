@@ -459,19 +459,22 @@ describe('detached run control integration', () => {
       if (process.platform !== 'win32') return;
 
       const { runId, dir, marker } = await startWindowsRunOwner('nested');
-      const childRunId = `${runId}-child`;
+      const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
       let survivors: number[] | undefined;
       try {
-        await waitFor(() => existsSync(join(dir, 'child', 'ready')), NESTED_LAUNCH_DEADLINE_MS);
-        const childPid = Number(readFileSync(join(dir, 'child', 'ready'), 'utf8'));
+        await waitFor(() => existsSync(join(dir, 'child-ready')), NESTED_LAUNCH_DEADLINE_MS);
+        const childPid = Number(readFileSync(join(dir, 'child-ready'), 'utf8'));
+        const child = await requestDetachedRunStop(childRunId);
 
         const parent = await requestDetachedRunStop(runId);
         await parent.stop();
 
-        // The parent's tree is gone and the child owner is the one process left.
-        expect(await windowsProcessesNaming(marker)).toEqual([childPid]);
-        const child = await requestDetachedRunStop(childRunId);
-        expect(child.pid).toBe(childPid);
+        const remaining = await windowsProcessesNaming(marker);
+        expect(remaining).toContain(childPid);
+        expect(remaining).toContain(child.pid);
+        expect(remaining).not.toContain(parent.pid);
+        const ownedChild = await requestDetachedRunStop(childRunId);
+        expect(ownedChild.pid).toBe(child.pid);
         await child.stop();
 
         survivors = await windowsProcessesNaming(marker);

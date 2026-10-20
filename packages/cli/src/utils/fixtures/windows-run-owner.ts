@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
 import { relayOutsideRunJob, RUN_JOB_ESCAPE_ENV } from '../run-job-escape';
@@ -12,15 +12,12 @@ import { relayOutsideRunJob, RUN_JOB_ESCAPE_ENV } from '../run-job-escape';
  * - `orphan`: start an intermediate that starts a detached grandchild and exits, so the
  *   grandchild's parent is gone before any stop begins.
  * - `spawner`: start a detached child every few milliseconds, so a stop races a spawn.
- * - `nested`: start a process, as a node would, that launches an `idle` owner for run
- *   `<run-id>-child` in `<dir>/child` the way `workflow run --detach` does: `relay` sends
- *   the launch to the run's job broker, which runs `launch`, which starts the owner
- *   detached and exits.
- * - `idle`: own the run and start nothing.
+ * - `nested`: start a process, as a node would, that launches a real CLI workflow with
+ *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-const modes = ['orphan', 'spawner', 'nested', 'idle', 'relay', 'launch'];
+const modes = ['orphan', 'spawner', 'nested', 'relay'];
 if (!runId || !dir || !mode || !modes.includes(mode)) {
   throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
@@ -37,24 +34,49 @@ function writeReady(): void {
 if (mode === 'relay') {
   const pipe = process.env[RUN_JOB_ESCAPE_ENV];
   if (pipe === undefined) throw new Error(`${RUN_JOB_ESCAPE_ENV} is not set`);
-  process.exit(
-    await relayOutsideRunJob(pipe, {
-      argv: [process.execPath, import.meta.path, runId, dir, 'launch'],
-      cwd: process.cwd(),
-      env: process.env,
-    })
+  const stdout: Buffer[] = [];
+  const code = await relayOutsideRunJob(
+    pipe,
+    {
+      argv: [
+        process.execPath,
+        resolve(import.meta.dir, '..', '..', 'cli.ts'),
+        'workflow',
+        'run',
+        'nested-child',
+        '--folder',
+        '--detach',
+        '--json',
+        '--cwd',
+        dir,
+      ],
+      cwd: dir,
+      env: { ...process.env, ARCHON_HOME: join(dir, 'home'), ARCHON_TELEMETRY_DISABLED: '1' },
+    },
+    {
+      stdout: async data => {
+        stdout.push(Buffer.from(data));
+      },
+      stderr: async data => {
+        process.stderr.write(data);
+      },
+    }
   );
-} else if (mode === 'launch') {
-  const childDir = join(dir, 'child');
-  mkdirSync(childDir);
-  const owner = spawn(process.execPath, [import.meta.path, `${runId}-child`, childDir, 'idle'], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  owner.once('error', error => {
-    throw error;
-  });
-  owner.once('spawn', () => process.exit(0));
+  if (code !== 0)
+    throw new Error(
+      `Nested CLI launch failed (${String(code)}): ${Buffer.concat(stdout).toString()}`
+    );
+  const ack: unknown = JSON.parse(Buffer.concat(stdout).toString());
+  if (
+    typeof ack !== 'object' ||
+    ack === null ||
+    !('runId' in ack) ||
+    typeof ack.runId !== 'string'
+  ) {
+    throw new Error('Nested CLI launch returned no run id');
+  }
+  writeFileSync(join(dir, 'child-run-id'), ack.runId);
+  process.exit(0);
 } else {
   await claimDetachedRunProcessOwner();
   await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
@@ -92,6 +114,24 @@ if (mode === 'relay') {
     loop();
     writeReady();
   } else if (mode === 'nested') {
+    const workflows = join(dir, '.archon', 'workflows');
+    mkdirSync(workflows, { recursive: true });
+    mkdirSync(join(dir, 'home'));
+    writeFileSync(join(dir, 'home', 'config.yaml'), 'store: files\n');
+    const readyPath = join(dir, 'child-ready');
+    const script = `import { writeFileSync, renameSync } from 'node:fs'; writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid)); renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)}); setInterval(() => {}, 1000);`;
+    writeFileSync(
+      join(workflows, 'nested-child.yaml'),
+      `name: nested-child
+description: Nested detached owner fixture
+worktree:
+  enabled: false
+nodes:
+  - id: hold
+    runtime: bun
+    script: ${JSON.stringify(script)}
+`
+    );
     const relay = spawn(process.execPath, [import.meta.path, runId, dir, 'relay'], {
       stdio: 'ignore',
     });
@@ -102,8 +142,6 @@ if (mode === 'relay') {
       if (code !== 0) throw new Error(`The nested launch exited ${String(code)}`);
       writeReady();
     });
-  } else {
-    writeReady();
   }
 
   setInterval(() => undefined, 1_000);
