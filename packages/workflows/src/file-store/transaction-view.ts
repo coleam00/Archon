@@ -431,6 +431,7 @@ export function createTransactionView(
           data: error === null ? {} : { error },
         });
       if (run.status === 'paused') record(workflowUnpausedEvent(id));
+      else Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
       if (pausedUsageLimitWait(run)) delete run.metadata.wait;
       if (
@@ -447,8 +448,6 @@ export function createTransactionView(
       }
       delete run.metadata.error;
       delete run.metadata.stop_reason;
-      if (run.status !== 'paused')
-        Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       delete run.metadata.continuation_retry_at;
       Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
       Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
