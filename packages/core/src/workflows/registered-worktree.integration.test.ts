@@ -723,6 +723,7 @@ for (const persistence of ['sql', 'file'] as const) {
           worktreePath: adopted.working_path,
         })
       );
+      expect(await readFile(tracePath, 'utf8')).toMatch(/\|\s+exit\s+\|\s*\|\s+\d+\.\d+\s+\|/);
       console.error(
         `[rollback timing] ${label} assertions done ${performance.now() - startedAt}ms`
       );
