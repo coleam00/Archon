@@ -502,8 +502,12 @@ for (const persistent of [false, true]) {
   });
 }
 
-for (const late of [false, true]) {
-  test(`manual reusable-checkout holders block explicit branches, registration late=${String(late)}`, async () => {
+for (const { late, local } of [
+  { late: false, local: false },
+  { late: true, local: false },
+  { late: false, local: true },
+]) {
+  test(`registered reusable-checkout holders block explicit branches, registration late=${String(late)}, local=${String(local)}`, async () => {
     const home = roots(await mkdtemp(join(tmpdir(), 'file-host-admission-')));
     process.env.ARCHON_HOME = home;
     process.env.DATABASE_URL = '';
@@ -536,7 +540,7 @@ for (const late of [false, true]) {
         working_path: workingPath,
         branch_name: toBranchName('different-git-branch'),
       });
-    const input = (launch: PreparedWorkflowLaunch, capacity = late ? 1 : 4) => ({
+    const input = (launch: PreparedWorkflowLaunch, capacity = late ? 1 : local ? 2 : 4) => ({
       resource: 'registered',
       capacity,
       hostId: 'host',
@@ -550,26 +554,31 @@ for (const late of [false, true]) {
     incoming.execution.isolation = { kind: 'worktree', branch: 'reusable' };
     if (late)
       expect(await store.admitResourceStart(input(incoming))).toMatchObject({ status: 'queued' });
-    const manual = await store.createWorkflowRun(makeLaunch().run);
-    await store.claimPendingWorkflowRun(manual.id, workingPath);
+    const holder = makeLaunch();
+    holder.execution.cwd = workingPath;
+    if (local) await store.admitResourceStart(input(holder));
+    else await store.createWorkflowRun(holder.run);
+    await store.claimPendingWorkflowRun(holder.run.id, workingPath);
     if (late) {
       await register();
       await store.cancelWorkflowRun(capacity.run.id);
     } else {
       expect(await store.admitResourceStart(input(incoming))).toMatchObject({
         status: 'queued',
-        blocker: { kind: 'run', id: manual.id },
+        blocker: { kind: 'run', id: holder.run.id },
       });
       const skip = makeLaunch();
       skip.execution.isolation = incoming.execution.isolation;
       expect(await store.admitResourceStart({ ...input(skip), overlap: 'skip' })).toMatchObject({
         status: 'skipped',
-        blocker: { kind: 'run', id: manual.id },
+        blocker: { kind: 'run', id: holder.run.id },
       });
-      for (const isolation of [
-        { kind: 'worktree' as const },
-        { kind: 'worktree' as const, branch: 'different-git-branch' },
-      ]) {
+      for (const isolation of local
+        ? []
+        : [
+            { kind: 'worktree' as const },
+            { kind: 'worktree' as const, branch: 'different-git-branch' },
+          ]) {
         const independent = makeLaunch();
         independent.execution.isolation = isolation;
         expect(await store.admitResourceStart(input(independent))).toMatchObject({
@@ -580,8 +589,8 @@ for (const late of [false, true]) {
     const drain = () => store.drainResourceStarts({ resource: 'registered', hostId: 'host' });
     expect(await drain()).toEqual([]);
     expect(await store.getWorkflowRun(incoming.run.id)).toBeNull();
-    expect((await store.getWorkflowRun(manual.id))?.status).toBe('running');
-    await store.completeWorkflowRun(manual.id, { duration_ms: 1 });
+    expect((await store.getWorkflowRun(holder.run.id))?.status).toBe('running');
+    await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
     expect(await drain()).toMatchObject([{ runId: incoming.run.id }]);
   });
 }

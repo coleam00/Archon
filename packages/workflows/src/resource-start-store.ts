@@ -156,38 +156,16 @@ function launchCheckout(launch: PreparedWorkflowLaunch): string | undefined {
     : checkoutBranch(launch.run.codebase_id, isolation.branch);
 }
 
-/**
- * The checkouts held by live runs admitted on a resource, each naming one such run. A run
- * holds its path lock from admission until it ends, whether or not it holds a slot (a
- * paused run gives its slot back), so a start on the same checkout would fail the lock. A
- * store passes each non-terminal run with its own launch.
- */
-export function heldCheckouts(
-  live: Iterable<{
-    id: string;
-    working_path?: string | null;
-    launch: PreparedWorkflowLaunch;
-  }>
-): Map<string, string> {
-  const held = new Map<string, string>();
-  for (const run of live) {
-    const own = launchCheckout(run.launch);
-    for (const key of [own, run.working_path ? checkoutPath(run.working_path) : undefined])
-      if (key !== undefined && !held.has(key)) held.set(key, run.id);
-  }
-  return held;
-}
-
 export interface ReusableCheckout {
   codebaseId: string;
   branch: string;
   workingPath: string;
 }
 
-/** Oldest-first foreign holders contribute physical paths and current reusable branch aliases. */
-export function foreignHeldCheckouts(
+/** Oldest-first holders contribute launch identities, paths and registered branch aliases. */
+export function heldCheckouts(
   live: Iterable<{ id: string; working_path?: string | null; launch?: PreparedWorkflowLaunch }>,
-  reusable: readonly ReusableCheckout[]
+  reusable: readonly ReusableCheckout[] = []
 ): Map<string, string> {
   const held = new Map<string, string>();
   for (const run of live) {

@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
 import {
-  foreignHeldCheckouts,
   heldCheckouts,
   resourceResumeBlocker,
   drainableStarts,
@@ -38,7 +37,7 @@ test('local checkout occupancy takes precedence, including for read-only starts'
   const guarded = launch(),
     readonly = launch(false);
   const local = heldCheckouts([{ id: 'local', launch: guarded }]);
-  const foreign = foreignHeldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
+  const foreign = heldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
   for (const incoming of [guarded, readonly])
     expect(
       resourceStartBlocker(
@@ -49,7 +48,7 @@ test('local checkout occupancy takes precedence, including for read-only starts'
   expect(resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, readonly)).toBeNull();
 });
 test('foreign observations retain the first holder and match registration workflow identity at its path', () => {
-  const foreign = foreignHeldCheckouts(
+  const foreign = heldCheckouts(
     [
       { id: 'oldest', working_path: '/shared' },
       { id: 'later', working_path: '/shared' },
@@ -78,7 +77,7 @@ test('drains reserve local checkouts even for read-only admissions and respect t
   });
   const occupied = {
     ...slot(),
-    foreignHeldCheckouts: foreignHeldCheckouts([{ id: 'foreign', working_path: '/shared' }], []),
+    foreignHeldCheckouts: heldCheckouts([{ id: 'foreign', working_path: '/shared' }], []),
     queue: [start('guarded', guarded), start('readonly', readonly), start('second', readonly)],
   };
   expect(drainableStarts(occupied, 'host').map(start => start.id)).toEqual(['readonly']);
@@ -91,7 +90,7 @@ test('drains reserve local checkouts even for read-only admissions and respect t
 });
 
 test('failed resume ignores foreign-blocked promises but yields to runnable read-only ones', () => {
-  const foreign = foreignHeldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
+  const foreign = heldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
   const queue = [{ id: 'queued', hostId: 'host', launch: launch() }];
   const failed = { id: 'failed', metadata: {}, status: 'failed' as const };
   expect(
@@ -112,4 +111,16 @@ test('malformed guard declarations fail at start, drain and failed-resume decisi
   expect(() =>
     resourceResumeBlocker({ ...slot(), queue }, { id: 'failed', metadata: {}, status: 'failed' })
   ).toThrow('expected a boolean');
+});
+
+test('local holders project registered aliases for guarded and read-only branch starts', () => {
+  const local = heldCheckouts(
+    [{ id: 'local', working_path: '/shared', launch: launch() }],
+    [{ codebaseId: 'codebase', branch: 'reusable', workingPath: '/shared' }]
+  );
+  for (const guard of [true, false]) {
+    expect(
+      resourceStartBlocker({ ...slot(), heldCheckouts: local }, launch(guard, 'reusable'))
+    ).toEqual({ kind: 'run', id: 'local' });
+  }
 });

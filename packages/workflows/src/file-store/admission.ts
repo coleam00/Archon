@@ -1,3 +1,4 @@
+import { holdsWorkflowPath } from '../workflow-path-lock';
 import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +25,6 @@ import {
   capacityWaiters,
   drainableStarts,
   heldCheckouts,
-  foreignHeldCheckouts,
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
@@ -196,7 +196,7 @@ export function createAdmissionTransaction(
       const admitted = await request(run.id);
       if (admitted?.status === 'admitted' && admitted.resource === resource)
         admittedRuns.push({ ...run, launch: admitted.launch });
-      else
+      else if (holdsWorkflowPath(run))
         foreign.push({
           ...run,
           launch: admitted?.status === 'admitted' ? admitted.launch : undefined,
@@ -208,6 +208,7 @@ export function createAdmissionTransaction(
       if (!queued) throw new Error('Queued resource request missing');
       queue.push(queued);
     }
+    const reusable = await listReusableCheckouts();
     return {
       capacity: row.capacity,
       holders: row.holders,
@@ -215,8 +216,8 @@ export function createAdmissionTransaction(
         admittedRuns.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
       ),
       queue,
-      heldCheckouts: heldCheckouts(admittedRuns),
-      foreignHeldCheckouts: foreignHeldCheckouts(foreign, await listReusableCheckouts()),
+      heldCheckouts: heldCheckouts(admittedRuns, reusable),
+      foreignHeldCheckouts: heldCheckouts(foreign, reusable),
     };
   }
   async function admitExisting(

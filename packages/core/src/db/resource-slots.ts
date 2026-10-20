@@ -1,8 +1,8 @@
+import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
   heldCheckouts,
-  foreignHeldCheckouts,
   type ReusableCheckout,
   type ResourceSlotOccupancy,
 } from '@archon/workflows/resource-start-store';
@@ -224,10 +224,14 @@ export async function resourceStartOccupancy(
     launch: unknown;
     resource_key: string | null;
   }>(
-    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key FROM remote_agent_workflow_runs w
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key FROM (
+         SELECT *, ${activeWorkflowPathHolderCondition()} AS holds_path FROM remote_agent_workflow_runs
+       ) w
        LEFT JOIN remote_agent_resource_start_requests q ON q.id = w.id AND q.status = 'admitted'
       WHERE w.status NOT IN (${terminalList})
-      ORDER BY w.started_at, w.id`
+        AND (q.resource_key = $1 OR w.holds_path)
+      ORDER BY w.started_at, w.id`,
+    [resource]
   );
   const queued = await query<{ id: string; host_id: string; launch: unknown }>(
     `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
@@ -264,8 +268,8 @@ export async function resourceStartOccupancy(
       hostId: String(row.host_id),
       launch: parseLaunch(row.launch),
     })),
-    heldCheckouts: heldCheckouts(liveRuns),
-    foreignHeldCheckouts: foreignHeldCheckouts(foreign, reusable.rows),
+    heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
+    foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
   };
 }
 

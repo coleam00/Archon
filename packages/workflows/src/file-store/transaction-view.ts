@@ -1,3 +1,4 @@
+import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
@@ -537,9 +538,7 @@ export function createTransactionView(
               run.working_path === path &&
               run.id !== self?.id &&
               !self?.excludeRunIds?.includes(run.id) &&
-              (run.status === 'running' ||
-                run.status === 'paused' ||
-                (run.status === 'pending' && run.started_at.getTime() > Date.now() - 300_000)) &&
+              holdsWorkflowPath(run) &&
               (!self ||
                 run.started_at < self.startedAt ||
                 (run.started_at.getTime() === self.startedAt.getTime() && run.id < self.id))

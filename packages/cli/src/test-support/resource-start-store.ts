@@ -1,10 +1,10 @@
+import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
   compareStartReceipts,
   capacityWaiters,
   drainableStarts,
   heldCheckouts,
-  foreignHeldCheckouts,
   compareCodeUnits,
   type ReusableCheckout,
   resourceResumeBlocker,
@@ -77,6 +77,7 @@ export function createInMemoryResourceStartStore(
       if (released.has(run.id)) candidates.push(run);
       else holders.push({ id: run.id });
     }
+    const reusable = await listReusableCheckouts();
     return {
       capacity: capacities.get(resource) ?? 1,
       holders,
@@ -84,12 +85,10 @@ export function createInMemoryResourceStartStore(
       queue: [...requests.values()].filter(
         request => request.resource === resource && request.status === 'queued'
       ),
-      heldCheckouts: heldCheckouts(live),
-      foreignHeldCheckouts: foreignHeldCheckouts(
+      heldCheckouts: heldCheckouts(live, reusable),
+      foreignHeldCheckouts: heldCheckouts(
         listRuns()
-          .filter(
-            run => !isTerminalRunStatus(run.status) && !live.some(local => local.id === run.id)
-          )
+          .filter(run => holdsWorkflowPath(run) && !live.some(local => local.id === run.id))
           .sort(
             (a, b) =>
               a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
@@ -101,7 +100,7 @@ export function createInMemoryResourceStartStore(
                 ? requests.get(run.id)?.launch
                 : undefined,
           })),
-        await listReusableCheckouts()
+        reusable
       ),
     };
   };

@@ -108,6 +108,49 @@ export function describeForeignCheckoutAdmission(
       await store.cancelWorkflowRun(manual.id);
       expect(await drain()).toMatchObject([{ runId: incoming.launch.run.id }]);
     });
+    for (const foreign of ['manual', 'other-resource'] as const) {
+      test(`expired pending ${foreign} holders release foreign admission without changing state`, async () => {
+        const shared = { cwd: '/conformance/expired' };
+        const holder = start('queue', 'host', 3, shared);
+        if (foreign === 'manual')
+          await store.createWorkflowRun({ ...holder.launch.run, working_path: shared.cwd });
+        else {
+          await store.admitResourceStart({ ...holder, resource: 'foreign' });
+          await store.updateWorkflowRun(holder.launch.run.id, { working_path: shared.cwd });
+        }
+        const id = holder.launch.run.id;
+        const queued = start('queue', 'host', 3, shared);
+        expect(await store.admitResourceStart(queued)).toMatchObject({
+          status: 'queued',
+          blocker: { kind: 'run', id },
+        });
+        expect(await drain()).toEqual([]);
+        await harness.backdate(id, { started_at: new Date(Date.now() - 600_000) });
+        const before = await store.getWorkflowRun(id);
+        expect(await store.getActiveWorkflowRunByPath(shared.cwd)).toBeNull();
+        expect(await drain()).toMatchObject([{ runId: queued.launch.run.id }]);
+        await store.cancelWorkflowRun(queued.launch.run.id);
+        for (const overlap of ['queue', 'skip'] as const) {
+          const incoming = start(overlap, 'host', 3, shared);
+          expect(await store.admitResourceStart(incoming)).toMatchObject({ status: 'admitted' });
+          await store.cancelWorkflowRun(incoming.launch.run.id);
+        }
+        expect(await store.getWorkflowRun(id)).toEqual(before);
+      });
+    }
+    test('expired local pending admissions retain same-resource checkout serialization', async () => {
+      const shared = { cwd: '/conformance/local-pending' };
+      const holder = start('queue', 'host', 2, shared);
+      await store.admitResourceStart(holder);
+      await harness.backdate(holder.launch.run.id, { started_at: new Date(Date.now() - 600_000) });
+      const incoming = start('queue', 'host', 2, shared);
+      incoming.launch.run.metadata.admission_checkout_guard = false;
+      expect(await store.admitResourceStart(incoming)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      expect(await drain()).toEqual([]);
+    });
     for (const guard of [true, false, undefined, null]) {
       test(`incoming guard ${String(guard)} applies only to foreign checkout occupancy`, async () => {
         const shared = { cwd: '/conformance/foreign' };
