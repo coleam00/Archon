@@ -72,6 +72,10 @@ Session context is explicit when it matters:
   layer. It is invalid where parallel structure makes that ancestry ambiguous.
 - `context: { resume: plan }` forks the named completed upstream node's session.
   Use it when one exact ancestry matters; the provider must support session forks.
+  Inside a `loop_group` body the source can be an enclosing node, whose session the
+  body continues across iterations, or an upstream node in the same body, whose
+  session of that iteration the consumer forks. The same-body form suits a follow-up that asks the agent to
+  finish a step it skipped.
 
 ### bash — deterministic shell, no AI
 
@@ -243,7 +247,14 @@ The `workflow:` target name is static YAML but resolves when the node executes,
 so a prior node may author the child workflow. `workflow:` also accepts `input:`
 instead of `with:` and can declare `fan_out:`. A plain `include:` resolves and
 expands fully at load time; the directive carries only structural graph fields
-plus `with:` and has no execution surface of its own.
+plus `with:` and has no execution surface of its own. The include's `when:` gates the
+whole block. Inside a `loop_group` it reads `$LOOP_PREV` from the loop that contains
+the include.
+
+On a `workflow:` node, `fan_out.max_parallel` limits unfinished children (default
+`5`). `max_parallel: all` starts every item at once: use it when each child asks an
+independent attention question, because a paused child keeps its slot and a numeric
+window leaves later questions unstarted.
 
 Put `fan_out:` on `include:` when runtime data determines how many copies of a
 static block should run inside the parent run:

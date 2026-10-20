@@ -11,7 +11,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 | Workflow | One run |
 |---|---|
 | `archon-intake` | Records an issue event and triages the best waiting issue. The verdict becomes the item's stage and a route label. |
-| `archon-build-queue` | Claims the best waiting triaged item and takes it to a pull request whose review says Ready, one round per run. |
+| `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
@@ -52,8 +52,11 @@ Optional inputs, with their defaults in each workflow's YAML:
   `created`.
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
   for a label), `label` and `label_actor` for a label event.
-- `archon-build-queue`: `round_limit` (default `3`), the rounds after which a run
-  that wants another also judges whether the rounds converge.
+- `archon-build-queue`: `number` (the issue to build; empty claims the first in
+  order), `retriage_as` (a maintainer login; set, a run that names no item also
+  re-triages blocked items that no longer look blocked) and `round_limit` (default
+  `3`), the rounds after which a run that wants another also judges whether the rounds
+  converge.
 - `archon-merge-queue`: `limit` (default `10` items claimed) and `merge_method`
   (`squash` or `merge`).
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
@@ -92,21 +95,38 @@ Read the result from the issue's labels:
 
 ## Build queue
 
-A run claims the waiting item that sorts first and works it for one round. You cannot
-point a run at a chosen item; ranking decides. Launch one run per item you want
-worked at the same time.
+A run claims the waiting item that sorts first and works it for one round. To build
+a chosen issue, name it:
+
+```bash
+archon workflow run archon-build-queue $R --input number=<issue> --detach
+```
+
+A named issue that cannot be claimed refuses the run before any agent, with the
+reason: it has no work item, another run holds it, or it does not wait for the build
+queue. Launch one run per item you want worked at the same time; the launch's
+`--config` decides which provider builds it.
 
 A round ends one of three ways, recorded on the item:
 
 - `done`: the pull request's latest review says Ready at its head. The merge queue
-  takes it from there.
-- `continue`: the issue already answers what stopped the round. The next run starts
-  the next round from the recorded brief.
+  takes it from there. A pull request already reviewed Ready at its head is marked
+  ready without another round.
+- `continue`: the issue already answers what stopped the round. The run starts the
+  item's next round at once, as a detached `archon-build-queue --input number=<n>`
+  run on the same run config. If that launch fails, the item waits for the next queue
+  run.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
-An answered `ask` starts its next round by itself. Launch another build-queue run to
-work the next item.
+An item the merge queue returns waits for a new build round, with the merge queue's
+brief. A re-triage after the queue's last decision starts the item over.
+
+Do not resume a failed build-queue run once another build-queue run has started.
+A later build-queue run releases the failed run's claim, and a resume skips the
+completed `facts` node that claimed the item. The resumed run works the whole round,
+then its `apply` refuses because the item is no longer claimed by it. Launch a fresh
+run with `--input number=<issue>` instead.
 
 ## Merge queue
 
@@ -118,10 +138,25 @@ never pushes or waits for CI: a conflict goes back to the build queue, and the d
 branch's CI on a merge is the next sweep's first fact. Claims keep two sweeps off the
 same item.
 
+A verdict counts only at the head it reviewed: after a push, the pull request goes
+back to the build queue for a new round. A maintainer's own pull request
+(`merge_queue: "own-prs"`) has no build round to return to, so where another would go
+back, the sweep asks instead and offers no `return`.
+
+A pull request whose read fails twice in a row is parked with the read error until
+the build queue readies the item again.
+
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `merge: base` and holds
-every merge until it is green.
+`return`, `park` and `other`. A red default branch pauses as `merge: base` with the
+one choice `hold`, and the gate refuses every merge until it is green. A run raises at
+most one attention item: the red default branch first, otherwise the first pull
+request the sweep asked about. A later sweep decides the rest again.
+
+A `merge` answer approves the pull request at the head it asked about, and a sweep
+the answer starts merges it once the gate passes. The approval carries to a later head
+only when the sweep judges that everything since is merges of the default branch and
+their conflict resolutions, and the verdict is Ready at the later head.
 
 ## Discoveries drain
 
@@ -147,8 +182,7 @@ The build and merge queues write the answer's text into the issue body as a date
 "Current scope" section, and later rounds work from it. Write the reason as a ruling a
 later round can act on: what is in scope, what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
-run at once, on the run config the answered run started with, so you don't relaunch. A
-build round that decides `continue` on its own starts its next round the same way.
+run at once, on the run config the answered run started with, so you don't relaunch.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to

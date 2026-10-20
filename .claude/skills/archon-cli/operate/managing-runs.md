@@ -133,6 +133,13 @@ by its `runId` and `occurrence` exactly as above. Labels are the user's routing 
 `--label ci=other` selects one class, and `attention label` writes a classification
 without answering. Archon never routes by them.
 
+A workflow can ask several independent questions at once by fanning out one child run
+per question. Each child is its own item, with its own `runId` and `occurrence`, and
+its `fanOut.parentRunId` names the parent. `attention <parent-run-id>` returns only the
+first open child, so list the queue to find them all, and answer each child by its own
+`runId`. Answers can arrive in any order; the parent stays paused until every child
+finishes.
+
 `workflow wait` follows one run whose id you hold. To follow every run in scope,
 including runs started later by triggers, schedules or other sessions, run
 `archon workflow attention --watch --json --all` as a background task. It prints one
