@@ -581,7 +581,7 @@ Tool-call advisories appear in nonverbose text and in the JSON `attention` field
 
 ### `workflow runs`
 
-List recent runs of **every** status (completed, failed, cancelled, running, paused) for the current project. The project is resolved from `cwd` by its registered checkout path or linked-worktree identity. A separate clone does not resolve to that project, even after a launch with `workflow run --project`. Complements `workflow status` (which is active-only).
+List recent runs of **every** execution status for the current project. The project is resolved from `cwd` by its registered checkout path or linked-worktree identity. A separate clone does not resolve to that project, even after a launch with `workflow run --project`. Complements `workflow status` (which is active-only).
 
 ```bash
 archon workflow runs
