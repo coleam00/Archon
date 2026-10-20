@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { prepareArtifactParent, writeArtifactFile } from './artifact-writes';
 import { join, sep } from 'node:path';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
@@ -119,7 +120,6 @@ export async function writeNodeArtifact(
   // durable constructor before creating either sidecar.
   const parsedParams = nodeArtifactWriteParamsSchema.parse(params);
   const nodesDir = join(artifactsDir, NODES_SUBDIR);
-  await mkdir(nodesDir, { recursive: true });
   const owner: ArtifactOwner = {
     nodeId: parsedParams.nodeId,
     ...(parsedParams.loopGroupPath !== undefined
@@ -128,6 +128,7 @@ export async function writeNodeArtifact(
   };
   const stem = artifactStem(owner);
   const metaPath = join(nodesDir, `${stem}.meta.json`);
+  await prepareArtifactParent(metaPath);
 
   // Collision guard: top-level safeSegment() can collapse distinct node ids (for
   // example `a.b` and `a_b`), and loop digests retain an ownership check rather
@@ -141,7 +142,7 @@ export async function writeNodeArtifact(
   }
 
   const relPath = join(NODES_SUBDIR, `${stem}.md`);
-  await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
+  await writeArtifactFile(join(artifactsDir, relPath), outputText);
   const meta: NodeArtifact = {
     nodeId: parsedParams.nodeId,
     outputType: parsedParams.outputType,
@@ -153,7 +154,7 @@ export async function writeNodeArtifact(
     producedAt: parsedParams.producedAt,
     size: Buffer.byteLength(outputText, 'utf8'),
   };
-  await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  await writeArtifactFile(metaPath, JSON.stringify(meta, null, 2));
   return meta;
 }
 
@@ -370,8 +371,7 @@ export async function writeNodeArtifactsListing(
   const result = await readNodeArtifacts(artifactsDir, { scope: 'current-run', runId });
   const listing: NodeArtifactsListing = { runId, ...result };
   const listingDir = join(artifactsDir, LISTINGS_SUBDIR);
-  await mkdir(listingDir, { recursive: true });
   const listingPath = join(listingDir, `${randomUUID()}.json`);
-  await writeFile(listingPath, JSON.stringify(listing, null, 2), 'utf8');
+  await writeArtifactFile(listingPath, JSON.stringify(listing, null, 2));
   return listingPath;
 }
