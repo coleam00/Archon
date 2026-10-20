@@ -8,11 +8,11 @@ sidebar:
   order: 5
 ---
 
-Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are two categories of variables: workflow variables (substituted by the workflow engine) and node output references (DAG workflows only).
+Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution — except the user-controlled variables, which reach `bash:` and `script:` nodes as environment variables instead. There are two categories of variables: workflow variables (substituted by the workflow engine) and node output references (DAG workflows only).
 
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one) — except the user-controlled ones in `bash:` and `script:` nodes, which arrive as environment variables instead (see [Shell quoting in `bash:` vs `script:`](#shell-quoting-in-bash-vs-script)).
 
 They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
 

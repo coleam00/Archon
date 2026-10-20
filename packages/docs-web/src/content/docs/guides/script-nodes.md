@@ -60,9 +60,13 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 ## How It Works
 
-1. **Substitute variables.** `$ARGUMENTS`, `$WORKFLOW_ID`, `$ARTIFACTS_DIR`,
-   `$BASE_BRANCH`, `$DOCS_DIR`, and upstream `$nodeId.output` references are
-   substituted into the `script` text before execution.
+1. **Substitute variables.** `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`,
+   `$DOCS_DIR`, and upstream `$nodeId.output` references are substituted into the
+   `script` text before execution. User-controlled workflow variables like
+   `$ARGUMENTS` and `$USER_MESSAGE` are not substituted: they arrive as
+   environment variables instead (`process.env.ARGUMENTS`), so untrusted text
+   never becomes script source — see
+   [Environment and Isolation](#environment-and-isolation).
 2. **Detect inline vs named.** If the `script` value contains a newline or any
    shell metacharacter (see [Inline vs Named Scripts](#inline-vs-named-scripts)
    below), it's treated as inline code. Otherwise it's treated as a named-script
