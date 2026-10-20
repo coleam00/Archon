@@ -112,7 +112,7 @@ export function registerAuthRoutes(app: OpenAPIHono): void {
   // whether to render the login gate at all. When web auth is enabled the
   // /api/auth/* mount explicitly next()s Archon-owned paths (this one included)
   // before Better Auth's handler runs, so the request reaches here untouched
-  // (see isArchonOwnedAuthPath in index.ts).
+  // (see mountWebAuth in server-routes.ts).
   registerOpenApiRoute(authStatusRoute, c => {
     return c.json({ enabled: isWebAuthEnabled(), signup: getSignupMode() });
   });

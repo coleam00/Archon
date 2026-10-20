@@ -4,8 +4,8 @@
  * its own provider. Each registerProvider() starts a background refresh that
  * re-reads modelsPath, so the per-call file must live for the whole session.
  *
- * Runs in its own `bun test` process (package.json testGroups): provider.test.ts
- * mocks the Pi SDK process-wide.
+ * Runs in its own `bun test` process (package.json testGroups): the provider unit tests
+ * mock the Pi SDK process-wide through provider-test-fixture.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

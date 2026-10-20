@@ -86,3 +86,14 @@ export const workflowNodeHooksSchema = z
   .strict();
 
 export type WorkflowNodeHooks = z.infer<typeof workflowNodeHooksSchema>;
+
+export function validateNodeHooks(value: unknown, ctx: z.RefinementCtx): void {
+  if (value === undefined) return;
+  const result = workflowNodeHooksSchema.safeParse(value);
+  if (result.success) return;
+  // Zod intersections suppress unrecognized_keys issues from just one side,
+  // even inside loop groups. Custom issues preserve strict hook failures there.
+  for (const issue of result.error.issues) {
+    ctx.addIssue({ code: 'custom', message: issue.message, path: ['hooks', ...issue.path] });
+  }
+}

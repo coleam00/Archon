@@ -20,6 +20,7 @@ describeWorkflowStoreConformance('in-memory CLI test store', async () => {
   return {
     store,
     backdate: store.backdate,
+    seedPersistedWait: store.seedPersistedWait,
     terminalReports: () => [...reports],
     close: async () => {},
   };
