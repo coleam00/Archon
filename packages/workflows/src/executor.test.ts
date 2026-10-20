@@ -3311,6 +3311,26 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('base branch resolution', () => {
+    for (const resolvedBaseBranch of ['checkout-base', '']) {
+      it(`uses the caller-resolved base ${JSON.stringify(resolvedBaseBranch)} ahead of config`, async () => {
+        const deps = makeDeps();
+        const loadConfig = deps.loadConfig;
+        deps.loadConfig = async path => ({ ...(await loadConfig(path)), baseBranch: 'configured' });
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp/worktree',
+          makeWorkflow(),
+          'goal',
+          { conversationId: 'db-conv-1' },
+          { resolvedBaseBranch }
+        );
+        expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe(resolvedBaseBranch);
+      });
+    }
+
     it('uses caller-provided baseBranch when repo config is unset', async () => {
       // Auto-detect would throw — the caller fallback must short-circuit before it.
       mockGetDefaultBranch.mockImplementation(async () => {
@@ -3520,6 +3540,7 @@ describe('executeWorkflow', () => {
           }),
           priorCompletedNodes: new Map(),
           baseBranch: 'develop',
+          resolvedBaseBranch: 'new-checkout-base',
         }
       );
 
@@ -3556,6 +3577,7 @@ describe('executeWorkflow', () => {
           }),
           priorCompletedNodes: new Map(),
           baseBranch: 'develop',
+          resolvedBaseBranch: 'new-checkout-base',
         }
       );
 
@@ -3583,6 +3605,7 @@ describe('executeWorkflow', () => {
           }),
           priorCompletedNodes: new Map(),
           baseOverride: 'hotfix/urgent',
+          resolvedBaseBranch: 'new-checkout-base',
         }
       );
 
