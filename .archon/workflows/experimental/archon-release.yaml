@@ -12,24 +12,15 @@ description: |
   NOT for: Hotfix recovery from a broken release CI run (manual recovery
            path), publishing release notes only, retroactive tagging.
 
-  Pass `--dry-run` (or `dry-run`) in the message to preview the release
-  without releasing it: no version bump on disk, no commit, pull request,
-  tag, GitHub release or tap update. The preview still fetches and
-  fast-forwards the live dev checkout, compiles the binary and drafts the
-  changelog with a provider call.
-  Keep the flag inside the quoted message and off the front: the shell
-  strips the quotes, so a message that starts with `--dry-run` is read as
-  the CLI's own in-memory simulation. Put the message after the command's
-  `--` separator to send it anyway; otherwise use `dry-run`, or put the
-  bump type first (`patch --dry-run`).
+  Pass `--dry-run` (or `dry-run`) anywhere in the message to preview every
+  step without touching git, GitHub, the filesystem, or any remote state.
   Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
 
   Examples:
     archon workflow run archon-release ""                  # patch release
     archon workflow run archon-release "minor"             # minor release
     archon workflow run archon-release "patch --dry-run"   # dry-run patch
-    archon workflow run archon-release "dry-run"           # dry-run patch (implicit)
-    archon workflow run archon-release -- "--dry-run"      # dry-run patch (separated)
+    archon workflow run archon-release "--dry-run"         # dry-run patch (implicit)
 
 provider: claude
 model: sonnet
@@ -44,9 +35,7 @@ nodes:
 
   - id: parse-args
     script: |
-      // The run message arrives as the ARGUMENTS env var; a script body never
-      // substitutes $ARGUMENTS (#2115).
-      const raw = (process.env.ARGUMENTS ?? "").trim().toLowerCase();
+      const raw = String.raw`$ARGUMENTS`.trim().toLowerCase();
       const tokens = raw.split(/\s+/).filter(Boolean);
       const dryRun = tokens.includes("--dry-run") || tokens.includes("dry-run");
       const bumpToken = tokens.find((t) => ["patch", "minor", "major"].includes(t));
@@ -55,14 +44,6 @@ nodes:
       console.log(JSON.stringify({ bump, dryRun: String(dryRun) }));
     runtime: bun
     timeout: 5000
-    # Declared because the release tail reads these fields by name: a mistyped
-    # reference fails the load, and a producer that changes the encoding fails here.
-    output_format:
-      type: object
-      properties:
-        bump: { type: string, enum: [patch, minor, major] }
-        dryRun: { type: string, enum: ["true", "false"] }
-      required: [bump, dryRun]
 
   - id: validate-state
     bash: |
@@ -249,21 +230,6 @@ nodes:
     runtime: bun
     timeout: 5000
     depends_on: [detect-stack, parse-args]
-    # Declared because the release tail reads these fields by name: the loader
-    # rejects a reference the declaration does not authorize, and the engine
-    # certifies the producer's own stdout against it. Every field the release
-    # tail reads is required, so a producer that drops one fails at its own node
-    # instead of at the consumer that reads it. The bump vocabulary belongs to
-    # the argument node's declaration, which owns it.
-    output_format:
-      type: object
-      properties:
-        oldVersion: { type: string }
-        newVersion: { type: string }
-        bump: { type: string }
-        stack: { type: string }
-        versionFile: { type: string }
-      required: [oldVersion, newVersion, bump, stack, versionFile]
 
   - id: collect-commits
     bash: |
@@ -441,8 +407,7 @@ nodes:
         ─────────────────────────────────────────────────────────────────
 
         Approve to continue, or reject to cancel the release.
-        - In dry-run mode the workflow ends here without writing any release files;
-          the live dev checkout was already fetched and fast-forwarded.
+        - In dry-run mode the workflow ends here without modifying any files.
         - In full mode approval triggers: write files, commit + push to dev,
           open a PR dev → main, then pause again before tag/release.
     depends_on: [format-changelog, collect-commits, bump-version, parse-args]
@@ -957,8 +922,7 @@ nodes:
       } else if (args.dryRun === "true") {
         lines.push(`DRY RUN COMPLETE — would have released v${ver.newVersion} (from v${ver.oldVersion})`);
         lines.push("");
-        lines.push("No release files were written. No commits were made. No PR was created.");
-        lines.push("The live dev checkout was fetched and brought up to date with origin/dev.");
+        lines.push("No files were written. No commits were made. No PR was created.");
         lines.push("Re-run without --dry-run to actually cut the release.");
       } else {
         lines.push(`RELEASE COMPLETE — v${ver.newVersion} (from v${ver.oldVersion}, ${ver.bump})`);
