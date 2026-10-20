@@ -2,6 +2,8 @@
 import { describe, expect, test } from 'bun:test';
 import { buildRunTerminalTelemetry, type RunTelemetryEvent } from './run-terminal-telemetry';
 import { buildTerminalRecord } from './terminal-record';
+import { WORKFLOW_TERMINAL_EVENT_TYPE } from '@archon/paths';
+import { TERMINAL_RUN_EVENT_TYPE } from './schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 
 const run = {
@@ -90,4 +92,8 @@ describe('buildRunTerminalTelemetry', () => {
     ])
       expect(props).not.toHaveProperty(key);
   });
+});
+
+test('analytics terminal event mapping conforms to the persisted event owner', () => {
+  expect(WORKFLOW_TERMINAL_EVENT_TYPE).toEqual(TERMINAL_RUN_EVENT_TYPE);
 });

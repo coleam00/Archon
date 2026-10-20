@@ -224,7 +224,22 @@ export async function runContainerWriteBackGate(
           .updateWorkflowRun(runId, {
             metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
           })
-          .catch(() => undefined);
+          .catch((err: unknown) => {
+            // The independent apply claim stays set even if resolution bookkeeping fails.
+            // Retaining it prevents another apply; it does not prove the overlay landed.
+            getLog().warn(
+              {
+                runId,
+                operation: 'updateWorkflowRun',
+                err,
+                recovery:
+                  'Resolution metadata was not recorded; the apply claim is retained. ' +
+                  'Before manual reconciliation, inspect the run and live-folder changes; ' +
+                  'do not release the claim or automatically apply again.',
+              },
+              'dag.writeback_resolution_persist_failed'
+            );
+          });
         return 'applied';
       }
       let applied;

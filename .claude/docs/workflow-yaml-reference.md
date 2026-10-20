@@ -236,7 +236,7 @@ when: "$classify.output.complexity != 'trivial'"
 | `$USER_MESSAGE` | Alias for `$ARGUMENTS` |
 | `$WORKFLOW_ID` | Workflow run UUID |
 | `$ARTIFACTS_DIR` | Absolute path to run artifacts directory |
-| `$BASE_BRANCH` | Base branch from config or auto-detected |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch. See the [Variable Reference](https://archon.diy/reference/variables/#workflow-variables) for resolution and child inheritance rules |
 | `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` | GitHub issue/PR context (empty string if none) |
 | `$PLAN` | Previous plan from session metadata |
 | `$IMPLEMENTATION_SUMMARY` | Previous execution summary |

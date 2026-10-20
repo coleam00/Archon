@@ -68,6 +68,16 @@ export async function makeSqlConformanceHarness(
         ]);
       }
     },
+    seedPersistedWait: async (id, wait): Promise<void> => {
+      const write =
+        type === 'postgresql'
+          ? "jsonb_set(metadata, '{wait}', $2::jsonb, true)"
+          : "json_set(metadata, '$.wait', json($2))";
+      await db.query(`UPDATE remote_agent_workflow_runs SET metadata = ${write} WHERE id = $1`, [
+        id,
+        JSON.stringify(wait),
+      ]);
+    },
     terminalReports: (): string[] => [...reports],
     close,
   };
