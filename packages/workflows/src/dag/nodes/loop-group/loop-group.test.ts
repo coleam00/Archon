@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
   createMockStore,
@@ -237,8 +237,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(iter2.node_output.startsWith('b')).toBe(true);
     expect(iter1.node_output_spill_path).not.toBe(iter2.node_output_spill_path);
     for (const output of [iter1, iter2]) {
-      expect(output.node_output_spill_path).toStartWith(
-        join(artifactsDir, '.archon', 'node-output-spills', 'persisted') + '/'
+      expect(dirname(output.node_output_spill_path)).toBe(
+        join(artifactsDir, '.archon', 'node-output-spills', 'persisted')
       );
       expect(output.node_output_spill_path).toMatch(/[0-9a-f-]{36}\.nodeoutput$/);
     }

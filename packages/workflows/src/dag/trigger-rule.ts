@@ -110,10 +110,9 @@ export function checkComposedBlockBoundaries(
   for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
     if (boundary.isEntry && !evaluateEntryBoundary) continue;
 
-    const triggerRules =
-      boundary.isEntry && evaluateEntryBoundary
-        ? [boundary.entryTriggerRule]
-        : boundary.entryTriggerRules;
+    const triggerRules = boundary.isEntry
+      ? [boundary.entryTriggerRule]
+      : boundary.entryTriggerRules;
     const triggerDecisions = triggerRules.map(rule =>
       checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs)
     );
@@ -139,7 +138,7 @@ export function checkComposedBlockBoundaries(
           return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
         }
       } catch (error) {
-        if (boundary.isEntry && evaluateEntryBoundary) throw error;
+        if (boundary.isEntry) throw error;
         // Entry nodes own the actionable missing-ref error. Descendants only need to stay
         // inside the failed boundary, without repeating the same failure for every node.
         return {
