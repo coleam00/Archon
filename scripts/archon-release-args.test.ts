@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluateCondition } from '../packages/workflows/src/condition-evaluator';
+import { certifyExecOutput } from '../packages/workflows/src/dag/nodes/exec/exec-output';
 import { declaredOutputPathsFromSchema } from '../packages/workflows/src/output-ref';
-import type { NodeOutput } from '../packages/workflows/src/schemas';
+import { execNodeSchema, type ExecNode, type NodeOutput } from '../packages/workflows/src/schemas';
 import { parseWhenExpression, type WhenAtom } from '../packages/workflows/src/when-atom';
 
 /**
@@ -21,6 +22,7 @@ const WORKFLOW = join(REPO, '.archon', 'workflows', 'experimental', 'archon-rele
 interface WorkflowNode {
   id: string;
   script?: string;
+  runtime?: string;
   when?: string;
   depends_on?: string[];
   wait?: { form?: string };
@@ -63,9 +65,10 @@ const BODY = parseArgsBody();
 /**
  * Runs the node's body with the given run message, the way the engine runs it: the
  * message arrives in the environment, because a `script:` body never substitutes it
- * into the source. `undefined` leaves the variable unset.
+ * into the source. `undefined` leaves the variable unset. Returns the stdout the
+ * engine would certify, with the trailing newline trimmed.
  */
-function runParseArgs(message: string | undefined): Record<string, unknown> {
+function runParseArgs(message: string | undefined): string {
   const env: Record<string, string | undefined> = { ...process.env };
   if (message === undefined) delete env.ARGUMENTS;
   else env.ARGUMENTS = message;
@@ -78,24 +81,79 @@ function runParseArgs(message: string | undefined): Record<string, unknown> {
   if (result.exitCode !== 0) {
     throw new Error(`parse-args exited ${String(result.exitCode)}: ${result.stderr.toString()}`);
   }
-  return JSON.parse(result.stdout.toString().trim()) as Record<string, unknown>;
+  return result.stdout.toString().replace(/\n$/, '');
 }
 
-describe('archon-release argument parsing', () => {
-  test.each([
-    ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
-    // The workflow's description offers both spellings, in any position.
-    ['dry-run minor', { bump: 'minor', dryRun: 'true' }],
-    ['--dry-run minor', { bump: 'minor', dryRun: 'true' }],
-    ['major', { bump: 'major', dryRun: 'false' }],
-    ['patch', { bump: 'patch', dryRun: 'false' }],
-    ['', { bump: 'patch', dryRun: 'false' }],
-  ])('reads %p from the run message', (message: string, expected: Record<string, unknown>) => {
-    expect(runParseArgs(message)).toEqual(expected);
+/** The producer's printed JSON. */
+function parseArgsJson(message: string | undefined): Record<string, unknown> {
+  return JSON.parse(runParseArgs(message)) as Record<string, unknown>;
+}
+
+/** The producer node as the engine runs it: its body and the contract it declares. */
+function parseArgsNode(): ExecNode {
+  const node = nodeById('parse-args');
+  return execNodeSchema.parse({
+    kind: 'exec',
+    id: node.id,
+    script: BODY,
+    runtime: node.runtime,
+    output_format: node.output_format,
   });
+}
+
+/** The run messages the workflow documents, and the output each one must produce. */
+const MESSAGES: readonly (readonly [string, Record<string, unknown>])[] = [
+  ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
+  // The workflow's description offers both spellings, in any position.
+  ['dry-run minor', { bump: 'minor', dryRun: 'true' }],
+  ['--dry-run minor', { bump: 'minor', dryRun: 'true' }],
+  ['major', { bump: 'major', dryRun: 'false' }],
+  ['patch', { bump: 'patch', dryRun: 'false' }],
+  ['', { bump: 'patch', dryRun: 'false' }],
+];
+
+describe('archon-release argument parsing', () => {
+  test.each(MESSAGES)(
+    'reads %p from the run message',
+    (message: string, expected: Record<string, unknown>) => {
+      expect(parseArgsJson(message)).toEqual(expected);
+    }
+  );
 
   test('defaults to a patch release when the run message is unset', () => {
-    expect(runParseArgs(undefined)).toEqual({ bump: 'patch', dryRun: 'false' });
+    expect(parseArgsJson(undefined)).toEqual({ bump: 'patch', dryRun: 'false' });
+  });
+});
+
+/**
+ * The producer's declared contract, and the output that must satisfy it.
+ *
+ * The release tail reads `$parse-args.output.dryRun` by name, so the node declares
+ * what it prints. The declaration only earns its keep while the engine enforces it:
+ * the loader rejects a mistyped reference against the declared paths, and the exec
+ * node certifies its own stdout against the declared schema. Nothing else in the
+ * repository runs the producer, so without these two checks a deleted declaration —
+ * or one narrowed until the producer's real output no longer satisfies it — leaves
+ * the suite green and moves the failure to run time, after the live checkout has
+ * been fast-forwarded and the binary compiled.
+ */
+describe('the parse-args output contract', () => {
+  test('the producer declares the fields the release tail reads', () => {
+    const declared = declaredOutputPathsFromSchema(nodeById('parse-args').output_format);
+    expect([...(declared ?? [])].map(path => path.join('.')).sort()).toEqual(['bump', 'dryRun']);
+  });
+
+  test.each(MESSAGES)(
+    'the output for %p satisfies the declared contract',
+    (message: string, expected: Record<string, unknown>) => {
+      const certified = certifyExecOutput(parseArgsNode(), runParseArgs(message), []);
+      expect(certified.structuredOutput).toEqual(expected);
+    }
+  );
+
+  test('the output satisfies the declared contract when the run message is unset', () => {
+    const certified = certifyExecOutput(parseArgsNode(), runParseArgs(undefined), []);
+    expect(certified.structuredOutput).toEqual({ bump: 'patch', dryRun: 'false' });
   });
 });
 
@@ -116,7 +174,8 @@ function releasePhase(): { gate: WorkflowNode[]; phase: WorkflowNode[] } {
 }
 
 /** The node's output as the engine records it: its printed JSON and its declared paths. */
-function parseArgsOutput(json: Record<string, unknown>): NodeOutput {
+function parseArgsOutput(message: string): NodeOutput {
+  const json = parseArgsJson(message);
   return {
     state: 'completed',
     output: JSON.stringify(json),
@@ -141,12 +200,8 @@ function atomText(atom: DryRunAtom): string {
 }
 
 /** The parsed flag as the engine records it: a dry run and a real run. */
-const DRY_RUN_OUTPUT = new Map<string, NodeOutput>([
-  ['parse-args', parseArgsOutput(runParseArgs('dry-run'))],
-]);
-const RELEASE_OUTPUT = new Map<string, NodeOutput>([
-  ['parse-args', parseArgsOutput(runParseArgs('minor'))],
-]);
+const DRY_RUN_OUTPUT = new Map<string, NodeOutput>([['parse-args', parseArgsOutput('dry-run')]]);
+const RELEASE_OUTPUT = new Map<string, NodeOutput>([['parse-args', parseArgsOutput('minor')]]);
 
 /** The gate a dry run ends at: it runs in both modes. */
 function assertApprovalGate(node: WorkflowNode): void {
