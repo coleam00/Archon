@@ -51,6 +51,8 @@ function workspaceCommands({
     if (args.includes('--abbrev-ref')) return output(currentBranch);
     if (args.includes('rev-parse')) return output(args.includes(remoteRef) ? remoteSha : localSha);
     if (args.includes('merge-base')) {
+      expect([localSha, remoteSha]).toContain(args[4]);
+      expect(args[5]).toBe(args[4] === localSha ? remoteSha : localSha);
       if (ancestryFailure) throw ancestryFailure;
       const isAncestor = args[4] === localSha ? localAncestor : remoteAncestor;
       if (!isAncestor) throw Object.assign(new Error('not ancestor'), { code: 1 });
@@ -103,9 +105,7 @@ describe('git utilities', () => {
 
       await git.syncWorkspace(repo('/workspace/repo'), branch('main'));
 
-      const resetCalls = execSpy.mock.calls.filter(([, args]) => args.includes('reset'));
-
-      expect(resetCalls).toHaveLength(0);
+      expect(execSpy.mock.calls.some(([, args]) => args.includes('reset'))).toBe(false);
     });
 
     test('hard-resets working tree to origin in reset mode', async () => {
