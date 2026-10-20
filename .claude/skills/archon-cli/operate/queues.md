@@ -28,6 +28,14 @@ reference covers launching and tending the queues by hand.
   maintainer's own open pull requests through the merge queue. Without the file every
   author is an outsider: intake labels their issues `archon-needs-maintainer` and runs
   no agent.
+- The forge account the pack's review runs post as must also be on
+  `maintainers.json`. The merge queue counts only a review comment a listed
+  maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
+- The merge gate requires green CI at the pull request's head. A repository with no
+  CI checks reads as `none`, not green, so nothing merges there.
+- Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
+  rather than replacing them. Where a line in the project's file conflicts with the
+  default, the project's line wins.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
   adds one. The README shows a binding per queue; until then, launch by hand.
 
@@ -122,11 +130,13 @@ A round ends one of three ways, recorded on the item:
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.
 
-Do not resume a failed build-queue run once another build-queue run has started.
-A later build-queue run releases the failed run's claim, and a resume skips the
-completed `facts` node that claimed the item. The resumed run works the whole round,
-then its `apply` refuses because the item is no longer claimed by it. Launch a fresh
-run with `--input number=<issue>` instead.
+Do not resume a failed build-queue run once a later build-queue run has released its
+claim. A run that names no item releases every finished run's claim, whichever item it
+then picks. A run named for the same `number` releases it too; one named for a
+different `number` leaves it alone. A resume skips the completed `facts` node that
+claimed the item, so the resumed run works the whole round, then its `apply` refuses
+because the item is no longer claimed by it. Launch a fresh run with
+`--input number=<issue>` instead.
 
 ## Merge queue
 
@@ -144,7 +154,9 @@ back to the build queue for a new round. A maintainer's own pull request
 back, the sweep asks instead and offers no `return`.
 
 A pull request whose read fails twice in a row is parked with the read error until
-the build queue readies the item again.
+the build queue readies the item again. A maintainer's own pull request has no build
+record, so nothing readies it again: once parked, it stays parked, and you merge it by
+hand.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,

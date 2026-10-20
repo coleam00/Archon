@@ -146,9 +146,13 @@ including runs started later by triggers, schedules or other sessions, run
 JSON line per change: each `attention` line is an item that needs attention, carrying
 the same item the list returns, so treat it as a wake and answer by its `runId` and
 `occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
-lines before `ready` are the whole open set. Keep the `cursor` of the last line you
-handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
-store cannot read the stream's cursor: rerun without `--after`.
+lines before `ready` are the whole open set. After a restart, `--after <cursor>`
+replays what came after that cursor. A cursor names a feed event, not a line, and one
+event can emit two lines with the same cursor (a `resolved` and the `attention` that
+replaces it, or a `resolved` and a `terminal`). `--after` skips the whole event, so
+checkpoint on a `bookmark` line you handled, or on the cursor before an event you
+handled only partly, and accept duplicate lines on replay. Exit `4` means the store
+cannot read the stream's cursor: rerun without `--after`.
 
 Or deliberately in two steps:
 
@@ -196,6 +200,8 @@ Choose deliberately after reading what the gate produced — not by reflex.
   (crashed host). If an owner still answers on this host, it stops it first, like
   `cancel`. If none answers, it records `cancelled` and prints the host and pid the
   run recorded; when that host is another machine, check there before abandoning.
+  It also removes the worktree the run created, uncommitted files included, and keeps
+  the branch. Commit or copy anything you need from the worktree first.
 
 ## Respond: gates beyond approve/reject
 
