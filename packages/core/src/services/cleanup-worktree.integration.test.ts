@@ -6,6 +6,7 @@
  */
 import { setPlatformPolicies } from '../platforms/registry';
 import * as gitModule from '@archon/git';
+import { withRedirectingGitHelper } from '@archon/git/test-utils';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
   chmod,
@@ -60,11 +61,15 @@ const {
 const codebaseDb = await import('../db/codebases');
 
 async function git(path: string, ...args: string[]): Promise<string> {
-  const process = Bun.spawn(['git', '-C', path, ...args], { stdout: 'pipe', stderr: 'pipe' });
+  const proc = Bun.spawn(['git', '-C', path, ...args], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env },
+  });
   const [out, err, code] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
-    process.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
   ]);
   if (code) throw new Error(err);
   return out.trim();
@@ -598,6 +603,7 @@ describe('completed run worktree release', () => {
   };
 
   beforeEach(async () => {
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
     await mkdir(join(repo, '.archon'));
     await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
   });
@@ -685,6 +691,62 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
   });
 
+  test.each(['same-tip', 'advanced'] as const)(
+    'a renamed published branch keeps the checkout (%s)',
+    async kind => {
+      await commitInWorktree();
+      const publishedTip = await git(env.working_path, 'rev-parse', 'HEAD');
+      if (kind === 'advanced') {
+        await writeFile(join(env.working_path, 'work'), 'more work');
+        await git(env.working_path, 'commit', '-qam', 'more work');
+      }
+      await git(env.working_path, 'push', '-q', 'upstream', 'HEAD:refs/heads/review-name');
+      if (kind === 'advanced') await git(env.working_path, 'reset', '--hard', publishedTip);
+      await git(repo, 'fetch', '-q', 'upstream');
+      expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow('published_branch');
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
+
+  test('a renamed ref published after assessment refuses the release', async () => {
+    expect(await assess()).toEqual({ disposition: 'release' });
+    await git(env.working_path, 'push', '-q', 'upstream', 'HEAD:refs/heads/review-name');
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow('published_branch');
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
+  test('an unfetched advertised tip keeps the checkout when ancestry is unknown', async () => {
+    const other = join(root, 'other');
+    await initRepo(other);
+    await writeFile(join(other, 'other'), 'other work');
+    await git(other, 'add', '.');
+    await git(other, 'commit', '-qm', 'other work');
+    await git(other, 'push', '-q', join(root, 'remote.git'), 'HEAD:refs/heads/review-name');
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow('Failed to check whether');
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
+  test('without an advertised default, matching tips cannot exclude publication', async () => {
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/missing');
+    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow('published_branch');
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a published branch with no remote-tracking ref still waits for the merged sweep', async () => {
     await git(
       env.working_path,
@@ -697,6 +759,26 @@ describe('completed run worktree release', () => {
     await git(repo, 'update-ref', '-d', `refs/remotes/upstream/${env.branch_name}`);
     expect(await git(repo, 'branch', '-r', '--list', `upstream/${env.branch_name}`)).toBe('');
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+  });
+
+  test('completion refuses a transport helper that redirects the receiver', async () => {
+    const published = join(root, 'helper.git');
+    await git(root, 'init', '--bare', '-q', published);
+    const ref = `refs/heads/${env.branch_name}`;
+    await git(repo, 'config', 'remote.upstream.vcs', 'archon-test');
+    await withRedirectingGitHelper(published, async () => {
+      await git(env.working_path, 'push', '-q', 'upstream', `HEAD:${ref}`);
+      const advertisement = await git(repo, 'ls-remote', 'upstream', ref);
+      expect(advertisement).toContain(ref);
+      expect(await git(repo, 'ls-remote', join(root, 'remote.git'), ref)).toBe('');
+      expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow();
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+      expect(await git(root, 'ls-remote', published, ref)).toBe(advertisement);
+    });
   });
 
   test.each(['uploadpack', 'receivepack'] as const)(
@@ -802,7 +884,7 @@ describe('completed run worktree release', () => {
   );
 
   test.each(
-    ['published', 'unavailable'].flatMap(outcome =>
+    ['published', 'unavailable', 'mixed'].flatMap(outcome =>
       ['pushurls', 'alias-pushurl'].map(configuration => ({ outcome, configuration }))
     )
   )(
@@ -816,7 +898,8 @@ describe('completed run worktree release', () => {
       await git(root, 'init', '--bare', '-q', empty);
       await git(root, 'init', '--bare', '-q', destination);
       await git(repo, 'push', '-q', destination, `HEAD:refs/heads/${env.branch_name}`);
-      await git(repo, 'remote', 'set-url', '--push', 'upstream', empty);
+      const first = outcome === 'mixed' ? destination : empty;
+      await git(repo, 'remote', 'set-url', '--push', 'upstream', first);
       const checked = outcome === 'published' ? destination : join(root, 'missing.git');
       if (configuration === 'alias-pushurl') {
         await git(repo, 'config', '--unset-all', 'remote.upstream.url');
@@ -825,7 +908,7 @@ describe('completed run worktree release', () => {
         await git(repo, 'remote', 'set-url', '--add', '--push', 'upstream', checked);
       }
       expect(await git(repo, 'remote', 'get-url', '--push', '--all', 'upstream')).toBe(
-        `${empty}\n${checked}`.trim()
+        `${first}\n${checked}`.trim()
       );
       expect(await git(repo, 'ls-remote', empty, `refs/heads/${env.branch_name}`)).toBe('');
       expect(await assess()).toMatchObject({

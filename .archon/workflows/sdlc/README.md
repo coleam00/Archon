@@ -782,13 +782,16 @@ and creates no worktree of its own.
 
 A worktree that never opened a pull request is not its concern. A completed run removes
 its own worktree when the checkout is clean, every commit is on a remote, and no push
-destination of the configured remote advertises the branch. If either
-`remote.<name>.uploadpack` or `remote.<name>.receivepack` is configured for that
-remote, receiving endpoints cannot be verified: the checkout stays with
-`check_failed` before destination inspection. Without these overrides, the
-publication check reads every push destination, which can differ from the fetch URL.
-If any destination advertises the branch or cannot be
-read, the checkout stays; the run's terminal record says why.
+destination of the configured remote advertises the branch name or a non-default
+branch containing its tip. This includes publication under another name; the advertised
+default branch alone does not count. If an advertised commit is unavailable locally
+and ancestry cannot be checked, the checkout stays with `check_failed`.
+If `remote.<name>.uploadpack`, `remote.<name>.receivepack`, or `remote.<name>.vcs`
+is configured for that remote, receiving endpoints cannot be verified: the checkout
+stays with `check_failed` before destination inspection. Without these service
+overrides or transport helpers, the publication check reads every push destination,
+which can differ from the fetch URL. If publication is found or any destination cannot
+be read, the checkout stays; the run's terminal record says why.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
 installs that run only the CLI. The pack installs no binding. A native schedule starts a

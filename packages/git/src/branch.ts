@@ -419,7 +419,7 @@ async function hasCommitObject(repoPath: RepoPath | WorktreePath, sha: string): 
  * Anything else throws. Kept apart from `isAncestorOf`, which maps a missing ref to
  * false: here false means "unmerged work", and cleanup must not reach it by guessing.
  */
-async function isCommitAncestor(
+export async function isCommitAncestor(
   repoPath: RepoPath | WorktreePath,
   ancestor: string,
   descendant: string

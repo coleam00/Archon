@@ -720,11 +720,16 @@ JSON; it does not masquerade as a missing historical record.
 
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote, and its branch was absent from every push destination of
-the configured remote. If either `remote.<name>.uploadpack` or
-`remote.<name>.receivepack` is configured for that remote, the engine cannot verify
-receiving endpoints: it retains the checkout with `check_failed` before inspecting
-destinations. Without these overrides, it checks every push destination.
+was clean, fully on a remote, and unpublished at every push destination of the
+configured remote. Publication includes the same branch name or a non-default branch
+containing the local branch tip, even under another name. The advertised default
+branch alone does not count as publication under another name. If ancestry cannot be
+checked because an advertised commit is unavailable locally, the checkout stays with
+`check_failed`.
+If `remote.<name>.uploadpack`, `remote.<name>.receivepack`, or `remote.<name>.vcs`
+is configured for that remote, the engine cannot verify receiving endpoints: it
+retains the checkout with `check_failed` before inspecting destinations. Without
+these service overrides or transport helpers, it checks every push destination.
 The engine removes a releasable checkout after the completion write, keeping the branch. The record is written before the removal, so a
 removal that is refused because work appeared in the meantime, or that fails, leaves the
 checkout and is logged. Otherwise it is
@@ -738,7 +743,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | At least one push destination of the configured remote advertises the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
+| `published_branch` | At least one push destination advertises the branch name, or a non-default branch containing its tip; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1561,11 +1566,15 @@ the branch Archon created for it holds such a commit.
 
 A completed run removes the worktree it created when it completes, if the checkout is
 clean, every commit on its HEAD and branch is on a remote, and none of the configured
-remote's push destinations advertises the branch. If either
-`remote.<name>.uploadpack` or `remote.<name>.receivepack` is configured for that
-remote, receiving endpoints cannot be verified: the checkout stays with
-`check_failed` before destination inspection. Without these overrides, the
-publication check reads every push destination, which can differ from the fetch URL.
+remote's push destinations advertises the branch name or a non-default branch
+containing its tip. This also detects publication under another name; the advertised
+default branch alone does not count. Unavailable commits that prevent ancestry
+checks retain the checkout with `check_failed`.
+If `remote.<name>.uploadpack`, `remote.<name>.receivepack`, or `remote.<name>.vcs`
+is configured for that remote, receiving endpoints cannot be verified: the checkout
+stays with `check_failed` before destination inspection. Without these service
+overrides or transport helpers, the publication check reads every push destination,
+which can differ from the fetch URL.
 The removal keeps the branch, so
 the run can still be adopted. A branch advertised by a push destination waits for
 `--merged`, which removes its local branch. When any push destination cannot be read,
@@ -1584,21 +1593,22 @@ If the ref belongs to a replacement registration or ownership is uncertain, leav
 it alone. To remove a ref manually, first ensure no one is reusing or publishing
 that branch. From the surviving primary checkout, verify that the branch still
 belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`)
-and the branch reported by cleanup. First check for service overrides:
+and the branch reported by cleanup. First check for service overrides or a transport helper:
 
 ```bash
 remote='<remote>'
 git config --get-all "remote.$remote.uploadpack"
 git config --get-all "remote.$remote.receivepack"
+git config --get-all "remote.$remote.vcs"
 ```
 
-Either override can redirect Git to a repository other than the URL, independently
-of the other service. Cleanup refuses automatic inspection in this case. Before
-manual cleanup, verify the actual receiving repository with the service owner.
+Either service override or a transport helper can redirect Git to a repository
+other than the URL. Cleanup refuses automatic inspection in these cases. Before
+manual cleanup, verify the actual receiving repository with the service or helper owner.
 Use an endpoint whose upload and receive services you have verified target that
 repository; do not infer absence from the configured URL or upload service.
-The URL procedure below applies only when neither override is configured and the
-endpoint is known to match the receiver.
+The URL procedure below applies only when no service override or transport helper
+is configured and the endpoint is known to match the receiver.
 
 Inspect the push destinations:
 

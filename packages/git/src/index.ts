@@ -89,7 +89,7 @@ export { trustRegisteredPath } from './registration-trust';
 
 export {
   inspectRemoteBranches,
-  inspectPushRemoteBranches,
+  isPushBranchPublished,
   validateBranchName,
   ConfiguredBaseBranchNotFoundError,
   InvalidBaseBranchError,

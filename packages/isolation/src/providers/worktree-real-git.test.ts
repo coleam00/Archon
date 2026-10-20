@@ -43,6 +43,7 @@ import { setLogLevel } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 import * as gitModule from '@archon/git';
+import { withRedirectingGitHelper } from '@archon/git/test-utils';
 
 import { WorktreeProvider } from './worktree';
 import { IsolationResolver } from '../resolver';
@@ -561,6 +562,50 @@ describe('WorktreeProvider against real git', () => {
             ]
           : []
       );
+    }
+  );
+
+  test.each([false, true])(
+    'remote destruction refuses a redirecting transport helper (force=%s)',
+    async force => {
+      const published = join(root, 'helper.git');
+      const nominal = join(root, 'nominal.git');
+      for (const destination of [published, nominal])
+        await git(root, 'init', '--bare', '-q', destination);
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('cleanup'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+      const creationId = created.metadata.creationId;
+      await git(repoPath, 'remote', 'set-url', 'origin', nominal);
+      await git(repoPath, 'config', 'remote.origin.vcs', 'archon-test');
+      const ref = `refs/heads/${created.branchName}`;
+      await withRedirectingGitHelper(published, async () => {
+        await git(repoPath, 'push', '-q', 'origin', created.branchName);
+        const advertisement = await git(repoPath, 'ls-remote', 'origin', ref);
+        expect(advertisement).toContain(ref);
+        expect(await git(root, 'ls-remote', nominal, ref)).toBe('');
+        const result = await provider.destroy(created.workingPath, {
+          canonicalRepoPath: request.canonicalRepoPath,
+          creationId,
+          branchName: created.branchName,
+          force,
+          deleteRemoteBranch: true,
+        });
+        expect(result.worktreeRemoved).toBe(true);
+        expect(result.remoteBranchDeleted).toBe(false);
+        expect(result.warnings).toEqual([
+          `Failed to delete remote branch '${created.branchName}': could not resolve push destinations`,
+        ]);
+        expect(await git(root, 'ls-remote', published, ref)).toBe(advertisement);
+      });
     }
   );
 

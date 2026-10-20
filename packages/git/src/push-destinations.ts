@@ -50,6 +50,9 @@ export async function resolvePushDestinations(
   ) {
     throw new Error('Cannot verify receiving endpoints with remote service overrides');
   }
+  if (settings.some(({ key }) => key === `remote.${remote}.vcs`)) {
+    throw new Error('Cannot verify receiving endpoints with a remote transport helper');
+  }
   return effectiveUrls.map(url => ({ url }));
 }
 

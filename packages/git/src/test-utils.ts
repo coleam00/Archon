@@ -68,3 +68,22 @@ export async function createRecordingGitFixture(root: string): Promise<Recording
     },
   };
 }
+
+/** A transport helper whose receiver is independent of the configured URL. */
+export async function withRedirectingGitHelper<T>(
+  receiver: string,
+  action: () => Promise<T>
+): Promise<T> {
+  const savedPath = process.env.PATH;
+  const savedReceiver = process.env.ARCHON_TEST_GIT_RECEIVER;
+  process.env.PATH = `${join(import.meta.dir, 'test-fixtures', 'redirecting-remote-bin')}${delimiter}${savedPath ?? ''}`;
+  process.env.ARCHON_TEST_GIT_RECEIVER = receiver.replaceAll('\\', '/').replaceAll(' ', '% ');
+  try {
+    return await action();
+  } finally {
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
+    if (savedReceiver === undefined) delete process.env.ARCHON_TEST_GIT_RECEIVER;
+    else process.env.ARCHON_TEST_GIT_RECEIVER = savedReceiver;
+  }
+}

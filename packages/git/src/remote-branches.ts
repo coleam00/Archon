@@ -1,5 +1,6 @@
 import { pinGitDestination, resolvePushDestinations } from './push-destinations';
 import { execFileAsync } from './exec';
+import { isCommitAncestor } from './branch';
 import { gitCredentialOptions, sanitizeGitError } from './credentials';
 import { validateCloneUrl, type CloneCredentials } from './repo';
 import { toBranchName, type BranchName, type RepoPath } from './types';
@@ -10,6 +11,14 @@ export type RemoteBranchTarget =
 export type RemoteBranches =
   | { status: 'available'; defaultBranch: BranchName | null; branches: BranchName[] }
   | { status: 'unavailable'; evidence: string; failure?: Error };
+
+type RemoteAdvertisement =
+  | {
+      status: 'available';
+      defaultBranch: BranchName | null;
+      branches: { name: BranchName; oid: string }[];
+    }
+  | Extract<RemoteBranches, { status: 'unavailable' }>;
 
 export class ConfiguredBaseBranchNotFoundError extends Error {
   constructor(branch: string, remote: string) {
@@ -65,21 +74,44 @@ export async function inspectRemoteBranches(target: RemoteBranchTarget): Promise
     credentials = target.credentials;
   }
   const { args, env } = gitCredentialOptions(httpUrl, credentials);
-  return readAdvertisement([...prefix, ...args], source, env, credentials, target.kind === 'local');
+  const result = await readAdvertisement(
+    [...prefix, ...args],
+    source,
+    env,
+    credentials,
+    target.kind === 'local'
+  );
+  return result.status === 'available'
+    ? { ...result, branches: result.branches.map(branch => branch.name) }
+    : result;
 }
 
-export async function inspectPushRemoteBranches(
+export async function isPushBranchPublished(
   repoPath: RepoPath,
-  remote: string
-): Promise<RemoteBranches> {
-  const branches = new Set<BranchName>();
+  remote: string,
+  branchName: BranchName
+): Promise<boolean> {
+  let published = false;
   for (const destination of await resolvePushDestinations(repoPath, remote)) {
     const { endpoint, env } = pinGitDestination(destination);
     const advertised = await readAdvertisement(['-C', repoPath], endpoint, env);
-    if (advertised.status === 'unavailable') return advertised;
-    for (const branch of advertised.branches) branches.add(branch);
+    if (advertised.status === 'unavailable') {
+      throw new Error(`cannot read branches on remote '${remote}': ${advertised.evidence}`);
+    }
+    // The default branch carries merged work. Other names can still publish this
+    // branch's commits; unknown tips must fail the ancestry check, not permit release.
+    for (const branch of advertised.branches) {
+      if (
+        branch.name === branchName ||
+        (branch.name !== advertised.defaultBranch &&
+          (await isCommitAncestor(repoPath, `refs/heads/${branchName}`, branch.oid)))
+      ) {
+        published = true;
+        break;
+      }
+    }
   }
-  return { status: 'available', defaultBranch: null, branches: [...branches] };
+  return published;
 }
 
 async function readAdvertisement(
@@ -88,7 +120,7 @@ async function readAdvertisement(
   env: NodeJS.ProcessEnv,
   credentials?: CloneCredentials,
   localFailure = false
-): Promise<RemoteBranches> {
+): Promise<RemoteAdvertisement> {
   try {
     const { stdout } = await execFileAsync(
       'git',
@@ -107,17 +139,17 @@ async function readAdvertisement(
   }
 }
 
-function parseAdvertisement(stdout: string): RemoteBranches {
+function parseAdvertisement(stdout: string): RemoteAdvertisement {
   let head: string | null = null;
   let hasHeadCommit = false;
-  const branches: BranchName[] = [];
+  const branches: Extract<RemoteAdvertisement, { status: 'available' }>['branches'] = [];
   for (const line of stdout.split('\n')) {
     const [value, ref] = line.split('\t');
     if (ref === 'HEAD') {
       if (value.startsWith('ref: refs/heads/')) head = value.slice('ref: refs/heads/'.length);
       else if (/^[0-9a-f]+$/.test(value)) hasHeadCommit = true;
     } else if (ref?.startsWith('refs/heads/') && /^[0-9a-f]+$/.test(value)) {
-      branches.push(toBranchName(ref.slice('refs/heads/'.length)));
+      branches.push({ name: toBranchName(ref.slice('refs/heads/'.length)), oid: value });
     }
   }
   return {
