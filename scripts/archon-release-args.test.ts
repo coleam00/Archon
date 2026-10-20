@@ -1,14 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { cliArgOptions } from '../packages/cli/src/args';
 import { evaluateCondition } from '../packages/workflows/src/condition-evaluator';
 import { certifyExecOutput } from '../packages/workflows/src/dag/nodes/exec/exec-output';
+import { substituteNodeOutputRefs } from '../packages/workflows/src/dag/references';
 import {
   declaredOutputPathsFromSchema,
   type JsonValue,
-  OUTPUT_REF_SOURCE,
 } from '../packages/workflows/src/output-ref';
 import { execNodeSchema, type ExecNode, type NodeOutput } from '../packages/workflows/src/schemas';
 
@@ -36,6 +38,7 @@ interface WorkflowNode {
   wait?: { form?: string };
   cancel?: string;
   trigger_rule?: string;
+  timeout?: number;
   output_format?: Record<string, unknown>;
 }
 
@@ -85,11 +88,38 @@ function parseArgsBody(): string {
 const BODY = parseArgsBody();
 
 /**
- * The bound the workflow's own script nodes declare (`timeout: 5000`). The engine
- * fails a node that overruns it; the helper fails the test the same way, so a body
- * that never settles cannot hang the shard.
+ * The description's two parts: the prose that names the vocabulary, and the example
+ * block that shows the commands.
+ *
+ * The block is delimited by its marker, so every line in it is a command the guard
+ * judges — a line in any other shape fails instead of being skipped.
  */
-const SCRIPT_TIMEOUT_MS = 5000;
+function splitDescription(): { prose: string[]; examples: string[] } {
+  const lines = SOURCE.description.split('\n').map(line => line.trim());
+  const marker = lines.indexOf('Examples:');
+  if (marker === -1) throw new Error('archon-release.yaml has no Examples: block');
+  const examples: string[] = [];
+  for (const line of lines.slice(marker + 1)) {
+    if (line === '') break;
+    examples.push(line);
+  }
+  if (examples.length === 0) throw new Error('the Examples: block of archon-release.yaml is empty');
+  return { prose: lines.slice(0, marker), examples };
+}
+
+const DESCRIPTION = splitDescription();
+
+/**
+ * The bound a node declares. The engine fails a node that overruns it; the helper
+ * fails the test the same way, so a body that never settles cannot hang the shard.
+ */
+function nodeTimeout(id: string): number {
+  const timeout = nodeById(id).timeout;
+  if (typeof timeout !== 'number') {
+    throw new Error(`archon-release.yaml declares no timeout for the ${id} node`);
+  }
+  return timeout;
+}
 
 /**
  * Runs a `script:` body the way the engine runs it: a Bun subprocess with the body on
@@ -97,16 +127,21 @@ const SCRIPT_TIMEOUT_MS = 5000;
  * substitutes it into the source. Returns the stdout the body printed, as the engine
  * records it: the trailing newline trimmed.
  */
-function runScript(body: string, env: Record<string, string | undefined>): string {
+function runScript(
+  body: string,
+  env: Record<string, string | undefined>,
+  timeoutMs: number,
+  cwd = REPO
+): string {
   const result = Bun.spawnSync([process.execPath, '--no-env-file', '-e', body], {
-    cwd: REPO,
+    cwd,
     env,
     stdout: 'pipe',
     stderr: 'pipe',
-    timeout: SCRIPT_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
   if (result.exitCode === null) {
-    throw new Error(`the script body did not finish within ${SCRIPT_TIMEOUT_MS}ms`);
+    throw new Error(`the script body did not finish within ${timeoutMs}ms`);
   }
   if (result.exitCode !== 0) {
     throw new Error(
@@ -123,7 +158,7 @@ function runParseArgs(message: string | undefined): string {
   const env: Record<string, string | undefined> = { ...process.env };
   if (message === undefined) delete env.ARGUMENTS;
   else env.ARGUMENTS = message;
-  return runScript(BODY, env);
+  return runScript(BODY, env, nodeTimeout('parse-args'));
 }
 
 /** The producer's printed JSON. */
@@ -144,12 +179,37 @@ function parseArgsNode(): ExecNode {
 }
 
 /**
+ * The bump vocabulary, as the argument node declares it.
+ *
+ * The argument node owns the set, and the version producer copies the value it parsed,
+ * so this declaration is the only statement of the vocabulary. A second list would be
+ * a second thing to keep in agreement, and a release of the type that fell out of it
+ * would die at the version node.
+ */
+function bumpTypes(): string[] {
+  const properties = parseArgsNode().output_format?.properties;
+  if (typeof properties !== 'object' || properties === null) {
+    throw new Error('the parse-args node declares no output_format properties');
+  }
+  const declared = (properties as Record<string, unknown>).bump;
+  const values = (declared as { enum?: unknown } | undefined)?.enum;
+  if (!Array.isArray(values)) {
+    throw new Error('the parse-args node declares no bump vocabulary');
+  }
+  const types = values.filter((value): value is string => typeof value === 'string');
+  if (types.length !== values.length || types.length === 0) {
+    throw new Error('the parse-args node declares no bump vocabulary');
+  }
+  return types;
+}
+
+/**
  * The run messages the workflow accepts, and the output each one must produce.
  *
- * These are message texts, not command lines: the CLI parses any argument that starts
- * with `--` as one of its own options, so `"--dry-run minor"` reaches the workflow
- * only through the API route, which delivers the message byte for byte as its
- * `$ARGUMENTS`.
+ * These are message texts, not command lines. The CLI's own option table claims any
+ * argument that starts with `--`, so a message that starts with one reaches the
+ * workflow only when the CLI's separator hands it over as a positional; the API route
+ * delivers the message byte for byte as its `$ARGUMENTS` either way.
  */
 const MESSAGES: readonly (readonly [string, JsonValue])[] = [
   // The producer reads the flag in any position; only the CLI delivers a message
@@ -157,6 +217,7 @@ const MESSAGES: readonly (readonly [string, JsonValue])[] = [
   ['minor --dry-run', { bump: 'minor', dryRun: 'true' }],
   ['dry-run minor', { bump: 'minor', dryRun: 'true' }],
   ['--dry-run minor', { bump: 'minor', dryRun: 'true' }],
+  ['--dry-run', { bump: 'patch', dryRun: 'true' }],
   ['major', { bump: 'major', dryRun: 'false' }],
   ['patch', { bump: 'patch', dryRun: 'false' }],
   ['', { bump: 'patch', dryRun: 'false' }],
@@ -183,38 +244,37 @@ describe('archon-release argument parsing', () => {
 interface DocumentedExample {
   /** The run message the command carries, as the shell hands it to the CLI. */
   message: string;
+  /** Whether the command separates the message from the CLI's own options. */
+  separated: boolean;
   /** The comment that states what the command does. */
   comment: string;
 }
 
 /**
- * The shape of a documented example: the command, a quoted run message, and a comment
- * that says what the command does. A line in any other shape is a shape the test
- * cannot judge, so it fails loudly instead of being skipped.
+ * The shape of a documented example: the command, an optional separator, a quoted run
+ * message, and a comment that says what the command does. A line in any other shape is
+ * a shape the test cannot judge, so it fails loudly instead of being skipped.
  */
-const DOCUMENTED_EXAMPLE = /^archon workflow run archon-release "([^"]*)"\s+#\s*(.+)$/;
+const DOCUMENTED_EXAMPLE = /^archon workflow run archon-release (-- )?"([^"]*)"\s+#\s*(.+)$/;
 
 /**
  * The example commands in the workflow's description.
  *
- * The message is read out of the quoted argument, not out of a re-implemented shell:
- * the shell has already removed the quotes by the time the CLI parses them, and the
- * message is the value that crosses the seam.
+ * Every line of the example block is read: the message comes out of the quoted
+ * argument, not out of a re-implemented shell, because the shell has already removed
+ * the quotes by the time the CLI parses them, and the message is the value that crosses
+ * the seam.
  */
 function documentedExamples(): DocumentedExample[] {
-  const examples: DocumentedExample[] = [];
-  for (const line of SOURCE.description.split('\n')) {
-    const text = line.trim();
-    if (!text.startsWith('archon workflow run ')) continue;
-    const match = DOCUMENTED_EXAMPLE.exec(text);
+  return DESCRIPTION.examples.map(line => {
+    const match = DOCUMENTED_EXAMPLE.exec(line);
     if (match === null) {
       throw new Error(
-        `the documented example is not a quoted message with a comment that says what it does: ${text}`
+        `the documented example is not a quoted message with a comment that says what it does: ${line}`
       );
     }
-    examples.push({ message: match[1], comment: match[2] });
-  }
-  return examples;
+    return { message: match[2], separated: match[1] !== undefined, comment: match[3] };
+  });
 }
 
 /**
@@ -242,8 +302,19 @@ function dryRunFor(message: string): string {
   return dryRun;
 }
 
+/** The argv the CLI receives for a documented example. */
+function exampleArgv(example: DocumentedExample): string[] {
+  return [
+    'workflow',
+    'run',
+    'archon-release',
+    ...(example.separated ? ['--'] : []),
+    example.message,
+  ];
+}
+
 /** The CLI's parse of a documented example, the way the CLI parses argv. */
-function parseExample(argv: string[]): { positionals: string[] } {
+function parseExample(argv: string[]): { values: Record<string, unknown>; positionals: string[] } {
   try {
     return parseArgs({ args: argv, options: cliArgOptions, allowPositionals: true, strict: true });
   } catch (error) {
@@ -257,21 +328,38 @@ function parseExample(argv: string[]): { positionals: string[] } {
  * The workflow's own examples must reach the workflow, and do what the description
  * says they do.
  *
- * The CLI parses any argument that starts with `--` as one of its own options, so a
- * documented example whose message starts with `--` never reaches the workflow: the
- * CLI answers with its own in-memory simulation instead of the release preview. And a
- * message the producer no longer reads as a dry run turns the documented preview into
- * a real release, which nothing else in the repository reports.
+ * The CLI's option table claims any argument that starts with `--`, so a message that
+ * starts with one reaches the workflow only when the CLI's separator hands it over;
+ * otherwise the CLI answers with its own in-memory simulation. And a message the
+ * producer no longer reads as a dry run turns the documented preview into a real
+ * release, which nothing else in the repository reports.
  */
 describe('the documented commands', () => {
+  test('the example block holds every command the description shows', () => {
+    const shown = SOURCE.description
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.includes('archon workflow run'));
+    expect(shown).toEqual(DESCRIPTION.examples);
+  });
+
+  test('a message that starts with the flag belongs to the CLI, not to the workflow', () => {
+    // The rule the description states: the shell strips the quotes, so the CLI's own
+    // option table claims a message that starts with the flag, and the workflow only
+    // sees it when the separator hands it over.
+    const parsed = parseExample(['workflow', 'run', 'archon-release', '--dry-run']);
+    expect(parsed.values['dry-run']).toBe(true);
+    expect(parsed.positionals).not.toContain('--dry-run');
+  });
+
   test('every documented example reaches the workflow', () => {
     const examples = documentedExamples();
     expect(examples.length).toBeGreaterThan(0);
     for (const example of examples) {
-      const argv = ['workflow', 'run', 'archon-release', example.message];
-      const parsed = parseExample(argv);
-      // An argument the CLI consumes as an option is an argument the workflow never sees.
-      expect(parsed.positionals).toEqual(argv);
+      const parsed = parseExample(exampleArgv(example));
+      // The message must survive as a positional: an argument the CLI consumes as one
+      // of its own options is an argument the workflow never sees.
+      expect(parsed.positionals).toEqual(['workflow', 'run', 'archon-release', example.message]);
     }
   });
 
@@ -293,6 +381,54 @@ describe('the documented commands', () => {
       }))
       .filter(row => row.dryRun !== row.expected);
     expect(mismatched).toEqual([]);
+  });
+});
+
+/**
+ * The spellings the description's prose names, and what the producer reads them as.
+ *
+ * The operator types what the description names, so a name the producer no longer
+ * reads as a dry run is a real release behind a documented preview.
+ */
+function proseTokens(): string[] {
+  const tokens: string[] = [];
+  for (const line of DESCRIPTION.prose) {
+    for (const match of line.matchAll(/`([^`]+)`/g)) {
+      tokens.push(match[1]);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * A token the CLI owns: its options and the separator that ends them. The description
+ * may name one, but the workflow never receives it as a message.
+ */
+function isCliToken(token: string): boolean {
+  return /^-+$/.test(token);
+}
+
+/**
+ * Every name in the description's prose is a spelling the workflow accepts: a bump type
+ * the argument node allows, or a message the producer reads as a dry run. A name that
+ * is neither is one the operator would type into a release.
+ */
+describe("the description's vocabulary", () => {
+  test('every name the description uses previews', () => {
+    const covered = new Set(MESSAGES.map(([message]) => message));
+    const types = new Set(bumpTypes());
+    const unusable = proseTokens()
+      .filter(token => !isCliToken(token) && !types.has(token))
+      .flatMap(token => {
+        if (!covered.has(token)) {
+          return [`"${token}" is not a message the workflow accepts`];
+        }
+        if (dryRunFor(token) !== 'true') {
+          return [`"${token}" is not a message the producer reads as a dry run`];
+        }
+        return [];
+      });
+    expect(unusable).toEqual([]);
   });
 });
 
@@ -328,14 +464,16 @@ describe('the parse-args output contract', () => {
   });
 });
 
-/** The node's output as the engine records it: its printed JSON and its declared paths. */
-function parseArgsOutput(message: string): NodeOutput {
-  const json = parseArgsJson(message);
+/**
+ * A producer's output as the engine records it: the text it printed, its value, and
+ * the paths its own declaration authorizes.
+ */
+function producerOutput(nodeId: string, stdout: string): NodeOutput {
   return {
     state: 'completed',
-    output: JSON.stringify(json),
-    structuredOutput: json,
-    declaredOutputPaths: declaredOutputPathsFromSchema(nodeById('parse-args').output_format),
+    output: stdout,
+    structuredOutput: JSON.parse(stdout) as JsonValue,
+    declaredOutputPaths: declaredOutputPathsFromSchema(nodeById(nodeId).output_format),
   };
 }
 
@@ -414,7 +552,10 @@ function scenario(dryRun: boolean): Map<string, NodeOutput> {
     structuredOutput: { decision: 'approve' },
   };
   return new Map<string, NodeOutput>([
-    ['parse-args', parseArgsOutput(dryRun ? 'minor --dry-run' : 'minor')],
+    [
+      'parse-args',
+      producerOutput('parse-args', runParseArgs(dryRun ? 'minor --dry-run' : 'minor')),
+    ],
     ['review-changelog', approved],
     ['wait-for-merge', approved],
     ['check-homebrew', { state: 'completed', output: 'true' }],
@@ -467,42 +608,56 @@ describe('archon-release dry-run gate', () => {
   });
 });
 
-/**
- * The stack the version producer reads: the version file the release ships and the
- * version it bumps. A fixture, because the real node reads the repository's own
- * package.json and the test must not follow the repository's version.
- */
-const DETECT_STACK_OUTPUT = JSON.stringify({
-  stack: 'node',
-  versionFile: 'package.json',
-  currentVersion: '0.12.1',
-});
+const trackTempRoot = trackTempRoots();
 
 /**
- * A body's node-output references, replaced the way the engine replaces them: the
- * producer's own text goes in verbatim. The scanner is built from the engine's own
- * grammar, so it cannot drift from the rule the engine applies.
+ * The version the release bumps. The stack producer reads it from the version file it
+ * finds in its working directory, so the fixture is a file of its own: the test must
+ * not follow the repository's own package.json.
  */
-function substituteOutputs(body: string, outputs: Record<string, string>): string {
-  return body.replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match: string, nodeId: string) => {
-    const text = outputs[nodeId];
-    if (text === undefined) {
-      throw new Error(`the body reads ${match}, which no node produced`);
-    }
-    return text;
-  });
+const FIXTURE_VERSION = '0.12.1';
+
+/** The version each bump type publishes from the fixture's version. */
+const EXPECTED_VERSION: Record<string, string> = {
+  patch: '0.12.2',
+  minor: '0.13.0',
+  major: '1.0.0',
+};
+
+/**
+ * The stack producer's own output: its real body, run against a temp directory that
+ * holds a known version file.
+ *
+ * The producer's wire has one owner — the body that prints it. The test never re-types
+ * the shape, so a producer that renames a field fails the release at the version node
+ * instead of leaving the suite green.
+ */
+function runDetectStack(): NodeOutput {
+  const body = nodeById('detect-stack').script;
+  if (typeof body !== 'string') {
+    throw new Error('archon-release.yaml has no detect-stack script node');
+  }
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-release-stack-')));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ version: FIXTURE_VERSION }));
+  return producerOutput(
+    'detect-stack',
+    runScript(body, { ...process.env }, nodeTimeout('detect-stack'), root)
+  );
 }
 
-/** The version producer's body with the engine's node-output substitutions applied. */
-function bumpVersionBody(parseArgsText: string): string {
+/**
+ * The version producer's body with the engine's node-output substitutions applied.
+ *
+ * The substitution is the engine's own: it resolves the whole-output form and the
+ * fielded form differently, and a body that reads a field must run here exactly as it
+ * runs in the workflow.
+ */
+function bumpVersionBody(outputs: Map<string, NodeOutput>): string {
   const body = nodeById('bump-version').script;
   if (typeof body !== 'string') {
     throw new Error('archon-release.yaml has no bump-version script node');
   }
-  return substituteOutputs(body, {
-    'parse-args': parseArgsText,
-    'detect-stack': DETECT_STACK_OUTPUT,
-  });
+  return substituteNodeOutputRefs(body, outputs, []);
 }
 
 /** The version producer as the engine runs it: its body and the contract it declares. */
@@ -517,9 +672,17 @@ function bumpVersionNode(): ExecNode {
   });
 }
 
-/** The version producer's own stdout, run the way the engine runs it. */
+/**
+ * The version producer's own stdout, run the way the engine runs it: the real argument
+ * producer and the real stack producer feed it, and the engine's own substitution puts
+ * their output in the body.
+ */
 function runBumpVersion(parseArgsText: string): string {
-  return runScript(bumpVersionBody(parseArgsText), { ...process.env });
+  const outputs = new Map<string, NodeOutput>([
+    ['parse-args', producerOutput('parse-args', parseArgsText)],
+    ['detect-stack', runDetectStack()],
+  ]);
+  return runScript(bumpVersionBody(outputs), { ...process.env }, nodeTimeout('bump-version'));
 }
 
 /**
@@ -544,34 +707,45 @@ describe('the bump-version output contract', () => {
     ]);
   });
 
-  test("the producer's output satisfies the contract it declares", () => {
-    const certified = certifyExecOutput(
-      bumpVersionNode(),
-      runBumpVersion(runParseArgs('minor')),
-      []
-    );
-    expect(certified.structuredOutput).toEqual({
-      oldVersion: '0.12.1',
+  test('the producer owes the release tail every field it reads', () => {
+    // A producer that stops printing a field the release reads must fail at its own
+    // node, not at the consumer that reads it.
+    const incomplete = JSON.stringify({
+      oldVersion: FIXTURE_VERSION,
       newVersion: '0.13.0',
       bump: 'minor',
-      stack: 'node',
-      versionFile: 'package.json',
     });
+    expect(() => certifyExecOutput(bumpVersionNode(), incomplete, [])).toThrow(/stack/);
   });
+
+  test.each(bumpTypes())(
+    'a %s release satisfies the contract the producer declares',
+    (bump: string) => {
+      const certified = certifyExecOutput(
+        bumpVersionNode(),
+        runBumpVersion(runParseArgs(bump)),
+        []
+      );
+      expect(certified.structuredOutput).toEqual({
+        oldVersion: FIXTURE_VERSION,
+        newVersion: EXPECTED_VERSION[bump],
+        bump,
+        stack: 'node',
+        versionFile: 'package.json',
+      });
+    }
+  );
 });
 
 /**
  * The closing summary's body with the engine's node-output substitutions applied.
  */
-function summaryBody(parseArgsText: string, bumpVersionText: string): string {
+function summaryBody(outputs: Map<string, NodeOutput>): string {
   const body = nodeById(SUMMARY_ID).script;
   if (typeof body !== 'string') {
     throw new Error('archon-release.yaml has no final-summary script node');
   }
-  return substituteOutputs(body, {
-    'parse-args': parseArgsText,
-    'bump-version': bumpVersionText,
-  });
+  return substituteNodeOutputRefs(body, outputs, []);
 }
 
 /**
@@ -581,8 +755,11 @@ function summaryBody(parseArgsText: string, bumpVersionText: string): string {
  */
 function runSummary(dryRun: boolean): string {
   const parseArgsText = runParseArgs(dryRun ? 'minor --dry-run' : 'minor');
-  const body = summaryBody(parseArgsText, runBumpVersion(parseArgsText));
-  return runScript(body, { ...process.env });
+  const outputs = new Map<string, NodeOutput>([
+    ['parse-args', producerOutput('parse-args', parseArgsText)],
+    ['bump-version', producerOutput('bump-version', runBumpVersion(parseArgsText))],
+  ]);
+  return runScript(summaryBody(outputs), { ...process.env }, nodeTimeout(SUMMARY_ID));
 }
 
 /**

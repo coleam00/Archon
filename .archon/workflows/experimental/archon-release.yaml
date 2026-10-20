@@ -19,8 +19,9 @@ description: |
   changelog with a provider call.
   Keep the flag inside the quoted message and off the front: the shell
   strips the quotes, so a message that starts with `--dry-run` is read as
-  the CLI's own in-memory simulation and the workflow never runs — use
-  `dry-run`, or put the bump type first (`patch --dry-run`).
+  the CLI's own in-memory simulation. Put the message after the command's
+  `--` separator to send it anyway; otherwise use `dry-run`, or put the
+  bump type first (`patch --dry-run`).
   Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
 
   Examples:
@@ -28,6 +29,7 @@ description: |
     archon workflow run archon-release "minor"             # minor release
     archon workflow run archon-release "patch --dry-run"   # dry-run patch
     archon workflow run archon-release "dry-run"           # dry-run patch (implicit)
+    archon workflow run archon-release -- "--dry-run"      # dry-run patch (separated)
 
 provider: claude
 model: sonnet
@@ -249,16 +251,19 @@ nodes:
     depends_on: [detect-stack, parse-args]
     # Declared because the release tail reads these fields by name: the loader
     # rejects a reference the declaration does not authorize, and the engine
-    # certifies the producer's own stdout against it.
+    # certifies the producer's own stdout against it. Every field the release
+    # tail reads is required, so a producer that drops one fails at its own node
+    # instead of at the consumer that reads it. The bump vocabulary belongs to
+    # the argument node's declaration, which owns it.
     output_format:
       type: object
       properties:
         oldVersion: { type: string }
         newVersion: { type: string }
-        bump: { type: string, enum: [patch, minor, major] }
+        bump: { type: string }
         stack: { type: string }
         versionFile: { type: string }
-      required: [oldVersion, newVersion, bump]
+      required: [oldVersion, newVersion, bump, stack, versionFile]
 
   - id: collect-commits
     bash: |
