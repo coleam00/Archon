@@ -61,7 +61,7 @@ The queues decide clear cases on their own and ask about unclear ones. The pack'
 | `rulings.md` | Answers your maintainers already gave, read before plan or review stops to ask |
 | `discoveries.md` | When a discovery is filed, tracked or dropped |
 
-To change one, put your own file at `.archon/sdlc/policy/<file>`. Your file replaces the default whole, except `merge.md`: the merge queue reads the default and then yours, and your lines win where they conflict. A policy file can be a pointer to documents the project already has.
+To change one, put only the lines to add or override in `.archon/sdlc/policy/<file>`. The agent reads the default first, then your file, and your line wins where they conflict. A policy file can be a pointer to documents the project already has.
 
 Each stage picks its model from a concern alias, falling back to the tier it has always used. With nothing set, you get the tier models.
 
@@ -163,13 +163,14 @@ Everything below is written as the `gh` account, to the repository the queues na
 | Where | What | Who |
 |---|---|---|
 | Labels | Creates the pack's own `archon-*` labels when missing. Adds and removes them on issues as a delta, so labels others add survive | Intake; `archon-triage` with `--input publish=true` |
-| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original. Only intake closes issues, and only as `triage.md` allows | Intake |
+| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original. Intake closes issues by triage verdict, as `triage.md` allows, and a merged pull request closes the issue it names with `Closes #N` | Intake; merges |
 | Issue bodies | Appends a dated "Current scope" section with your answer | Build queue, merge queue |
 | New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment to an open issue it tracks | Discoveries |
 | Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
-| Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met | Build queue rounds |
+| Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met. Before merging, the merge queue changes `Refs #N` to `Closes #N` when the Ready review left nothing open, and changes it back if the merge doesn't land | Build queue rounds; merge queue |
 | CI | Reruns the failed jobs of a run once, when red is outside the change or on the default branch | Build queue rounds, merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
+| Worktrees and branches | If you schedule it, removes each worktree whose pull request merged, with the branch Archon created, remote included | `archon-worktree-cleanup` |
 
 On your machine it keeps state documents (`archon state list --prefix work/`), worktrees and run artifacts under `~/.archon/`.
 
