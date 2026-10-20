@@ -1,4 +1,3 @@
-// @archon-test-isolated
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import { isSourceReadFailure } from './workflow-source';
