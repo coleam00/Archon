@@ -57,6 +57,9 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
 
   it('seeds a resumed run with prior usage and accumulates the resumed pass', async () => {
     const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('resume-token-reconciliation');
@@ -115,8 +118,6 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     ]);
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
 
-    // The resume snapshot is the store's to build (covered in core's workflow-events
-    // tests); here it is fixed data matching what pass 1 persisted.
     const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
       ['step1', { output: 'first execution output' }],
     ]);
@@ -209,8 +210,9 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
 
     // Cold resume reads the persisted rows through the same handoff the executor uses.
-    const rows = persistedEvents(store);
-    store.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot(rows, id));
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
     const inspection = await inspectResumableRun(deps, workflowRun);
     if (!inspection) throw new Error('Expected the failed run to be resumable');
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();

@@ -556,7 +556,9 @@ function countedUsage(
     )
   );
   const unfinishedAttempts = new Set(
-    [...fold.unfinishedInvocations.values()].map(record => record.attempt.id)
+    [...fold.unfinishedInvocations.values()]
+      .filter(record => fold.unresolvedNodeStarts.has(record.path))
+      .map(record => record.attempt.id)
   );
   const loopUsage = [...fold.loopUsage.entries()]
     .filter(

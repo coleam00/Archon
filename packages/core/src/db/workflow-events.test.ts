@@ -1469,8 +1469,8 @@ describe('workflow-events', () => {
       expect([...running.unfinishedInvocations!.values()]).toEqual([
         executionMetadata(suspendedExecution),
       ]);
-      expect(running.costUsd).toBe(0.5);
-      expect(running.tokens).toEqual(deferred.data.tokens);
+      expect(running.costUsd).toBe(0.75);
+      expect(running.tokens).toEqual({ ...deferred.data.tokens, input: 30, output: 15 });
       const rows = [
         started,
         suspended,
