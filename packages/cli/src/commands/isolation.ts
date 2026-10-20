@@ -521,6 +521,9 @@ async function completeBranch(
       return 'failed';
     }
     const selected = matches[0];
+    if (selected && selected.provider !== 'worktree') {
+      throw new Error('not a worktree environment');
+    }
     env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
     // Hydration adds codebase fields; legacy registration identity compares the whole row.
     const observed = selected && {

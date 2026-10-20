@@ -388,6 +388,22 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
   });
 
+  it.each([false, true])('refuses container environments accurately with force=%s', async force => {
+    const env = makeEnvironment({ provider: 'container' });
+    mockListActive.mockResolvedValueOnce([env]);
+    mockFindActiveByBranchName.mockResolvedValueOnce(env);
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockExecFileAsync).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('not a worktree environment')
+    );
+  });
+
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
     mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
