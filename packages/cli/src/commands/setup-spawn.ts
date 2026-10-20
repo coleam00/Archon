@@ -14,7 +14,7 @@ interface SpawnResult {
 async function trySpawn(
   command: string,
   args: string[],
-  options: { detached: boolean; stdio: 'ignore' }
+  options: { detached: boolean; stdio: 'ignore'; env: NodeJS.ProcessEnv | undefined }
 ): Promise<boolean> {
   try {
     return await new Promise<boolean>(resolve => {
@@ -34,12 +34,17 @@ async function trySpawn(
  * Spawn a new terminal window with the setup command on Windows
  * Tries: Windows Terminal -> cmd.exe with start
  */
-async function spawnWindowsTerminal(repoPath: string, command: string): Promise<SpawnResult> {
+async function spawnWindowsTerminal(
+  repoPath: string,
+  command: string,
+  env: NodeJS.ProcessEnv | undefined
+): Promise<SpawnResult> {
   // Try Windows Terminal first (modern Windows 10/11)
   if (
     await trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
+      env,
     })
   ) {
     return { success: true };
@@ -50,6 +55,7 @@ async function spawnWindowsTerminal(repoPath: string, command: string): Promise<
     await trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
       detached: true,
       stdio: 'ignore',
+      env,
     })
   ) {
     return { success: true };
@@ -62,12 +68,16 @@ async function spawnWindowsTerminal(repoPath: string, command: string): Promise<
  * Spawn terminal on macOS
  * Uses osascript to open Terminal.app (works with default terminal)
  */
-async function spawnMacTerminal(repoPath: string, command: string): Promise<SpawnResult> {
+async function spawnMacTerminal(
+  repoPath: string,
+  command: string,
+  env: NodeJS.ProcessEnv | undefined
+): Promise<SpawnResult> {
   // Escape single quotes in path for AppleScript
   const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
   const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
 
-  if (await trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
+  if (await trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore', env })) {
     return { success: true };
   }
 
@@ -78,7 +88,11 @@ async function spawnMacTerminal(repoPath: string, command: string): Promise<Spaw
  * Spawn terminal on Linux
  * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
  */
-async function spawnLinuxTerminal(repoPath: string, command: string): Promise<SpawnResult> {
+async function spawnLinuxTerminal(
+  repoPath: string,
+  command: string,
+  env: NodeJS.ProcessEnv | undefined
+): Promise<SpawnResult> {
   const setupCmd = `${command}; exec bash`;
 
   // Try x-terminal-emulator first (Debian/Ubuntu default)
@@ -89,6 +103,7 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
       {
         detached: true,
         stdio: 'ignore',
+        env,
       }
     )
   ) {
@@ -103,6 +118,7 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
       {
         detached: true,
         stdio: 'ignore',
+        env,
       }
     )
   ) {
@@ -114,6 +130,7 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
     await trySpawn('konsole', ['--workdir', repoPath, '-e', 'bash', '-c', setupCmd], {
       detached: true,
       stdio: 'ignore',
+      env,
     })
   ) {
     return { success: true };
@@ -124,6 +141,7 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
     await trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
       detached: true,
       stdio: 'ignore',
+      env,
     })
   ) {
     return { success: true };
@@ -135,7 +153,10 @@ async function spawnLinuxTerminal(repoPath: string, command: string): Promise<Sp
   };
 }
 
-type SetupLaunchOptions = Pick<SetupOptions, 'repoPath' | 'providers' | 'scope' | 'force'>;
+type SetupLaunchOptions = Pick<
+  SetupOptions,
+  'repoPath' | 'providers' | 'scope' | 'force' | 'inheritedEnv'
+>;
 
 export function setupLaunchCommand({ providers, scope, force }: SetupLaunchOptions): string {
   if (providers?.some(id => !isMaintainedProvider(id)))
@@ -152,15 +173,15 @@ export function setupLaunchCommand({ providers, scope, force }: SetupLaunchOptio
  * Spawn a new terminal window with archon setup
  */
 export async function spawnTerminalWithSetup(options: SetupLaunchOptions): Promise<SpawnResult> {
-  const { repoPath } = options;
+  const { repoPath, inheritedEnv } = options;
   const command = setupLaunchCommand(options);
   const platform = process.platform;
 
   if (platform === 'win32') {
-    return spawnWindowsTerminal(repoPath, command);
+    return spawnWindowsTerminal(repoPath, command, inheritedEnv);
   } else if (platform === 'darwin') {
-    return spawnMacTerminal(repoPath, command);
+    return spawnMacTerminal(repoPath, command, inheritedEnv);
   } else {
-    return spawnLinuxTerminal(repoPath, command);
+    return spawnLinuxTerminal(repoPath, command, inheritedEnv);
   }
 }

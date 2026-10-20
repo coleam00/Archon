@@ -214,6 +214,7 @@ async function openSetupTerminal(options: SetupOptions): Promise<void> {
     console.log(
       'Come back here and let me know when you finish so I can verify your configuration.'
     );
+    exitSetup(1);
   }
 }
 

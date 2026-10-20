@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { spawnTerminalWithSetup } from './setup-spawn';
 import { setupCommand } from './setup';
+import { assertEffectiveGitHubAuth } from './setup-github';
 
 const spawner: {
   spawn(
@@ -38,6 +39,7 @@ function terminalSpawns(successAt: number) {
 }
 
 const repoPath = '/repo with spaces';
+const inheritedEnv = { PATH: '/native/bin', CUSTOM_SETTING: 'preserved' };
 const setup = 'archon setup --providers=claude,codex';
 const shellSetup = `${setup}; exec bash`;
 
@@ -72,13 +74,68 @@ describe('setup terminal spawning', () => {
     it(`${platform}: stops after the first successful spawn and unreferences it`, async () => {
       usePlatform(platform);
       const { spawn, children } = terminalSpawns(0);
-      expect(await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'] })).toEqual({
+      expect(
+        await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'], inheritedEnv })
+      ).toEqual({
         success: true,
       });
       expect(spawn.mock.calls.map(call => call[0])).toEqual([commands[0]]);
-      expect(spawn.mock.calls[0]?.[2]).toEqual({ detached: true, stdio: 'ignore' });
+      expect(spawn.mock.calls[0]?.[2]).toEqual({
+        detached: true,
+        stdio: 'ignore',
+        env: inheritedEnv,
+      });
       expect(spawn.mock.calls[0]?.[1]).toEqual(args[0]);
       expect(children[0]?.unref).toHaveBeenCalledTimes(1);
+    });
+
+    it(`${platform}: preserves provider prompting when selection is omitted`, async () => {
+      usePlatform(platform);
+      const { spawn } = terminalSpawns(0);
+      expect(await spawnTerminalWithSetup({ repoPath })).toEqual({ success: true });
+      const expectedArgs = args[0].map(arg => arg.replace(setup, 'archon setup'));
+      expect(spawn.mock.calls[0]?.[1]).toEqual(expectedArgs);
+    });
+
+    it(`${platform}: forced re-entry does not inherit file-loaded App credentials`, async () => {
+      usePlatform(platform);
+      const previous = process.env.GITHUB_APP_ID;
+      process.env.GITHUB_APP_ID = 'stale-file-app';
+      const { spawn } = terminalSpawns(0);
+      spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        expect(await setupCommand({ spawn: true, repoPath, force: true, inheritedEnv })).toBe(0);
+        const childEnv = spawn.mock.calls[0]?.[2]?.env ?? process.env;
+        expect(() =>
+          assertEffectiveGitHubAuth(
+            {
+              ai: { claude: false, codex: false, pi: false, defaultAssistant: undefined },
+              platforms: { github: true, telegram: false, slack: false },
+              github: {
+                mode: 'pat',
+                token: 'fixture-pat',
+                webhookSecret: 'fixture-secret',
+                allowedUsers: '',
+              },
+              botDisplayName: 'Archon',
+            },
+            'GITHUB_TOKEN=fixture-pat\nWEBHOOK_SECRET=fixture-secret\n',
+            {
+              scope: 'project',
+              force: true,
+              targetEnvPath: '/unused',
+              replaceGitHubAuth: true,
+              inheritedEnv: childEnv,
+              otherGitHubEnv: {},
+              saved: { GITHUB_APP_ID: 'stale-file-app' },
+            }
+          )
+        ).not.toThrow();
+        expect(childEnv).toEqual(inheritedEnv);
+      } finally {
+        if (previous === undefined) delete process.env.GITHUB_APP_ID;
+        else process.env.GITHUB_APP_ID = previous;
+      }
     });
 
     it(`${platform}: handles asynchronous errors from every missing terminal`, async () => {
@@ -95,13 +152,15 @@ describe('setup terminal spawning', () => {
       it(`${platform}: falls back through asynchronous errors to ${commands[successAt]}`, async () => {
         usePlatform(platform);
         const { spawn, children } = terminalSpawns(successAt);
-        expect(await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'] })).toEqual({
+        expect(
+          await spawnTerminalWithSetup({ repoPath, providers: ['claude', 'codex'], inheritedEnv })
+        ).toEqual({
           success: true,
         });
         expect(spawn.mock.calls.map(call => call[0])).toEqual(commands.slice(0, successAt + 1));
         expect(spawn.mock.calls.map(call => call[1])).toEqual(args.slice(0, successAt + 1));
         for (const call of spawn.mock.calls)
-          expect(call[2]).toEqual({ detached: true, stdio: 'ignore' });
+          expect(call[2]).toEqual({ detached: true, stdio: 'ignore', env: inheritedEnv });
         for (const child of children.slice(0, successAt))
           expect(child.unref).not.toHaveBeenCalled();
         expect(children[successAt]?.unref).toHaveBeenCalledTimes(1);
@@ -140,7 +199,7 @@ describe('setup terminal spawning', () => {
         scope: 'project',
         force: true,
       })
-    ).toBe(0);
+    ).toBe(successAt === -1 ? 1 : 0);
     const command = 'archon setup --providers=codex --scope=project --force';
     expect(spawn.mock.calls[0]?.[1]).toEqual(['-d', repoPath, 'cmd', '/k', command]);
     if (successAt !== 0) {
@@ -172,7 +231,7 @@ describe('setup terminal spawning', () => {
       usePlatform(platform);
       terminalSpawns(-1);
       const log = spyOn(console, 'log').mockImplementation(() => undefined);
-      expect(await setupCommand({ spawn: true, repoPath: "/repo's path with spaces" })).toBe(0);
+      expect(await setupCommand({ spawn: true, repoPath: "/repo's path with spaces" })).toBe(1);
       const output = log.mock.calls.flat().join('\n');
       expect(output).toContain('Next step: run the setup wizard in a separate terminal.');
       expect(output).toContain(`cd '/repo'"'"'s path with spaces' && archon setup`);
@@ -192,7 +251,9 @@ describe('setup terminal spawning', () => {
           : realSpawn('/archon-nonexistent-terminal/terminal', [], options);
       });
       const log = spyOn(console, 'log').mockImplementation(() => undefined);
-      expect(await setupCommand({ spawn: true, repoPath: '/repo' })).toBe(0);
+      expect(await setupCommand({ spawn: true, repoPath: '/repo' })).toBe(
+        fallbackAvailable ? 0 : 1
+      );
       expect(spawn).toHaveBeenCalledTimes(2);
       const output = log.mock.calls.flat().join('\n');
       if (fallbackAvailable) {
