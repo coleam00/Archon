@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { foldDagResumeSnapshot, type DagResumeEvent } from '../../../dag-resume-snapshot';
 import { nodeInvocationKey, readNodeRecordEvent } from '../../../node-record-reader';
 import { definedOutputPaths, type NodeOutput } from '../../../schemas';
@@ -178,7 +179,9 @@ function spillWriteHistory(rows: readonly WorkflowEventRow[]) {
       if (record.eventType === 'node_started')
         unfinished.set(record.path, record.metadata.attempt.id);
       else if (
-        record.eventType === 'node_completed' &&
+        (record.eventType === 'node_completed' ||
+          record.eventType === 'node_failed' ||
+          record.eventType === 'node_skipped') &&
         unfinished.get(record.path) === record.metadata.attempt.id
       )
         unfinished.delete(record.path);
@@ -205,11 +208,13 @@ function refuseOverwrittenSpills(
   }
   for (const record of completions.values()) {
     const spill = record.data.node_output_spill_path;
-    // A started attempt may replace the spill before its completion is committed.
+    // Historical step-keyed spills can be replaced before a completion commits.
+    // Exec failures and timeout skips return before writing a spill.
     if (
       spill &&
       record.metadata &&
-      (writers.get(spill) !== record.metadata.attempt.id || unfinished.has(record.path))
+      (writers.get(spill) !== record.metadata.attempt.id ||
+        (basename(spill) === `${record.path}.nodeoutput` && unfinished.has(record.path)))
     ) {
       throw new Error(
         `Cannot resume loop: overwritten output spill for '${record.path}' in the preceding iteration`

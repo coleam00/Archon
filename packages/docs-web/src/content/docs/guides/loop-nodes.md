@@ -912,10 +912,12 @@ Suspension and failure have different recovery rules:
   iteration's `$LOOP_PREV` snapshot. Cached includes must still pass their owning
   loop's gate; `always_run` and changed dependencies retain their ordinary cache
   invalidation rules. Later iterations start with an empty cache. This does not
-  restore provider session cursors from failures. If a later recorded execution has
-  overwritten a preceding iteration's output spill, or a later execution started
-  without a committed completion and may have replaced that spill, resume fails
-  rather than using the spill or its preview. Historical runs without execution
+  restore provider session cursors from failures. New output spills have unique paths.
+  For historical shared spill paths, if a later
+  recorded execution overwrote a preceding iteration's spill, or an execution has no
+  matching durable terminal event and may have replaced it, resume fails rather
+  than using the spill or its preview. Recorded command failures and timeout skips
+  do not replace spills and do not prevent recovery. Historical runs without execution
   lineage restart from iteration 1 and replay the whole body.
 
 ### What is NOT supported on loop_group nodes (v1)
