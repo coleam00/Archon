@@ -5,6 +5,7 @@ import {
   readNodeRecordEvent,
   readDeferredNodeUsageEvent,
 } from './node-record-reader';
+import { nodeExecutionMetadataPayloadSchema } from './schemas/node-execution';
 
 const metadata = {
   node: { id: 'build', kind: 'exec' as const, runtime: 'sh' as const },
@@ -22,6 +23,26 @@ const metadata = {
 };
 
 describe('readNodeRecordEvent', () => {
+  it('rejects each missing required payload field and each malformed present field', () => {
+    const envelope = {
+      workflow_run_id: 'run-1',
+      step_name: 'build',
+      event_type: 'node_completed',
+    };
+    for (const [key, schema] of Object.entries(nodeExecutionMetadataPayloadSchema.shape)) {
+      if (!schema.isOptional()) {
+        const partial: Record<string, unknown> = { ...metadata };
+        delete partial[key];
+        expect(() => readNodeRecordEvent({ ...envelope, data: partial })).toThrow(
+          'metadata is incomplete'
+        );
+      }
+      expect(() =>
+        readNodeRecordEvent({ ...envelope, data: { ...metadata, [key]: null } })
+      ).toThrow();
+    }
+  });
+
   it('reconstructs envelope-owned metadata without exposing malformed legacy usage', () => {
     const record = readNodeRecordEvent({
       workflow_run_id: 'run-1',
