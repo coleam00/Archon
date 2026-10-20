@@ -57,7 +57,7 @@ export async function setToolCallAttention(
   const dialect = getDialect();
   const changed = await getDatabase().withTransaction(async query => {
     const row = await lockedRunRow(query, runId);
-    if (row?.status !== 'running') return false;
+    if (row?.status !== 'running' && row?.status !== 'paused') return false;
     const metadata = normalizeMetadata(row.metadata);
     const previous = toolCallAttentionArraySchema.parse(
       metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []

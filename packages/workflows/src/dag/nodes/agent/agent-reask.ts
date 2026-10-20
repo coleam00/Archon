@@ -4,13 +4,7 @@ import { canonicalValueText } from '../../../output-ref';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
-import {
-  cutOffClause,
-  formatWatchdogResetDiagnostic,
-  STRUCTURED_OUTPUT_MAX_REASKS,
-  structuredOutputPass,
-  NodeFailure,
-} from '../../ai-turn';
+import { STRUCTURED_OUTPUT_MAX_REASKS, structuredOutputPass, NodeFailure } from '../../ai-turn';
 import { runStreamPass, type AgentAttemptState, type AgentPassContext } from './agent-stream';
 
 /** The attempt's usage summed over every pass. */
@@ -58,6 +52,8 @@ export async function runUntilStructuredOutputValid(
       foldPassUsage(pc.node.id, state, total);
     }
 
+    if (state.cutOff || pc.abortController.signal.aborted) return;
+
     // When output_format is set and the provider returned structured_output, use
     // it instead of the concatenated assistant text. Each provider normalizes its
     // own structured output onto the result chunk — no provider branching here.
@@ -65,11 +61,8 @@ export async function runUntilStructuredOutputValid(
 
     const miss = acceptStructuredOutput(pc, state);
     if (miss === undefined) return;
-    // Don't reask after an idle-timeout/abort — those are genuine failures, not
-    // validation misses; they fall through to a cause-specific throw.
-    const canReask =
-      reaskAttempt < maxReasks && !state.cutOff && !pc.abortController.signal.aborted;
-    if (!canReask) throw structuredOutputFailure(pc, state, miss);
+    const canReask = reaskAttempt < maxReasks;
+    if (!canReask) throw structuredOutputFailure(pc, miss);
     reaskAttempt++;
     reaskPrompt = buildReaskPrompt(finalPrompt, miss.errors);
     await emitReask(pc, reaskAttempt, maxReasks);
@@ -154,11 +147,7 @@ function acceptStructuredOutput(
   return undefined;
 }
 
-function structuredOutputFailure(
-  pc: AgentPassContext,
-  state: AgentAttemptState,
-  miss: StructuredOutputMiss
-): NodeFailure {
+function structuredOutputFailure(pc: AgentPassContext, miss: StructuredOutputMiss): NodeFailure {
   const nodeId = pc.node.id;
   if (miss.payload === 'invalid') {
     return new NodeFailure(
@@ -166,20 +155,7 @@ function structuredOutputFailure(
       `Node '${nodeId}': output_format declared but the provider's structured output failed schema validation: ${miss.errors.join('; ')}`
     );
   }
-  // Surface the real cause: a timeout/abort produces no structured output too,
-  // and reporting it as "the model replied with prose" would mislead.
-  if (state.cutOff === 'idle_timeout') {
-    return new NodeFailure(
-      'timeout',
-      `Node '${nodeId}': timed out (no output for ${String(pc.idleTimeoutMs / 60000)} min) before producing the required structured output.${formatWatchdogResetDiagnostic(state.lastWatchdogReset)}`
-    );
-  }
-  if (state.cutOff === 'operator') {
-    return new NodeFailure(
-      'timeout',
-      `Node '${nodeId}' ${cutOffClause(state.cutOff, pc.idleTimeoutMs)}, before producing the required structured output.`
-    );
-  }
+
   return new NodeFailure(
     'output_contract',
     `Node '${nodeId}': output_format declared but the provider returned no schema-valid structured output. ` +

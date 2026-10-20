@@ -1,19 +1,3 @@
-/**
- * An operator's request to end AI turns whose tools or background work stalled.
- *
- * A stream that reports live work suspends its idle watchdog, so work that never ends (a
- * background command polling forever) keeps the node open with nothing to time it out.
- * The stream raises `stalled_tool_calls` attention instead, and this request is the
- * operator's answer to it. It names the attention streams that were stalled when the
- * operator asked; each of those streams reads it at its status check and cuts itself off
- * as a timeout, so the node fails or retries under its retry policy and the run goes on.
- * A stream that recovered and stalled again after the request was made is not ended: the
- * request answers the stall the operator saw, not a later one.
- *
- * The request travels through run metadata, which every owner (server, detached CLI,
- * foreground CLI) already polls, so no owner endpoint is involved. Stream ids are unique
- * per stream pass, so a request left in metadata cannot end a later stream.
- */
 import { z } from 'zod';
 
 import {
@@ -25,27 +9,36 @@ import {
 import type { IWorkflowStore } from './store';
 import type { StreamStall } from './tool-call-attention';
 
+/** Requests bind to the owner-observed stall, never to the requester's clock. */
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
-const endTurnRequestSchema = z.object({
+export const endTurnRequestSchema = z.object({
   stalls: z.record(z.string().min(1), z.iso.datetime()),
   requestedAt: z.iso.datetime(),
 });
 
+type EndTurnMetadata = {
+  [END_TURN_REQUEST_METADATA_KEY]: z.infer<typeof endTurnRequestSchema>;
+};
+
 export type EndTurnPlan =
-  | { kind: 'request'; calls: ToolCallAttention[]; metadata: Record<string, unknown> }
-  | { kind: 'refused'; reason: 'not_running' | 'nothing_stalled' };
+  | { kind: 'request'; calls: ToolCallAttention[]; metadata: EndTurnMetadata }
+  | { kind: 'refused'; reason: 'not_running' | 'nothing_stalled' | 'unreadable_attention' };
 
 /** What ending the run's stalled turns would write, or why there is nothing to end. */
 export function planEndTurn(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
   now: Date = new Date()
 ): EndTurnPlan {
-  if (run.status !== 'running') return { kind: 'refused', reason: 'not_running' };
+  if (run.status !== 'running' && run.status !== 'paused')
+    return { kind: 'refused', reason: 'not_running' };
   const parsed = toolCallAttentionArraySchema.safeParse(
-    run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+    run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] === undefined
+      ? []
+      : run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY]
   );
-  const calls = parsed.success ? parsed.data : [];
+  if (!parsed.success) return { kind: 'refused', reason: 'unreadable_attention' };
+  const calls = parsed.data;
   if (calls.length === 0) return { kind: 'refused', reason: 'nothing_stalled' };
   const stalls = new Map<string, string>();
   for (const call of calls) {
@@ -58,10 +51,10 @@ export function planEndTurn(
     kind: 'request',
     calls,
     metadata: {
-      [END_TURN_REQUEST_METADATA_KEY]: {
+      [END_TURN_REQUEST_METADATA_KEY]: endTurnRequestSchema.parse({
         stalls: Object.fromEntries(stalls),
         requestedAt: now.toISOString(),
-      },
+      }),
     },
   };
 }

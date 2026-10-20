@@ -4610,6 +4610,8 @@ export interface components {
             streamId: string;
             nodeId: string;
             provider: string;
+            /** @enum {string} */
+            kind?: 'provider_turn';
             toolCallId: string;
             name: string;
             title?: string;
@@ -5488,6 +5490,8 @@ export interface components {
         streamId: string;
         nodeId: string;
         provider: string;
+        /** @enum {string} */
+        kind?: 'provider_turn';
         toolCallId: string;
         name: string;
         title?: string;

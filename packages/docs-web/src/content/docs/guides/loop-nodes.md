@@ -477,7 +477,7 @@ Now the only way out is a passing suite.
 - `depends_on` — upstream dependencies
 - `when` — conditional execution
 - `trigger_rule` — join semantics
-- `idle_timeout` — per-iteration timeout (default: 30 minutes)
+- `idle_timeout` — per-iteration silence threshold for attention (default: 30 minutes); use `workflow end-turn` for explicit recovery
 - `provider` / `model` — node-level overrides are resolved and used for every iteration
 - `allowed_tools` / `denied_tools` — passed to the selected provider on every iteration,
   just as on a `prompt:` node. Enforcement depends on the provider's tool-restriction

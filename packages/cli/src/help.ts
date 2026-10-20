@@ -320,7 +320,7 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'end-turn',
     spec: 'workflow end-turn <run-id>',
-    description: 'End the turn behind stalled tool calls; the node fails as a timeout',
+    description: 'Record a request to end stalled provider turns or reported work',
   },
   {
     command: 'workflow',

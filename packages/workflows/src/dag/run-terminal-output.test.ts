@@ -229,75 +229,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(nodeCompletedEvents.length).toBeGreaterThan(0);
   });
 
-  it('idle-timeout with zero output produces node_failed, not node_completed', async () => {
-    // Regression test for #1807: idle-timeout before first token must fail, not silently complete.
-    // The generator yields nothing; idle_timeout fires before any output is produced.
-    mockSendQueryDag.mockImplementation(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      // Wait for abort (idle timeout fires abort).
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) {
-          resolve();
-        } else {
-          options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-        }
-      });
-    });
-
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'idle-timeout-no-output',
-          nodes: [
-            {
-              id: 'classify',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              idle_timeout: 50,
-              // Disable retries so the test doesn't wait for retry delays (a timeout
-              // is transient, which would trigger the default 2-retry / 3s-delay
-              // policy otherwise).
-              retry: { max_attempts: 0 },
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const nodeFailedEvents = eventCalls.filter(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
-    );
-    expect(nodeFailedEvents.length).toBeGreaterThan(0);
-    const failedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
-      string,
-      unknown
-    >;
-    expect(failedData.error).toContain('timed out with no output');
-    const nodeCompletedEvents = eventCalls.filter(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
-    );
-    expect(nodeCompletedEvents.length).toBe(0);
-    expect(store.failWorkflowRun).toHaveBeenCalled();
-    const transcript = await readTranscript(join(testDir, 'logs'), workflowRun.id);
-    expect(transcript.filter(event => event.type === 'watchdog_reset')).toHaveLength(0);
-    expect(failedData.error).toContain('No provider chunk reset the watchdog');
-  });
-
-  it('a thinking-only stream renews the watchdog and persists a type-only timeout diagnostic', async () => {
+  it('a thinking-only stream renews the watchdog and persists a type-only progress record', async () => {
     const privateThinking = 'reasoning the diagnostic must not copy';
     let yielded = 0;
     mockSendQueryDag.mockImplementation(async function* (
@@ -312,17 +244,13 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         yielded++;
         yield { type: 'agent_thought_chunk', text: `${privateThinking} ${String(i)}` };
       }
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) resolve();
-        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-      });
     });
 
     const store = createMockStore();
     const workflowRun = makeWorkflowRun('thinking-only-timeout');
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
         cwd: testDir,
         workflow: {
           name: 'thinking-only-timeout',
@@ -356,12 +284,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       transcript.filter(event => event.type === 'provider_event').map(event => event.event)
     ).toEqual(
       [0, 1, 2].map(i => ({ type: 'agent_thought_chunk', text: `${privateThinking} ${String(i)}` }))
-    );
-
-    const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
-    // The transcript's last record is the renewal the stall diagnostic names.
-    expect(failed?.error).toContain(
-      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'agent_thought_chunk'.`
     );
   });
 
@@ -619,7 +541,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       _prompt: string,
       _cwd: string,
       _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
+      _options?: { abortSignal?: AbortSignal }
     ) {
       for (let i = 0; i < chunkCount; i++) {
         if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 1));
@@ -632,17 +554,13 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         rawInput: { command: 'private tool input' },
       };
       yield { type: 'tool_call_update', toolCallId: 'call-1', status: 'completed' };
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) resolve();
-        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-      });
     });
 
     const store = createMockStore();
     const workflowRun = makeWorkflowRun('many-chunks-timeout');
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
         cwd: testDir,
         workflow: {
           name: 'many-chunks-timeout',
@@ -666,13 +584,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       ['review', 'agent_thought_chunk', 1],
       ['review', 'tool_call_update', chunkCount + 1],
     ]);
-    const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
-    expect(failed?.error).toContain(
-      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'tool_call_update'.`
-    );
   });
 
-  it('loop timeout diagnostics retain the latest reset and distinguish tool progress from assistant output', async () => {
+  it('loop progress records retain the latest reset and distinguish tool progress from assistant output', async () => {
     const runCase = async (
       runId: string,
       chunks: MessageChunk[]
@@ -681,20 +595,16 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         _prompt: string,
         _cwd: string,
         _resumeSessionId?: string,
-        options?: { abortSignal?: AbortSignal }
+        _options?: { abortSignal?: AbortSignal }
       ) {
         for (const chunk of chunks) yield chunk;
-        await new Promise<void>(resolve => {
-          if (options?.abortSignal?.aborted) resolve();
-          else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-        });
       });
 
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(runId);
       await executeDagWorkflow(
         dagOptions({
-          deps: createMockDeps(store),
+          deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
           cwd: testDir,
           workflow: {
             name: runId,
@@ -714,6 +624,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
                   until_field: 'done',
                 },
                 idle_timeout: 50,
+                retry: { max_attempts: 0 },
               },
             ],
           },
@@ -753,8 +664,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(assistantReset.map(event => event.chunk_type)).toEqual(['agent_message_chunk']);
     expect(toolReset.every(event => !('content' in event) && !('tool_input' in event))).toBe(true);
     expect(assistantReset.every(event => !('content' in event))).toBe(true);
-    expect(tool.error).toContain("chunk type 'tool_call_update'");
-    expect(assistant.error).toContain("chunk type 'agent_message_chunk'");
     const recordedTypes = (transcript: Array<Record<string, unknown>>): unknown[] =>
       transcript
         .filter(event => event.type === 'provider_event')
@@ -765,158 +674,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       'tool_call_update',
     ]);
     expect(recordedTypes(assistant.transcript)).toEqual(['agent_message_chunk']);
-  });
-
-  it('idle-timeout with zero output fails a loop iteration instead of consuming its iteration budget', async () => {
-    mockSendQueryDag.mockImplementationOnce(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) resolve();
-        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-      });
-    });
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'COMPLETE' };
-      yield { type: 'result', sessionId: 'implement-recovered' };
-    });
-
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-    try {
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'loop-idle-timeout-no-output',
-            nodes: [
-              {
-                id: 'implement',
-                kind: 'loop',
-                loop: {
-                  fresh_context: false,
-                  prompt: 'Implement the change.',
-                  until: 'COMPLETE',
-                  max_iterations: 1,
-                },
-                idle_timeout: 50,
-              },
-            ],
-          },
-          workflowRun,
-        })
-      );
-
-      expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
-      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-      const loopFailed = eventCalls.find(
-        (call: unknown[]) =>
-          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
-          (call[0] as Record<string, unknown>).step_name === 'implement'
-      );
-      expect(loopFailed).toBeUndefined();
-      const iterationFailed = eventCalls.find(
-        (call: unknown[]) =>
-          (call[0] as Record<string, unknown>).event_type === 'loop_iteration_failed' &&
-          (call[0] as Record<string, unknown>).step_name === 'implement'
-      );
-      expect(iterationFailed).toBeDefined();
-      const timeoutError = (
-        (iterationFailed![0] as Record<string, unknown>).data as Record<string, unknown>
-      ).error as string;
-      expect(timeoutError).toContain('timed out with no output');
-      // The retried attempt must NOT have been announced as a completion first —
-      // that contradiction is what moving the notification below the guard fixed.
-      const notices = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
-        (call: unknown[]) => String(call[1])
-      );
-      expect(notices.some(text => text.includes('completed via idle timeout'))).toBe(false);
-      expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
-  });
-
-  it('idle-timeout with zero output fails a structured loop immediately, without transient retries', async () => {
-    // A loop declaring output_format owns its own timeout failure: retrying it would
-    // spend another full idle_timeout window per attempt for no new information, and
-    // the single-shot AI node fails such a node on its first attempt.
-    mockSendQueryDag.mockImplementation(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) resolve();
-        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-      });
-    });
-
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-    try {
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          cwd: testDir,
-          workflow: {
-            name: 'structured-loop-idle-timeout',
-            nodes: [
-              {
-                id: 'implement',
-                kind: 'loop',
-                output_format: {
-                  type: 'object',
-                  properties: { done: { type: 'boolean' } },
-                  required: ['done'],
-                },
-                loop: {
-                  fresh_context: false,
-                  prompt: 'Implement the change.',
-                  max_iterations: 3,
-                  until_field: 'done',
-                },
-                idle_timeout: 50,
-              },
-            ],
-          },
-          workflowRun,
-        })
-      );
-
-      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-      const failed = eventCalls.find(
-        (call: unknown[]) =>
-          (call[0] as Record<string, unknown>).event_type === 'node_failed' &&
-          (call[0] as Record<string, unknown>).step_name === 'implement'
-      );
-      expect(failed).toBeDefined();
-      expect(
-        String(((failed![0] as Record<string, unknown>).data as Record<string, unknown>).error)
-      ).toContain('timed out before producing the required structured output');
-      const notices = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
-        (call: unknown[]) => String(call[1])
-      );
-      expect(notices.some(text => text.includes('completed via idle timeout'))).toBe(false);
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
   });
 
   it('loop output_format that ajv cannot compile fails the iteration (#2453)', async () => {
@@ -1782,113 +1539,6 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         (call[0] as Record<string, unknown>).step_name === 'classify'
     );
     expect(completed.length).toBe(1);
-  });
-
-  it('best-effort provider: idle-timeout on an output_format node does NOT reask', async () => {
-    // Generator hangs → idle_timeout fires → abort. canReask is false (timed out),
-    // so exactly one sendQuery and the failure names the timeout, not "prose".
-    mockSendQueryDag.mockImplementation(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      await new Promise<void>(resolve => {
-        if (options?.abortSignal?.aborted) resolve();
-        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
-      });
-    });
-
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'reask-idle',
-          nodes: [
-            {
-              id: 'classify',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'decide' },
-              provider: 'pi',
-              idle_timeout: 50,
-              output_format: {
-                type: 'object',
-                properties: { verdict: { type: 'string' } },
-                required: ['verdict'],
-              },
-              retry: { max_attempts: 0 },
-            },
-          ],
-        },
-        workflowRun,
-        workflowProvider: 'pi',
-        config: { ...minimalConfig, assistant: 'pi' },
-      })
-    );
-
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const failed = eventCalls.find(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
-    );
-    expect(failed).toBeDefined();
-    const errMsg = ((failed![0] as Record<string, unknown>).data as Record<string, unknown>)
-      .error as string;
-    expect(errMsg).toContain('timed out');
-  });
-
-  it('fails a node whose provider idles out after output without settling — #3524', async () => {
-    // The subprocess hung after the AI wrote output, so the provider never said its
-    // turn was over. That is not a finished node.
-    mockSendQueryDag.mockImplementation(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      yield { type: 'agent_message_chunk', text: 'Here is the analysis result.' };
-      // Hang until abort signal fires (idle timeout aborts the controller)
-      await new Promise<void>(resolve => {
-        options?.abortSignal?.addEventListener('abort', () => resolve());
-      });
-    });
-
-    const store = createMockStore();
-    const platform = createMockPlatform();
-
-    await executeDagWorkflow(
-      dagOptions({
-        // The raw mock: a provider that breaks the settle contract.
-        deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'idle-timeout-with-output',
-          nodes: [
-            {
-              id: 'step1',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              idle_timeout: 50,
-              retry: { max_attempts: 0 },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun(),
-      })
-    );
-
-    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-    expect(failed?.data?.failure_kind).toBe('timeout');
-    expect(failed?.data?.error).toContain('before the provider signalled that its turn settled');
-    expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(false);
   });
 
   it('fails a node whose provider stream ends after its result without settling — #3524', async () => {

@@ -80,9 +80,9 @@ export interface ProviderEventHandler {
   handle(event: ProviderEvent): Promise<void>;
   /** Subtasks that started and have not ended: the work a stream cut short would lose. */
   liveSubtaskIds(): string[];
-  hasOpenTools(): boolean;
   /** This pass's attention stall while its stalled calls are on the run row. */
   stall(): StreamStall | undefined;
+  progress(at: number): void;
   refreshAttention(): Promise<void>;
   clearAttention(): Promise<void>;
 }
@@ -190,7 +190,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
         }
       }
     },
-    hasOpenTools: () => deps.toolAttention.hasOpenTools(),
+    progress: at => deps.toolAttention.progress(at),
     stall: () => deps.toolAttention.stall(),
     refreshAttention: async (): Promise<void> => {
       await deps.toolAttention.refresh();

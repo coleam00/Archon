@@ -2,7 +2,6 @@ import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider
 import { sessionPreview } from '@archon/provider-contract';
 import {
   type TurnCutOff,
-  type WatchdogReset,
   STRUCTURED_OUTPUT_MAX_REASKS,
   structuredOutputPass,
   NodeFailure,
@@ -13,7 +12,7 @@ import type { NodeExecutionResult } from '../../../node-record-serialization';
 import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { createProviderEventHandler, type ProviderEventHandler } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
-import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
+import { withStreamPolling, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { isEndTurnRequested } from '../../../end-turn-request';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
@@ -76,7 +75,6 @@ export interface StreamedAttempt {
   cutOff: TurnCutOff | undefined;
   /** Whether this attempt's stream ended on the provider's `settled` (see the AI-node path's streamSettled). */
   settled: boolean;
-  lastWatchdogReset: WatchdogReset | undefined;
   /** Raw structured payload seen on this attempt, before validation. */
   structured: unknown;
   /**
@@ -198,7 +196,6 @@ async function runReaskAttempts(
     );
     if (attempt.kind !== 'streamed') return attempt;
     const streamFailure = await failedStream(run, state, i, attempt, {
-      wantsStructured,
       iterationStart,
       retry,
     });
@@ -222,7 +219,6 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     fullOutput: '',
     cutOff: undefined,
     settled: false,
-    lastWatchdogReset: undefined,
     structured: undefined,
     stopStatus: undefined,
     abort: new AbortController(),
@@ -233,6 +229,7 @@ function newAttempt(run: LoopRun): StreamedAttempt {
       nodeId: stepName,
       reportedBackgroundWork: run.capabilities.backgroundWork === 'reported',
       provider: run.workflowProvider,
+      idleThresholdMs: node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,
       thresholdMs: ctx.config.workflows?.toolCallAttentionMs ?? DEFAULT_TOOL_CALL_ATTENTION_MS,
       env: {
         ...(ctx.execContext.kind === 'host' ? process.env : {}),
@@ -347,7 +344,7 @@ function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: strin
 }
 
 /**
- * Stream ended with background tasks still live (idle timeout mid-wait or subprocess
+ * Stream ended with background tasks still live (operator cutoff or subprocess
  * death): their artifacts may be missing (#2083). Record them for the audit trail
  * whatever ended the stream; the operator hears about it once, from the iteration's
  * unsettled failure, which names these tasks.
@@ -426,7 +423,7 @@ async function consumeIterationStream(
   typedArtifactsFile: string,
   scope: StreamScope
 ): Promise<void> {
-  const { ctx, node, capabilities } = run;
+  const { ctx, capabilities } = run;
   const { attempt, watchdogResets } = scope;
   const { providerEvents } = attempt;
   const finalPrompt = attemptPrompt(run, state, i, typedArtifactsFile, scope.position.reask);
@@ -440,38 +437,15 @@ async function consumeIterationStream(
     env: run.iterationEnv,
     abortSignal: attempt.abort.signal,
   });
-  const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
   try {
-    for await (const msg of withIdleTimeout(
+    for await (const msg of withStreamPolling(
       generator,
-      effectiveIdleTimeout,
-      () => {
-        attempt.cutOff = 'idle_timeout';
-        getLog().warn(
-          {
-            nodeId: node.id,
-            iteration: i,
-            timeoutMs: effectiveIdleTimeout,
-            ...(attempt.lastWatchdogReset
-              ? {
-                  lastResetType: attempt.lastWatchdogReset.type,
-                  lastResetAt: new Date(attempt.lastWatchdogReset.at).toISOString(),
-                }
-              : {}),
-          },
-          'loop_node.idle_timeout_reached'
-        );
-        attempt.abort.abort();
-      },
       (msg, resetAt) => {
+        providerEvents.progress(resetAt);
         const type = msg.type;
-        attempt.lastWatchdogReset = { type, at: resetAt };
         watchdogResets.observe(type, resetAt);
       },
-      () =>
-        providerEvents.hasOpenTools() ||
-        (capabilities.backgroundWork === 'reported' && providerEvents.liveSubtaskIds().length > 0),
       shouldStopStream
     )) {
       if (await shouldStopStream()) break;

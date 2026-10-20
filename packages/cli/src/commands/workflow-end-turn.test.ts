@@ -37,12 +37,14 @@ describe('workflow end-turn', () => {
   });
 
   it('records a request for the stalled stream', async () => {
-    spyOn(console, 'log').mockImplementation(() => {});
+    const output = spyOn(console, 'log').mockImplementation(() => {});
     const { host, updateWorkflowRun } = hostWith({
       status: 'running',
       metadata: { tool_call_attention: [stalledCall] },
     });
     expect(await workflowEndTurnCommand(host, RUN_ID)).toBe(0);
+    expect(output.mock.calls[0]?.[0]).toContain('Recorded an end-turn request');
+    expect(output.mock.calls[0]?.[0]).toContain('owner_lost');
     expect(updateWorkflowRun).toHaveBeenCalledWith(RUN_ID, {
       metadata: {
         end_turn_request: {
@@ -55,7 +57,11 @@ describe('workflow end-turn', () => {
 
   it.each([
     ['a run with nothing stalled', { status: 'running' as const, metadata: {} }],
-    ['a run that is not running', { status: 'paused' as const, metadata: {} }],
+    ['a terminal run', { status: 'completed' as const, metadata: {} }],
+    [
+      'unreadable attention',
+      { status: 'running' as const, metadata: { tool_call_attention: null } },
+    ],
     ['an unknown run', null],
   ])('refuses %s without writing', async (_label, run) => {
     spyOn(console, 'error').mockImplementation(() => {});

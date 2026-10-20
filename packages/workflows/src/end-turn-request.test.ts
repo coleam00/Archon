@@ -29,7 +29,7 @@ const storeWith = (metadata: Record<string, unknown>) => ({
 
 describe('planEndTurn', () => {
   it('refuses a run that is not running', () => {
-    expect(planEndTurn(run('paused', [call('a', '2026-10-18T06:55:59.000Z')]))).toEqual({
+    expect(planEndTurn(run('completed', [call('a', '2026-10-18T06:55:59.000Z')]))).toEqual({
       kind: 'refused',
       reason: 'not_running',
     });
@@ -37,6 +37,19 @@ describe('planEndTurn', () => {
 
   it('refuses a running run with nothing stalled', () => {
     expect(planEndTurn(run('running', []))).toEqual({ kind: 'refused', reason: 'nothing_stalled' });
+  });
+
+  it('accepts a paused run with a live stalled sibling', () => {
+    expect(planEndTurn(run('paused', [call('a', '2026-10-18T06:55:59.000Z')])).kind).toBe(
+      'request'
+    );
+  });
+
+  it.each([null, {}, 'bad', [{ streamId: 'broken' }]])('refuses unreadable attention %j', raw => {
+    expect(planEndTurn({ status: 'running', metadata: { tool_call_attention: raw } })).toEqual({
+      kind: 'refused',
+      reason: 'unreadable_attention',
+    });
   });
 
   it('names every stalled stream once', () => {
@@ -58,6 +71,19 @@ describe('planEndTurn', () => {
 });
 
 describe('isEndTurnRequested', () => {
+  it.each([
+    {},
+    { stalls: { a: 'bad' }, requestedAt: '2026-10-18T08:00:00.000Z' },
+    { stalls: { a: '2026-10-18T08:00:00.000Z' } },
+  ])('rejects malformed persisted requests %j', async request => {
+    expect(
+      await isEndTurnRequested(storeWith({ end_turn_request: request }), 'run', {
+        streamId: 'a',
+        raisedAt: '2026-10-18T06:55:59.000Z',
+      })
+    ).toBe(false);
+  });
+
   it.each(['2026-10-18T05:00:00.000Z', '2026-10-18T10:00:00.000Z'])(
     'matches only observed stalls when the requester clock is %s',
     async requestedAt => {

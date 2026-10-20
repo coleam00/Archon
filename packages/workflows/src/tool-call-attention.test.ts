@@ -9,7 +9,7 @@ import {
   DEFAULT_TOOL_CALL_ATTENTION_MS,
 } from './schemas/run-config';
 
-function harness(thresholdMs = 100, reportedBackgroundWork = false) {
+function harness(thresholdMs = 100, reportedBackgroundWork = false, idleThresholdMs = 0) {
   let time = Date.parse('2026-10-01T00:00:00Z');
   const snapshots: ToolCallAttention[][] = [];
   const write = mock(async (_run: string, _stream: string, calls: ToolCallAttention[]) => {
@@ -25,6 +25,7 @@ function harness(thresholdMs = 100, reportedBackgroundWork = false) {
     nodeId: 'group.node',
     provider: 'codex',
     thresholdMs,
+    idleThresholdMs,
     env: { API_TOKEN: 'secret-value', SPECIAL: 'file-key' },
     protectedEnvKeys: ['SPECIAL'],
     protectedCredentialValues: ['file-credential'],
@@ -50,6 +51,34 @@ const start = {
 } as const;
 
 describe('tool call attention', () => {
+  test('silent turns raise, progress clears and renews the stall, and closure stays clear', async () => {
+    const h = harness(0, false, 100);
+    h.advance(99);
+    await h.tracker.refresh();
+    expect(h.write).not.toHaveBeenCalled();
+    h.tracker.progress(h.now());
+    h.advance(99);
+    await h.tracker.refresh();
+    expect(h.write).not.toHaveBeenCalled();
+    h.advance(1);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toMatchObject([{ kind: 'provider_turn', name: 'provider turn' }]);
+    const original = h.tracker.stall();
+    h.tracker.progress(h.now());
+    h.write.mockRejectedValueOnce(new Error('clear failed'));
+    await h.tracker.refresh();
+    expect(h.tracker.stall()).toBeUndefined();
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toEqual([]);
+    h.advance(100);
+    await h.tracker.refresh();
+    expect(h.tracker.stall()?.raisedAt).not.toEqual(original?.raisedAt);
+    await h.tracker.clear();
+    h.advance(1000);
+    await h.tracker.refresh();
+    expect(h.snapshots.at(-1)).toEqual([]);
+  });
+
   test('raises only at the threshold, redacts before retaining, clears on completion', async () => {
     const h = harness();
     await h.tracker.observe(start);
@@ -167,16 +196,13 @@ describe('tool call attention', () => {
     expect(h.snapshots).toHaveLength(1);
   });
 
-  test('disable affects publication only; a fresh stream owns reused provider ids', async () => {
+  test('disabled reported-work publication and fresh streams with reused provider ids', async () => {
     const h = harness(0);
-    expect(h.tracker.hasOpenTools()).toBe(false);
     await h.tracker.observe(start);
     h.advance(10000000);
     await h.tracker.refresh();
     expect(h.write).not.toHaveBeenCalled();
-    expect(h.tracker.hasOpenTools()).toBe(true);
     await h.tracker.clear();
-    expect(h.tracker.hasOpenTools()).toBe(false);
     const a = harness(),
       b = harness();
     await a.tracker.observe(start);
@@ -321,7 +347,6 @@ describe('tool call attention', () => {
     await successor.observe({ ...start, toolCallId: 'successor' });
     await h.owner.refresh();
     expect(h.snapshots.at(-1)).toEqual([]);
-    expect(successor.hasOpenTools()).toBe(true);
     const writes = h.write.mock.calls.length;
     await h.owner.refresh();
     expect(h.write.mock.calls).toHaveLength(writes);

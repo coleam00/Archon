@@ -173,7 +173,7 @@ export async function logWorkflowEvent(
  * Watchdog resets closer together than this belong to one burst, and the transcript
  * records a burst by its two ends. A gap at least this long is always visible as the
  * distance between two records; a shorter one is not a liveness question when the
- * watchdog itself waits minutes.
+ * default silence threshold is measured in minutes.
  */
 export const WATCHDOG_RESET_BURST_GAP_MS = 10_000;
 
@@ -192,9 +192,9 @@ export interface WatchdogResetRecorder {
  * of a pass sum to its renewals.
  *
  * A timer writes the burst end instead of leaving it for `flush`: a stalled node's
- * process can be killed before its watchdog fires (Ctrl-C and SIGTERM exit without
+ * process can exit before its attention is published (Ctrl-C and SIGTERM exit without
  * running the executor's `finally`), and the transcript is then the only record of when
- * the stream went quiet. The timer is unref'd and never touches the watchdog.
+ * the stream went quiet. The timer is unref'd and never controls the stream.
  *
  * A burst end lands in the file after rows logged during the burst's final gap. Its
  * `ts` is the renewal time; order by `ts`.

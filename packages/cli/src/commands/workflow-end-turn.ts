@@ -6,16 +6,12 @@ import { resolveRunIdArg } from './workflow-shared';
 
 const REFUSALS = {
   not_found: 'Workflow run not found',
-  not_running: 'Run is not running, so it has no turn to end',
+  not_running: 'Run is not live, so it has no turn to end',
+  unreadable_attention: 'Run attention is unreadable. Inspect it with archon workflow get',
   nothing_stalled:
-    'Run has no stalled tool calls or background work to end. Inspect it with archon workflow get',
+    'Run has no stalled turns, tools or background work to end. Inspect it with archon workflow get',
 } as const;
 
-/**
- * Ends the turns behind a run's `stalled_tool_calls` attention. The owning process reads
- * the request at its next status check and fails each stalled node attempt as a timeout,
- * so the node's retry policy runs and the run continues. Nothing is killed from here.
- */
 export async function workflowEndTurnCommand(
   host: WorkflowHost,
   runIdArg: string,
@@ -34,10 +30,10 @@ export async function workflowEndTurnCommand(
   await host.deps.store.updateWorkflowRun(runId, { metadata: plan.metadata });
   const nodes = [...new Set(plan.calls.map(call => call.nodeId))];
   if (json) {
-    await writeJsonLine({ ok: true, runId, action: 'end_turn', nodes });
+    await writeJsonLine({ ok: true, runId, action: 'end_turn', requestRecorded: true, nodes });
   } else {
     console.log(
-      `Requested the end of the stalled turn in ${nodes.join(', ')}. The run's process ends it at its next status check; the node fails as a timeout and its retry policy decides what runs next.`
+      `Recorded an end-turn request for ${nodes.join(', ')}. A live owner ends the observed stall if it is still active at its next status check. Use archon workflow wait ${runId} to check progress or detect owner_lost.`
     );
   }
   return 0;

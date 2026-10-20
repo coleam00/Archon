@@ -463,7 +463,7 @@ export function createTransactionView(
       if (snapshot.some(call => call.streamId !== streamId))
         throw new Error('Tool attention stream mismatch');
       const run = runs.get(id);
-      if (run?.status !== 'running') return false;
+      if (run?.status !== 'running' && run?.status !== 'paused') return false;
       const previous = toolCallAttentionArraySchema.parse(
         run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
       );

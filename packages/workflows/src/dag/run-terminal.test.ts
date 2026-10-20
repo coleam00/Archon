@@ -316,31 +316,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
   });
 
-  it('an AI node that idles out after output is retried as a transient timeout', async () => {
-    mockSendQueryDag.mockImplementation(async function* (
-      _prompt: string,
-      _cwd: string,
-      _resumeSessionId?: string,
-      options?: { abortSignal?: AbortSignal }
-    ) {
-      yield { type: 'agent_message_chunk', text: 'Here is the analysis result.' };
-      await new Promise<void>(resolve => {
-        options?.abortSignal?.addEventListener('abort', () => resolve());
-      });
-    });
-    const { failureKinds } = await runDag([
-      {
-        id: 'step',
-        kind: 'agent',
-        source: { kind: 'inline', prompt: 'Do thing.' },
-        idle_timeout: 50,
-        retry: { max_attempts: 1, delay_ms: 1 },
-      },
-    ]);
-    expect(failureKinds).toEqual({ step: 'timeout' });
-    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
-  });
-
   it('a config failure is never retried, even under on_error: all', async () => {
     const { store, failureKinds } = await runDag([
       {

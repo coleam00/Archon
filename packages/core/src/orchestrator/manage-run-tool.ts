@@ -336,13 +336,13 @@ function formatRunDetail(run: WorkflowRun): string {
   if (attention?.kind === 'awaiting_response' || attention?.kind === 'attention')
     parts.push(`occurrence: ${attention.occurrence}`);
   if (attention?.kind === 'stalled_tool_calls') {
-    parts.push('tool calls need attention; work remains running');
+    parts.push('provider turns or reported work need attention; work remains running');
     for (const call of attention.calls)
       parts.push(
         `${call.nodeId} · ${call.provider} · ${call.name}: ${call.title || call.name} (running ${Math.floor(call.elapsedMs / 1000)}s; no progress ${Math.floor(call.stalledForMs / 1000)}s)`
       );
     parts.push(
-      `inspect with archon workflow logs ${run.id}; archon workflow end-turn ${run.id} fails the stalled attempt as a timeout, or explicitly cancel`
+      `inspect with archon workflow logs ${run.id}; archon workflow end-turn ${run.id} records a request to end the stalled attempt; workflow wait checks progress or owner_lost, or explicitly cancel`
     );
   }
   if (attention?.kind === 'attention') {

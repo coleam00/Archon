@@ -611,7 +611,7 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   `wait: attention` waiting for its answer), `usage_limit` (node `nodeId` hit a provider
   usage limit, or a rate limit that outlasted its retries; the run continues by itself at `resumeAt`), `blocked_on_child` (the child run is the one to inspect), `blocked_on_children` (a fan-out
   waiting on the listed child runs), `stalled_tool_calls` (still-running
-  work with overdue provider tools or reported subtasks), or `unreadable`.
+  work with a silent provider turn, overdue tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
 The node events for every listed run are read in one query, so the cost does not grow with
@@ -877,7 +877,7 @@ message, the paused node id, the `form` and the `options` an answer may choose f
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
-An overdue tool returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) fails the stalled attempt so the run continues, and `workflow cancel` stops the whole run. The advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
+A silent open turn or overdue reported work returns `result: "attention"` with `attention.kind: "stalled_tool_calls"`, `status: "running"`, the affected `runId`, and `calls` naming nodes, providers, tools, sanitized titles, timestamps, `elapsedMs`, and `stalledForMs`. Exit `0` means attention was found; it does not mean the run completed. Inspect with `workflow logs`; [`workflow end-turn`](#workflow-end-turn) records a request to end the stalled attempt, and `workflow cancel` stops the whole run. The advisory grants no approve or resume action. Reattaching returns it immediately while active. When a parent waits on a child, the advisory names the child's run id.
 
 ```bash
 archon workflow wait <run-id>
@@ -1242,32 +1242,39 @@ warnings. A cleanup warning does not change `ok: true`.
 
 ### `workflow end-turn`
 
-End the AI turns behind a run's `stalled_tool_calls` advisory, so the run can move on.
+Record a request to end the AI turns behind a run's `stalled_tool_calls` advisory.
 
 ```bash
 archon workflow end-turn <run-id>
 archon workflow end-turn <run-id> --json
+archon workflow wait <run-id> --json
 ```
 
-A stream that reports a running tool or background work suspends its idle timeout, because
-that work can legitimately run for a long time. Work that never ends, such as a background
-command an agent left polling in a loop, then holds the node open. After
-`workflows.toolCallAttentionMs` (30 minutes by default) without progress, the run reports
-`stalled_tool_calls`; this command is the answer to it.
+An open provider turn with no events for its node's `idle_timeout` (30 minutes by
+default) raises attention with the node, provider, and idle duration. Every chunk,
+including thinking and result chunks, renews that interval. Reported tools and background
+work use `workflows.toolCallAttentionMs` instead, with their own progress timestamps and
+sanitized descriptions. Silence never ends the turn automatically.
 
-It records a request naming the attention streams that are stalled now. The process that
-owns the run reads it at its next status check (within about ten seconds), stops that
-stream's provider turn, and fails the node attempt as a `timeout`. The node's retry policy
-then decides what happens: by default an agent node runs a fresh attempt, and once retries
-run out the node fails and the run continues under its trigger rules. Every owner reads the
-request the same way, whether it is a server, a `--detach` run or a foreground command;
-nothing is killed by this command itself.
+The command records the stream ids and stall timestamps the operator observed. A live
+owner checks about every ten seconds and aborts a matching turn only if that stall is
+still active. The attempt fails as `timeout`; its retry policy decides whether to start
+a fresh attempt. A recovered stream or a later attempt is not ended by an old request.
+A paused run can have live streaming siblings; their stalls can also be ended without
+answering its gate. Inspect `workflow get <run-id> --json` for their
+`metadata.tool_call_attention`; the gate remains the paused run's primary attention.
 
-It is refused, with exit `1`, when the run is not running or reports no stalled calls.
-Tool calls that recover before the owner reads the request clear the advisory, and the
-request then ends nothing. `--json` prints `{ ok, runId, action: "end_turn", nodes }`, or
-`{ ok: false, runId, action, error }` with `error` one of `not_found`, `not_running` and
-`nothing_stalled`.
+Exit `0` means the request was recorded, not that an owner accepted it or that the run
+progressed. The owner might exit or the run might finish before it reads the request.
+Use `workflow wait <run-id>` to inspect the next attention or terminal result; it can
+return the same advisory while recovery is pending. An `owner_lost` result requires
+operator recovery of the run's ownership. Nothing is killed by the CLI itself.
+
+Exit `1` refuses an unknown run, a run outside `running` or `paused`, no stalled work,
+or unreadable attention. `--json` prints
+`{ ok: true, runId, action: "end_turn", requestRecorded: true, nodes }`, or
+`{ ok: false, runId, action: "end_turn", error }` with `error` one of `not_found`,
+`not_running`, `nothing_stalled`, and `unreadable_attention`.
 
 ### `workflow respond`
 

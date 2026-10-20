@@ -1,19 +1,7 @@
 import { type NodeFailureKind } from '../schemas/node-execution';
-import type { MessageChunk } from '@archon/provider-contract';
 import { type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
-
-export interface WatchdogReset {
-  type: MessageChunk['type'];
-  at: number;
-}
-
-export function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): string {
-  return lastReset
-    ? ` Last watchdog reset: ${new Date(lastReset.at).toISOString()} from chunk type '${lastReset.type}'.`
-    : ' No provider chunk reset the watchdog after the stream opened.';
-}
 
 /**
  * Max validate-and-reask attempts for a `best-effort` provider whose structured
@@ -41,18 +29,11 @@ export function structuredOutputPass(
   return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
 }
 
-/**
- * What cut a stream off before its provider settled: the idle watchdog, or the operator
- * ending a turn whose tools or background work stalled (see `end-turn-request.ts`). Both
- * are a `timeout` failure, so the node's retry policy decides whether a fresh attempt runs.
- */
-export type TurnCutOff = 'idle_timeout' | 'operator';
+/** An explicit operator cutoff fails the attempt as a timeout under its retry policy. */
+export type TurnCutOff = 'operator';
 
-/** How a cut-off stream ended, as the clause that follows the node or iteration name. */
-export function cutOffClause(cutOff: TurnCutOff, idleTimeoutMs: number): string {
-  return cutOff === 'idle_timeout'
-    ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event`
-    : 'was ended by the operator after its tools or background work stalled';
+export function cutOffClause(): string {
+  return 'was ended by the operator after its provider turn or reported work stalled';
 }
 
 /**
@@ -62,13 +43,11 @@ export function cutOffClause(cutOff: TurnCutOff, idleTimeoutMs: number): string 
  */
 export function unsettledTurnError(
   cutOff: TurnCutOff | undefined,
-  idleTimeoutMs: number,
-  lastWatchdogReset: WatchdogReset | undefined,
   liveTaskIds: readonly string[]
 ): string {
   const cause =
     cutOff !== undefined
-      ? `${cutOffClause(cutOff, idleTimeoutMs)}, before the provider signalled that its turn settled.${cutOff === 'idle_timeout' ? formatWatchdogResetDiagnostic(lastWatchdogReset) : ''}`
+      ? `${cutOffClause()}, before the provider signalled that its turn settled.`
       : 'the provider stream ended without signalling that its turn settled.';
   const tasks =
     liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';

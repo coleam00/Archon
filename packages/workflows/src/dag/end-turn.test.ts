@@ -18,12 +18,9 @@ import {
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import { CANCEL_CHECK_INTERVAL_MS } from './run-control';
+import { runAttention } from '../schemas/workflow-run';
 import { planEndTurn } from '../end-turn-request';
 
-// #4533: a Codex agent left `while true; …; sleep 30; done` running as a background
-// command. Its turn completed, but the reported work never ended, so the watchdog stayed
-// suspended and only `stalled_tool_calls` attention showed the hang. Ending the turn is
-// the operator's answer to that attention.
 const DONE_SCHEMA = {
   type: 'object',
   properties: { done: { type: 'boolean' } },
@@ -45,6 +42,29 @@ const structuredLoop = (structured: boolean) =>
       }
     : { loop: { prompt: 'Check CI', max_iterations: 1, until: 'DONE', fresh_context: false } };
 
+function assertRecoveryOutcome(
+  store: ReturnType<typeof createMockStore>,
+  retry: boolean,
+  attempts: number
+): void {
+  const events = persistedEvents(store);
+  if (retry) {
+    expect(attempts).toBe(2);
+    expect(events.some(event => event.event_type === 'node_retry_scheduled')).toBe(true);
+    expect(events.some(event => event.event_type === 'node_completed')).toBe(true);
+    expect(
+      events
+        .filter(event => event.event_type === 'node_failed')
+        .every(event => event.data?.failure_kind === 'timeout')
+    ).toBe(true);
+  } else {
+    const failed = events.find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.failure_kind).toBe('timeout');
+    expect(String(failed?.data?.error)).toContain('was ended by the operator');
+    expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+  }
+}
+
 describe('ending a stalled turn', () => {
   let testDir: string;
 
@@ -61,16 +81,68 @@ describe('ending a stalled turn', () => {
   });
 
   it.each([
-    { kind: 'agent', retry: false, payload: true },
-    { kind: 'loop', retry: false, payload: true },
-    { kind: 'structured loop', retry: false, payload: true },
-    { kind: 'structured loop', retry: true, payload: true },
-    { kind: 'structured loop', retry: true, payload: false },
+    { kind: 'agent', retry: false, payload: true, provider: 'codex', work: true, paused: false },
+    { kind: 'loop', retry: false, payload: true, provider: 'codex', work: true, paused: false },
+    {
+      kind: 'structured loop',
+      retry: true,
+      payload: true,
+      provider: 'codex',
+      work: true,
+      paused: false,
+    },
+    {
+      kind: 'structured loop',
+      retry: true,
+      payload: false,
+      provider: 'codex',
+      work: true,
+      paused: false,
+    },
+    {
+      kind: 'structured agent',
+      retry: true,
+      payload: true,
+      provider: 'codex',
+      work: true,
+      paused: false,
+    },
+    {
+      kind: 'structured agent',
+      retry: true,
+      payload: true,
+      provider: 'pi',
+      work: false,
+      paused: false,
+    },
+    { kind: 'agent', retry: true, payload: false, provider: 'claude', work: false, paused: false },
+    { kind: 'agent', retry: false, payload: false, provider: 'codex', work: false, paused: false },
+    { kind: 'loop', retry: true, payload: false, provider: 'pi', work: false, paused: false },
+    { kind: 'agent', retry: false, payload: false, provider: 'codex', work: false, paused: true },
+    { kind: 'loop', retry: false, payload: false, provider: 'codex', work: true, paused: true },
+    {
+      kind: 'agent',
+      retry: true,
+      payload: false,
+      provider: 'pi',
+      work: 'unobserved',
+      paused: false,
+    },
+    {
+      kind: 'loop',
+      retry: true,
+      payload: false,
+      provider: 'pi',
+      work: 'unobserved',
+      paused: false,
+    },
   ] as const)(
-    'ends $kind with payload=$payload and retry=$retry under its retry policy',
-    async ({ kind, retry, payload }) => {
+    'ends $provider $kind with work=$work, payload=$payload, retry=$retry, paused=$paused',
+    async ({ kind, retry, payload, provider, work, paused }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`end-turn-${kind}`);
+      if (paused) workflowRun.status = 'paused';
+      store.getWorkflowRunStatus.mockImplementation(async () => workflowRun.status);
       store.getWorkflowRun.mockImplementation(async () => workflowRun);
       let raised!: () => void;
       const stalled = new Promise<void>(resolve => {
@@ -86,33 +158,40 @@ describe('ending a stalled turn', () => {
       mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
         attempts++;
         if (attempts > 1) {
+          yield { type: 'agent_message_chunk', text: 'DONE' };
           yield { type: 'result', sessionId: 'retry', structuredOutput: { done: true } };
           yield { type: 'settled' };
           return;
         }
         signal = options?.abortSignal;
-        yield {
-          type: 'subtask',
-          taskId: 'command:thread:exec-1',
-          status: 'started',
-          taskType: 'command_execution',
-          description: 'while true; do gh run view; sleep 30; done',
-        };
+        if (work)
+          yield {
+            type: 'subtask',
+            taskId: 'command:thread:exec-1',
+            status: 'started',
+            taskType: 'command_execution',
+            description: 'while true; do gh run view; sleep 30; done',
+          };
         if (payload) {
           yield { type: 'agent_message_chunk', text: '{"done":true}' };
-          yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+          yield {
+            type: 'result',
+            sessionId: 'session',
+            structuredOutput: kind === 'structured agent' ? { done: 'invalid' } : { done: true },
+          };
         }
-        // The background command never ends, so the provider never settles.
+        // The provider leaves this turn open until the operator requests recovery.
         await new Promise<void>(resolve => {
           signal?.addEventListener('abort', () => resolve());
         });
       });
       const node =
-        kind === 'agent'
+        kind === 'agent' || kind === 'structured agent'
           ? {
               id: 'ci',
               kind: 'agent' as const,
               source: { kind: 'command' as const, name: 'my-cmd' },
+              ...(kind === 'structured agent' ? { output_format: DONE_SCHEMA } : {}),
               idle_timeout: 10,
               retry: { max_attempts: retry ? 1 : 0, delay_ms: 1 },
             }
@@ -127,12 +206,12 @@ describe('ending a stalled turn', () => {
         dagOptions({
           deps: createMockDeps(
             store,
-            withProviderCapabilities(mockProviderRegistry, 'codex', {
-              ...getProviderCapabilities('codex'),
-              backgroundWork: 'reported',
+            withProviderCapabilities(mockProviderRegistry, provider, {
+              ...getProviderCapabilities(provider),
+              backgroundWork: work === 'unobserved' ? 'unobserved' : 'reported',
             })
           ),
-          workflowProvider: 'codex',
+          workflowProvider: provider,
           config: {
             ...minimalConfig,
             workflows: { autoResumeOnQuotaReset: false, toolCallAttentionMs: 20 },
@@ -144,8 +223,19 @@ describe('ending a stalled turn', () => {
       );
 
       await stalled;
-      // Still waiting on the live command: the watchdog is suspended, nothing timed out.
+      // Silence is attention, never evidence that the provider died.
       expect(signal?.aborted).toBe(false);
+      expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+      if (!paused) {
+        expect(runAttention(workflowRun)).toMatchObject({
+          kind: 'stalled_tool_calls',
+          calls: [{ nodeId: 'ci', stalledForMs: expect.any(Number) }],
+        });
+      }
+      if (!work || work === 'unobserved') {
+        const calls = workflowRun.metadata.tool_call_attention;
+        expect(Array.isArray(calls) && calls[0].kind).toBe('provider_turn');
+      }
       const plan = planEndTurn(workflowRun);
       if (plan.kind !== 'request') throw new Error(`expected a request, got ${plan.reason}`);
       Object.assign(workflowRun.metadata, plan.metadata);
@@ -154,54 +244,9 @@ describe('ending a stalled turn', () => {
       await execution;
 
       expect(signal?.aborted).toBe(true);
-      const events = persistedEvents(store);
-      if (retry) {
-        expect(attempts).toBe(2);
-        expect(events.some(event => event.event_type === 'node_retry_scheduled')).toBe(true);
-        expect(events.some(event => event.event_type === 'node_completed')).toBe(true);
-        expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
-      } else {
-        const failed = events.find(event => event.event_type === 'node_failed');
-        expect(failed?.data?.failure_kind).toBe('timeout');
-        expect(String(failed?.data?.error)).toContain('was ended by the operator');
-        expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
-      }
+      assertRecoveryOutcome(store, retry, attempts);
+      expect(workflowRun.metadata.tool_call_attention).toEqual([]);
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     }
   );
-
-  it('fails a structured loop iteration cut off by the idle timeout after its payload', async () => {
-    const store = createMockStore();
-    mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
-      yield { type: 'agent_message_chunk', text: '{"done":true}' };
-      yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
-      // No live work is reported, so the idle watchdog runs and cuts the stream off.
-      await new Promise<void>(resolve => {
-        options?.abortSignal?.addEventListener('abort', () => resolve());
-      });
-    });
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        cwd: testDir,
-        workflow: {
-          name: 'idle-structured-loop',
-          nodes: [
-            {
-              id: 'ci',
-              kind: 'loop',
-              idle_timeout: 50,
-              retry: { max_attempts: 0 },
-              ...structuredLoop(true),
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('idle-structured-loop'),
-      })
-    );
-    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-    expect(failed?.data?.failure_kind).toBe('timeout');
-    expect(String(failed?.data?.error)).toContain('timed out after');
-    expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(false);
-  });
 });

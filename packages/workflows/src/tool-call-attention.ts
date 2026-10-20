@@ -14,6 +14,7 @@ interface ToolCallAttentionOptions {
   provider: string;
   reportedBackgroundWork: boolean;
   thresholdMs: number;
+  idleThresholdMs?: number;
   env: Readonly<Record<string, string | undefined>>;
   protectedEnvKeys?: readonly string[];
   protectedCredentialValues?: readonly string[];
@@ -21,7 +22,7 @@ interface ToolCallAttentionOptions {
   streamId?: string;
 }
 
-/** A stream whose stalled calls are on the run row, and when the oldest was raised. */
+/** A stream with published attention, and when its oldest active stall was raised. */
 export interface StreamStall {
   streamId: string;
   raisedAt: string;
@@ -56,7 +57,7 @@ function createToolCallAttention(
   options: ToolCallAttentionOptions,
   retainCleanup: (retry: () => Promise<boolean>) => void
 ): {
-  hasOpenTools(): boolean;
+  progress(at: number): void;
   /** This stream's id and when its current stall was raised, while the run row shows one. */
   stall(): StreamStall | undefined;
   observe(event: ProviderEvent): Promise<void>;
@@ -75,10 +76,25 @@ function createToolCallAttention(
   const tools = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const subtasks = new Map<string, Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string }>();
   const parents = new Map<string, string>();
+  const openedAt = new Date(now()).toISOString();
+  const turn = {
+    streamId,
+    nodeId: options.nodeId,
+    provider: options.provider,
+    kind: 'provider_turn' as const,
+    toolCallId: `turn:${streamId}`,
+    name: 'provider turn',
+    startedAt: openedAt,
+    lastProgressAt: openedAt,
+    thresholdMs: Math.ceil(options.idleThresholdMs ?? 0),
+  };
+  let turnRaisedAt: string | undefined;
+  let closed = false;
   let persisted = '[]';
   let stall: StreamStall | undefined;
 
-  async function persist(): Promise<boolean> {
+  function stalledCalls(): ToolCallAttention[] {
+    if (closed) return [];
     const time = now();
     const calls: ToolCallAttention[] = [];
     const independentSubtasks = [...subtasks]
@@ -97,13 +113,28 @@ function createToolCallAttention(
           calls.push({ ...tool, raisedAt: tool.raisedAt });
         }
       }
+    if (
+      tools.size === 0 &&
+      subtasks.size === 0 &&
+      turn.thresholdMs > 0 &&
+      (turnRaisedAt !== undefined || time - Date.parse(turn.lastProgressAt) >= turn.thresholdMs)
+    ) {
+      turnRaisedAt ??= new Date(time).toISOString();
+      calls.push({ ...turn, raisedAt: turnRaisedAt });
+    }
+    return calls;
+  }
+
+  async function persist(): Promise<boolean> {
+    const calls = stalledCalls();
+    const raisedAt = calls.map(call => call.raisedAt).sort()[0];
+    if (stall?.raisedAt !== raisedAt) stall = undefined;
     const snapshot = JSON.stringify(calls);
     if (snapshot === persisted) return true;
     try {
       const changed = await options.store.setToolCallAttention(options.runId, streamId, calls);
       if (changed || calls.length === 0) {
         persisted = snapshot;
-        const raisedAt = calls.map(call => call.raisedAt).sort()[0];
         stall = raisedAt === undefined ? undefined : { streamId, raisedAt };
         return true;
       }
@@ -122,7 +153,10 @@ function createToolCallAttention(
   };
 
   return {
-    hasOpenTools: () => tools.size > 0,
+    progress(at): void {
+      turn.lastProgressAt = new Date(at).toISOString();
+      turnRaisedAt = undefined;
+    },
     stall: () => stall,
     async observe(event: ProviderEvent): Promise<void> {
       if (event.type === 'tool_call' && !tools.has(event.toolCallId)) {
@@ -178,6 +212,7 @@ function createToolCallAttention(
     },
     refresh,
     async clear(): Promise<void> {
+      closed = true;
       tools.clear();
       subtasks.clear();
       parents.clear();
