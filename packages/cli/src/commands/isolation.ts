@@ -282,9 +282,9 @@ export async function isolationCleanupMergedCommand(
   );
 }
 
-type CompletionEnvironment = Awaited<
-  ReturnType<typeof isolationDb.listAllActiveWithCodebase>
->[number];
+type CompletionEnvironment = NonNullable<
+  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
+>;
 type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
 type CompletionOutcome = 'completed' | 'failed' | 'notFound';
 
@@ -534,9 +534,9 @@ async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let env: CompletionEnvironment | undefined;
+  let env: CompletionEnvironment | null;
   try {
-    const matches = (await isolationDb.listAllActiveWithCodebase()).filter(
+    const matches = (await isolationDb.listActive()).filter(
       candidate => candidate.branch_name === branch
     );
     if (matches.length > 1) {
@@ -545,7 +545,7 @@ async function completeBranch(
       );
       return 'failed';
     }
-    env = matches[0];
+    env = matches.length === 1 ? await isolationDb.findActiveByBranchName(branch) : null;
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch }, 'isolation.lookup_failed');

@@ -30,8 +30,9 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const mockListAllActiveWithCodebase = mock<typeof IsolationDb.listAllActiveWithCodebase>(() =>
-  Promise.resolve([])
+const mockListActive = mock<typeof IsolationDb.listActive>(() => Promise.resolve([]));
+const mockFindActiveByBranchName = mock<typeof IsolationDb.findActiveByBranchName>(() =>
+  Promise.resolve(null)
 );
 const mockFindStaleEnvironments = mock<typeof IsolationDb.findStaleEnvironments>(() =>
   Promise.resolve([])
@@ -42,7 +43,8 @@ const mockMarkWorktreeDestroyed = mock<typeof IsolationDb.markWorktreeDestroyed>
 
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
-  listAllActiveWithCodebase: mockListAllActiveWithCodebase,
+  listActive: mockListActive,
+  findActiveByBranchName: mockFindActiveByBranchName,
   listByCodebaseWithAge: mock(() => Promise.resolve([])),
   findStaleEnvironments: mockFindStaleEnvironments,
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
@@ -169,7 +171,9 @@ mock.module('@archon/isolation', () => ({
   })),
 }));
 
-type ActiveEnvironment = Awaited<ReturnType<typeof IsolationDb.listAllActiveWithCodebase>>[number];
+type ActiveEnvironment = NonNullable<
+  Awaited<ReturnType<typeof IsolationDb.findActiveByBranchName>>
+>;
 
 function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvironment {
   return {
@@ -178,7 +182,6 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
     working_path: '/test/worktree',
     codebase_id: 'cb-123',
     codebase_name: 'test-project',
-    codebase_repository_url: null,
     codebase_default_cwd: '/test/repo',
     workflow_id: 'wf-123',
     workflow_type: 'task',
@@ -203,7 +206,11 @@ describe('isolationCompleteCommand', () => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
-    mockListAllActiveWithCodebase.mockReset().mockResolvedValue([]);
+    mockListActive.mockReset().mockResolvedValue([]);
+    mockFindActiveByBranchName.mockReset().mockImplementation(async branch => ({
+      ...mockEnv,
+      branch_name: branch,
+    }));
     mockRemoveEnvironment.mockReset();
     mockWorktreeExists.mockReset().mockResolvedValue(true);
     mockHasUncommittedChanges.mockReset();
@@ -232,7 +239,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('completes a branch when env is found and all checks pass', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+    mockListActive.mockResolvedValueOnce([
       makeEnvironment({ id: 'unrelated', branch_name: 'other' }),
       mockEnv,
     ]);
@@ -253,11 +260,12 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('prints not found when env does not exist', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
+    mockListActive.mockResolvedValueOnce([]);
 
     await isolationCompleteCommand(['nonexistent-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockFindActiveByBranchName).not.toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '  Not found: nonexistent-branch (no active isolation environment)'
     );
@@ -265,7 +273,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts a lookup failure and continues completing the remaining branches', async () => {
-    mockListAllActiveWithCodebase
+    mockListActive
       .mockRejectedValueOnce(new Error('database unavailable'))
       .mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
@@ -290,8 +298,22 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 0 not found');
   });
 
+  it('refuses completion when the selected environment cannot be hydrated', async () => {
+    mockListActive.mockResolvedValueOnce([mockEnv]);
+    mockFindActiveByBranchName.mockRejectedValueOnce(new Error('invalid target path'));
+
+    await expect(isolationCompleteCommand(['feature-branch'], { force: true })).rejects.toThrow(
+      'Failed to complete'
+    );
+
+    expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '  Failed: feature-branch — DB lookup error: invalid target path'
+    );
+  });
+
   it.each([false, true])('refuses ambiguous branches even with force=%s', async force => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+    mockListActive.mockResolvedValueOnce([
       mockEnv,
       {
         ...mockEnv,
@@ -306,13 +328,14 @@ describe('isolationCompleteCommand', () => {
     );
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
+    expect(mockFindActiveByBranchName).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('multiple active environments')
     );
   });
 
   it('checks open PRs in the selected repository rather than the process cwd', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     expect(process.cwd()).not.toBe(mockEnv.codebase_default_cwd);
     mockExecFileAsync.mockImplementation(async (cmd, _args, options) => ({
       stdout:
@@ -337,7 +360,7 @@ describe('isolationCompleteCommand', () => {
   it.each(['unknown revision', 'bad revision'])(
     'does not classify unrelated %s prose as an absent ref',
     async phrase => {
-      mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+      mockListActive.mockResolvedValueOnce([mockEnv]);
       mockGetUniqueCommitCount.mockResolvedValueOnce(2);
       mockIsPatchEquivalent.mockResolvedValue(true);
       mockExecFileAsync.mockImplementation(async (cmd, args) => {
@@ -359,7 +382,7 @@ describe('isolationCompleteCommand', () => {
   it.each([0, 128, null])(
     'keeps unique commits when a failed log has an unverified remote ref (code=%s)',
     async code => {
-      mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+      mockListActive.mockResolvedValueOnce([mockEnv]);
       mockGetUniqueCommitCount.mockResolvedValueOnce(1);
       mockIsPatchEquivalent.mockResolvedValue(true);
       mockExecFileAsync.mockImplementation(async (cmd, args) => {
@@ -393,7 +416,7 @@ describe('isolationCompleteCommand', () => {
   );
 
   it('finishes removing the first shared ref before checking the last one', async () => {
-    mockListAllActiveWithCodebase
+    mockListActive
       .mockResolvedValueOnce([makeEnvironment({ branch_name: 'first' })])
       .mockResolvedValueOnce([makeEnvironment({ id: 'last-env', branch_name: 'last' })]);
     let firstRemoved = false;
@@ -425,7 +448,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('does not query status for an absent checkout', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockWorktreeExists.mockResolvedValueOnce(false);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
@@ -440,7 +463,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks a failed status query without calling it uncommitted changes', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
 
     await expect(
@@ -455,9 +478,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when env has uncommitted changes without --force', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironment({ branch_name: 'dirty-branch' }),
-    ]);
+    mockListActive.mockResolvedValueOnce([makeEnvironment({ branch_name: 'dirty-branch' })]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
 
     await expect(
@@ -475,7 +496,7 @@ describe('isolationCompleteCommand', () => {
   // environment is the failed run's resume handle; removeEnvironment is what would
   // delete its worktree and its local and remote branch.
   it('refuses a clean, pushed environment a failed run can still resume', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
 
     await expect(
@@ -491,7 +512,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('refuses when the owning-run lookup fails', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
 
     await expect(
@@ -507,7 +528,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when there is an open PR on the branch', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
@@ -533,7 +554,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('completes a branch identical to dev without --force', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -548,7 +569,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('uses the configured remote for the completion commit checks', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -581,7 +602,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when commits are unique to the branch', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
 
     await expect(
@@ -596,7 +617,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when there are unpushed commits', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === 'gh') {
         return Promise.resolve({ stdout: '[]', stderr: '' });
@@ -619,7 +640,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('allows a squash-merged branch whose remote default has its patches', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetUniqueCommitCount.mockResolvedValueOnce(1);
     mockIsPatchEquivalent.mockImplementation((_repo: string, _branch: string, baseRef: string) =>
       Promise.resolve(baseRef === 'origin/dev')
@@ -660,7 +681,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('does not accept patches present only on the local default branch', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetUniqueCommitCount.mockResolvedValueOnce(1);
     mockIsPatchEquivalent.mockImplementation((_repo: string, _branch: string, baseRef: string) =>
       Promise.resolve(baseRef === 'dev')
@@ -694,7 +715,7 @@ describe('isolationCompleteCommand', () => {
   // covers the second one — an unpushed probe that fails for a reason that is NOT a
   // missing ref — so the copy on the destructive path cannot rot untested.
   it('still blocks on unique commits when the unpushed probe fails unexpectedly', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === 'gh') {
@@ -718,7 +739,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('blocks when the remote default branch cannot be verified', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockGetUniqueCommitCount.mockResolvedValueOnce(1);
     mockIsPatchEquivalent.mockRejectedValueOnce(new Error('unknown revision origin/dev'));
     mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
@@ -746,7 +767,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('allows never-pushed branch with 0 unique commits to complete without --force', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     // Every commit on the branch is reachable from a surviving ref (so
     // getUniqueCommitCount returns 0), and origin/<branch> does not exist.
     // Combined, there is provably nothing to lose — completion must succeed
@@ -785,7 +806,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('still blocks when the unique-commit check throws (fail-closed preserved)', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     // getUniqueCommitCount throws — check 4's blocker fires. Check 5's
     // "never pushed" blocker must NOT also fire on the same branch: the gate
     // (uniqueCommitCount !== undefined && uniqueCommitCount > 0) is false
@@ -822,7 +843,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('reports all blockers together when multiple checks fail', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
@@ -849,7 +870,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('skips PR check with warning when gh CLI is not available', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -874,9 +895,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('proceeds despite all checks when --force is set', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironment({ branch_name: 'dirty-branch' }),
-    ]);
+    mockListActive.mockResolvedValueOnce([makeEnvironment({ branch_name: 'dirty-branch' })]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
     mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
     mockRemoveEnvironment.mockResolvedValueOnce({
@@ -899,9 +918,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts failed when removeEnvironment throws', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironment({ branch_name: 'bad-branch' }),
-    ]);
+    mockListActive.mockResolvedValueOnce([makeEnvironment({ branch_name: 'bad-branch' })]);
     mockRemoveEnvironment.mockRejectedValueOnce(new Error('git error: cannot remove worktree'));
 
     await expect(
@@ -915,7 +932,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('handles multiple branches with mixed results', async () => {
-    mockListAllActiveWithCodebase
+    mockListActive
       .mockResolvedValueOnce([makeEnvironment({ branch_name: 'branch-1' })]) // found: branch-1
       .mockResolvedValueOnce([]) // not found: branch-2
       .mockResolvedValueOnce([makeEnvironment({ branch_name: 'branch-3' })]); // found: branch-3 (will fail)
@@ -933,9 +950,7 @@ describe('isolationCompleteCommand', () => {
     expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 1 not found');
   });
   it('counts as failed when removeEnvironment returns skippedReason (ghost worktree)', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironment({ branch_name: 'ghost-branch' }),
-    ]);
+    mockListActive.mockResolvedValueOnce([makeEnvironment({ branch_name: 'ghost-branch' })]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: false,
       branchDeleted: false,
@@ -955,9 +970,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('counts as failed when removeEnvironment returns partial (worktree not removed, branch deleted)', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironment({ branch_name: 'partial-branch' }),
-    ]);
+    mockListActive.mockResolvedValueOnce([makeEnvironment({ branch_name: 'partial-branch' })]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: false,
       branchDeleted: true,
@@ -977,7 +990,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('surfaces warnings from removeEnvironment result', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([mockEnv]);
+    mockListActive.mockResolvedValueOnce([mockEnv]);
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: false,
