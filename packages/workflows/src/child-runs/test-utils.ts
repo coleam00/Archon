@@ -15,8 +15,8 @@ import { settlingProvider } from '../test-settling-provider';
  * Importing this module replaces `@archon/paths`, `@archon/git` and `fs/promises`
  * with test doubles and registers the built-in providers, so it must be the first
  * import of a test file that starts with `// @archon-test-isolated`. Such a file
- * deliberately does NOT mock ./dag-executor, so it cannot share a process with
- * executor.test.ts, which does (mock.module is process-global and irreversible).
+ * deliberately does NOT mock ./dag-executor, so it cannot share a process with the
+ * executor.*.test.ts files, which do (mock.module is process-global and irreversible).
  */
 import { readBundleIndex } from '../defaults/bundle-inventory';
 import { afterAll, mock } from 'bun:test';
@@ -85,8 +85,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Mock git (no real repo needed) ---
+export const detectDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
-  getDefaultBranch: mock(async () => 'main'),
+  getDefaultBranch: detectDefaultBranch,
   getDefaultRemote: mock(async () => 'origin'),
   toRepoPath: mock((p: string) => p),
 }));
@@ -721,6 +722,7 @@ export function makeFakeResolver(childCwd: string): {
       return {
         cwd: childCwd,
         envId: `env-${String(req.childIndex ?? 0)}`,
+        baseBranch: 'child-release',
         branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-${String(req.childIndex ?? 0)}`,
       };
     },
@@ -759,6 +761,7 @@ export function makeFanResolver(root: string): {
       return {
         cwd: dir,
         envId: `env-${req.parentRun.id.slice(0, 8)}-${String(idx)}`,
+        baseBranch: 'child-release',
         branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-${String(idx)}`,
       };
     },

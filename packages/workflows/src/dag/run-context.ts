@@ -1,3 +1,4 @@
+import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
 import { buildAiNodeEnvironment } from '../exec-environment';
@@ -19,6 +20,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
+import { isNodeContextResume, type NodeContext } from '../schemas';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
@@ -180,6 +182,8 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: GraphPlan['layers'];
+  /** A settled enclosing body failure prevents later interactions, including nested ones. */
+  interactionAdmission?: InteractionAdmission;
   /** Shared node-output map (caller owns; runLayers writes node results here). */
   nodeOutputs: Map<string, NodeOutput>;
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
@@ -324,4 +328,16 @@ export function sessionCheckpoint(
       provider_session_id: sessionId,
     });
   };
+}
+
+/**
+ * A loop_group body node that resumes a source outside its own body owns a private
+ * session cursor continued across iterations. A same-body source is forked afresh in
+ * every iteration, so its consumer never owns a cursor.
+ */
+export function ownsBodySessionCursor(
+  node: { context?: NodeContext },
+  bodyNodeIds: ReadonlySet<string>
+): boolean {
+  return isNodeContextResume(node.context) && !bodyNodeIds.has(node.context.resume);
 }

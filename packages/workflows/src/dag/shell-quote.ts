@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join as joinPath } from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
+import { writeArtifactFileSync } from '../artifact-writes';
 import { getLog } from './log';
 import { NODE_OUTPUT_FILE_THRESHOLD } from './node-output';
 
@@ -16,13 +16,13 @@ export function shellQuote(value: string): string {
 /**
  * Write `value` to `<dir>/<filename>`, creating `dir` as needed. Returns the full
  * path on success, or `undefined` after logging on any failure (permission, disk
- * space, etc.) — callers own their own fallback; this never throws.
+ * space, a refused link in a container-mounted artifacts directory, etc.) — callers
+ * own their own fallback; this never throws.
  */
 export function writeSpillFile(dir: string, filename: string, value: string): string | undefined {
   const filePath = joinPath(dir, filename);
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(filePath, value);
+    writeArtifactFileSync(filePath, value);
     return filePath;
   } catch (fileErr) {
     const err = fileErr as Error;

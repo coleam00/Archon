@@ -26,7 +26,10 @@
       "src/resolver.test.ts"
     ],
     [
-      "src/providers/worktree.test.ts"
+      "src/providers/worktree-create.test.ts",
+      "src/providers/worktree-destroy.test.ts",
+      "src/providers/worktree-naming.test.ts",
+      "src/providers/worktree-queries.test.ts"
     ],
     [
       "src/providers/worktree-real-git.test.ts"

@@ -1,3 +1,5 @@
+import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
@@ -1021,3 +1023,68 @@ nodes:
     ).toHaveLength(1);
   }, 30_000);
 }
+
+test('independent questions survive separate CLI processes and apply second first', async () => {
+  const f = fixture();
+  for (const [name, yaml] of Object.entries(multiAttentionWorkflows))
+    writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
+  const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const queue = async () => {
+    const result = await cli(f, ['workflow', 'attention', '--json']);
+    expect(result, result.error).toMatchObject({ code: 0 });
+    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+  };
+  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  expect(items).toHaveLength(2);
+  const [first, second] = items;
+  for (const item of items) {
+    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    expect(read, read.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(read.output).item).toEqual(item);
+  }
+  const answer = async (item: typeof first, choose: string) => {
+    if (item.kind !== 'attention') throw new Error('Expected attention');
+    const answered = await cli(f, [
+      'workflow',
+      'answer',
+      item.runId,
+      '--occurrence',
+      item.occurrence,
+      '--choose',
+      choose,
+    ]);
+    expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
+  };
+  await answer(second, 'defer');
+  expect(await queue()).toEqual([first]);
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  const parentId = first.fanOut!.parentRunId;
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
+  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect(
+    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+  ).toEqual([]);
+  await answer(first, 'accept');
+  expect(await queue()).toEqual([]);
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
+  expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
+    items.map(i => i.runId).sort()
+  );
+  expect(
+    (await store.listWorkflowEvents(parentId)).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'answers'
+    )?.data.structured_output
+  ).toEqual([
+    { key: 'first', decision: 'accept' },
+    { key: 'second', decision: 'defer' },
+  ]);
+  for (const item of items) {
+    const events = await store.listWorkflowEvents(item.runId);
+    expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
+    expect(
+      events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')
+    ).toHaveLength(1);
+  }
+  expect(existsSync(f.trap)).toBe(false);
+}, 30_000);

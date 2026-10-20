@@ -72,12 +72,17 @@ Artifacts are **external** to the repo on purpose — they don't pollute git.
 
 ### "No base branch could be resolved"
 
-A node references `$BASE_BRANCH` in its prompt, but neither git auto-detection nor `worktree.baseBranch` in `.archon/config.yaml` produced a branch.
+A node references `$BASE_BRANCH`, but the run has no resolved base. Causes:
+- A git run where no `--base`, `worktree.baseBranch`, or codebase default was set and git detection failed. A shared-checkout child inherits this from its parent.
+- A folder project, which has no git base.
+- An isolated child that reused an existing branch without its original child run record. Its historical base is unknown, so config and parent flags cannot recover it.
 
 **Fix:**
-1. Set `worktree.baseBranch: main` (or `dev`, or whatever) in `.archon/config.yaml`.
-2. Or pass `--from <branch>` on `archon workflow run`.
-3. Or remove the `$BASE_BRANCH` reference if the node doesn't actually need it.
+1. For a top-level git run, pass `--base <branch>` on `archon workflow run`, or set `worktree.baseBranch: main` (or `dev`, or whatever) in `.archon/config.yaml`. `--from` picks the starting point and does not set `$BASE_BRANCH`.
+2. For the reused-branch child, start a new parent run so the child cuts a new isolated branch with a known base.
+3. Or remove the `$BASE_BRANCH` reference if the node doesn't need it.
+
+A resumed run keeps its recorded base unless it is retargeted with `--base`. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
 
 ### "Claude Code not found" / "Codex CLI binary not found"
 

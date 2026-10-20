@@ -32,7 +32,7 @@ sweep:
           - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
         if_unanswered: "stub: it waits"
         links: ["https://github.com/example/repo/pull/42"]
-  base: { summary: "stub: dev is green", attention: null }
+  base: { summary: "stub: dev is green", reran: false, attention: null }
   summary: "stub: asked about PR 42"
 record:
   merged: []

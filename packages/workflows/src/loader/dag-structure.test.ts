@@ -1,21 +1,8 @@
 // @archon-test-isolated
-import { clearRegistry, providerRegistry } from '@archon/providers';
-import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { parseError, parseWorkflow } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { evaluateCondition } from '../condition-evaluator';
-import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
-
-// Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-clearRegistry();
-registerBuiltinProviders();
-
-function parseWorkflow(
-  content: string,
-  filename: string,
-  configuredEnvNames?: ReadonlySet<string>
-): ParseResult {
-  return parseWorkflowWithProviders(content, filename, providerRegistry, configuredEnvNames);
-}
+import type { ParseResult } from '../loader';
 
 describe('scalar shared session context', () => {
   function parseSessionContext(yaml: string): ParseResult {
@@ -468,5 +455,69 @@ nodes:
     expect(result.error?.error).toContain(
       "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
     );
+  });
+});
+
+describe('suspension placement', () => {
+  it('rejects suspension nodes that can run concurrently', () => {
+    const suspensionNodes = [
+      `  - id: review
+    approval:
+      message: Review this`,
+      `  - id: refine
+    loop:
+      prompt: Iterate.
+      until: DONE
+      max_iterations: 2
+      interactive: true
+      gate_message: Review.`,
+      `  - id: child
+    workflow: child-workflow`,
+      `  - id: refine-group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      interactive: true
+      gate_message: Review.
+      nodes:
+        - id: refine-step
+          bash: echo refine`,
+    ];
+    for (const suspensionNode of suspensionNodes) {
+      expect(
+        parseError(`
+name: parallel-suspensions
+description: Two nodes cannot own the run cursor together
+nodes:
+  - id: wait-for-time
+    wait:
+      duration_ms: 60000
+${suspensionNode}
+`)
+      ).toContain("Suspending nodes 'wait-for-time'");
+    }
+  });
+
+  it('rejects waits nested below more than one loop_group boundary', () => {
+    expect(
+      parseError(`
+name: nested-wait
+description: nested wait
+nodes:
+  - id: outer
+    loop_group:
+      max_iterations: 2
+      until_bash: exit 0
+      nodes:
+        - id: inner
+          loop_group:
+            max_iterations: 2
+            until_bash: exit 0
+            nodes:
+              - id: delay
+                wait:
+                  duration_ms: 1000
+`)
+    ).toContain('wait nodes nested below another loop_group are not supported');
   });
 });

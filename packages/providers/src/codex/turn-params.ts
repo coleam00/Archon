@@ -12,6 +12,7 @@ import type {
   SendQueryOptions,
 } from '../types';
 import { loadMcpConfig } from '../mcp/config';
+import { ClassifiedProviderError } from '../shared/failure';
 import {
   hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
@@ -270,6 +271,13 @@ export async function loadNodeMcpServers(
     ...requestEnv,
   });
   const mcpServers = buildCodexMcpServers(servers);
+  const missing = serverNames.find(name => !Object.hasOwn(mcpServers ?? {}, name));
+  if (missing !== undefined) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Required MCP server "${missing}" has no supported Codex configuration fields`
+    );
+  }
   getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
   if (missingVars.length === 0) return { mcpServers, warnings: [] };
   const uniqueVars = [...new Set(missingVars)];

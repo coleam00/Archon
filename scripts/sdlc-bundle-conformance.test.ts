@@ -4,24 +4,31 @@
  * tests never read the pack.
  */
 import { describe, expect, it } from 'bun:test';
-import { findStrictSchemaIssues } from '../packages/provider-contract/src';
-import { getProviderCapabilities, isRegisteredProvider, providerRegistry } from '@archon/providers';
+import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import {
   BUNDLED_WORKFLOW_OWNERS,
   BUNDLED_WORKFLOWS,
 } from '../packages/workflows/src/defaults/bundled-defaults';
+import { collectStrictSchemaViolations } from '../packages/workflows/src/dag/capability-preflight';
 import { parseWorkflow } from '../packages/workflows/src/loader';
-import {
-  isExecNode,
-  isIncludeDirective,
-  isLoopGroupNode,
-  isOutputFormatEnforced,
-  isWaitNode,
-  type WorkflowModelRef,
-} from '../packages/workflows/src/schemas';
+import type { WorkflowModelRef } from '../packages/workflows/src/schemas';
 
 registerBuiltinProviders();
+
+function bundledStrictSchemaViolations(content: string, name: string): string[] {
+  const parsed = parseWorkflow(content, `${name}.yaml`, providerRegistry);
+  if (parsed.workflow === null) throw new Error(parsed.error.error);
+  return collectStrictSchemaViolations(
+    providerRegistry,
+    parsed.workflow.nodes,
+    parsed.workflow.provider ?? 'codex'
+  ).map(issue =>
+    issue.kind === 'missing-properties'
+      ? `${name}:${issue.nodeId} ${issue.schemaPath} missing properties`
+      : `${name}:${issue.nodeId} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
+  );
+}
 
 describe('bundled workflows', () => {
   // OpenAI Structured Outputs (the Codex provider's path) accepts only an object at a
@@ -57,6 +64,43 @@ describe('bundled workflows', () => {
     }
   });
 
+  it.each([
+    [
+      'Codex group under Claude',
+      'claude',
+      'codex',
+      ['fixture:inner output_format missing required keys note'],
+    ],
+    ['Claude group under Codex', 'codex', 'claude', []],
+    [
+      'Codex install default',
+      undefined,
+      undefined,
+      ['fixture:inner output_format missing required keys note'],
+    ],
+  ])('%s', (_name, workflowProvider, groupProvider, expected) => {
+    const source = `
+name: fixture
+description: Strict schema provider inheritance
+${workflowProvider === undefined ? '' : `provider: ${workflowProvider}`}
+nodes:
+  - id: group
+    ${groupProvider === undefined ? '' : `provider: ${groupProvider}`}
+    loop_group:
+      max_iterations: 1
+      until_bash: "true"
+      nodes:
+        - id: inner
+          prompt: Produce a result
+          output_format:
+            type: object
+            properties:
+              note: { type: string }
+            required: []
+`;
+    expect(bundledStrictSchemaViolations(source, 'fixture')).toEqual(expected);
+  });
+
   // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this
   // same bundled set with a prose exemption rule for pinned providers. The engine now
   // owns the rule (launch preflight + `archon validate workflows`), and this test is
@@ -67,47 +111,8 @@ describe('bundled workflows', () => {
   it('every bundled workflow is compatible with Codex strict-mode schemas', () => {
     const violations: string[] = [];
 
-    type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
-
-    const walk = (
-      nodes: readonly WalkNode[],
-      workflowProvider: string | undefined,
-      name: string
-    ): void => {
-      for (const node of nodes) {
-        if (isIncludeDirective(node)) continue;
-        if (isLoopGroupNode(node)) {
-          // Body nodes resolve against the workflow-level provider, not the group's
-          // own `provider` field (mirrors visitProviderInvokingNodes).
-          walk(node.loop_group.nodes, workflowProvider, name);
-          continue;
-        }
-        // exec/bash/script certify local stdout; gate/halt/loop_group schemas are
-        // inert (isOutputFormatEnforced); wait nodes carry an engine-injected
-        // output_format that never reaches a provider. Only agent and loop kinds
-        // both enforce output_format and send the schema to a provider.
-        if (isExecNode(node) || isWaitNode(node) || !isOutputFormatEnforced(node)) continue;
-        if (node.output_format === undefined) continue;
-
-        const provider = 'provider' in node ? node.provider : workflowProvider;
-        if (provider !== undefined && isRegisteredProvider(provider)) {
-          if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
-        }
-        // provider === undefined routes to the install default, scanned as Codex.
-        for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
-          violations.push(
-            issue.kind === 'missing-properties'
-              ? `${name}:${node.id} ${issue.schemaPath} missing properties`
-              : `${name}:${node.id} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
-          );
-        }
-      }
-    };
-
     for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-      const parsed = parseWorkflow(content, `${name}.yaml`, providerRegistry);
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      walk(parsed.workflow.nodes, parsed.workflow.provider, name);
+      violations.push(...bundledStrictSchemaViolations(content, name));
     }
 
     expect(violations).toEqual([]);

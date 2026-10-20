@@ -26,6 +26,7 @@ import {
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
 import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
   getLog,
@@ -128,12 +129,14 @@ export function buildDetachedRunCmd(
   execPath: string,
   argv: string[],
   cwd: string,
-  extraArgs: string[]
+  extraArgs: string[],
+  execArgv: readonly string[] = []
 ): string[] {
-  // Only the command prefix differs between modes: in a compiled binary
-  // execPath IS the archon binary and re-invoking it needs no entry script; in
-  // dev, execPath is bun and argv[1] is the cli entry that bun must be handed.
-  const baseCmd = isBinary ? [execPath] : [execPath, argv[1]];
+  // The escape broker disables project startup hooks with an explicit Bun config.
+  // Keep only that cwd-independent config; caller config paths belong to the launch cwd.
+  const baseCmd = isBinary
+    ? [execPath]
+    : [execPath, ...execArgv.filter(arg => arg === RUN_JOB_ESCAPE_BUN_CONFIG_ARG), argv[1]];
   // User args always start at argv[2] in BOTH modes. A Bun single-file
   // executable does have an argv[1] — the virtual entry path
   // (`/$bunfs/root/<name>`, `B:/~BUN/root/<name>.exe` on Windows) — so slicing
@@ -188,7 +191,8 @@ export async function spawnDetachedWorkflowRun(
     cwd,
     runConfigPayload
       ? [...extraArgs, '--internal-detached-run-config', runConfigPayload]
-      : extraArgs
+      : extraArgs,
+    process.execArgv
   );
 
   let logPath: string | null = null;

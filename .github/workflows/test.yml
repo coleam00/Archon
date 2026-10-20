@@ -521,6 +521,29 @@ jobs:
           cache-from: type=gha
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
+      - name: Slack upgrade on persistent volumes, offline
+        run: bash scripts/test-docker-slack-upgrade.sh archon-ci:test
+
+      - name: Set up QEMU for arm64 plugin verification
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build arm64 Slack bundle
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: image-plugins
+          platforms: linux/arm64
+          load: true
+          tags: archon-ci:slack-arm64
+          cache-from: type=gha
+
+      - name: Initialize arm64 Slack bundle offline
+        run: |
+          docker run --rm --platform linux/arm64 --network none --entrypoint bun archon-ci:slack-arm64 \
+            -e 'import { inspectChatPlugin } from "./packages/cli/src/commands/inspect-chat-plugin"; const descriptor = await inspectChatPlugin("/opt/archon/image-plugins/archon-chat-slack"); if (descriptor.id !== "slack") process.exit(1);'
+
       - name: Smoke test — container starts and serves /api/health
         run: |
           docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test

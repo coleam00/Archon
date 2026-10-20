@@ -236,6 +236,7 @@ export {
   isTerminalRunStatus,
   runAttention,
   isWorkflowWaitContext,
+  readWorkflowWaitContext,
   pendingWorkflowWaitDeadline,
   pausedUsageLimitWait,
   workflowWaitStepName,
@@ -345,3 +346,5 @@ export {
 } from './workflow-run';
 
 export type { SessionCursor } from './workflow-run';
+
+export { canSuspend, isInteractiveSink } from './node-suspension';

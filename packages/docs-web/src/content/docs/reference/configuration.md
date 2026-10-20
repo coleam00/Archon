@@ -429,7 +429,7 @@ worktree:
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
 2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
-3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
+3. If a workflow references `$BASE_BRANCH` while its base is unresolved, the node fails. See [`$BASE_BRANCH` fail-fast](/reference/variables/#base_branch-fail-fast) for causes and recovery.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 
@@ -557,7 +557,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Platform Adapters -- Slack
 
-These variables take effect only when the `chat-slack` plugin is installed. See the [Slack guide](/adapters/slack/).
+These variables configure the `chat-slack` plugin. In Docker, a nonempty `SLACK_BOT_TOKEN` declares installation of the image-provided release offline at startup; both tokens are required to connect. Existing installed releases are retained. Remove the tokens from every effective env source and remove the plugin to keep Slack off across Docker restarts. Outside Docker, install the plugin manually. See the [Slack guide](/adapters/slack/).
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -874,7 +874,7 @@ Attention stores only ids, timestamps, and bounded display fields. It never copi
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead, or a rate limit (below); it waits for the latest of those deadlines. Any other failure, a usage limit without a reset time, or a usage limit whose reset has already passed fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset, or a rate limit (below), and the latest of those deadlines is still ahead. This also applies to failed descendants inside loop groups and fan-outs. A usage limit whose reset has already passed does not prevent waiting for another node's later deadline: when the run continues, both failed nodes retry. Any other failure, a usage limit without a reset time, or no deadline still ahead fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
 
 A rate limit (`rate_limited`, such as HTTP 429) that still refuses a node after its retries takes the same wait. Its deadline is the provider's reset when the failure reports one that is still ahead; otherwise Archon waits a computed backoff of 5 to 15 minutes, jittered so runs limited together do not retry together. Resume the run to try sooner.
 

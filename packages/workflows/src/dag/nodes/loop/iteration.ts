@@ -1,7 +1,11 @@
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
-import { pauseGateRespectingExternalTransition, sendPauseNotice } from '../../pause';
+import {
+  pauseGateRespectingExternalTransition,
+  sendPauseNotice,
+  snapshotBodySessionCursorAncestry,
+} from '../../pause';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { finishNodeExecution, executionMetadata } from '../../../node-execution';
 import {
@@ -101,6 +105,9 @@ export async function runLoopIteration(
   // On a non-completing gate, the user's feedback feeds the next iteration, which exits
   // above once any declared completion channel fires.
   if (loop.interactive && loop.gate_message) {
+    await ctx.interactionAdmission?.beforeInteraction();
+    const origin = ctx.interactionAdmission?.failure();
+    if (origin !== undefined) return suppressLoopGate(run, state, i, origin);
     const honestMessage = buildHonestGateMessage(
       completionChecks,
       state.lastOutput,
@@ -502,6 +509,31 @@ async function completeLoop(
   );
 }
 
+async function suppressLoopGate(
+  run: LoopRun,
+  state: LoopState,
+  iteration: number,
+  origin: string
+): Promise<NodeExecutionResult> {
+  const { ctx } = run;
+  const skipped = finishNodeExecution(
+    state.execution,
+    { status: 'skipped', reason: 'trigger_rule', cause: { kind: 'upstream_failed', origin } },
+    {
+      ...loopSpend(state),
+      stopReason: state.stopReason,
+      numTurns: state.numTurns,
+      resolvedModel: state.resolvedModel?.id,
+      sessionId: state.sessionId,
+      diagnostics: { loopIterations: iteration },
+    }
+  );
+  // Skipped lifecycle rows settle the invocation; the accounting fold reads spend
+  // from the existing usage-only channel rather than skipped rows.
+  await persistNodeEvent(ctx.deps.store, serializeDeferredNodeUsage(skipped));
+  return recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, skipped);
+}
+
 async function pauseAtLoopGate(
   run: LoopRun,
   state: LoopState,
@@ -534,6 +566,7 @@ async function pauseAtLoopGate(
     iteration: i,
     // null = this pause has no session to restore.
     sessionId: state.sessionId ?? null,
+    ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
     // Signal state for finalize-on-bare-approve (#2074). The structured payload
     // rides along (#2637) so the finalize attaches it like a natural completion.
     completionSignaled: completionDetected,

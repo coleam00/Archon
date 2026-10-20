@@ -1,6 +1,6 @@
 # Route One Build Item
 
-Decide whether the build queue launches its next run on this item, and write the brief the run starts from. Triage already decided the route; you keep it thin. The next node performs what you declare: it launches `archon-ship` with your brief, or raises your attention item. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
+Decide whether the build queue launches its next run on this item, and write the brief the run starts from. Triage already decided the route; you keep it thin. The next node performs what you declare: it launches `archon-ship` with your brief, raises your attention item, or takes an already finished pull request out of draft. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
 
 The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/issue.md`; read the body from there, because it is the text this decision is about. You may read the issue's comments and linked items with the tracker's CLI.
 
@@ -16,7 +16,8 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 
 1. **Is the body a contract?** It must state, semantically rather than by heading, the problem, why it is worth solving, why now, the desired outcome, the invariants that must hold, and what acceptance looks like. Dated "Current scope" sections are part of it and override what they rule on. When one element is missing but the issue's own comments from a maintainer supply it, the brief carries it with its source. When nothing supplies it, ask.
 2. **A bug is proved first.** When triage typed the item `bug` and it has not been launched yet, reproduce the symptom on the current checkout before launching: run the smallest probe that shows it, writing any probe file under `$ARTIFACTS_DIR/build/repro/`, never in the checkout. When the bug is in a browser surface, use the playwright-cli skill: invoke it as `$playwright-cli` where skills are invoked that way, and otherwise run the `playwright-cli` command, reading the skill's `SKILL.md` from the project's or your own skills directory for its usage. When you cannot reproduce it, launch only if you hold other concrete evidence of it, such as a failing test, a log or a recorded run, and name it. Otherwise ask.
-3. **Launch, or ask.** Launch a clear case. Ask when the policy says the case is unclear.
+3. **Is the work already done?** When the item's open pull request already meets the policy's Done at its current head and CI is green at that head, so only its draft state is left, declare `ready` instead of launching a round to do nothing. Set `ready_head` to that full head SHA, `brief` to one line saying so, and give the review and CI evidence in `reason`. On launch or ask, `ready_head` is null.
+4. **Launch, or ask.** Launch a clear case. Ask when the policy says the case is unclear.
 
 ## The brief
 
@@ -31,7 +32,7 @@ On ask, `brief` is what the next run starts from if the maintainer chooses to co
 
 ## The attention item
 
-Only on ask; null on launch. A maintainer reads it without opening the run, so each field stands alone:
+Only on ask; null on launch or ready. A maintainer reads it without opening the run, so each field stands alone:
 
 - `what`: the item and the decision, in plain words.
 - `why`: what happens if it is decided either way.

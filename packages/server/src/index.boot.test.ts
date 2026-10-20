@@ -366,6 +366,7 @@ const envKeys = [
   'GITLAB_TOKEN',
   'GITLAB_WEBHOOK_SECRET',
   'HOST',
+  'ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND',
   'SLACK_BOT_TOKEN',
   'TELEGRAM_BOT_TOKEN',
   'WEB_UI_DEV',
@@ -567,6 +568,39 @@ describe('server platform composition', () => {
     }
   });
 
+  test.each([
+    { HOST: '0.0.0.0', allow: undefined, rejects: true },
+    { HOST: '0.0.0.0', allow: '1', rejects: false },
+    { HOST: 'localhost', allow: undefined, rejects: false },
+  ])('App mode refuses a public bind before listening: %j', async env => {
+    process.env.GITHUB_APP_ID = '123';
+    process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+    process.env.WEBHOOK_SECRET = 'test-webhook';
+    process.env.HOST = env.HOST;
+    if (env.allow) process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND = env.allow;
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      const { startServer } = await import('./index');
+      const started = startServer({ port: 12345 });
+      if (env.rejects) {
+        await expect(started).rejects.toThrow(/non-loopback/);
+        expect(serveSpy).not.toHaveBeenCalled();
+      } else {
+        await started;
+        expect(serveSpy).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      serveSpy.mockRestore();
+      process.env.HOST = '127.0.0.1';
+      delete process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND;
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.WEBHOOK_SECRET;
+    }
+  });
+
   test('server publishes the bound port to credential-helper children', async () => {
     process.env.ARCHON_PORT = '3090';
     process.env.PORT = '3000';
@@ -716,7 +750,7 @@ describe('server platform composition', () => {
       expect(warnSpy).toHaveBeenCalledWith(
         {
           platform: 'slack',
-          hint: 'Install its plugin: archon plugin add coleam00/Archon/plugins/chat-slack',
+          hint: 'Docker images provision Slack offline when SLACK_BOT_TOKEN is set. Check provisioning logs and restart with a current image. Outside Docker, install the plugin and restart. Manual install: archon plugin add coleam00/Archon/plugins/chat-slack',
         },
         'chat.bundled_adapter_retired'
       );

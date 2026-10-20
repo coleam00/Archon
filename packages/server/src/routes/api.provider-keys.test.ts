@@ -600,7 +600,7 @@ describe('POST /api/auth/providers/:provider/oauth/poll', () => {
 // on, Better Auth claims all of /api/auth/* and 404s anything it doesn't own.
 // EVERY Archon-registered /api/auth/* route must be in isArchonOwnedAuthPath or it
 // 404s live (this is exactly what bit GET /api/auth/providers). registerApiRoutes
-// registers only Archon routes (Better Auth mounts separately in index.ts), so
+// registers only Archon routes (Better Auth mounts separately in server-routes.ts), so
 // all /api/auth/* paths here are Archon's and must be exempted.
 describe('Better Auth catch-all exemption is exhaustive', () => {
   test('every Archon-registered /api/auth/* route is exempted by isArchonOwnedAuthPath', () => {

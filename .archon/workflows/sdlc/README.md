@@ -528,6 +528,15 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
   conditional write. A run that asks keeps its claim while it is paused.
+  When route finds the pull request already reviewed at its current head, apply
+  checks that head before and after taking it out of draft. A changed read-back
+  head fails readiness and, unless already draft, triggers one draft correction
+  through the selected forge source. The failure reports the observed head, state
+  and draft status; a failed correction preserves its error and attempts one
+  diagnostic read. If verification fails, inspect the PR, restore draft if still
+  open and ready, and review its current head before readiness. These observations
+  cannot prevent another actor changing it afterwards. The merge queue still owns
+  exact-head review and merge checks.
 - **Attention.** An unclear decision pauses the run as one `select` attention item
   labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
   is, why it matters, the agent's recommendation with its evidence, confidence and
@@ -597,9 +606,10 @@ then the project's file, whose lines win where the two conflict.
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). No build round
   owns such a pull request, so where another would go back to the build queue (no
-  verdict, a stale one, a conflict, a holding thread) the sweep asks instead, naming
-  what is missing and the command a maintainer can launch. The queue never starts that
-  run itself.
+  verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
+  sweep asks instead, naming what is wrong and the command a maintainer can launch,
+  and its question offers no `return`. The record never hands one to the build queue.
+  The queue never starts that run itself.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -638,7 +648,12 @@ then the project's file, whose lines win where the two conflict.
   maintainer, naming the pull requests merged since it was last green, with a revert
   or fix-forward recommendation.
 - **Record.** The `record` script refuses a sweep that decided a pull request this
-  run did not claim, because that item belongs to another run. A claimed pull request
+  run did not claim, because that item belongs to another run. It also refuses a
+  `return` without a brief, a `return` for an own pull request, an `ask` without its
+  question or, on a pull request a build round owns, without the brief a `return`
+  answer starts from, and a red default branch the sweep neither re-ran nor raised: the pull
+  request waits for the next sweep, and the record fails, naming each, once every
+  other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
   waits the same way. It reads every pull request back: the forge, not the sweep, says
   what merged, at the head the forge merged. A sweep that says it merged a pull

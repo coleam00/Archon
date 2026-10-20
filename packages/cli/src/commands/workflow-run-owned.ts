@@ -1,7 +1,7 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { withCapturedSource } from '@archon/workflows/run-source';
 import {
-  assertDetachedRunProcessOwner,
+  claimDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
@@ -100,9 +100,9 @@ export async function workflowRunCommand(
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
     try {
-      // Inside the try so a refused process-group claim still records the `pending` row
+      // Inside the try so a refused owner claim still records the `pending` row
       // the launcher handed over (#2872) instead of stranding it.
-      if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      if (detachedProcessOwner) await claimDetachedRunProcessOwner();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource({
           host,

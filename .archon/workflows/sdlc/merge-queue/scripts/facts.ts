@@ -7,7 +7,8 @@
  * verdict, CI and review threads at that head, and whether it merges cleanly. An item
  * whose pull request is already merged or closed, or that names none, is settled without the
  * sweep, and one whose pull request cannot be read waits for the next sweep with the
- * reason, so it never stops the rest of the batch. It writes only the claims.
+ * reason, so it never stops the rest of the batch. A red default branch reaches the sweep
+ * even when no pull request waits. It writes only the claims.
  */
 
 import { join } from 'node:path';
@@ -134,9 +135,13 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
+  // The default branch is read on every run: a red one after the last merge needs the
+  // sweep's question even when no pull request waits.
+  const base = readBase(repo);
+  const sweep = items.length > 0 || base.checks.state === 'red';
   emit({
-    path: items.length > 0 ? 'sweep' : settled.length > 0 ? 'record' : 'idle',
-    base: items.length > 0 ? readBase(repo) : null,
+    path: sweep ? 'sweep' : settled.length > 0 ? 'record' : 'idle',
+    base,
     items,
     settled,
     gate,

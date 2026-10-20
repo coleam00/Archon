@@ -29,7 +29,10 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { type GhApiIssue, type GhPr, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import {
+  type GhApiIssue, type GhPr, type ScriptOptions, type ScriptRun,
+  forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
+} from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -243,12 +246,20 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'apply' | 'ruling' | 'retriage',
+  script: 'facts' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { issue?: GhApiIssue; pr?: GhPr; writeLost?: boolean } = {}
+  options: {
+    issue?: GhApiIssue;
+    pr?: GhPr;
+    writeLost?: boolean;
+    source?: ScriptOptions['source'];
+    preload?: ScriptOptions['preload'];
+  } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
+    source: options.source,
+    preload: options.preload,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
@@ -291,7 +302,175 @@ function applyInputs(answer: Record<string, unknown>, atCap = false): Record<str
 const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', attention: null };
 const ASK = { decision: 'ask', brief: 'continue PR 42 under the ruling', push: null, reason: 'the plan asks to relax a constraint', attention: ATTENTION };
 
+const HEAD_A = 'a'.repeat(40);
+const HEAD_B = 'b'.repeat(40);
+const HEAD_C = 'c'.repeat(40);
+const READY_CASES = [
+  'matching', 'prewrite', 'raced', 'moved-again', 'already-draft',
+  'closed', 'merged', 'refused', 'unknown', 'readback-failed', 'diagnostic-failed',
+] as const;
+type ReadyCase = (typeof READY_CASES)[number];
+
+function readyPreload(source: 'gh' | 'forge', scenario: ReadyCase): string {
+  return `
+import { writeFileSync } from 'node:fs';
+import { forgeOperation, forgeFailure } from ${JSON.stringify(resolve(import.meta.dir, 'deliver-checks-harness.ts'))};
+const scenario = ${JSON.stringify(scenario)};
+const selected = ${JSON.stringify(source)};
+const current = ${JSON.stringify(forgePrRecord({ head_revision: HEAD_A }))};
+const calls = [];
+const writes = [];
+let readyReturned = false;
+let correctionStarted = false;
+let correctionFailed = false;
+let failReadback = false;
+const delegate = Bun.spawnSync.bind(Bun);
+const save = () => writeFileSync('{ARTIFACTS}/ready-state.json', JSON.stringify({ current, calls, writes }));
+const response = (op, failure) => {
+  save();
+  const ghRow = {
+    number: current.number, url: current.url, state: current.state.toUpperCase(),
+    isDraft: current.is_draft, headRefOid: current.head_revision,
+    headRefName: current.head, baseRefName: current.base,
+    headRepository: { name: 'repo' }, headRepositoryOwner: { login: 'example' },
+    maintainerCanModify: null,
+  };
+  const stdout = selected === 'forge'
+    ? failure ? forgeFailure(op, scenario === 'unknown' ? 'outcome_unknown' : scenario === 'readback-failed' ? 'verification_failed' : 'refused', failure, { leaveBehind: 'draft state may have changed' })
+      : forgeOperation(op, op === 'pr.view' ? { pr: current } : { target: { repo: current.repo, number: current.number }, outcome: 'applied', changed: writes.at(-1) === op, pr: current })
+    : op === 'pr.view' ? JSON.stringify(ghRow) : '';
+  return { exitCode: failure ? 1 : 0, stdout: Buffer.from(stdout), stderr: Buffer.from(failure ?? '') };
+};
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const isGh = argv[0] === 'gh' && argv[1] === 'pr';
+  const forgeAt = argv.indexOf('forge');
+  const isForge = forgeAt >= 0 && ['pr.view', 'pr.ready', 'pr.draft'].includes(argv[forgeAt + 1]);
+  if (!isGh && !isForge) return delegate(argv, settings);
+  if ((selected === 'gh') !== isGh) throw new Error('unexpected forge source');
+  const op = isGh ? argv[2] === 'view' ? 'pr.view' : argv.includes('--undo') ? 'pr.draft' : 'pr.ready' : argv[forgeAt + 1];
+  calls.push(op);
+  if (scenario === 'prewrite') current.head_revision = '${HEAD_B}';
+  if (readyReturned && !correctionStarted) {
+    correctionStarted = true;
+    if (scenario === 'moved-again') current.head_revision = '${HEAD_C}';
+    if (scenario === 'already-draft') current.is_draft = true;
+    if (scenario === 'closed' || scenario === 'merged') current.state = scenario;
+  }
+  if (op === 'pr.view') {
+    if (failReadback) { failReadback = false; return response(op, 'read-back unavailable'); }
+    if (correctionFailed && scenario === 'diagnostic-failed') return response(op, 'diagnostic unavailable');
+    if (writes.includes('pr.ready')) readyReturned = true;
+    return response(op);
+  }
+  if (op === 'pr.ready') {
+    writes.push(op);
+    current.is_draft = false;
+    if (scenario !== 'matching') current.head_revision = '${HEAD_B}';
+    if (selected === 'forge') readyReturned = true;
+    return response(op);
+  }
+  if (current.state !== 'open') { correctionFailed = true; return response(op, 'cannot draft ' + current.state); }
+  if (current.is_draft) return response(op);
+  writes.push(op);
+  if (['refused', 'unknown', 'diagnostic-failed'].includes(scenario)) {
+    correctionFailed = true;
+    if (scenario === 'refused') current.head_revision = '${HEAD_C}';
+    return response(op, 'draft permission denied; mutation evidence retained');
+  }
+  current.is_draft = true;
+  if (scenario === 'readback-failed') {
+    correctionFailed = true;
+    if (selected === 'forge') return response(op, 'read-back unavailable');
+    failReadback = true;
+  }
+  return response(op);
+} });
+`;
+}
+
+interface ReadyObservation {
+  current: { head_revision: string; is_draft: boolean; state: string };
+  calls: string[];
+  writes: string[];
+}
+
+function failedCorrection(scenario: ReadyCase): boolean {
+  return ['refused', 'unknown', 'diagnostic-failed', 'closed', 'merged', 'readback-failed'].includes(scenario);
+}
+
+function expectCorrectionError(result: ScriptRun, observed: ReadyObservation, scenario: ReadyCase, source: 'gh' | 'forge'): void {
+  expect(result.stderr).toContain('draft correction failed');
+  expect(result.stderr).toContain('Inspect');
+  const expectedError = scenario === 'closed' || scenario === 'merged' ? scenario
+    : scenario === 'readback-failed' ? 'read-back unavailable' : 'draft permission denied; mutation evidence retained';
+  expect(result.stderr).toContain(expectedError);
+  expect(observed.calls.at(-1)).toBe('pr.view');
+  if (source === 'forge') expect(result.stderr).toContain('draft state may have changed');
+  if (scenario === 'unknown') expect(result.stderr).toContain('outcome_unknown');
+  if (scenario === 'readback-failed' && source === 'forge') expect(result.stderr).toContain('verification_failed');
+  if (scenario === 'diagnostic-failed') {
+    expect(result.stderr).toContain('final state unknown');
+    expect(result.stderr).toContain('diagnostic unavailable');
+  } else {
+    expect(result.stderr).toContain(`observed ${observed.current.state}, draft=${String(observed.current.is_draft)} at ${observed.current.head_revision}`);
+    if (scenario === 'refused') expect(observed.current.head_revision).toBe(HEAD_C);
+  }
+}
+
+function expectDraftObservation(result: ScriptRun, observed: ReadyObservation, scenario: ReadyCase): void {
+  expect(observed.current.is_draft).toBe(true);
+  expect(result.stderr).toContain('observed open, draft=true');
+  if (scenario === 'moved-again') {
+    expect(observed.current.head_revision).toBe(HEAD_C);
+    expect(result.stderr).toContain(HEAD_C);
+  }
+}
+
 describe('the build queue scripts', () => {
+  describe('the ready transition', () => {
+    for (const source of ['gh', 'forge'] as const) {
+      test.each(READY_CASES.filter(scenario => source === 'forge' || scenario !== 'unknown'))(`${source}: %s`, scenario => {
+        const at = install();
+        seed(at, triaged(CLAIMED));
+        const before = stored(at);
+        const result = run(at, 'apply', {
+          INPUTS_PATH: 'route',
+          INPUTS_ITEM: JSON.stringify(SUBJECT),
+          INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: HEAD_A, reason: 'reviewed', brief: '', attention: null }),
+          INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
+          INPUTS_ENDING: 'null',
+          INPUTS_ANSWER: 'null',
+          INPUTS_AT_CAP: 'false',
+        }, { source, preload: readyPreload(source, scenario) });
+        const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
+        if (scenario === 'matching') {
+          expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
+          expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
+          expect(observed.writes).toEqual(['pr.ready']);
+          expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', decisions: [{ decision: 'ready' }] } } });
+          return;
+        }
+        if (scenario === 'raced') expect(observed.current.is_draft).toBe(true);
+        expect(result.code).not.toBe(0);
+        expect(result.stdout).toBe('');
+        expect(stored(at)).toEqual(before);
+        expect(result.stderr).toContain(HEAD_A);
+        expect(result.stderr).toContain(HEAD_B);
+        if (scenario === 'prewrite') {
+          expect(observed.writes).toEqual([]);
+          return;
+        }
+        const noDraftWrite = ['already-draft', 'closed', 'merged'].includes(scenario);
+        expect(observed.writes).toEqual(noDraftWrite ? ['pr.ready'] : ['pr.ready', 'pr.draft']);
+        if (failedCorrection(scenario)) expectCorrectionError(result, observed, scenario, source);
+        else expectDraftObservation(result, observed, scenario);
+        if (scenario === 'readback-failed') expect(observed.current.is_draft).toBe(true);
+        if (['refused', 'unknown', 'diagnostic-failed'].includes(scenario)) expect(observed.current.is_draft).toBe(false);
+        expect(observed.calls.filter(op => op === 'pr.draft')).toHaveLength(source === 'gh' && noDraftWrite ? 0 : 1);
+      });
+    }
+  });
+
   test("facts claims a triaged item without taking intake's requests, and writes the issue the agents read", () => {
     const at = install();
     const request = { at: AT, run_id: 'event', action: 'edited' as const, label: null, actor: null, body_digest: null };
@@ -637,5 +816,30 @@ describe('the build queue scripts', () => {
     expect(lost.code).not.toBe(0);
     expect(lost.stderr).toContain('does not read back with the section');
     expect(stored(at).revision).toBe(before);
+  }, 60_000);
+});
+
+describe('the build queue checkout', () => {
+  function git(cwd: string, ...args: string[]): string {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  }
+
+  test("a round that continues a pull request starts from that pull request's head", () => {
+    const at = install();
+    // The fixture leaves the checkout on the pull request's branch. Publish it, then go
+    // back to dev, where a run's checkout starts.
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    git(at.checkout, 'checkout', '-q', 'dev');
+    const result = run(
+      at,
+      'checkout',
+      { INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
+      { pr: { headRefOid: head } }
+    );
+    expect(ok(result)).toEqual({ head });
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
   }, 60_000);
 });

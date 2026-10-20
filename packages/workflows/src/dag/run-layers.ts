@@ -3,12 +3,18 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SkipCause } from '../schemas';
-import { nodeUsesPersistedScope, readSubrunMetadata, isNodeContextResume } from '../schemas';
+import {
+  canSuspend,
+  nodeUsesPersistedScope,
+  readSubrunMetadata,
+  isNodeContextResume,
+} from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
@@ -18,7 +24,12 @@ import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
-import { beginExecution, type LayerNodeResult, type RunLayersContext } from './run-context';
+import {
+  beginExecution,
+  ownsBodySessionCursor,
+  type LayerNodeResult,
+  type RunLayersContext,
+} from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
 import { isCheckoutGuarded } from './checkout-guard';
@@ -45,7 +56,7 @@ async function settleSequentially(
 
 /**
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
- * concurrently, aggregating results into `ctx.nodeOutputs`, and accumulating usage into
+ * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
  *
@@ -65,7 +76,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     }
 
     // Build a thunk per node so the layer can run either concurrently or strictly
-    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
     // asserts after a node's own execution, so when a guarded node shares the layer
     // with any node that isn't checkout-guarded (including loop/loop_group/workflow
     // siblings whose internal execution would overlap the window), that sibling's
@@ -76,45 +87,79 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     const guardedCount = layer.filter(isCheckoutGuarded).length;
     const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
     const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
-    const nodeThunks = layer.map(
-      (node): (() => Promise<LayerNodeResult>) =>
-        async (): Promise<LayerNodeResult> => {
-          const nodeCtx: RunLayersContext = {
-            ...ctx,
-            currentExecution: undefined,
-            guardedLayerSnapshots,
-            nodeInvocation:
-              ctx.unfinishedInvocations?.get(
-                nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-              )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
-          };
-          try {
-            return (
-              (await admitNode(nodeCtx, node)) ??
-              (await dispatchNode(nodeCtx, node, isParallelLayer))
-            );
-          } catch (error) {
-            return recordPreExecutionFailure(nodeCtx, node, error);
-          }
-        }
-    );
-    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
-    // comment above); every other layer keeps the concurrent `allSettled` path.
-    const layerResults = serializeLayer
-      ? await settleSequentially(nodeThunks)
-      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+    // A nested interaction can persist a pause before its ordinary sibling settles.
+    // Settle ordinary peers first inside loop bodies so admission sees their failures.
+    const phases = ctx.interactionAdmission
+      ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
+      : [layer];
+    for (const phase of phases) {
+      const layerHadFailure = await runLayerPhase(
+        ctx,
+        phase,
+        isParallelLayer,
+        serializeLayer,
+        guardedLayerSnapshots
+      );
 
-    const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
-    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
-
-    if (layerHadFailure) {
-      getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+      if (layerHadFailure) {
+        getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+      }
     }
 
     await ctx.afterLayer?.();
 
     if (await stopsBetweenLayers(ctx, layerIdx)) break;
   }
+}
+
+async function runLayerPhase(
+  ctx: RunLayersContext,
+  layer: readonly DagNode[],
+  isParallelLayer: boolean,
+  serializeLayer: boolean,
+  guardedLayerSnapshots: Set<string> | undefined
+): Promise<boolean> {
+  const peers =
+    ctx.interactionAdmission && layer.some(canSuspend)
+      ? peerAdmissions(ctx.interactionAdmission, layer.length)
+      : undefined;
+  const nodeThunks = layer.map(
+    (node, index): (() => Promise<LayerNodeResult>) =>
+      async (): Promise<LayerNodeResult> => {
+        const nodeCtx: RunLayersContext = {
+          ...ctx,
+          currentExecution: undefined,
+          interactionAdmission: peers?.[index].admission ?? ctx.interactionAdmission,
+          guardedLayerSnapshots,
+          nodeInvocation:
+            ctx.unfinishedInvocations?.get(
+              nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
+            )?.invocation ?? newNodeInvocation(ctx.loopGroupPath),
+        };
+        try {
+          const result =
+            (await admitNode(nodeCtx, node)) ??
+            (await dispatchNode(nodeCtx, node, isParallelLayer));
+          if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
+          return result;
+        } catch (error) {
+          nodeCtx.interactionAdmission?.failed(node.id);
+          return await recordPreExecutionFailure(nodeCtx, node, error);
+        } finally {
+          peers?.[index].finished();
+        }
+      }
+  );
+  // Mixed checkout guards still require sequential execution within each phase.
+  const layerResults =
+    serializeLayer && layer.some(isCheckoutGuarded)
+      ? await settleSequentially(nodeThunks)
+      : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
+
+  const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);
+  settledValuesOrThrow(layerResults, ctx.workflowRun.id);
+
+  return layerHadFailure;
 }
 
 /**
@@ -250,6 +295,28 @@ async function admitNode(
       return { nodeId: node.id, output };
     }
   }
+  return suppressFailedLoopInteraction(ctx, node);
+}
+
+async function suppressFailedLoopInteraction(
+  ctx: RunLayersContext,
+  node: DagNode
+): Promise<LayerNodeResult | undefined> {
+  if (node.kind === 'gate' || node.kind === 'wait') {
+    await ctx.interactionAdmission?.beforeInteraction();
+  }
+  const origin = ctx.interactionAdmission?.failure();
+  if (origin !== undefined && node.kind !== 'loop_group' && canSuspend(node)) {
+    const output = await recordNodeState(
+      { store: ctx.deps.store, logDir: ctx.logDir },
+      finishNodeExecution(beginExecution(ctx, node), {
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin },
+      })
+    );
+    return { nodeId: node.id, output };
+  }
   return undefined;
 }
 
@@ -263,18 +330,8 @@ async function replayPriorSuccess(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
   composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
 ): Promise<LayerNodeResult | undefined> {
-  // Three sites below (always_run reset, cache invalidation, and the
-  // prior-success skip re-emit) all persist THIS node's prior output through
-  // the same bounded-preview+spill helper, keyed by its own step_name (#2726)
-  // — captured once here rather than repeating the lookup at each call site.
-  const formatThisNodesPriorOutput = (
-    stepName: string
-  ): ReturnType<typeof formatPersistedNodeOutput> =>
-    formatPersistedNodeOutput(
-      priorCompletedNodes.get(node.id)?.output ?? '',
-      ctx.artifactsDir,
-      stepName
-    );
+  const formatThisNodesPriorOutput = (): ReturnType<typeof formatPersistedNodeOutput> =>
+    formatPersistedNodeOutput(priorCompletedNodes.get(node.id)?.output ?? '', ctx.artifactsDir);
   if (node.always_run) {
     getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
     const alwaysRunStepName = ctx.stepNamePrefix + node.id;
@@ -282,7 +339,7 @@ async function replayPriorSuccess(
     // prefers the full spilled text over the bounded preview (#2726), so this
     // audit row must go through the same bounded-preview+spill helper as the
     // primary node_completed/node_skipped_prior_success writers, not the raw text.
-    const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
+    const alwaysRunPriorOutput = formatThisNodesPriorOutput();
     await recordNodeState(
       { store: ctx.deps.store, logDir: ctx.logDir },
       {
@@ -320,7 +377,7 @@ async function replayPriorSuccess(
       const invalidatedStepName = ctx.stepNamePrefix + node.id;
       // Same rationale as the always_run reset above: prior.output can now be
       // the full spilled text, so this audit row needs the same bounding (#2726).
-      const invalidatedPriorOutput = formatThisNodesPriorOutput(invalidatedStepName);
+      const invalidatedPriorOutput = formatThisNodesPriorOutput();
       getLog().info(
         { nodeId: node.id, invalidatingDeps: staleDeps },
         'dag.node_prior_cache_invalidated'
@@ -358,7 +415,7 @@ async function replayPriorSuccess(
               : {}),
             ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
           }
-        : formatThisNodesPriorOutput(skipStepName);
+        : formatThisNodesPriorOutput();
       // Return the pre-populated output (already in nodeOutputs)
       const cachedOutput = ctx.nodeOutputs.get(node.id);
       if (cachedOutput === undefined) {
@@ -488,6 +545,7 @@ async function aggregateLayerResults(
   isParallelLayer: boolean
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
+  const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
@@ -534,7 +592,7 @@ async function aggregateLayerResults(
       const ownerNode = nodeById.get(nodeId);
       if (
         ownerNode &&
-        isNodeContextResume(ownerNode.context) &&
+        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
         output.state === 'completed' &&
         output.sessionId !== undefined &&
         sessionProvider !== undefined

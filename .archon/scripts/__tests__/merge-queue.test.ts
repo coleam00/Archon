@@ -367,7 +367,7 @@ function merges(result: ScriptRun): string[] {
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
-const BASE_GREEN = { summary: 'dev is green', attention: null };
+const BASE_GREEN = { summary: 'dev is green', reran: false, attention: null };
 
 const ATTENTION: MergeAttention = {
   what: 'PR 42 changes the SDLC pack; merge it?',
@@ -386,11 +386,19 @@ function decision(overrides: Record<string, unknown>): Record<string, unknown> {
   return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', attention: null, ...overrides };
 }
 
-function recordInputs(decisions: readonly Record<string, unknown>[], base: Record<string, unknown> = BASE_GREEN): Record<string, string> {
+const FACTS_BASE_GREEN = { branch: 'dev', head: OLD, checks: { state: 'green', failing: [], pending: [] } };
+const FACTS_BASE_RED = { branch: 'dev', head: OLD, checks: { state: 'red', failing: ['test'], pending: [] } };
+
+function recordInputs(
+  decisions: readonly Record<string, unknown>[],
+  base: Record<string, unknown> = BASE_GREEN,
+  factsBase: Record<string, unknown> = FACTS_BASE_GREEN
+): Record<string, string> {
   return {
     INPUTS_PATH: 'sweep',
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
+    INPUTS_BASE: JSON.stringify(factsBase),
     INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
   };
 }
@@ -406,6 +414,7 @@ const BOTH_ITEMS = JSON.stringify([
 const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
 const BASE_RED = {
   summary: 'lint red on dev after a rerun',
+  reran: false,
   attention: { ...ATTENTION, what: 'dev is red since PR 43 merged', choices: [HOLD], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
 };
 
@@ -446,6 +455,13 @@ describe('the merge queue scripts', () => {
     expect(picked.stderr).toContain('own-PR enrollment stopped');
     const output = JSON.parse(picked.stdout) as { items: { item: { number: number } }[] };
     expect(output.items.map(entry => entry.item.number)).toEqual([7]);
+  }, 60_000);
+
+  test('a red default branch with no queued pull request still reaches the sweep, so its question can be raised', () => {
+    const at = install();
+    const output = ok(run(at, 'facts', {}, { pr: { baseChecks: 'red' } })) as { path: string; items: unknown[]; base: { checks: { state: string } } };
+    expect(output).toMatchObject({ path: 'sweep', items: [], base: { checks: { state: 'red' } } });
+    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
   test('without the opt-in, nobody\'s pull requests are enrolled', () => {
@@ -590,7 +606,7 @@ describe('the merge queue scripts', () => {
       [decision({}), BASE_GREEN],
       [decision({ head: OLD }), BASE_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), BASE_GREEN],
-      [decision({ action: 'ask', attention: ATTENTION }), BASE_GREEN],
+      [decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' }), BASE_GREEN],
     ] as const;
     for (const [decided, base] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));
@@ -598,6 +614,42 @@ describe('the merge queue scripts', () => {
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(false);
     }
+  }, 60_000);
+
+  test('a return without a brief or an ask without its question is refused: it waits, and the record fails after writing the rest', () => {
+    const at = install();
+    for (const [declared, refusal] of [
+      [decision({ action: 'return', brief: ' ', reason: 'CI red in its test' }), 'the sweep returned pull request 42 with no brief'],
+      [decision({ action: 'ask', class: 'unclear', attention: null, brief: 'rework PR 42' }), 'the sweep asked about pull request 42 with no question'],
+      [decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: '' }), 'the sweep asked about pull request 42 with no brief for a return'],
+    ] as const) {
+      seed(at, item(BUILT, undefined, CLAIMED));
+      const refused = run(at, 'record', recordInputs([declared]));
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain(refusal);
+      const doc = stored(at).value as WorkItem;
+      expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
+      expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain(refusal);
+    }
+  }, 60_000);
+
+  test('a red default branch the sweep neither reran nor raised fails the record; a rerun waits for its result', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const silent = run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red' })], BASE_GREEN, FACTS_BASE_RED));
+    expect(silent.code).not.toBe(0);
+    expect(silent.stderr).toContain(`the default branch dev is red at ${OLD} (test), and the sweep neither reran it nor raised it`);
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+    seed(at, item(BUILT, undefined, CLAIMED));
+    ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red; reran' })], { ...BASE_GREEN, reran: true }, FACTS_BASE_RED)));
+  }, 60_000);
+
+  test('a red default branch with no pull request waiting raises its hold question', () => {
+    const at = install();
+    const inputs = { ...recordInputs([], BASE_RED, FACTS_BASE_RED), INPUTS_ITEMS: '[]' };
+    const raised = ok(run(at, 'record', inputs));
+    expect(raised).toMatchObject({ merged: [], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
+    expect(raised.attention).toContain('dev is red since PR 43 merged');
   }, 60_000);
 
   test('a rerun is recorded at its head, for the next sweep to read', () => {
@@ -639,22 +691,35 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
-  test("an own pull request's ask offers no way back to the build queue: its `other` parks", () => {
+  test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const attention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention })]);
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]);
     const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { asked: { attention: { choices: { id: string; effect: string }[] } } };
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
+  }, 60_000);
+
+  test('an own pull request is never handed to the build queue: a return waits for the next sweep instead', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
+    const inputs = recordInputs([decision({ action: 'return', brief: 'fix the red test', reason: 'CI red in its own test' })]);
+    const held = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
+    expect(held.code).not.toBe(0);
+    expect(held.stderr).toContain('the sweep returned own pull request 42, which no build round owns; it waits for the next sweep');
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, which no build round owns');
+    expect(buildWaits(doc)).toBe(false);
   }, 60_000);
 
   test('a red default branch takes the run\'s one question, and the pull request\'s ask waits for the next sweep', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION })], BASE_RED);
+    const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
     expect(raised).toMatchObject({ merged: [43], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
     expect(raised.attention).toContain('dev is red since PR 43 merged');

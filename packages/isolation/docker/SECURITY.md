@@ -59,7 +59,12 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   root-owned files on a rootful Linux daemon; Archon `chown`s the mount back to the
   host user on suspend and destroy, best-effort and logged
   (`isolation.container_artifacts_chown_failed`). The run's frozen workflow source is a
-  separate read-only bind, never under `$ARTIFACTS_DIR`.
+  separate read-only bind, never under `$ARTIFACTS_DIR`. Because the container can
+  plant symlinks there, the engine's own host writes into `$ARTIFACTS_DIR` (typed
+  artifacts and their listings, output spills, checkout manifests, delivered
+  credential files) refuse a parent directory that is a symlink and replace a symlinked
+  file rather than write through it. These checks see links that exist when the write
+  starts; they do not cover a container swapping a directory for a link mid-write.
 
 - **Captured-source integrity is checkpoint detection, not containment.** Archon
   hashes the host capture against the run's pinned identity before dispatching each
