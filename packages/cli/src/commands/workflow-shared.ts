@@ -281,6 +281,15 @@ export function printJsonWriteError(runId: string, action: string, error: unknow
 const FULL_RUN_ID_RE =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
+export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
+  const scope = process.env[WORKFLOW_CODEBASE_ID_ENV];
+  if (scope === undefined) return undefined;
+  if (all) throw new Error('--all cannot override the selected chat project.');
+  const codebase = scope ? await host.records.codebases.getCodebase(scope) : null;
+  if (!codebase) throw new Error(`${WORKFLOW_CODEBASE_ID_ENV} must name a registered project.`);
+  return codebase;
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's

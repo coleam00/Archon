@@ -27,7 +27,13 @@ import {
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { formatAge, getLog, resolveRunIdArg, resolveRunTranscriptPath } from './workflow-shared';
+import {
+  formatAge,
+  getLog,
+  inheritedWorkflowCodebase,
+  resolveRunIdArg,
+  resolveRunTranscriptPath,
+} from './workflow-shared';
 import {
   TRANSCRIPT_POLL_INTERVAL_MS,
   type TranscriptFormat,
@@ -270,14 +276,15 @@ export async function workflowStatusCommand(
   const { getWorkflowStatus } = host.operations;
 
   let codebase = null;
-  if (!opts.all) {
-    try {
+  try {
+    codebase = await inheritedWorkflowCodebase(host, opts.all);
+    if (codebase === undefined && !opts.all) {
       codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
-      throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
     }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
+    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
   }
 
   let runs: DashboardWorkflowRun[];
@@ -610,7 +617,7 @@ export async function workflowGetCommand(
  *
  * Complements `status` (active-only): resolves the codebase from `cwd` the same
  * way `workflow run` does, then lists that project's recent runs of every
- * status. `--all` drops the project scope (lists across all projects);
+ * status. Outside chat, `--all` lists across all projects;
  * `--status` filters to one status; `--limit` caps the count (default 20).
  * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
  */
@@ -651,24 +658,25 @@ export async function workflowRunsCommand(
   }
 
   let codebase = null;
-  if (!opts.all) {
-    try {
+  try {
+    codebase = await inheritedWorkflowCodebase(host, opts.all);
+    if (codebase === undefined && !opts.all) {
       codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-      const message = `Failed to resolve workflow runs project: ${err.message}`;
-      if (opts.json) {
-        await writeJsonLine({ ok: false, error: message });
-        return 1;
-      }
-      throw new Error(message, { cause: err });
     }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+    const message = `Failed to resolve workflow runs project: ${err.message}`;
+    if (opts.json) {
+      await writeJsonLine({ ok: false, error: message });
+      return 1;
+    }
+    throw new Error(message, { cause: err });
   }
   // The open-work inbox contains terminal failed runs with no adopter or successor.
   if (opts.open) {
     const runs = await host.deps.store.findOpenWorkRuns({
-      codebaseId: opts.all ? undefined : (codebase?.id ?? undefined),
+      codebaseId: codebase?.id,
       limit: opts.limit ?? 20,
     });
     if (opts.json) {
@@ -696,7 +704,7 @@ export async function workflowRunsCommand(
 
   // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
   // so pass codebaseId/status straight through — no conditional spread needed.
-  const codebaseId = opts.all ? undefined : codebase?.id;
+  const codebaseId = codebase?.id;
 
   let result;
   try {
