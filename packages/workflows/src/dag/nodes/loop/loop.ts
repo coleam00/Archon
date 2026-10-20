@@ -7,7 +7,14 @@ import {
 } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
-import type { LoopNode, EffortLevel, LoopGateRunMetadata, WorkflowRun } from '../../../schemas';
+import type {
+  ApprovalContext,
+  LoopNode,
+  EffortLevel,
+  LoopGateRunMetadata,
+  WorkflowRun,
+} from '../../../schemas';
+import { nodeInvocationKey } from '../../../node-record-reader';
 import { isApprovalContext } from '../../../schemas';
 import { createAttemptEventSequence } from '../../../provider-events';
 import {
@@ -133,26 +140,9 @@ export async function executeLoopNode(
     tier: resolvedTier,
     effort: resolvedEffort,
   });
-  const savedApproval = workflowRun.metadata?.approval;
-  const saved =
-    isApprovalContext(savedApproval) &&
-    savedApproval.type === 'interactive_loop' &&
-    savedApproval.nodeId === node.id
-      ? savedApproval.execution
-      : undefined;
-  const savedExecution = saved === undefined ? undefined : nodeExecutionMetadataSchema.parse(saved);
-  if (
-    savedExecution !== undefined &&
-    (savedExecution.runId !== workflowRun.id ||
-      savedExecution.path !== stepName ||
-      savedExecution.node.kind !== 'loop')
-  ) {
-    throw new Error(
-      `Loop execution identity does not match '${stepName}' in run ${workflowRun.id}`
-    );
-  }
+  const resume = readLoopResume(workflowRun, node, newExecution);
+  const { savedExecution } = resume;
   const resumedExecution = savedExecution ?? newExecution;
-  const resume = readLoopResume(workflowRun, node);
   const state: LoopState = {
     execution: resumedExecution,
     lastStartedIteration: resume.startIteration - 1,
@@ -365,19 +355,54 @@ async function runSettledLoopIteration(
   }
 }
 
-/** Detect interactive loop resume — whether workflowRun.metadata holds this node's loop gate. */
-function readLoopResume(workflowRun: WorkflowRun, node: LoopNode): LoopResume {
-  const rawApproval = workflowRun.metadata?.approval;
-  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
-  const gate =
-    loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id
-      ? loopGateMeta
+function readLoopGate(
+  workflowRun: WorkflowRun,
+  node: LoopNode,
+  execution: NodeExecutionRecord
+): {
+  gate: ApprovalContext | undefined;
+  savedExecution: NodeExecutionRecord | undefined;
+} {
+  const savedApproval = workflowRun.metadata?.approval;
+  let gate =
+    isApprovalContext(savedApproval) &&
+    savedApproval.type === 'interactive_loop' &&
+    savedApproval.nodeId === node.id
+      ? savedApproval
       : undefined;
+  let savedExecution =
+    gate?.execution === undefined ? undefined : nodeExecutionMetadataSchema.parse(gate.execution);
+  if (
+    savedExecution !== undefined &&
+    nodeInvocationKey(savedExecution.path, savedExecution.invocation.loopPath) !==
+      nodeInvocationKey(execution.path, execution.invocation.loopPath)
+  ) {
+    gate = undefined;
+    savedExecution = undefined;
+  }
+  if (
+    savedExecution !== undefined &&
+    (savedExecution.runId !== workflowRun.id || savedExecution.node.kind !== 'loop')
+  ) {
+    throw new Error(
+      `Loop execution identity does not match '${execution.path}' in run ${workflowRun.id}`
+    );
+  }
+  return { gate, savedExecution };
+}
+
+function readLoopResume(
+  workflowRun: WorkflowRun,
+  node: LoopNode,
+  execution: NodeExecutionRecord
+): LoopResume & { savedExecution: NodeExecutionRecord | undefined } {
+  const { gate, savedExecution } = readLoopGate(workflowRun, node, execution);
   const startIteration = gate !== undefined ? (gate.iteration ?? 0) + 1 : 1;
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
-  const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
+  const feedbackGiven = gate !== undefined && loopGateRunMeta.loop_feedback_given === true;
   const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
   return {
+    savedExecution,
     gate,
     startIteration,
     userInput: gate !== undefined ? (loopGateRunMeta.loop_user_input ?? '') : '',
