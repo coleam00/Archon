@@ -8,7 +8,7 @@ The repository: `$INPUTS.repo_host/$INPUTS.repo_path`. The base commit every cla
 
 - `$ARTIFACTS_DIR/drain/queue.json`: the queued runs and their undecided records. Each record has a `ref` of the form `<run-id>:<ref>`, a title, a claim and its evidence. `reviewed: true` means the run's review certified it; `false` is a raw record no review judged. Each run's `artifacts` directory holds the run's own report, `discoveries.md` and anything the evidence cites; open them when a record needs its context. Each run's `questions` are what an earlier pass asked a maintainer about its records, with the answer once there is one.
 - The project's direction document, where it has one: at the root, in a config directory such as `.archon/`, or wherever its steering files point.
-- The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `discoveries.md`, `triage.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default.
+- The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `discoveries.md`, `triage.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins.
 - The project's `engineering.md` and `architecture.md`, only when a decision depends on what they rule.
 
 ## Decide every record

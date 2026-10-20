@@ -272,12 +272,10 @@ new pack prompt that writes or judges code follows the same rule.
 A project's policy for a decision the pack makes, such as what triage accepts, is
 one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
 a default for each policy document a prompt names, in
-[`.shared/policy/`](.shared/policy). A project's own file replaces its default
-whole, except `merge.md`, which layers: the merge queue reads the default and then the
-project's file, whose lines add to it and win where they conflict. With no project
-file, the default applies. To change one, copy the default
-to `.archon/sdlc/policy/` and reword it; for `merge.md`, write only the lines to add or
-override. A policy document may be only a pointer to
+[`.shared/policy/`](.shared/policy). A node reads the default first and then
+the project's own file, whose lines add to the default and win where the two conflict;
+with no project file, the default applies. To change one, write only the lines to add
+or override in `.archon/sdlc/policy/<topic>.md`. A policy document may be only a pointer to
 documents the project already has, and the agent reads what it points to. A prompt
 names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
@@ -295,10 +293,9 @@ captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
 from its own location and the node binds that directory into the prompt with `with:`. The script hands over
-the directory only; the agent chooses between the project's file and the default,
-and no script opens either. The default is a file rather than text in the prompt
-because a prompt carrying the default would hold it even after a project replaced
-it.
+the directory only; the agent reads the default and the project's file, and no
+script opens either. The default is a file rather than text in the prompt, so a node
+whose decision names no policy carries none of it.
 
 ## A stage pauses where nothing takes it forward
 
@@ -476,7 +473,7 @@ The predicate only saves runs; intake ignores any other label. A binding install
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
-which a project replaces with its own `.archon/sdlc/policy/build.md`.
+which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order (the `order`
   input). An item waits for the build queue when its work item's stage is a READY

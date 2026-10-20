@@ -73,7 +73,7 @@ outcome_field: ready
 nodes:
   # The directory of the pack's default policy documents in this run's captured
   # source, the same in a source checkout and a binary install. Synthesis names the
-  # policy file it needs and chooses between the project's own and the default.
+  # policy file it needs and reads the default, then the project's own on top.
   - id: policy
     script: policy
     runtime: bun
