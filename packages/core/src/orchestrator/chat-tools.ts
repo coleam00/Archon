@@ -250,10 +250,12 @@ export function buildRegisterProjectTool(ctx: {
   };
 }
 
+export const REPORT_WORKFLOW_NO_MATCH_TOOL_NAME = 'report_workflow_no_match';
+
 export function buildReportWorkflowNoMatchTool(): NativeTool {
   let reported = false;
   return {
-    name: 'report_workflow_no_match',
+    name: REPORT_WORKFLOW_NO_MATCH_TOOL_NAME,
     description:
       'Report that the user wants work done but no available workflow fits. Do not use for ordinary questions or missing project/input details.',
     inputSchema: defineNativeToolInputSchema({ properties: {}, required: [] }),

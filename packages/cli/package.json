@@ -145,6 +145,7 @@
     ],
     [
       "src/cli.test.ts",
+      "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",

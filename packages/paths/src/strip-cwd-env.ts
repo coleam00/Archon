@@ -24,6 +24,7 @@
  *    Auth vars (CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_USE_BEDROCK,
  *    CLAUDE_CODE_USE_VERTEX) are kept.
  */
+import { CString, dlopen } from 'bun:ffi';
 import { WORKFLOW_CODEBASE_ID_ENV } from './workflow-scope';
 import { config } from 'dotenv';
 import { resolve } from 'path';
@@ -41,6 +42,28 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
 ]);
+
+// Bun's dotenv preload only changes its JS environment map. Native getenv still
+// distinguishes actual parent context, including an empty value, from that preload.
+function preserveInheritedWorkflowScope(cwdKeys: Set<string>): void {
+  if (!cwdKeys.has(WORKFLOW_CODEBASE_ID_ENV)) return;
+  const library = dlopen(
+    process.platform === 'win32'
+      ? 'ucrtbase.dll'
+      : process.platform === 'darwin'
+        ? '/usr/lib/libSystem.B.dylib'
+        : 'libc.so.6',
+    { getenv: { args: ['cstring'], returns: 'ptr' } }
+  );
+  try {
+    const pointer = library.symbols.getenv(Buffer.from(`${WORKFLOW_CODEBASE_ID_ENV}\0`));
+    if (pointer === null) return;
+    process.env[WORKFLOW_CODEBASE_ID_ENV] = new CString(pointer).toString();
+    cwdKeys.delete(WORKFLOW_CODEBASE_ID_ENV);
+  } finally {
+    library.close();
+  }
+}
 
 /**
  * Strip keys named in CWD .env files except the inherited chat project scope,
@@ -87,7 +110,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     }
   }
 
-  cwdKeys.delete(WORKFLOW_CODEBASE_ID_ENV);
+  preserveInheritedWorkflowScope(cwdKeys);
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
   }

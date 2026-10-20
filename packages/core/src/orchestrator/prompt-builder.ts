@@ -5,7 +5,11 @@
  */
 import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
 
-import { INVOKE_WORKFLOW_SCHEMA, REGISTER_PROJECT_SCHEMA } from './chat-tools';
+import {
+  INVOKE_WORKFLOW_SCHEMA,
+  REGISTER_PROJECT_SCHEMA,
+  REPORT_WORKFLOW_NO_MATCH_TOOL_NAME,
+} from './chat-tools';
 import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
@@ -342,7 +346,7 @@ ${rule4}
 5. If no project needed (general question) → answer directly without workflow
 6. If the user wants to add a new project → clone it, then register it (see below)
 
-In the examples below, {workflow-name} is an illustrative placeholder: replace it with the exact name of an appropriate workflow from Available Workflows. Never invoke the placeholder literally. If the user wants work done but no listed workflow fits, ${channel === 'tools' ? 'call `report_workflow_no_match` once' : 'run `archon telemetry no-match` once'}, then explain that instead of inventing a name. Do not report no match for ordinary questions or missing project/input details. Identify the closest available option and its limits, offer to author a workflow for repeatable work, or suggest using a coding agent directly for one-off work. Do not recommend deprecated workflows when a non-deprecated workflow fits; follow the deprecation guidance in Available Workflows.`;
+In the examples below, {workflow-name} is an illustrative placeholder: replace it with the exact name of an appropriate workflow from Available Workflows. Never invoke the placeholder literally. If the user wants work done but no listed workflow fits, ${channel === 'tools' ? `call \`${REPORT_WORKFLOW_NO_MATCH_TOOL_NAME}\` once` : 'run `archon telemetry no-match` once'}, then explain that instead of inventing a name. Do not report no match for ordinary questions or missing project/input details. Identify the closest available option and its limits, offer to author a workflow for repeatable work, or suggest using a coding agent directly for one-off work. Do not recommend deprecated workflows when a non-deprecated workflow fits; follow the deprecation guidance in Available Workflows.`;
 
   const promptRules = (
     arg: string

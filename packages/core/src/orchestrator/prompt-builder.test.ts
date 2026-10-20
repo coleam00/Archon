@@ -9,6 +9,7 @@ import {
   formatPausedGateSection,
   type LaunchChannel,
 } from './prompt-builder';
+import { buildReportWorkflowNoMatchTool } from './chat-tools';
 import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
@@ -20,7 +21,7 @@ describe('buildRoutingRulesWithProject', () => {
     const rules = buildRoutingRulesWithProject(channel);
     expect(rules).toContain('no listed workflow fits');
     expect(rules).toContain(
-      channel === 'tools' ? 'report_workflow_no_match' : 'archon telemetry no-match'
+      channel === 'tools' ? buildReportWorkflowNoMatchTool().name : 'archon telemetry no-match'
     );
     expect(rules).toContain('Do not report no match for ordinary questions');
     expect(rules).toContain('closest available option and its limits');

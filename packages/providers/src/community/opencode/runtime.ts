@@ -52,23 +52,21 @@ async function startEmbeddedOpencode(
   signal?: AbortSignal,
   env: Record<string, string> = {}
 ): Promise<{ client: unknown; server: { url: string; close(): void } }> {
-  // Clear any pre-existing OpenCode server credential env vars so the embedded
-  // server uses the random password generated in buildEmbeddedServerConfig rather
-  // than picking up credentials intended for an external server instance.
-  // Only clear them when they are actually set to avoid unnecessary mutations.
-  if (process.env.OPENCODE_SERVER_PASSWORD !== undefined) {
-    delete process.env.OPENCODE_SERVER_PASSWORD;
-  }
-  if (process.env.OPENCODE_SERVER_USERNAME !== undefined) {
-    delete process.env.OPENCODE_SERVER_USERNAME;
-  }
-
-  const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  // Server credentials belong to the embedded config, never to host or request env.
+  const overlay = {
+    ...env,
+    OPENCODE_SERVER_PASSWORD: undefined,
+    OPENCODE_SERVER_USERNAME: undefined,
+  };
+  const previous = Object.fromEntries(Object.keys(overlay).map(key => [key, process.env[key]]));
   // The SDK spawns synchronously before returning its startup promise. Restore before
   // awaiting it: overlapping queries must never inherit another request's environment.
   // runtime-env.integration.spec.ts checks this contract against the installed SDK.
   try {
-    Object.assign(process.env, env);
+    for (const [key, value] of Object.entries(overlay)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     return createOpencode({
       hostname: '127.0.0.1',
       port: startupPort,
