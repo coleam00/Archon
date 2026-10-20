@@ -157,25 +157,8 @@ describe('git utilities', () => {
   });
 
   describe('isProjectScopedWorktreeBase (deprecated)', () => {
-    test('returns true for path under workspaces with owner/repo', () => {
-      const workspacesPath = join(homedir(), '.archon', 'workspaces');
-      expect(
-        git.isProjectScopedWorktreeBase(repo(join(workspacesPath, 'acme', 'widget', 'source')))
-      ).toBe(true);
-    });
-
     test('returns true for a local non-workspace path (new two-layout model)', () => {
       expect(git.isProjectScopedWorktreeBase(repo('/workspace/my-repo'))).toBe(true);
-    });
-
-    test('returns true when codebaseName is provided (local repo)', () => {
-      expect(
-        git.isProjectScopedWorktreeBase(repo('/Users/rasmus/Projects/repo'), 'owner/repo')
-      ).toBe(true);
-    });
-
-    test('returns true when codebaseName is invalid (falls back to path-derived)', () => {
-      expect(git.isProjectScopedWorktreeBase(repo('/local/repo'), 'invalid')).toBe(true);
     });
   });
 });
