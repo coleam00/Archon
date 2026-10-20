@@ -1,6 +1,6 @@
 ---
 title: Build your first workflow
-description: Build a workflow that plans a change, waits for your approval, implements it and fixes failing tests, and check every route before it spends a token.
+description: Build an agent-first workflow that plans a change, waits for your approval, implements it and fixes failing tests, and check every route before it spends a token.
 category: getting-started
 audience: [user]
 sidebar:
@@ -9,15 +9,25 @@ sidebar:
 
 In this tutorial you build `build-change`, a workflow that takes a brief for a small change to your repository and:
 
-1. plans the change and saves the plan as an artifact;
+1. has an agent plan the change and save the plan as an artifact;
 2. pauses until you approve the plan, or cancels if you reject it;
-3. implements the approved plan;
-4. runs your tests in a fresh agent session;
-5. fixes the code if the tests fail.
+3. has an agent implement the approved plan;
+4. runs your test command and records whether it passed;
+5. has a fresh agent fix the code if the tests failed.
 
 Before you run it, you check it three ways that cost nothing: `archon validate workflows`, a dry run with stub outputs, and fixtures that `archon workflow test` replays on every change.
 
 You need Archon installed and a provider added; see the [Quickstart](/getting-started/quick-start/). Work in a git repository that has a test command.
+
+## Who does what
+
+Archon's rule for a workflow is **YAML coordinates. Code computes. Agents judge.** `build-change` follows it:
+
+- **Agents judge.** Planning a change, implementing it and working out why a test fails all need judgment, so each is an agent node. When a later node needs the agent's decision, the agent returns it as a small typed result through `output_format`, never as prose for code to parse.
+- **Scripts give facts and act at boundaries.** Whether the tests pass is a fact, so a script runs the test command and reports the exit code and output. It does not interpret the failure; that is the fixing agent's job. Use a `bash:` or `script:` node only for work with a fixed rule like this one.
+- **YAML coordinates.** The file holds the order, the approval gate and the `when:` conditions on typed fields. It decides nothing on its own.
+
+Tests follow the same split. The fixtures you write later check outcomes at those seams: which nodes run, whether the run completes or is cancelled, and whether the test output reached the fixing agent. They never pin what an agent writes.
 
 ## Lay out the workflow folder
 
@@ -27,32 +37,34 @@ A workflow lives in its own folder under `.archon/workflows/<pack>/<workflow>/`,
 .archon/workflows/my-team/build-change/
 ├── build-change.yaml
 ├── commands/
-│   └── run-tests.md
+│   └── fix-tests.md
 └── fixtures/
 ```
 
-`my-team` is the pack name; choose your own. A command or script that `build-change.yaml` names resolves only from its own `commands/` and `scripts/` folders, so two workflows can each have a `run-tests.md` without colliding.
+`my-team` is the pack name; choose your own. A command or script that `build-change.yaml` names resolves only from its own `commands/` and `scripts/` folders, so two workflows can each have a `fix-tests.md` without colliding.
 
 ## Write a command
 
-A command is a markdown file of instructions for an agent. Use one when the instructions are long or shared by several nodes. Create `commands/run-tests.md`:
+A command is a markdown file of instructions for an agent. Use one when the instructions are long or shared by several nodes. Create `commands/fix-tests.md`:
 
 ```markdown
 ---
-description: Run the project's tests and report whether they pass
+description: Find why the tests fail after a change and fix the cause
 ---
 
-# Run tests
+# Fix failing tests
 
-Run this project's test suite. Find the test command in the project's own
-files, for example `package.json`, `Makefile` or `pyproject.toml`. If you
-cannot find one, report `passed: false` and say where you looked.
+The change described in $ARTIFACTS_DIR/plan.md was implemented, and the
+project's tests now fail. The test output is:
 
-Do not fix anything. Report what you saw:
+$INPUTS.test_output
 
-- `passed`: true only if every test passed
-- `failures`: each failing test with its error message, or an empty string
+Decide whether the failure comes from the change or from a test that the plan
+says should change. Fix the cause, not the symptom: do not delete or skip a
+test to make it pass. Run the tests again, then commit the fix.
 ```
+
+`$ARTIFACTS_DIR` is a directory Archon creates for each run, outside your repository. `$INPUTS.test_output` is a value the workflow passes to this command; the next section shows where it comes from.
 
 ## Write the workflow
 
@@ -62,8 +74,12 @@ Create `build-change.yaml`:
 name: build-change
 description: |
   Plan a change from a brief, wait for you to approve the plan, implement it,
-  then run the tests in a fresh session and fix what fails.
+  run the tests, and fix the code if they fail.
   Use when: you have a small, well-described change for this repository.
+inputs:
+  test_command:
+    default: npm test
+    description: the command that runs this project's tests
 
 nodes:
   - id: plan
@@ -104,36 +120,38 @@ nodes:
       $approve-plan.output.text
       Commit your changes with a clear message.
 
-  - id: check
+  - id: test
     depends_on: [implement]
-    command: run-tests
-    context: fresh
+    runtime: bun
+    script: |
+      const run = Bun.spawnSync(['sh', '-c', process.env.INPUTS_TEST_COMMAND ?? '']);
+      const output = (run.stdout.toString() + run.stderr.toString()).slice(-4000);
+      console.log(JSON.stringify({ passed: run.exitCode === 0, output }));
     output_format:
       type: object
       properties:
         passed: { type: boolean }
-        failures: { type: string }
-      required: [passed, failures]
+        output: { type: string }
+      required: [passed, output]
       additionalProperties: false
 
   - id: fix
-    depends_on: [check]
-    when: "$check.output.passed == false"
+    depends_on: [test]
+    when: "$test.output.passed == false"
+    command: fix-tests
     context: fresh
-    prompt: |
-      These tests fail after implementing $ARTIFACTS_DIR/plan.md:
-      $check.output.failures
-      Fix the cause, run the tests again, and commit the fix.
+    with:
+      test_output: $test.output.output
 ```
 
-Each node does one kind of work:
+Each node does one job:
 
-- **`plan`** is an agent node. `$ARGUMENTS` is the brief you pass to the run, and `$ARTIFACTS_DIR` is a directory Archon creates for each run, outside your repository. `output_format` makes the agent return JSON matching the schema, so later nodes can read `$plan.output.summary` as a field. The node fails if the agent returns anything else.
+- **`plan`** is an agent node. `$ARGUMENTS` is the brief you pass to the run. `output_format` makes the agent return JSON matching the schema, so the gate can show `$plan.output.summary`. The node fails if the agent returns anything else.
 - **`approve-plan`** is the gate. A `wait:` node with `attention:` pauses the run until someone answers it, and `form: approval` means the answer is `approve` or `reject` plus optional text. A paused run holds no process; answer it minutes or days later. Pause only where a person should decide. A check that code or another agent can make belongs in a node.
 - **`stop`** cancels the run when you reject. A rejection is an answer, not a cancellation, so the workflow decides what happens next.
 - **`implement`** runs only after an approval. `$approve-plan.output.text` passes on any notes you gave with the answer.
-- **`check`** loads `commands/run-tests.md`. `context: fresh` starts a new agent session, so the agent reads the real test results instead of trusting what the implementer believed it wrote. Use it before any node whose job is to verify.
-- **`fix`** runs only when `check` reports a failure.
+- **`test`** is a script node. It runs the command from the `test_command` input, which defaults to `npm test`, and prints `passed` and the last 4,000 characters of output as JSON. `output_format` on a script certifies its stdout: output that does not match the schema fails the node.
+- **`fix`** runs only when `test` reports a failure. It loads `commands/fix-tests.md`, and `with:` binds the test output to the command's `$INPUTS.test_output`. `context: fresh` starts a new agent session, so the agent works from the real test output instead of what the implementer believed it wrote.
 
 Nodes without a dependency between them run at the same time. Here every node depends on the one before it, so they run in order.
 
@@ -157,7 +175,7 @@ ERROR [validation_error] DAG node validation failed: Node 'plan': 'timeout' 'tim
 
 ## Dry-run it with stubs
 
-A dry run walks the graph with outputs you supply instead of calling a model. It never creates a run, so it is free. Generate a stub file that has one entry per node that needs one:
+A dry run walks the graph with outputs you supply instead of calling a model or running scripts. It never creates a run, so it is free. Generate a stub file that has one entry per node that needs one:
 
 ```bash
 archon workflow run build-change --dry-run --stubs-init stubs.yaml
@@ -168,7 +186,7 @@ Edit the values to describe the route you want to see. This one simulates failin
 ```yaml
 plan: { summary: "Add a --version flag that prints the version from package.json." }
 implement: "Added the flag and a test."
-check: { passed: false, failures: "version.test.ts: expected 1.2.0, got undefined" }
+test: { passed: false, output: "version.test.ts: expected 1.2.0, got undefined" }
 fix: "Read the version from package.json at startup."
 ```
 
@@ -195,12 +213,12 @@ STUBBED   plan (prompt)
 STUBBED   approve-plan (wait) — answered by stub
 SKIPPED   stop (cancel) — when_condition_false
 STUBBED   implement (prompt)
-STUBBED   check (command)
-STUBBED   fix (prompt)
+STUBBED   test (script)
+STUBBED   fix (command)
 Simulation outcome: completed
 ```
 
-The trace also prints each agent node's resolved prompt and the provider and model it will run on. A dry run checks the wiring: routing, gates, `when:` conditions and variable substitution. It does not check what the model will write.
+The trace also prints each agent node's resolved prompt and the provider and model it will run on. A dry run checks the wiring: routing, gates, `when:` conditions and variable substitution. It does not check what the model will write. To run the `test` script for real while the agents stay stubbed, delete its stub and add `--exec-code --input test_command="npm test"`. That runs your test command on your machine.
 
 ## Keep the routes as fixtures
 
@@ -209,22 +227,24 @@ A fixture is a stub file with an expected result, saved in the workflow's `fixtu
 `fixtures/approved.stubs.yaml`: the tests pass, so `fix` must not run.
 
 ```yaml
-plan: { summary: "Add a --version flag that prints package.json's version." }
+# The tests pass, so `fix` is skipped. It has no stub, so the fixture fails if it runs.
+plan: { summary: "Add a --version flag that prints the version from package.json." }
 approve-plan: { decision: approve, text: "" }
 implement: "Added the flag and a test."
-check: { passed: true, failures: "" }
+test: { passed: true, output: "12 pass, 0 fail" }
 fixture:
   expect: completed
-  reached: [implement, check]
+  reached: [implement, test]
 ```
 
-`fixtures/red.stubs.yaml`: the tests fail, so `fix` runs and receives the failures.
+`fixtures/red.stubs.yaml`: the tests fail, so `fix` runs and receives the test output.
 
 ```yaml
-plan: { summary: "Add a --version flag that prints package.json's version." }
+# The tests fail, so `fix` runs and receives the test output.
+plan: { summary: "Add a --version flag that prints the version from package.json." }
 approve-plan: { decision: approve, text: "" }
 implement: "Added the flag."
-check: { passed: false, failures: "version.test.ts: expected 1.2.0, got undefined" }
+test: { passed: false, output: "version.test.ts: expected 1.2.0, got undefined" }
 fix: "Read the version from package.json at startup."
 fixture:
   expect: completed
@@ -236,6 +256,8 @@ fixture:
 `fixtures/rejected.stubs.yaml`: you reject the plan, so the run is cancelled before any code changes.
 
 ```yaml
+# You reject the plan: the run is cancelled before any code changes.
+# `implement` has no stub, so the fixture fails if it runs.
 plan: { summary: "Rewrite the CLI parser." }
 approve-plan: { decision: reject, text: "Too broad. Only add the flag." }
 fixture:
@@ -243,7 +265,7 @@ fixture:
   reached: [stop]
 ```
 
-The `fixture:` block holds the expectations. `expect` is the simulation outcome: `completed`, `failed`, `paused` or `cancelled`. `reached` lists nodes that must run. `resolved-text-contains` checks that a node's prompt received a value. A node the route reaches without a stub fails the fixture, so leaving out the stub for `fix` in `approved` is what proves `fix` stays skipped.
+The `fixture:` block holds the expectations. `expect` is the simulation outcome: `completed`, `failed`, `paused` or `cancelled`. `reached` lists nodes that must run. `resolved-text-contains` checks that a fact reached a node: here, that the failing test's output reached the fixing agent's instructions. A node the route reaches without a stub fails the fixture, so leaving out the stub for `fix` in `approved` is what proves `fix` stays skipped.
 
 ```bash
 archon workflow test build-change
@@ -267,7 +289,7 @@ archon workflow test build-change
 The brief is the input the whole run is measured against. A vague brief gets a confident plan for a change you didn't want. State the problem, why it matters, the outcome you want, what must not change, and how you will know it is done; see [The input is the contract](/getting-started/quick-start/#the-input-is-the-contract).
 
 ```bash
-archon workflow run build-change --branch feat/version-flag "$(cat <<'BRIEF'
+archon workflow run build-change --branch feat/version-flag --input test_command="npm test" "$(cat <<'BRIEF'
 Problem: the CLI has no way to print its version, so bug reports never say
 which release they were filed against.
 
@@ -294,7 +316,7 @@ Approving continues the run in your terminal until it finishes. To stop it inste
 
 - **Every field and node type:** [Workflow language](/reference/workflow-language/).
 - **Repeat work until a check passes:** [Loop nodes](/guides/loop-nodes/).
-- **Compute instead of asking an agent:** [Script nodes](/guides/script-nodes/).
+- **Write script nodes that supply facts:** [Script nodes](/guides/script-nodes/).
 - **Start a workflow from an event, such as a new issue:** [Proactive workflows](/guides/proactive-workflows/).
 - **Write better commands:** [Authoring commands](/guides/authoring-commands/).
 - **A full delivery pipeline to copy from:** the bundled `sdlc` pack; see [SDLC workflows](/reference/sdlc-workflows/).
