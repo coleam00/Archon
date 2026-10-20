@@ -1,4 +1,3 @@
-// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

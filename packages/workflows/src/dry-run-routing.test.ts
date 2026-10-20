@@ -1,4 +1,3 @@
-// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import type { ResolvedWorkflow } from './schemas';

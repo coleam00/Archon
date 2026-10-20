@@ -1,4 +1,3 @@
-// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { makeTestWorkflow } from './test-utils';
 import { formatDryRunTrace } from './dry-run';
