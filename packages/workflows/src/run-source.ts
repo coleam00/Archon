@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from './workflow-status-read';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { randomUUID } from 'crypto';
@@ -553,7 +554,9 @@ export async function establishRunSource(
             result: { success: true, paused: true, workflowRunId: workflowRun.id },
           };
         }
-        const current = await deps.store.getWorkflowRun(workflowRun.id);
+        const current = await readWorkflowLifecycle(workflowRun.id, () =>
+          deps.store.getWorkflowRun(workflowRun.id)
+        );
         if (current?.status === 'paused') {
           return {
             stopped: true,

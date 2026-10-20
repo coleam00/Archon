@@ -2,7 +2,8 @@ import { readWorkflowLifecycle, WorkflowStatusReadError } from './workflow-statu
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
-import { childOutcomeFromRun } from './dag/child-run';
+import { getLog } from './dag/log';
+import { childOutcomeFromRun, ChildWorkflowStatusReadError } from './dag/child-run';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import type { ResolvedRunModelOverrides } from './model-validation';
@@ -20,7 +21,7 @@ import {
   withCapturedSource,
   type PreparedWorkflowSource,
 } from './run-source';
-import type { ResolvedWorkflow, WorkflowRun } from './schemas';
+import type { ResolvedWorkflow } from './schemas';
 import { SUBRUN_METADATA_KEYS } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -61,7 +62,7 @@ export async function gatherDescendantRunIds(
     const id = queue.shift();
     if (id === undefined) break;
     processed++;
-    const children = await deps.store.findChildRuns(id);
+    const children = await readWorkflowLifecycle(id, () => deps.store.findChildRuns(id));
     for (const c of children) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
@@ -212,14 +213,10 @@ export async function runChildWorkflow(
     // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
     //    The child's ancestor chain is the parent plus the parent's ancestors; a
     //    resolved target already in the chain is a cycle.
-    let ancestry: WorkflowRun[];
-    try {
-      ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
-    } catch (err) {
-      return failOutcome(
-        `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
-      );
-    }
+    const ancestry = [
+      parentRun,
+      ...(await readWorkflowLifecycle(parentRun.id, () => deps.store.getRunAncestry(parentRun.id))),
+    ];
     if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
       return failOutcome(
         `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
@@ -508,7 +505,20 @@ async function recoverChildSetupFailure(
   childWorkflowName: string,
   err: unknown
 ): Promise<ChildWorkflowOutcome> {
-  if (err instanceof TerminalStatusWriteError || err instanceof WorkflowStatusReadError) throw err;
+  if (err instanceof WorkflowStatusReadError) {
+    let usage: Awaited<ReturnType<WorkflowDeps['store']['getDagResumeSnapshot']>>;
+    try {
+      usage = await deps.store.getDagResumeSnapshot(childRunId);
+    } catch (usageError) {
+      getLog().error(
+        { err: usageError, workflowRunId: childRunId },
+        'workflow.child_unwind_usage_read_failed'
+      );
+      throw err;
+    }
+    throw new ChildWorkflowStatusReadError(err, usage);
+  }
+  if (err instanceof TerminalStatusWriteError) throw err;
 
   // Early setup may leave a child pending, so failWorkflowRun's running-only CAS
   // cannot release it. Cancellation covers both pending and running children.

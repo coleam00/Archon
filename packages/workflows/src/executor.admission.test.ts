@@ -47,6 +47,47 @@ async function blockedBy(
 }
 
 describe('concurrent-run guard', () => {
+  it.each(['ancestry', 'siblings', 'sibling descendants', 'own descendants'] as const)(
+    'does not cancel admitted work when %s cannot be read',
+    async site => {
+      const cause = new Error('Unsupported persisted status');
+      const run = makeRun({
+        parent_run_id: site === 'own descendants' ? null : 'parent',
+        working_path: '/tmp/ops',
+        metadata: { parent_node_id: 'fan', child_index: 0 },
+      });
+      const sibling = makeRun({
+        id: 'sibling',
+        working_path: '/tmp/ops',
+        metadata: { parent_node_id: 'fan', child_index: 1 },
+      });
+      const store = makeStore({
+        getRunAncestry: mock(async () => {
+          if (site === 'ancestry') throw cause;
+          return [];
+        }),
+        findChildRuns: mock(async id => {
+          if (
+            site === 'siblings' ||
+            (site === 'sibling descendants' && id === 'sibling') ||
+            (site === 'own descendants' && id === run.id)
+          )
+            throw cause;
+          return id === 'parent' ? [sibling] : [];
+        }),
+      });
+      const platform = makePlatform();
+      await expect(
+        startWorkflow({ store, platform, cwd: '/tmp/ops', options: resumeOf(run) })
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelFanOutRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(sentMessages(platform).some(message => /failed|blocked/i.test(message))).toBe(false);
+    }
+  );
+
   it('blocks and cancels its own row when the active-workflow check fails', async () => {
     const cancelSpy = mock(async () => ({ cancelled: true }));
     const store = makeStore({

@@ -1,5 +1,5 @@
 import type { WorkflowDeps } from '../../../deps';
-import type { FanOutConfig, WorkflowNode, WorkflowRun } from '../../../schemas';
+import type { FanOutConfig, WorkflowNode } from '../../../schemas';
 import { readSubrunMetadata } from '../../../schemas';
 import type { NodeFailureKind } from '../../../schemas/node-execution';
 import type { JsonValue } from '../../../output-ref';
@@ -108,16 +108,7 @@ export async function joinFanOutOutcomes(
     };
   }
 
-  let children: WorkflowRun[];
-  try {
-    children = await findFanOutChildRuns(store, parentRunId, stepName);
-  } catch (error) {
-    return joinFailure(
-      `Failed to look up settled fan-out child runs for node '${node.id}': ${(error as Error).message}`,
-      'unknown',
-      node.id
-    );
-  }
+  const children = await findFanOutChildRuns(store, parentRunId, stepName);
   const anyChildStarted = children.some(child => {
     const index = readSubrunMetadata(child.metadata).childIndex;
     return index !== undefined && index >= 0 && index < outcomes.length;

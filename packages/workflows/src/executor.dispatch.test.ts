@@ -137,6 +137,48 @@ describe('container resume guard', () => {
     expect(result.success).toBe(true);
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'propagates an unreadable row while reconciling a refused source release',
+    async () => {
+      const captureRoot = await mkdtemp(join(tmpdir(), 'archon-unreadable-reconcile-'));
+      const cause = new Error('Unsupported persisted status');
+      const store = makeStore({
+        releaseRunForUnreadableSource: mock(async () => ({ released: false })),
+        getWorkflowRun: mock(async () => {
+          throw cause;
+        }),
+      });
+      const platform = makePlatform();
+      const run = makeRun({
+        metadata: {
+          workflow_source: {
+            version: 1,
+            root: captureRoot,
+            origin: captureRoot,
+            captured_at: new Date().toISOString(),
+            digest: 'unread',
+            file_count: 0,
+            byte_count: 0,
+          },
+        },
+      });
+      await chmod(captureRoot, 0o000);
+      try {
+        await expect(
+          startWorkflow({ store, platform, cwd: '/tmp/ops', options: resumeOf(run) })
+        ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      } finally {
+        await chmod(captureRoot, 0o755);
+        await removeTempTree(captureRoot);
+      }
+      expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(sentMessages(platform).some(message => /failed/i.test(message))).toBe(false);
+    }
+  );
+
   describe.each([
     ['no adoption', undefined],
     ['an adopted run with no output root', null],

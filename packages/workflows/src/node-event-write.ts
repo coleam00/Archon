@@ -1,4 +1,7 @@
-import type { NodeStateRecord } from './schemas/node-execution';
+import { observeExecutionSpend, type ExecutionObservations } from './node-execution';
+import { serializeDeferredNodeUsage } from './node-record-serialization';
+import { createLogger } from '@archon/paths';
+import type { NodeStateRecord, NodeExecutionRecord } from './schemas/node-execution';
 import {
   serializeNodeStateRecord,
   serializeNodeTranscript,
@@ -41,6 +44,27 @@ export async function persistNodeEvent(
     await store.persistWorkflowEvent(event);
   } catch (error) {
     throw new NodeEventWriteError(event, error);
+  }
+}
+
+export async function persistUnsettledNodeUsage(
+  store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>,
+  execution: NodeExecutionRecord,
+  usage: ExecutionObservations
+): Promise<void> {
+  try {
+    await persistNodeEvent(
+      store,
+      serializeDeferredNodeUsage({
+        ...execution,
+        spend: observeExecutionSpend(execution.spend, usage),
+      })
+    );
+  } catch (error) {
+    createLogger('workflow').error(
+      { err: error, workflowRunId: execution.runId, nodeId: execution.path },
+      'dag.unwind_node_usage_persist_failed'
+    );
   }
 }
 

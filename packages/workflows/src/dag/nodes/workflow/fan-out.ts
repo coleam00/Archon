@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -7,7 +8,11 @@ import {
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
 import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
-import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
+import {
+  recordDerivedExecution,
+  recordNodeState,
+  persistUnsettledNodeUsage,
+} from '../../../node-event-write';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
@@ -23,7 +28,12 @@ import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
-import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';
+import {
+  childOutcomeFromRun,
+  ChildWorkflowStatusReadError,
+  type ChildWorkflowOutcome,
+  type RunChildWorkflowFn,
+} from '../../child-run';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { type RunLayersContext } from '../../run-context';
 import {
@@ -144,7 +154,7 @@ async function driveChildWindow(
   spawn: (index: number) => Promise<ChildWorkflowOutcome>,
   findChildren: () => Promise<WorkflowRun[]>,
   parentRunId: string
-): Promise<{ lookupError: unknown } | undefined> {
+): Promise<void> {
   for (
     let waiting = unclaimedIndices(itemCount, state);
     waiting.length > 0 && state.heldByIndex.size < maxParallel;
@@ -170,13 +180,7 @@ async function driveChildWindow(
     });
 
     if (state.heldByIndex.size === 0) break;
-    let rows: WorkflowRun[];
-    try {
-      rows = await findChildren();
-    } catch (lookupError) {
-      return { lookupError };
-    }
-    settleFinishedHeldChildren(rows, state);
+    settleFinishedHeldChildren(await findChildren(), state);
   }
   return undefined;
 }
@@ -336,12 +340,6 @@ export async function executeFanOutWorkflowNode(
     return failResult(msg, 'config');
   };
 
-  const failChildLookup = async (error: unknown): Promise<NodeExecutionResult> => {
-    const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown');
-  };
-
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume.
   let childCancellationFailure: TerminalStatusWriteError | undefined;
@@ -372,23 +370,14 @@ export async function executeFanOutWorkflowNode(
   }
 
   // 3. Re-entry: index this node's existing children by child_index.
-  let existingByIndex: Map<number, WorkflowRun>;
-  try {
-    existingByIndex = await indexExistingChildren(
-      deps.store,
-      parentRun.id,
-      node,
-      stepName,
-      items,
-      childId => cancelChild(childId, 'fan_out_orphan')
-    );
-  } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
-    // Notify like every other early-failure branch — this one was the odd one out, so a
-    // store error was the single fan-out failure that reached the user only via the
-    // end-of-run digest.
-    return failChildLookup(err);
-  }
+  const existingByIndex = await indexExistingChildren(
+    deps.store,
+    parentRun.id,
+    node,
+    stepName,
+    items,
+    childId => cancelChild(childId, 'fan_out_orphan')
+  );
 
   // 4. Classify the existing children (#4044 D3). The node's own latest lifecycle record
   //    tells a CONTINUATION — this node paused on its children, and one of them finished —
@@ -416,114 +405,152 @@ export async function executeFanOutWorkflowNode(
     return failResult(ambiguous.message, 'unknown', undefined, undefined, ambiguous.child.id);
   }
   const state = classifyExistingChildren(existingByIndex, continuing);
-
-  if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
-    await notify(
-      `Re-driving fan_out node '${node.id}': no child run rows exist for its ${String(items.length)} children. ` +
-        'Resume uses the captured parent source; changes to that source require a fresh launch.'
-    );
-  }
-
-  // 5. Spawn or re-drive every unsettled index through a `max_parallel` window. A failed
-  //    or fan-out-cancelled existing child is re-driven in a recovery; a missing index
-  //    spawns fresh.
-  //
-  //    No child's outcome terminates another's. Every child runs to its OWN terminal state
-  //    before the join reduces — a fan-out is N independent governed runs that happen to
-  //    be siblings, not a competition. An earlier revision fail-fasted here, deciding one
-  //    child's fate from another's, which is not the engine's call to make.
-  //
-  //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
-  //    child fails still runs every remaining child. The workflow `budget:` does not cover
-  //    fan-out yet; a budgeted workflow rejects it at load (#2815).
-  const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
-    // A rolled-back cancellation has not released the child's working-path lock.
-    // Let claimed siblings settle, but do not start another child against that lock.
-    if (childCancellationFailure) throw childCancellationFailure;
-    const item = items[i];
-    const existing = existingByIndex.get(i);
-    const input = fanOutItemInput(item);
-    // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
-    // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
-    // collide with a `with:` key, so this spread order is unambiguous. The item travels
-    // LOGICALLY under `as` (#2637 — an object item stays an object for the child);
-    // `fanOutItemInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
-    const childInputs: Record<string, JsonValue> = {
-      ...staticInputs.inputs,
-      ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
-    };
-    const resumeChild =
-      existing?.status === 'failed'
-        ? ({ kind: 'failed', run: existing } as const)
-        : existing?.status === 'cancelled'
-          ? ({ kind: 'fan-out-cancelled', run: existing } as const)
-          : undefined;
-    return runChild({
-      parentRun,
-      nodeId: stepName,
-      childWorkflowName: node.workflow,
-      input,
-      cwd,
-      conversationId,
-      userId: parentRun.user_id ?? undefined,
-      codebaseId: parentRun.codebase_id ?? undefined,
-      isolation: node.isolation,
-      childIndex: i,
-      itemHash: hashFanOutItem(input),
-      ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
-      ...(resumeChild ? { resumeChild } : {}),
-    }).catch((error: unknown) => {
-      if (error instanceof WorkflowSourceUnavailableError)
-        throw new RunSourceUnreadableError(stepName, error);
-      if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
-      throw error;
-    });
-  };
-
-  const windowFailure = await driveChildWindow(
-    items.length,
-    fanOut.max_parallel === 'all' ? items.length : fanOut.max_parallel,
-    state,
-    spawn,
-    () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
-    parentRun.id
+  const paidChildren = new Map<number, ChildWorkflowStatusReadError['usage']>(
+    [...existingByIndex].map(([index, child]) => [index, childOutcomeFromRun(child)])
   );
-  if (windowFailure !== undefined) return failChildLookup(windowFailure.lookupError);
-
-  // 6. Some children are unfinished: pause the parent on them.
-  if (state.heldByIndex.size > 0) {
-    return suspendOnHeldChildren(node, ctx, execution, stepName, state, items.length, notify);
-  }
-
-  const outcomes = items.map((_, i) => {
-    const outcome = state.settledByIndex.get(i);
-    if (outcome === undefined) {
-      throw new Error(`fan_out node '${node.id}': item ${String(i)} has no settled outcome`);
+  try {
+    if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
+      await notify(
+        `Re-driving fan_out node '${node.id}': no child run rows exist for its ${String(items.length)} children. ` +
+          'Resume uses the captured parent source; changes to that source require a fresh launch.'
+      );
     }
-    return outcome;
-  });
 
-  const totalCostUsd = sumReportedCost(outcomes);
-  const totalTokens = sumFanOutTokens(outcomes);
-  tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+    // 5. Spawn or re-drive every unsettled index through a `max_parallel` window. A failed
+    //    or fan-out-cancelled existing child is re-driven in a recovery; a missing index
+    //    spawns fresh.
+    //
+    //    No child's outcome terminates another's. Every child runs to its OWN terminal state
+    //    before the join reduces — a fan-out is N independent governed runs that happen to
+    //    be siblings, not a competition. An earlier revision fail-fasted here, deciding one
+    //    child's fate from another's, which is not the engine's call to make.
+    //
+    //    `max_parallel` bounds concurrency, not total spend — a wide fan-out whose first
+    //    child fails still runs every remaining child. The workflow `budget:` does not cover
+    //    fan-out yet; a budgeted workflow rejects it at load (#2815).
+    const spawn = async (i: number): Promise<ChildWorkflowOutcome> => {
+      // A rolled-back cancellation has not released the child's working-path lock.
+      // Let claimed siblings settle, but do not start another child against that lock.
+      if (childCancellationFailure) throw childCancellationFailure;
+      const item = items[i];
+      const existing = existingByIndex.get(i);
+      const input = fanOutItemInput(item);
+      // Per-child $INPUTS (#2470): the static `with:` map plus the per-item `fan_out.as`
+      // channel (the item value under `$INPUTS.<as>`). `as` is load-time guaranteed not to
+      // collide with a `with:` key, so this spread order is unambiguous. The item travels
+      // LOGICALLY under `as` (#2637 — an object item stays an object for the child);
+      // `fanOutItemInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
+      const childInputs: Record<string, JsonValue> = {
+        ...staticInputs.inputs,
+        ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
+      };
+      const resumeChild =
+        existing?.status === 'failed'
+          ? ({ kind: 'failed', run: existing } as const)
+          : existing?.status === 'cancelled'
+            ? ({ kind: 'fan-out-cancelled', run: existing } as const)
+            : undefined;
+      const outcome = await runChild({
+        parentRun,
+        nodeId: stepName,
+        childWorkflowName: node.workflow,
+        input,
+        cwd,
+        conversationId,
+        userId: parentRun.user_id ?? undefined,
+        codebaseId: parentRun.codebase_id ?? undefined,
+        isolation: node.isolation,
+        childIndex: i,
+        itemHash: hashFanOutItem(input),
+        ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
+        ...(resumeChild ? { resumeChild } : {}),
+      }).catch((error: unknown) => {
+        if (error instanceof WorkflowSourceUnavailableError)
+          throw new RunSourceUnreadableError(stepName, error);
+        if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+        if (error instanceof ChildWorkflowStatusReadError) paidChildren.set(i, error.usage);
+        throw error;
+      });
+      paidChildren.set(i, outcome);
+      return outcome;
+    };
 
-  // 7. Join.
-  const joined = await joinFanOutOutcomes(
-    deps.store,
-    parentRun.id,
-    node,
-    stepName,
-    fanOut.join,
-    outcomes
-  );
-  if (joined.status === 'failed') {
-    await notify(joined.notice);
-    return failResult(joined.error, joined.failureKind, totalCostUsd, totalTokens);
+    await driveChildWindow(
+      items.length,
+      fanOut.max_parallel === 'all' ? items.length : fanOut.max_parallel,
+      state,
+      spawn,
+      () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
+      parentRun.id
+    );
+
+    // 6. Some children are unfinished: pause the parent on them.
+    if (state.heldByIndex.size > 0) {
+      return await suspendOnHeldChildren(
+        node,
+        ctx,
+        execution,
+        stepName,
+        state,
+        items.length,
+        notify
+      );
+    }
+
+    const outcomes = items.map((_, i) => {
+      const outcome = state.settledByIndex.get(i);
+      if (outcome === undefined) {
+        throw new Error(`fan_out node '${node.id}': item ${String(i)} has no settled outcome`);
+      }
+      return outcome;
+    });
+
+    const totalCostUsd = sumReportedCost(outcomes);
+    const totalTokens = sumFanOutTokens(outcomes);
+    tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+
+    // 7. Join.
+    const joined = await joinFanOutOutcomes(
+      deps.store,
+      parentRun.id,
+      node,
+      stepName,
+      fanOut.join,
+      outcomes
+    );
+    if (joined.status === 'failed') {
+      await notify(joined.notice);
+      return failResult(joined.error, joined.failureKind, totalCostUsd, totalTokens);
+    }
+    return writeCompleted(
+      JSON.stringify(joined.elements),
+      totalCostUsd,
+      totalTokens,
+      joined.elements
+    );
+  } catch (error) {
+    await preserveFanOutUsage(
+      error,
+      deps.store,
+      execution,
+      new Map([...paidChildren, ...state.settledByIndex])
+    );
+
+    throw error;
   }
-  return writeCompleted(
-    JSON.stringify(joined.elements),
-    totalCostUsd,
-    totalTokens,
-    joined.elements
-  );
+}
+
+async function preserveFanOutUsage(
+  error: unknown,
+  store: RunLayersContext['deps']['store'],
+  execution: NodeExecutionRecord,
+  paidChildren: ReadonlyMap<number, ChildWorkflowStatusReadError['usage']>
+): Promise<void> {
+  if (!(error instanceof WorkflowStatusReadError)) return;
+  const children = [...paidChildren.values()];
+  await persistUnsettledNodeUsage(store, execution, {
+    costUsd: sumReportedCost(children),
+    tokens: sumFanOutTokens(children),
+    tokensUnknown: children.some(child => child.tokensUnknown === true),
+  });
 }

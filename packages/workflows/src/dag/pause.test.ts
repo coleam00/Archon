@@ -738,6 +738,47 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it.each(['status', 'row'] as const)(
+    'propagates an unreadable pause-conflict %s without failing the gate',
+    async site => {
+      const store = createMockStore();
+      const cause = new Error('Unsupported persisted status');
+      let attempted = false;
+      store.pauseWorkflowRun.mockImplementation(async () => {
+        attempted = true;
+        throw new WorkflowRunPauseConflictError('pause-read');
+      });
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (attempted && site === 'status') throw cause;
+        return attempted ? 'paused' : 'running';
+      });
+      store.getWorkflowRun.mockImplementation(async () => {
+        throw cause;
+      });
+      const platform = createMockPlatform();
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('pause-read'),
+            workflow: {
+              name: 'pause-read',
+              nodes: [dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } })],
+            },
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+      expect(platform.sendMessage.mock.calls.some(([, message]) => /failed/i.test(message))).toBe(
+        false
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   it('does not mistake a store failure for deferral when a sibling holds the paused slot', async () => {
     const store = createMockStore();
     let attempted = false;

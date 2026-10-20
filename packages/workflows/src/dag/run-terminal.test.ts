@@ -19,10 +19,12 @@ import {
   createMockPlatform,
   deliveredMessages,
   persistedEvents,
+  runUsageWrites,
   dagOptions,
   makeWorkflowRun,
   readTranscript,
 } from './test-utils';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { WorkflowStatusReadError } from '../workflow-status-read';
 import { NodeEventWriteError } from '../node-event-write';
 import { settledValuesOrThrow } from './node-source';
@@ -62,6 +64,207 @@ describe('executeDagWorkflow -- final status derivation', () => {
 
   afterEach(async () => {
     await removeTempTree(testDir);
+  });
+
+  it.each(
+    (['loop-group', 'compose', 'loop', 'retry'] as const).flatMap(kind =>
+      [false, true].map(tokensUnknown => [kind, tokensUnknown] as const)
+    )
+  )(
+    'preserves paid usage on %s lifecycle exit (tokens unavailable: %s)',
+    async (kind, tokensUnknown) => {
+      const store = createMockStore();
+      const cause = new Error('Unsupported persisted status');
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Paid work' };
+        yield {
+          type: 'result',
+          sessionId: 'paid',
+          cost: 0.37,
+          ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+          ...(kind === 'retry'
+            ? {
+                isError: true,
+                failure: { class: 'transient' as const, evidence: 'retryable' },
+                errors: ['retryable'],
+              }
+            : {}),
+        };
+      });
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        const events = persistedEvents(store);
+        if (
+          kind === 'loop'
+            ? events.some(e => e.event_type === 'loop_iteration_completed')
+            : kind === 'retry'
+              ? events.some(e => e.event_type === 'node_retry_scheduled')
+              : events.some(e => e.event_type === 'node_completed')
+        )
+          throw cause;
+        return 'running';
+      });
+      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'paid-body.yaml'),
+        'name: paid-body\ndescription: paid body\nnodes:\n  - id: work\n    prompt: Paid work\n'
+      );
+      const agent = {
+        id: 'work',
+        kind: 'agent' as const,
+        source: { kind: 'inline' as const, prompt: 'Paid work' },
+      };
+      const node: DagNode =
+        kind === 'loop-group'
+          ? {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                nodes: [agent],
+                until: 'DONE',
+                max_iterations: 2,
+                fresh_context: false,
+              },
+            }
+          : kind === 'compose'
+            ? {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'paid-body',
+                fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+              }
+            : kind === 'loop'
+              ? {
+                  ...agent,
+                  kind: 'loop',
+                  loop: {
+                    prompt: 'Paid work',
+                    until: 'DONE',
+                    max_iterations: 2,
+                    fresh_context: false,
+                  },
+                }
+              : { ...agent, retry: { max_attempts: 2, delay_ms: 1 } };
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('paid'),
+            workflow: { name: 'paid', nodes: [node] },
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.37,
+        total_tokens_in: tokensUnknown ? null : 100,
+        total_tokens_out: tokensUnknown ? null : 50,
+        ...(tokensUnknown ? { total_tokens_unknown: true } : {}),
+      });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      if (kind !== 'retry')
+        expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+    }
+  );
+
+  it.each(['loop usage', 'snapshot', 'metadata'] as const)(
+    'keeps the lifecycle cause when secondary %s bookkeeping rejects',
+    async site => {
+      const store = createMockStore();
+      const cause = new Error('Unsupported persisted status');
+      const secondary = new Error('Bookkeeping unavailable');
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Paid work' };
+        yield { type: 'result', sessionId: 'paid', cost: 0.37, tokens: { input: 100, output: 50 } };
+      });
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (persistedEvents(store).some(e => e.event_type === 'loop_iteration_completed'))
+          throw cause;
+        return 'running';
+      });
+      store.getDagResumeSnapshot.mockImplementation(async id => {
+        if (site === 'snapshot') throw secondary;
+        return foldDagResumeSnapshot(persistedEvents(store), id);
+      });
+      const persist = store.persistWorkflowEvent.getMockImplementation();
+      store.persistWorkflowEvent.mockImplementation(async event => {
+        if (site === 'loop usage' && event.event_type === 'node_deferred_usage') throw secondary;
+        if (!persist) throw new Error('Missing event persistence mock');
+        await persist(event);
+      });
+      if (site === 'metadata')
+        store.updateWorkflowRun.mockImplementation(async (_id, update) => {
+          if (update.metadata?.total_cost_usd !== undefined) throw secondary;
+        });
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('paid'),
+            workflow: {
+              name: 'paid',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'loop',
+                  loop: { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false },
+                },
+              ],
+            },
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(
+        mockLogFn.mock.calls.some(
+          ([, message]) =>
+            message ===
+            (site === 'loop usage'
+              ? 'dag.unwind_node_usage_persist_failed'
+              : site === 'snapshot'
+                ? 'dag.unwind_usage_refresh_failed'
+                : 'dag.run_usage_persist_failed')
+        )
+      ).toBe(true);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves the completion-guard cause after a successful DAG without terminal writes', async () => {
+    const store = createMockStore();
+    const cause = new Error('Unsupported persisted status at completion');
+    let afterWork = 0;
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      if (persistedEvents(store).some(e => e.event_type === 'node_completed') && ++afterWork === 2)
+        throw cause;
+      return 'running';
+    });
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('completion'),
+          workflow: {
+            name: 'completion',
+            nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work' } }],
+          },
+        })
+      )
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+    expect(afterWork).toBe(2);
+    expect(
+      persistedEvents(store)
+        .filter(e => e.event_type === 'node_completed')
+        .map(e => e.step_name)
+    ).toEqual(['work']);
+    expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
   it.each([

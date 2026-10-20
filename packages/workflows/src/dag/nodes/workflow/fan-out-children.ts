@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../../../workflow-status-read';
 import type { WorkflowDeps } from '../../../deps';
 import type { WorkflowNode, WorkflowRun } from '../../../schemas';
 import { readSubrunMetadata, isTerminalRunStatus } from '../../../schemas';
@@ -98,7 +99,7 @@ export async function findFanOutChildRuns(
   parentRunId: string,
   nodePath: string
 ): Promise<WorkflowRun[]> {
-  return (await store.findChildRuns(parentRunId)).filter(
+  return (await readWorkflowLifecycle(parentRunId, () => store.findChildRuns(parentRunId))).filter(
     child => readSubrunMetadata(child.metadata).parentNodeId === nodePath
   );
 }

@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle } from '../workflow-status-read';
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import { getWorkflowEventEmitter } from '../event-emitter';
@@ -53,21 +54,11 @@ export async function sendPauseNotice(
     });
 }
 
-/**
- * The run's status after a pause write failed. When that read fails too the status is
- * unknowable, so the original pause failure surfaces rather than the read's error.
- */
-export async function statusAfterPauseFailure(
+export function statusAfterPauseFailure(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
-  runId: string,
-  pauseError: unknown
+  runId: string
 ): Promise<WorkflowRunStatus | null> {
-  try {
-    return await store.getWorkflowRunStatus(runId);
-  } catch (statusErr) {
-    getLog().warn({ err: statusErr as Error, workflowRunId: runId }, 'dag.status_check_failed');
-    throw pauseError;
-  }
+  return readWorkflowLifecycle(runId, () => store.getWorkflowRunStatus(runId));
 }
 
 /**
@@ -94,10 +85,10 @@ export async function pauseGateRespectingExternalTransition(
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
-    const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);
+    const status = await statusAfterPauseFailure(deps.store, runId);
     if (status === 'running' || status === 'pending') throw pauseErr;
     if (status === 'paused') {
-      const run = await deps.store.getWorkflowRun(runId);
+      const run = await readWorkflowLifecycle(runId, () => deps.store.getWorkflowRun(runId));
       const active = run?.metadata?.approval;
       const wait = run?.metadata?.wait;
       if (isWorkflowWaitContext(wait)) {

@@ -6,9 +6,10 @@ import {
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type NodeFailureKind, type NodeExecutionRecord } from '../../../schemas/node-execution';
 import {
   NodeEventWriteError,
+  persistUnsettledNodeUsage,
   recordDerivedExecution,
   recordNodeState,
 } from '../../../node-event-write';
@@ -24,7 +25,11 @@ import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { executeFanOutWorkflowNode } from './fan-out';
-import { childOutcomeFromRun, type ChildWorkflowOutcome } from '../../child-run';
+import {
+  childOutcomeFromRun,
+  ChildWorkflowStatusReadError,
+  type ChildWorkflowOutcome,
+} from '../../child-run';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
@@ -321,21 +326,34 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (
-      err instanceof TerminalStatusWriteError ||
-      err instanceof NodeEventWriteError ||
-      err instanceof WorkflowStatusReadError
-    )
-      throw err;
-
-    // Only a read of the parent's source releases the parent; a child's fault stays the
-    // child's, so the launch types those reads (see runChildWorkflow).
-    if (err instanceof WorkflowSourceUnavailableError)
-      throw new RunSourceUnreadableError(executionNodeId, err);
-
-    return failResult(
-      `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
-      'child_failed'
-    );
+    return recoverWorkflowNodeError(ctx, node, execution, err, failResult);
   }
+}
+
+async function recoverWorkflowNodeError(
+  ctx: RunLayersContext,
+  node: WorkflowNode,
+  execution: NodeExecutionRecord,
+  err: unknown,
+  failResult: (message: string, kind: NodeFailureKind) => Promise<NodeExecutionResult>
+): Promise<NodeExecutionResult> {
+  if (err instanceof ChildWorkflowStatusReadError) {
+    await persistUnsettledNodeUsage(ctx.deps.store, execution, err.usage);
+  }
+  if (
+    err instanceof TerminalStatusWriteError ||
+    err instanceof NodeEventWriteError ||
+    err instanceof WorkflowStatusReadError
+  )
+    throw err;
+
+  // Only a read of the parent's source releases the parent; a child's fault stays the
+  // child's, so the launch types those reads (see runChildWorkflow).
+  if (err instanceof WorkflowSourceUnavailableError)
+    throw new RunSourceUnreadableError(execution.path, err);
+
+  return failResult(
+    `Sub-run '${node.workflow}' errored: ${(err as Error).message}`,
+    'child_failed'
+  );
 }

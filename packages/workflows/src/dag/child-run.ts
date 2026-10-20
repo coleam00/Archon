@@ -1,6 +1,17 @@
+import { WorkflowStatusReadError } from '../workflow-status-read';
+import type { DagResumeSnapshot } from '../store';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
+
+export class ChildWorkflowStatusReadError extends WorkflowStatusReadError {
+  constructor(
+    error: WorkflowStatusReadError,
+    readonly usage: Pick<DagResumeSnapshot, 'costUsd' | 'tokens' | 'tokensUnknown'>
+  ) {
+    super(error.workflowRunId, error.cause);
+  }
+}
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
 export interface ChildWorkflowOutcome {

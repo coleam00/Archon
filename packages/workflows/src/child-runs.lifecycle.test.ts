@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { settlingProvider } from './test-settling-provider';
 import {
   mockLogger,
   telemetryResumeFlags,
@@ -55,6 +56,104 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  it.each(
+    [false, true].flatMap(fanOut =>
+      [false, true].map(tokensUnknown => [fanOut, tokensUnknown] as const)
+    )
+  )(
+    'preserves paid child usage in both run rows after a lifecycle error (fan-out: %s, tokens unknown: %s)',
+    async (fanOut, tokensUnknown) => {
+      await writeWorkflow(
+        'paid-child',
+        'name: paid-child\ndescription: child\nnodes:\n  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 2\n      nodes:\n        - id: work\n          prompt: Work\n'
+      );
+      await writeWorkflow(
+        'paid-parent',
+        'name: paid-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: paid-child\n' +
+          (fanOut
+            ? '    fan_out:\n      items: "[1]"\n      max_parallel: 1\n      join: all_done\n'
+            : '')
+      );
+      const store = new InMemoryStore();
+      const cause = new Error('Unsupported child status');
+      const status = store.getWorkflowRunStatus;
+      store.getWorkflowRunStatus = async id => {
+        if (
+          store.runs.get(id)?.workflow_name === 'paid-child' &&
+          store.events.some(e => e.workflow_run_id === id && e.event_type === 'node_completed')
+        )
+          throw cause;
+        return status(id);
+      };
+      const deps = makeDeps(store);
+      const provider = deps.getAgentProvider('claude');
+      deps.getAgentProvider = () =>
+        settlingProvider({
+          ...provider,
+          sendQuery: async function* () {
+            yield { type: 'agent_message_chunk', text: 'Paid work' };
+            yield {
+              type: 'result',
+              sessionId: 'paid',
+              cost: 0.37,
+              ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+            };
+          },
+        });
+      const fail = spyOn(store, 'failWorkflowRun');
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'paid-tree',
+          cwd,
+          await discover('paid-parent'),
+          'goal'
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(store.runs.size).toBe(2);
+      for (const run of store.runs.values()) {
+        expect(run.status).toBe('running');
+        expect(run.metadata).toMatchObject({
+          total_cost_usd: 0.37,
+          total_tokens_in: tokensUnknown ? null : 100,
+          total_tokens_out: tokensUnknown ? null : 50,
+          ...(tokensUnknown ? { total_tokens_unknown: true } : {}),
+        });
+      }
+      expect(fail).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(store.events.some(e => e.event_type === 'node_failed')).toBe(false);
+    }
+  );
+
+  it('propagates unreadable child ancestry without a failed outcome or terminal compensation', async () => {
+    await writeWorkflow(
+      'status-child',
+      'name: status-child\ndescription: child\nnodes:\n  - id: work\n    prompt: Work\n'
+    );
+    await writeWorkflow(
+      'status-parent',
+      'name: status-parent\ndescription: parent\nmutates_checkout: false\nnodes:\n  - id: sub\n    workflow: status-child\n'
+    );
+    const store = new InMemoryStore();
+    const cause = new Error('Unsupported ancestor status');
+    store.getRunAncestry = async () => {
+      throw cause;
+    };
+    const fail = spyOn(store, 'failWorkflowRun');
+    const cancel = spyOn(store, 'cancelWorkflowRun');
+    const workflow = await discover('status-parent');
+    await expect(
+      executeWorkflow(makeDeps(store), makePlatform(), 'status-ancestry', cwd, workflow, 'goal')
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+    expect(fail).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+    expect([...store.runs.values()].map(run => run.status)).toEqual(['running']);
   });
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

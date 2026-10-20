@@ -4,6 +4,8 @@ import {
   cwdPath,
   dagCall,
   makeRun,
+  makePlatform,
+  sentMessages,
   makeStore,
   makeWorkflow,
   mocked,
@@ -39,6 +41,29 @@ function adoptedRunEvents(store: IWorkflowStore): unknown[] {
 // A root inside ARCHON_HOME is used as is; a relocated root is re-derived under the current
 // ARCHON_HOME through the adopted run's codebase row rather than walked verbatim.
 describe('adopted run dir', () => {
+  it('propagates an unreadable adopted row on the path-resolution read without failing the admitted run', async () => {
+    const cause = new Error('Unsupported persisted status');
+    let reads = 0;
+    const store = makeStore({
+      getWorkflowRun: mock(async id => {
+        if (id === 'prior-run' && ++reads === 2) throw cause;
+        return makeRun({
+          id,
+          status: 'completed',
+          output_root: join(WS, 'workspaces', 'acme', 'widget'),
+        });
+      }),
+    });
+    const platform = makePlatform();
+    await expect(
+      startWorkflow({ store, platform, cwd: '/tmp/ops', options: adopt })
+    ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+    expect(reads).toBe(2);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(sentMessages(platform).some(message => /failed/i.test(message))).toBe(false);
+  });
+
   const trustedRoot = join(WS, 'workspaces', 'acme', 'widget');
   const roots = [
     ['inside ARCHON_HOME', trustedRoot, null, trustedRoot],

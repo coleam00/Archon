@@ -1,3 +1,4 @@
+import { readWorkflowLifecycle, WorkflowStatusReadError } from './workflow-status-read';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
@@ -399,7 +400,7 @@ async function holdCheckoutPathLock(
   if (workflow.mutates_checkout === false && subrun.childIndex === undefined) return undefined;
   try {
     const ancestry = workflowRun.parent_run_id
-      ? await deps.store.getRunAncestry(workflowRun.id)
+      ? await readWorkflowLifecycle(workflowRun.id, () => deps.store.getRunAncestry(workflowRun.id))
       : [];
     const pathLockExclude = ancestry.map(run => run.id);
     const sharedCheckoutSiblings: WorkflowRun[] = [];
@@ -413,7 +414,10 @@ async function holdCheckoutPathLock(
       ) {
         continue;
       }
-      const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
+      const parentRunId = branch.parent_run_id;
+      const siblings = (
+        await readWorkflowLifecycle(parentRunId, () => deps.store.findChildRuns(parentRunId))
+      ).filter(peer => {
         const peerMetadata = readSubrunMetadata(peer.metadata);
         return (
           peer.id !== branch.id &&
@@ -481,33 +485,46 @@ async function holdCheckoutPathLock(
       }
     }
   } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
-    const err = error as Error;
-    getLog().error(
-      { err, conversationId, cwd, pendingRunId: workflowRun.id },
-      'db_active_workflow_check_failed'
-    );
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
-    );
-    // Even if notification delivery failed, release this run's lock token.
-    // A rejected cleanup must escape rather than become an ordinary guard result.
-    // A fan-out child is cancelled with a fan-out reason so the parent's resume
-    // re-drives it; an untagged cancel reads as a user's and is never re-run (#2180).
-    await requireTerminalStatusWrite(
-      subrun.childIndex !== undefined
-        ? deps.store.cancelFanOutRun(workflowRun.id, 'fan_out_checkout_check')
-        : deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
-      {
-        workflowRunId: workflowRun.id,
-        site: 'executor.guard_query_failure_cleanup',
-      }
-    );
-    return { success: false, error: 'Database error checking for active workflow' };
+    return recoverCheckoutPathLockFailure(deps, platform, conversationId, cwd, workflowRun, error);
   }
   return undefined;
+}
+
+async function recoverCheckoutPathLockFailure(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflowRun: WorkflowRun,
+  error: unknown
+): Promise<WorkflowExecutionResult> {
+  const subrun = readSubrunMetadata(workflowRun.metadata);
+  if (error instanceof TerminalStatusWriteError || error instanceof WorkflowStatusReadError)
+    throw error;
+  const err = error as Error;
+  getLog().error(
+    { err, conversationId, cwd, pendingRunId: workflowRun.id },
+    'db_active_workflow_check_failed'
+  );
+  await sendCriticalMessage(
+    platform,
+    conversationId,
+    '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
+  );
+  // Even if notification delivery failed, release this run's lock token.
+  // A rejected cleanup must escape rather than become an ordinary guard result.
+  // A fan-out child is cancelled with a fan-out reason so the parent's resume
+  // re-drives it; an untagged cancel reads as a user's and is never re-run (#2180).
+  await requireTerminalStatusWrite(
+    subrun.childIndex !== undefined
+      ? deps.store.cancelFanOutRun(workflowRun.id, 'fan_out_checkout_check')
+      : deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+    {
+      workflowRunId: workflowRun.id,
+      site: 'executor.guard_query_failure_cleanup',
+    }
+  );
+  return { success: false, error: 'Database error checking for active workflow' };
 }
 
 /** Spell a workflow action the way the surface rendering the message accepts it. */

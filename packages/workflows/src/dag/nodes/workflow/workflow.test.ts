@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
@@ -15,6 +16,9 @@ import {
   createMockDeps,
   dagOptions,
   makeWorkflowRun,
+  createMockPlatform,
+  persistedEvents,
+  runUsageWrites,
   readTranscript,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
@@ -116,6 +120,94 @@ describe('executeDagWorkflow -- workflow: node', () => {
         { err: ordinary, workflowRunId: 'mixed-child' },
         'dag.join_secondary_failure'
       );
+    }
+  );
+
+  it.each(
+    (['initial', 'refresh', 'join', 'replay'] as const).flatMap(phase =>
+      [false, true].map(tokensUnknown => [phase, tokensUnknown] as const)
+    )
+  )(
+    'propagates unreadable fan-out child rows at %s without a failure notice or event (tokens unknown: %s)',
+    async (phase, tokensUnknown) => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    prompt: Work',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const cause = new Error('Unsupported child status');
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      let reads = 0;
+      store.findChildRuns.mockImplementation(async () => {
+        if (++reads === (phase === 'refresh' || phase === 'join' ? 2 : 1)) throw cause;
+        return [];
+      });
+      const platform = createMockPlatform();
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () =>
+        phase === 'refresh'
+          ? {
+              childRunId: 'held',
+              status: 'paused',
+              costUsd: 0.37,
+              ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+            }
+          : {
+              childRunId: 'settled',
+              status: 'completed',
+              output: 'done',
+              costUsd: 0.37,
+              ...(tokensUnknown ? { tokensUnknown: true } : { tokens: { input: 100, output: 50 } }),
+            }
+      );
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('fan-read'),
+            runChildWorkflow,
+            workflow: {
+              name: 'fan-read',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'workflow',
+                  workflow: 'child-workflow',
+                  fan_out: { items: '[1,2]', max_parallel: 1, join: 'all_done' },
+                },
+              ],
+            },
+            ...(phase === 'replay'
+              ? {
+                  priorCompletedNodes: new Map([
+                    ['fan', { output: '[1,2]', structuredOutput: [1, 2] }],
+                  ]),
+                }
+              : {}),
+          })
+        )
+      ).rejects.toMatchObject({ name: 'WorkflowStatusReadError', cause });
+      expect(reads).toBe(phase === 'refresh' || phase === 'join' ? 2 : 1);
+      expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+      expect(platform.sendMessage.mock.calls.some(([, message]) => /failed/i.test(message))).toBe(
+        false
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(store.cancelFanOutRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      if (phase === 'refresh' || phase === 'join') {
+        const children = phase === 'join' ? 2 : 1;
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_cost_usd: 0.37 * children,
+          total_tokens_in: tokensUnknown ? null : 100 * children,
+          total_tokens_out: tokensUnknown ? null : 50 * children,
+          ...(tokensUnknown ? { total_tokens_unknown: true } : {}),
+        });
+      }
     }
   );
 

@@ -6,7 +6,11 @@ import {
   nodeExecutionMetadataSchema,
   type NodeExecutionRecord,
 } from '../../../schemas/node-execution';
-import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
+import {
+  NodeEventWriteError,
+  recordNodeState,
+  persistUnsettledNodeUsage,
+} from '../../../node-event-write';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type {
   ApprovalContext,
@@ -334,8 +338,11 @@ async function runSettledLoopIteration(
   try {
     return await runLoopIteration(run, state, i);
   } catch (error) {
-    if (error instanceof NodeEventWriteError || error instanceof WorkflowStatusReadError)
+    if (error instanceof WorkflowStatusReadError) {
+      await persistUnsettledNodeUsage(run.ctx.deps.store, state.execution, loopSpend(state));
       throw error;
+    }
+    if (error instanceof NodeEventWriteError) throw error;
     const { ctx, node } = run;
     const message = error instanceof Error ? error.message : String(error);
     getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');
