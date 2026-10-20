@@ -169,18 +169,33 @@ function currentExecutionRows(
   return rows.slice(start);
 }
 
+function spillWriteHistory(rows: readonly WorkflowEventRow[]) {
+  const writers = new Map<string, string>();
+  const unfinished = new Map<string, string>();
+  for (const row of rows) {
+    const record = readNodeRecordEvent(row);
+    if (record?.metadata) {
+      if (record.eventType === 'node_started')
+        unfinished.set(record.path, record.metadata.attempt.id);
+      else if (
+        record.eventType === 'node_completed' &&
+        unfinished.get(record.path) === record.metadata.attempt.id
+      )
+        unfinished.delete(record.path);
+    }
+    if (record?.metadata && record.data.node_output_spill_path) {
+      writers.set(record.data.node_output_spill_path, record.metadata.attempt.id);
+    }
+  }
+  return { writers, unfinished };
+}
+
 function refuseOverwrittenSpills(
   previous: readonly DagResumeEvent[],
   rows: readonly WorkflowEventRow[],
   runId: string
 ): void {
-  const writers = new Map<string, string>();
-  for (const row of rows) {
-    const record = readNodeRecordEvent(row);
-    if (record?.metadata && record.data.node_output_spill_path) {
-      writers.set(record.data.node_output_spill_path, record.metadata.attempt.id);
-    }
-  }
+  const { writers, unfinished } = spillWriteHistory(rows);
   const completions = new Map<string, NonNullable<ReturnType<typeof readNodeRecordEvent>>>();
   for (const row of previous) {
     const record = readNodeRecordEvent({ ...row, workflow_run_id: runId, data: row.data });
@@ -190,7 +205,12 @@ function refuseOverwrittenSpills(
   }
   for (const record of completions.values()) {
     const spill = record.data.node_output_spill_path;
-    if (spill && record.metadata && writers.get(spill) !== record.metadata.attempt.id) {
+    // A started attempt may replace the spill before its completion is committed.
+    if (
+      spill &&
+      record.metadata &&
+      (writers.get(spill) !== record.metadata.attempt.id || unfinished.has(record.path))
+    ) {
       throw new Error(
         `Cannot resume loop: overwritten output spill for '${record.path}' in the preceding iteration`
       );

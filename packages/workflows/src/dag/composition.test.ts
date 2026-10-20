@@ -709,7 +709,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   }
 
-  it('discards an unfinished body cache when outer inputs change', async () => {
+  it('keeps an unfinished body cache invalidated across a second interruption', async () => {
     const runId = 'unfinished-stale-input';
     const store = createMockStore();
     const deps = createMockDeps(store);
@@ -756,13 +756,39 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     const snapshot = await foldDagResumeSnapshot(eventList(deps), runId);
     expect(snapshot.completedNodeOutputs.has('cycle')).toBe(false);
     restorePersistedHistory(store, deps, runId);
+    const persist = store.persistWorkflowEvent;
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.step_name === 'cycle.work' && event.event_type === 'node_started')
+        throw new Error('stop before fresh body starts');
+      await persist(event);
+    });
+    const beforeInterruption = eventList(deps).length;
+    await expect(
+      executeDagWorkflow({
+        ...options,
+        workflow: ready(workflow(true)),
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+      })
+    ).rejects.toThrow('stop before fresh body starts');
+    expect(
+      eventList(deps)
+        .slice(beforeInterruption)
+        .filter(e => e.step_name === 'cycle.work')
+    ).toEqual([]);
+    store.persistWorkflowEvent = persist;
+    const secondSnapshot = await store.getDagResumeSnapshot(runId);
     const before = eventList(deps).length;
     await executeDagWorkflow({
       ...options,
       workflow: ready(workflow(true)),
-      priorCompletedNodes: snapshot.completedNodeOutputs,
+      priorCompletedNodes: secondSnapshot.completedNodeOutputs,
     });
     const resumed = eventList(deps).slice(before);
+    expect(
+      resumed.filter(
+        e => e.step_name === 'cycle.work' && e.event_type === 'node_skipped_prior_success'
+      )
+    ).toEqual([]);
     expect(
       resumed
         .filter(e => e.step_name === 'cycle.work' && e.event_type === 'node_completed')
@@ -867,6 +893,78 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     expect(tail.map(e => e.event_type)).toEqual(['node_skipped']);
     expect(tail[0]?.data?.cause).toEqual({ kind: 'condition_parse_error', expr: when });
   });
+
+  for (const runtime of ['sh', 'bun'] as const) {
+    it(`refuses a preceding spill after an uncommitted ${runtime} replacement`, async () => {
+      const runId = `uncommitted-spill-${runtime}`;
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const group = loopGatedWorkflow("$LOOP_PREV.work.output != ''").nodes[0];
+      if (group?.kind !== 'loop_group') throw new Error('expected group');
+      const nodes = resolvedBodyNodes(group.loop_group).map(node =>
+        node.kind === 'exec' && node.id === 'work'
+          ? {
+              ...node,
+              runtime,
+              when: undefined,
+              script:
+                runtime === 'sh'
+                  ? `if [ -z $LOOP_PREV.work.output ]; then printf '%s' '${'a'.repeat(40_000)}'; else printf '%s' '${'b'.repeat(40_000)}'; fi`
+                  : `process.stdout.write(('$LOOP_PREV.work.output' === '' ? 'a' : 'b').repeat(40_000));`,
+            }
+          : node
+      );
+      const persist = store.persistWorkflowEvent;
+      let rejectedSpill: string | undefined;
+      store.persistWorkflowEvent = mock(async event => {
+        if (
+          event.step_name === 'cycle.work' &&
+          event.event_type === 'node_completed' &&
+          eventList(deps).some(
+            e => e.step_name === 'cycle.work' && e.event_type === 'node_completed'
+          )
+        ) {
+          rejectedSpill = event.data.node_output_spill_path;
+          throw new Error('completion rejected after spill write');
+        }
+        await persist(event);
+      });
+      const options = dagOptions({
+        deps,
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: runId,
+          nodes: [{ ...group, loop_group: { ...group.loop_group, nodes } }],
+        },
+        workflowRun: makeWorkflowRun(runId),
+      });
+      await expect(executeDagWorkflow(options)).rejects.toThrow(
+        'completion rejected after spill write'
+      );
+      const completions = eventList(deps).filter(
+        e => e.step_name === 'cycle.work' && e.event_type === 'node_completed'
+      );
+      expect(completions).toHaveLength(1);
+      expect(completions[0]?.data?.node_output_original_bytes).toBe(40_000);
+      expect(String(completions[0]?.data?.node_output)).toStartWith('a');
+      expect(rejectedSpill).toBe(completions[0]?.data?.node_output_spill_path);
+      expect(await readFile(String(rejectedSpill), 'utf8')).toBe('b'.repeat(40_000));
+      expect(
+        eventList(deps).filter(e => e.step_name === 'cycle.work' && e.event_type === 'node_started')
+      ).toHaveLength(2);
+      store.persistWorkflowEvent = persist;
+      restorePersistedHistory(store, deps, runId);
+      const snapshot = await store.getDagResumeSnapshot(runId);
+      const before = eventList(deps).length;
+      await executeDagWorkflow({ ...options, priorCompletedNodes: snapshot.completedNodeOutputs });
+      const resumed = eventList(deps).slice(before);
+      expect(
+        resumed.find(e => e.step_name === 'cycle' && e.event_type === 'node_failed')?.data?.error
+      ).toContain('overwritten output spill');
+      expect(resumed.filter(e => e.step_name.startsWith('cycle.inc__'))).toEqual([]);
+    });
+  }
 
   for (const spill of ['overwritten', 'uncompeted', 'inline'] as const) {
     it(`handles ${spill} preceding outputs at the recovery boundary`, async () => {

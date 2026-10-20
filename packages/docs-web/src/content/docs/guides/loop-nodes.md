@@ -872,9 +872,10 @@ Suspension and failure have different recovery rules:
   loop's gate; `always_run` and changed dependencies retain their ordinary cache
   invalidation rules. Later iterations start with an empty cache. This does not
   restore provider session cursors from failures. If a later recorded execution has
-  overwritten a preceding iteration's output spill, resume fails rather than using
-  the wrong output. Historical runs without execution lineage restart from
-  iteration 1 and replay the whole body.
+  overwritten a preceding iteration's output spill, or a later execution started
+  without a committed completion and may have replaced that spill, resume fails
+  rather than using the spill or its preview. Historical runs without execution
+  lineage restart from iteration 1 and replay the whole body.
 
 ### What is NOT supported on loop_group nodes (v1)
 
