@@ -32,6 +32,7 @@ const BUILD_INPUTS = [
   'packages/docs-web/src/content/docs/reference/database.md',
   'packages/docs-web/src/content/docs/reference/api.md',
   'packages/docs-web/src/content/docs/reference/node-execution.md',
+  'packages/docs-web/src/content/docs/reference/variables.md',
   'packages/docs-web/src/content/docs/deployment/docker.md',
   'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
   'packages/docs-web/src/content/docs/guides/attention-queue.md',
