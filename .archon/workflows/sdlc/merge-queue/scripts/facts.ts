@@ -4,18 +4,16 @@
  * Enrolls listed maintainers' own open pull requests that opted in (`maintainers.ts`), then
  * live claims, in intake's order, every item the build queue finished, up to `limit`,
  * and reads each one's pull request in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly. The
- * trusted review report is written under `merge/<number>/review/` with the commit it
- * reviewed beside it, so a delta review can continue from it. An item whose pull
- * request is already merged or closed, or that names none, is settled without the
+ * verdict, CI and review threads at that head, and whether it merges cleanly. An item
+ * whose pull request is already merged or closed, or that names none, is settled without the
  * sweep, and one whose pull request cannot be read waits for the next sweep with the
- * reason, so it never stops the rest of the batch. It writes only the claims.
+ * reason, so it never stops the rest of the batch. A red default branch reaches the sweep
+ * even when no pull request waits. It writes only the claims.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { artifactsDir, emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   itemPr,
   MERGE_METHODS,
@@ -24,7 +22,6 @@ import {
   type MergeRecord,
   type MergeSettled,
   type PrFacts,
-  type PrRead,
   readBase,
   readPr,
   requireGh,
@@ -42,8 +39,6 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts;
   readonly record: MergeRecord | null;
-  /** The trusted review report a delta review continues from; empty when there is none. */
-  readonly prior_report: string;
   /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
   readonly own_pr: boolean;
 }
@@ -63,14 +58,6 @@ function parseMethod(value: string): MergeMethod {
 /** A shell word: the sweep pastes the gate command into its shell. */
 function quoted(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
-}
-
-function writePrior(pr: QualifiedPr, reviewed: string, report: string): string {
-  const dir = join(artifactsDir(), 'merge', String(pr.number), 'review');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'report.md'), report);
-  writeFileSync(join(dir, 'reviewed-head'), `${reviewed}\n`);
-  return join(dir, 'report.md');
 }
 
 function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: string): WorkItem[] {
@@ -113,20 +100,19 @@ function main(): void {
   const settled: MergeSettled[] = [];
   for (const doc of claimAll(limit, order, runId)) {
     let pr: QualifiedPr | null = null;
-    let read: PrRead;
+    let facts: PrFacts;
     try {
       pr = itemPr(doc);
       if (pr === null) {
         settled.push({ item: doc.subject, pr: null, status: 'parked', decision: 'parked', reason: 'the build record names no pull request' });
         continue;
       }
-      read = readPr(pr, maintainers);
+      facts = readPr(pr, maintainers);
     } catch (error) {
       const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
       settled.push({ item: doc.subject, pr, status: 'waiting', decision: UNREADABLE, reason });
       continue;
     }
-    const { facts, report } = read;
     if (facts.state !== 'open') {
       const status = facts.state === 'merged' ? 'merged' : 'parked';
       settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
@@ -138,7 +124,6 @@ function main(): void {
       url: facts.url,
       facts,
       record: doc.facts.merge ?? null,
-      prior_report: report === null || facts.verdict.reviewed === null ? '' : writePrior(pr, facts.verdict.reviewed, report),
       own_pr: isOwnPr(doc),
     });
   }
@@ -150,9 +135,13 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
+  // The default branch is read on every run: a red one after the last merge needs the
+  // sweep's question even when no pull request waits.
+  const base = readBase(repo);
+  const sweep = items.length > 0 || base.checks.state === 'red';
   emit({
-    path: items.length > 0 ? 'sweep' : settled.length > 0 ? 'record' : 'idle',
-    base: items.length > 0 ? readBase(repo) : null,
+    path: sweep ? 'sweep' : settled.length > 0 ? 'record' : 'idle',
+    base,
     items,
     settled,
     gate,

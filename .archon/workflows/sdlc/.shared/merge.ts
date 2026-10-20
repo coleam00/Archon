@@ -23,22 +23,18 @@ export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
-export const DEV_EFFECTS = ['hold'] as const;
-export type DevAttention = Attention<(typeof DEV_EFFECTS)[number]>;
+export const BASE_EFFECTS = ['hold'] as const;
+export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
 
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
-export const SWEEP_ACTIONS = ['merged', 'review', 'return', 'ask', 'wait'] as const;
+export const SWEEP_ACTIONS = ['merged', 'return', 'ask', 'wait'] as const;
 export type SweepAction = (typeof SWEEP_ACTIONS)[number];
 export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
-export const DEV_STATES = ['unchecked', 'green', 'red'] as const;
-export type DevState = (typeof DEV_STATES)[number];
-export const RERUNS = ['none', 'green', 'red'] as const;
-export type Rerun = (typeof RERUNS)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
 /** Which attention item a run raised: its class label, which the YAML also declares. */
-export const MERGE_ASKED_BY = ['pr', 'dev'] as const;
+export const MERGE_ASKED_BY = ['pr', 'base'] as const;
 export type MergeAskedBy = (typeof MERGE_ASKED_BY)[number];
 /** What the record node asked, which the ruling node needs to act on the answer. */
 export type MergeAsked =
@@ -50,7 +46,7 @@ export type MergeAsked =
       readonly brief: string;
       readonly attention: MergeAttention;
     }
-  | { readonly by: Extract<MergeAskedBy, 'dev'>; readonly attention: DevAttention };
+  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
@@ -219,12 +215,6 @@ export interface PrFacts {
   readonly verdict: Verdict;
 }
 
-/** The facts with the trusted review report's text, which the facts node hands to a delta review. */
-export interface PrRead {
-  readonly facts: PrFacts;
-  readonly report: string | null;
-}
-
 function gh(...args: string[]): string {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
   if (result.exitCode !== 0) {
@@ -308,17 +298,17 @@ export function readBase(repo: QualifiedPr['repo']): { branch: string; head: str
  * marked comment anyone else wrote is ignored, so an outside commenter cannot forge a
  * verdict on a public repository.
  */
-function trustedReview(pr: QualifiedPr, maintainers: ReadonlySet<string>): { verdict: Verdict; report: string | null } {
+function trustedReview(pr: QualifiedPr, maintainers: ReadonlySet<string>): Verdict {
   const reviews = ghIssueComments(pr).flatMap(comment => {
     const stamp = readReviewStamp(comment.body);
     const trusted = comment.author !== null && maintainers.has(comment.author.toLowerCase());
     return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
   });
   const [review, ...others] = reviews;
-  if (review === undefined) return { verdict: { state: 'none', reviewed: null, url: null }, report: null };
-  if (others.length > 0) return { verdict: { state: 'duplicate', reviewed: null, url: null }, report: null };
+  if (review === undefined) return { state: 'none', reviewed: null, url: null };
+  if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null };
   const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
-  return { verdict: { state, reviewed: review.stamp.reviewed, url: review.url }, report: review.stamp.report };
+  return { state, reviewed: review.stamp.reviewed, url: review.url };
 }
 
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
@@ -337,8 +327,7 @@ const BEHIND_QUERY = `query($owner: String!, $name: String!, $head: String!) { r
 
 /**
  * The default branch's head and how many of its commits `head` lacks. A head that
- * lacks some still merges when the forge reports it merges cleanly; one that conflicts,
- * or whose mergeability the forge has not computed, is synced first.
+ * lacks some still merges when the forge reports it merges cleanly.
  */
 function readBehind(repo: QualifiedPr['repo'], head: string): { default_head: string; behind: number } {
   const [owner, name] = repo.path.split('/');
@@ -352,7 +341,7 @@ function readBehind(repo: QualifiedPr['repo'], head: string): { default_head: st
 }
 
 /** One snapshot of everything the gate and the sweep read about a pull request. */
-export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRead {
+export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
   const [owner, name] = pr.repo.path.split('/');
   const repository = graphql(pr.repo.host, PR_QUERY, { owner: owner ?? '', name: name ?? '', number: pr.number });
   const row = record(repository.pullRequest);
@@ -368,46 +357,44 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrRea
     throw new Error(`${String(row.url)} has ${String(threads.totalCount)} review threads; the gate reads at most 100`);
   }
   const unresolved = threadNodes.filter(thread => thread?.isResolved !== true);
-  const review = trustedReview(pr, maintainers);
+  const verdict = trustedReview(pr, maintainers);
   const { default_head, behind } = readBehind(pr.repo, row.headRefOid);
   const state = String(row.state).toLowerCase();
   return {
-    facts: {
-      pr,
-      url: String(row.url),
-      title: String(row.title),
-      state: state === 'merged' || state === 'closed' ? state : 'open',
-      is_draft: row.isDraft === true,
-      base: String(row.baseRefName),
-      default_branch: defaultBranch,
-      default_head,
-      behind,
-      head: String(row.headRefName),
-      head_revision: row.headRefOid,
-      merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
-      mergeable: row.mergeable === 'MERGEABLE' ? 'clean' : row.mergeable === 'CONFLICTING' ? 'conflict' : 'unknown',
-      checks: checksOf(commit.statusCheckRollup),
-      threads: {
-        unresolved: unresolved.length,
-        urls: unresolved.map(thread => String(record((record(thread?.comments)?.nodes as unknown[] | undefined)?.[0])?.url ?? '')),
-      },
-      verdict: review.verdict,
+    pr,
+    url: String(row.url),
+    title: String(row.title),
+    state: state === 'merged' || state === 'closed' ? state : 'open',
+    is_draft: row.isDraft === true,
+    base: String(row.baseRefName),
+    default_branch: defaultBranch,
+    default_head,
+    behind,
+    head: String(row.headRefName),
+    head_revision: row.headRefOid,
+    merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
+    mergeable: row.mergeable === 'MERGEABLE' ? 'clean' : row.mergeable === 'CONFLICTING' ? 'conflict' : 'unknown',
+    checks: checksOf(commit.statusCheckRollup),
+    threads: {
+      unresolved: unresolved.length,
+      urls: unresolved.map(thread => String(record((record(thread?.comments)?.nodes as unknown[] | undefined)?.[0])?.url ?? '')),
     },
-    report: review.report,
+    verdict,
   };
 }
 
 /**
  * Why the pull request may not merge at `head`; empty when it may. The facts the
- * queue's contract names are the verdict and CI, each at the head. Whether an open review
- * thread holds the merge is the sweep's judgment, from the thread facts it reads. The
- * rest keep the merge on an open, non-draft pull request into the default branch at
- * exactly the commit that was judged, and that commit either containing the default
- * branch's head or merging into it with no conflict. A clean merge of a head that is
- * behind is checked by the default branch's CI after the batch; whether a pull request
- * should be synced first anyway is the sweep's judgment.
+ * queue's contract names are a Ready verdict given at the head and green CI there, on a
+ * default branch whose CI is not red. The queue never pushes, so a verdict for another
+ * commit means someone else pushed after the review. Pending CI on the default branch
+ * does not hold a merge: the next sweep reads its result. Whether an open review thread
+ * holds the merge is the sweep's judgment, from the thread facts it reads. The rest keep
+ * the merge on an open, non-draft pull request into the default branch at exactly the
+ * commit that was judged, and that commit either containing the default branch's head
+ * or merging into it with no conflict.
  */
-export function gateRefusals(facts: PrFacts, head: string): string[] {
+export function gateRefusals(facts: PrFacts, head: string, base: { readonly head: string; readonly checks: Checks }): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
@@ -421,12 +408,14 @@ export function gateRefusals(facts: PrFacts, head: string): string[] {
     );
   }
   const { verdict } = facts;
-  // Which commit the verdict is for is the sweep's call: it sends a moved head to delta
-  // review unless only a clean sync moved it. The gate holds the merge to a trusted verdict.
   if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
+  else if (verdict.reviewed !== head) refusals.push(`its review verdict is for ${String(verdict.reviewed)}, not ${head}`);
   if (facts.checks.state !== 'green') {
     const named = [...facts.checks.failing, ...facts.checks.pending];
     refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
+  }
+  if (base.checks.state === 'red') {
+    refusals.push(`the default branch ${facts.default_branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }
   return refusals;
 }
