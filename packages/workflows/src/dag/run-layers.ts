@@ -8,7 +8,12 @@ import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SkipCause } from '../schemas';
-import { nodeUsesPersistedScope, readSubrunMetadata, isNodeContextResume } from '../schemas';
+import {
+  nodeUsesPersistedScope,
+  readSubrunMetadata,
+  isNodeContextResume,
+  ownsBodySessionCursor,
+} from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
@@ -488,6 +493,7 @@ async function aggregateLayerResults(
   isParallelLayer: boolean
 ): Promise<boolean> {
   const nodeById = new Map(layer.map(n => [n.id, n]));
+  const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
@@ -534,7 +540,7 @@ async function aggregateLayerResults(
       const ownerNode = nodeById.get(nodeId);
       if (
         ownerNode &&
-        isNodeContextResume(ownerNode.context) &&
+        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
         output.state === 'completed' &&
         output.sessionId !== undefined &&
         sessionProvider !== undefined

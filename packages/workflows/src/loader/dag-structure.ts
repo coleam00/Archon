@@ -265,17 +265,16 @@ function checkSuspensionOrdering(
   return null;
 }
 
-/** Body ancestry is proven at group entry, separately from output visibility. */
+/**
+ * A same-scope source must be transitively upstream within the scope; an enclosing source
+ * is proven at group entry, separately from output visibility.
+ */
 function checkResumeAncestry(node: DagNode | IncludeDirective, scope: DagScope): string | null {
   if (isIncludeDirective(node)) return null;
   if (!isNodeContextResume(node.context)) return null;
   const { nodesById, enclosingNodes, eligibleResumeSources } = scope;
   const sourceId = node.context.resume;
-  if (enclosingNodes !== undefined && nodesById.has(sourceId)) {
-    return `Node '${node.id}' context.resume cannot name a source inside the same loop_group body`;
-  }
-  const source =
-    enclosingNodes === undefined ? nodesById.get(sourceId) : eligibleResumeSources?.get(sourceId);
+  const source = nodesById.get(sourceId) ?? eligibleResumeSources?.get(sourceId);
   if (source === undefined && enclosingNodes?.has(sourceId)) {
     return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency of the loop_group`;
   }
@@ -285,7 +284,7 @@ function checkResumeAncestry(node: DagNode | IncludeDirective, scope: DagScope):
   if (isIncludeDirective(source) || !(isAgentNode(source) || isLoopNode(source))) {
     return `Node '${node.id}' context.resume source '${sourceId}' is not a session-producing command, prompt, or loop node`;
   }
-  if (enclosingNodes === undefined && !scope.transitiveDepsOf(node.id).has(sourceId)) {
+  if (nodesById.has(sourceId) && !scope.transitiveDepsOf(node.id).has(sourceId)) {
     return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency`;
   }
   return null;

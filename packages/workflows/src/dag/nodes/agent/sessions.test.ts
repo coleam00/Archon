@@ -1540,6 +1540,129 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     });
   }
 
+  /** `b` resumes same-body `a`; `withNestedPause` puts a gated inner group between them. */
+  function sameBodyWorkflow(withNestedPause: boolean): DagNode[] {
+    const inner = dagNodeSchema.parse({
+      id: 'inner',
+      depends_on: ['a'],
+      loop_group: {
+        max_iterations: 2,
+        until_bash: 'test $review.output.done = true',
+        nodes: [
+          {
+            id: 'review',
+            prompt: 'review',
+            output_format: {
+              type: 'object',
+              properties: { done: { type: 'boolean' } },
+              required: ['done'],
+            },
+          },
+          {
+            id: 'pause',
+            depends_on: ['review'],
+            when: '$review.output.done != true',
+            approval: { message: 'Continue?' },
+          },
+        ],
+      },
+    });
+    return [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        provider: 'claude',
+        loop_group: {
+          max_iterations: 2,
+          fresh_context: true,
+          until_bash: 'test $b.output = B2',
+          nodes: [
+            { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'a' } },
+            ...(withNestedPause ? [inner] : []),
+            {
+              id: 'b',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'b' },
+              depends_on: [withNestedPause ? 'inner' : 'a'],
+              context: { resume: 'a' },
+            },
+          ],
+        },
+      },
+    ];
+  }
+
+  /** Each `a` run yields session A<n>, each `b` run B<n>; the second review is done. */
+  function mockSameBodySessions(): void {
+    let aRuns = 0;
+    let bRuns = 0;
+    let reviews = 0;
+    mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
+      if (prompt === 'review') {
+        const done = ++reviews >= 2;
+        yield { type: 'agent_message_chunk', text: JSON.stringify({ done }) };
+        yield {
+          type: 'result',
+          sessionId: `R${reviews}`,
+          ...(options?.outputFormat ? { structuredOutput: { done } } : {}),
+        };
+        return;
+      }
+      const sessionId = prompt === 'a' ? `A${++aRuns}` : `B${++bRuns}`;
+      yield { type: 'agent_message_chunk', text: sessionId };
+      yield { type: 'result', sessionId, ...(session ? { resumed: true } : {}) };
+    });
+  }
+
+  function sameBodyConsumerCalls(): unknown[][] {
+    return mockSendQueryDag.mock.calls
+      .filter(c => c[0] === 'b')
+      .map(c => [c[2], c[3]?.forkSession]);
+  }
+
+  it("forks each iteration's same-body consumer from that iteration's source", async () => {
+    mockSameBodySessions();
+    const store = await runAddressableWorkflow(sameBodyWorkflow(false));
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(sameBodyConsumerCalls()).toEqual([
+      ['A1', true],
+      ['A2', true],
+    ]);
+  });
+
+  it("keeps a same-body consumer on its iteration's source across a nested pause", async () => {
+    mockSameBodySessions();
+    const nodes = sameBodyWorkflow(true);
+    const firstStore = createEscalationStore('addressable-run');
+    await runAddressableWorkflow(nodes, firstStore);
+    expect(firstStore.failWorkflowRun).not.toHaveBeenCalled();
+    expect(sameBodyConsumerCalls()).toEqual([]);
+    const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+    // The group tracks ancestry so the pause resumes inside iteration 1, but never
+    // persists the same-body consumer as an owner.
+    expect(metadata.approval.bodySessionCursorAncestry).toEqual({
+      [JSON.stringify(['group', []])]: {},
+      [JSON.stringify(['group.inner', [{ groupId: 'group', iteration: 1 }]])]: {},
+    });
+    metadata.approval.resolved = 'approved';
+    const resumedStore = createEscalationStore('addressable-run');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(resumedStore),
+        cwd: testDir,
+        workflow: { name: 'addressable', nodes },
+        workflowRun: makeWorkflowRun('addressable-run', { metadata }),
+      })
+    );
+    expect(resumedStore.failWorkflowRun).not.toHaveBeenCalled();
+    // The resumed iteration re-runs `a` (A2) and `b` forks that re-run, never the
+    // pre-pause A1; iteration 2 forks its own A3.
+    expect(sameBodyConsumerCalls()).toEqual([
+      ['A2', true],
+      ['A3', true],
+    ]);
+  });
+
   it('refuses missing, malformed, or foreign owner pause state before dispatch', async () => {
     for (const bodySessionCursors of [
       undefined,

@@ -825,13 +825,51 @@ over `fresh_context` and parallel-layer resets. Multiple owners fork separate br
 a skipped owner keeps its cursor, or waits to fork until its first executed turn.
 
 The source must be a command, prompt, or plain `loop:` node in an enclosing scope with
-a dependency path proving it completes before the group starts. Same-body, unordered,
-non-session, and loop-group sources are rejected. Nested groups get separate owner
+a dependency path proving it completes before the group starts. Unordered, non-session,
+and loop-group sources are rejected. A source in the same body works differently; see
+[Same-iteration sessions](#same-iteration-sessions). Nested groups get separate owner
 cursors for each enclosing invocation. Nested pauses retain every enclosing
 owner cursor and resume within the paused enclosing iteration before advancing.
 The resolved provider must match the source and
 support session resume and immutable forks. Missing context or a replacement owner
 session ID fails the node rather than starting a new conversation.
+
+### Same-iteration sessions
+
+A command or prompt in the body can also continue a session produced earlier in the
+same iteration, for example to ask an agent to finish a step it skipped:
+
+```yaml
+nodes:
+  - id: rounds
+    loop_group:
+      max_iterations: 3
+      until_bash: 'test $work.output.done = true'
+      nodes:
+        - id: work
+          prompt: Review the change, write review.md, and report what you did.
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              wrote_report: { type: boolean }
+            required: [done, wrote_report]
+        - id: follow-up
+          depends_on: [work]
+          when: '$work.output.wrote_report != true'
+          context: { resume: work }
+          prompt: You did not write review.md. Write it now from your review.
+```
+
+In each iteration, `follow-up` forks that iteration's `work` session. It never continues
+its own branch from an earlier iteration, and it has no owner cursor. The fork contract is
+the same as for any named resume: the source session stays unchanged, the providers must
+match and support immutable forks, and a missing source handle fails the node.
+
+The source must be a command, prompt, or plain `loop:` node transitively upstream of the
+consumer within the body. A body node that is not upstream, a node in a different
+`loop_group` body, and a consumer that is not a command or prompt node are rejected when
+the workflow loads.
 
 ### Resume
 
@@ -850,6 +888,9 @@ Suspension and failure have different recovery rules:
   cursor. The next iteration continues each owner even with `fresh_context: true`.
   Missing or invalid owner state fails restoration. A wait that suspends again retains
   the same snapshot.
+- **Same-iteration sessions after a nested pause**: a nested group's pause between a
+  same-body source and its consumer resumes within the paused iteration, which re-runs
+  the source. The consumer forks the re-run, matching the `$source.output` it reads.
 - **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
   no persisted iteration cursor — the loop_group node restarts from
   **iteration 1**. Per-body-node resume granularity is not supported in v1.

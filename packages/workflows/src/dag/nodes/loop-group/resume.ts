@@ -21,6 +21,7 @@ import {
   isWorkflowWaitContext,
   isApprovalContext,
   isNodeContextResume,
+  ownsBodySessionCursor,
 } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
@@ -206,9 +207,10 @@ function enclosingPauseFrameOf(
 }
 
 /**
- * Restore the named owner sessions this group's body nodes resume, from the pause this
- * run resumes or an enclosing group's pause frame. Undefined when no body node resumes a
- * session context.
+ * Restore the owner sessions of body nodes that resume an enclosing source, from the
+ * pause this run resumes or an enclosing group's pause frame. Undefined when no body node
+ * resumes a session context; a group whose consumers all resume same-body sources still
+ * returns an (empty) map so a nested pause resumes inside the paused iteration.
  */
 function restoreBodySessionCursors(
   node: LoopGroupNode,
@@ -218,8 +220,11 @@ function restoreBodySessionCursors(
     enclosingPauseFrame: { iteration: number } | undefined;
   }
 ): Map<string, SessionCursor> | undefined {
-  const ownerIds = new Set(bodyNodes.filter(n => isNodeContextResume(n.context)).map(n => n.id));
-  if (ownerIds.size === 0) return undefined;
+  if (!bodyNodes.some(n => isNodeContextResume(n.context))) return undefined;
+  const bodyNodeIds = new Set(bodyNodes.map(n => n.id));
+  const ownerIds = new Set(
+    bodyNodes.filter(n => ownsBodySessionCursor(n, bodyNodeIds)).map(n => n.id)
+  );
   const bodySessionCursors = new Map<string, SessionCursor>();
   if (shape.rawLoopWait && !shape.isEscalatedWaitResume) {
     throw new Error(

@@ -138,6 +138,7 @@ export {
   runMayPersistSessions,
   persistedSessionHandling,
   isNodeContextResume,
+  ownsBodySessionCursor,
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
