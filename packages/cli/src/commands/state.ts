@@ -16,6 +16,7 @@ import {
   stateRevisionNumberSchema,
   statePatchSchema,
   stateValueSchema,
+  type stateWriteScopeSchema,
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StatePatchError,
@@ -56,7 +57,7 @@ async function readStdin(): Promise<string> {
 
 type StateHost = Pick<WorkflowHost, 'deps' | 'records'>;
 type StateCommand = (typeof commands)[number];
-type StateInput = { scope: StateScope; name: string; writer: StateWriter };
+type StateInput = z.infer<typeof stateWriteScopeSchema>;
 
 function validateStateOptions(command: StateCommand, options: StateCommandOptions): void {
   if (options.ifRevision !== undefined && !['put', 'patch', 'delete'].includes(command))
@@ -262,7 +263,7 @@ async function executeStateCommand(
   parsed: ReturnType<typeof parseStateArguments>,
   options: StateCommandOptions,
   readInput: () => Promise<string>
-): Promise<unknown> {
+): Promise<object> {
   const { scope, name } = input;
   const { command, ifRevision, limit, prefix } = parsed;
   switch (command) {
@@ -304,6 +305,7 @@ async function executeStateCommand(
       };
     }
   }
+  throw new Error(`Unhandled state subcommand: ${command satisfies never}`);
 }
 
 function stateErrorCode(error: unknown): number {
