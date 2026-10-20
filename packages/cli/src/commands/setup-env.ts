@@ -42,11 +42,7 @@ interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
   hasPi: boolean;
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
+  platforms: SetupConfig['platforms'];
 }
 
 /**

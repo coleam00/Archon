@@ -199,6 +199,30 @@ describe('GitHub setup wizard', () => {
   const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
 
+  it('Add combines an existing Telegram connection with a newly selected Slack connection', async () => {
+    setupMode = 'add';
+    writeFileSync(target, 'TELEGRAM_BOT_TOKEN=123456:old-telegram\n');
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue(['slack']);
+    try {
+      expect(await run()).toBe(0);
+      expect(read()).toMatchObject({
+        TELEGRAM_BOT_TOKEN: '123456:old-telegram',
+        SLACK_BOT_TOKEN: 'xoxb-new-slack',
+        SLACK_APP_TOKEN: 'xapp-new-slack',
+      });
+      expect(read().GITHUB_APP_ID).toBeUndefined();
+      expect(read().GITHUB_TOKEN).toBeUndefined();
+      expect(output.find(message => message.startsWith('Claude:'))).toContain(
+        'Platforms: Telegram'
+      );
+      expect(output.find(message => message.startsWith('AI:'))).toContain(
+        'Platforms: Telegram, Slack'
+      );
+    } finally {
+      platforms.mockRestore();
+    }
+  });
+
   it.each([
     ['home', 'app', true],
     ['home', 'pat', true],

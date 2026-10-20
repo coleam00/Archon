@@ -65,6 +65,7 @@ import {
   collectTelegramConfig,
 } from './setup-platforms';
 import { spawnTerminalWithSetup } from './setup-spawn';
+import { createPlatformSelection, platformNames } from './setup-platform-selection';
 
 // =============================================================================
 // File Generation and Writing
@@ -258,14 +259,6 @@ async function selectSetupMode(existing: ExistingConfig, force: boolean): Promis
   return modeChoice;
 }
 
-function platformNames(platforms: SetupConfig['platforms']): string[] {
-  const names: string[] = [];
-  if (platforms.github) names.push('GitHub');
-  if (platforms.telegram) names.push('Telegram');
-  if (platforms.slack) names.push('Slack');
-  return names;
-}
-
 async function collectAdditionalConfig(
   ai: SetupConfig['ai'],
   existing: ExistingConfig,
@@ -276,11 +269,7 @@ async function collectAdditionalConfig(
 
   const config: SetupConfig = {
     ai,
-    platforms: {
-      github: existing?.platforms.github ?? false,
-      telegram: existing?.platforms.telegram ?? false,
-      slack: existing?.platforms.slack ?? false,
-    },
+    platforms: createPlatformSelection(platform => existing?.platforms[platform] ?? false),
     botDisplayName: 'Archon',
   };
 
@@ -289,21 +278,20 @@ async function collectAdditionalConfig(
   log.info('Select additional platforms to configure');
   const newPlatforms = await collectPlatforms();
 
-  config.platforms = {
-    github: config.platforms.github || newPlatforms.github,
-    telegram: config.platforms.telegram || newPlatforms.telegram,
-    slack: config.platforms.slack || newPlatforms.slack,
-  };
+  config.platforms = createPlatformSelection(
+    platform => config.platforms[platform] || newPlatforms[platform]
+  );
 
   if (force) {
     log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
   }
 
-  await collectPlatformCredentials(config, {
-    github: config.platforms.github && (force || !existing?.platforms.github),
-    telegram: config.platforms.telegram && (force || !existing?.platforms.telegram),
-    slack: config.platforms.slack && (force || !existing?.platforms.slack),
-  });
+  await collectPlatformCredentials(
+    config,
+    createPlatformSelection(
+      platform => config.platforms[platform] && (force || !existing?.platforms[platform])
+    )
+  );
   return config;
 }
 
