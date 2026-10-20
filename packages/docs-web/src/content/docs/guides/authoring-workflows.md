@@ -595,8 +595,8 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   output; referencing the failed producer's own output fails the condition's node loudly
   (see [Reading across a skipped branch](#reading-across-a-skipped-branch))
 
-:::danger[You cannot compare a whole AI output to a literal]
-A `when:` that compares the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
+:::danger[Current-node whole AI output comparisons are rejected]
+A `when:` that uses `$nodeId.output` to compare the **entire output** of a `prompt:`, `command:`, or `loop:` node with no
 `output_format`, or of any `loop_group:` node, against a literal is
 **rejected at load time**:
 
@@ -608,6 +608,8 @@ A `when:` that compares the **entire output** of a `prompt:`, `command:`, or `lo
   depends_on: [analyze]
   when: "$analyze.output == 'BUG'"
 ```
+
+This loader rule does not reject previous-iteration `$LOOP_PREV.<nodeId>.output` comparisons.
 
 The model writes `This is a BUG.` and the byte-for-byte comparison is false, so the node
 is skipped with no error and the run finishes looking successful having quietly done less
