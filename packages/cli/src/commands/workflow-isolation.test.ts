@@ -233,6 +233,70 @@ describe('run codebase resolution', () => {
     }
   );
 
+  it.each(['reuse-worktree', 'checkout-branch', 'foreign-worktree'] as const)(
+    'checks the resolved detached adoption checkout (%s)',
+    async laneKind => {
+      const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'run-adopted' },
+      ]);
+      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      const workingPath = laneKind === 'foreign-worktree' ? '/parent' : `${childRoot}/worktree`;
+      (git.findRepoRoot as ReturnType<typeof mock>).mockImplementation(async (path: string) =>
+        path === '/parent' ? '/parent' : childRoot
+      );
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(
+        async (path: string) => (path === childRoot ? child : path === '/parent' ? parent : null)
+      );
+      mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+        workflows: [makeTestWorkflowWithSource({ name: 'probe', worktree: { enabled: false } })],
+        errors: [],
+      });
+      (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
+        adoptedRun: { id: 'run-adopted', status: 'completed', codebase_id: child.id },
+        lane:
+          laneKind === 'checkout-branch'
+            ? { kind: 'checkout-branch', taskBranch: { kind: 'existing', branch: 'feature/adopt' } }
+            : {
+                kind: 'reuse-worktree',
+                environment: { id: 'env-adopted', working_path: workingPath },
+              },
+      });
+      const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
+      jest.useFakeTimers();
+      try {
+        const command = workflowRunCommand(createTestWorkflowHost(), '/parent', 'probe', 'go', {
+          codebaseId: child.id,
+          adoptRunId: 'run-adopted',
+          detach: true,
+        });
+        if (laneKind === 'foreign-worktree') {
+          await expect(command).rejects.toThrow('/setproject');
+          expect(spawnSpy).not.toHaveBeenCalled();
+          expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        } else {
+          await finishStartupWindow(command, spawnSpy);
+          expect(spawnSpy).toHaveBeenCalledTimes(1);
+          expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+            expect.objectContaining({ codebase_id: child.id, adopted_from_run_id: 'run-adopted' })
+          );
+        }
+        expect(resolveWorkflowAdoption).toHaveBeenCalledWith(
+          expect.objectContaining({ adoptedRunId: 'run-adopted', codebaseId: child.id })
+        );
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+        jest.useRealTimers();
+        spawnSpy.mockRestore();
+        (resolveWorkflowAdoption as ReturnType<typeof mock>)
+          .mockReset()
+          .mockRejectedValue(new Error('adoption not expected'));
+      }
+    }
+  );
+
   it.each([undefined, child.id])(
     'allows a launch in the selected chat checkout (id=%s)',
     async codebaseId => {
