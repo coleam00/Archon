@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
   createMockStore,
@@ -178,16 +178,10 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(data.node_output_original_bytes).toBe(32_769);
     // The full bytes are spilled alongside the bounded preview (#2726) so a resumed run
     // rehydrates the same value a fresh run's in-process consumer would have seen.
-    expect(data.node_output_spill_path).toBe(
-      join(
-        testDir,
-        'artifacts',
-        '.archon',
-        'node-output-spills',
-        'persisted',
-        'over-cap.nodeoutput'
-      )
+    expect(dirname(data.node_output_spill_path)).toBe(
+      join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
     );
+    expect(data.node_output_spill_path).toEndWith('.over-cap.nodeoutput');
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 
@@ -324,16 +318,10 @@ describe('executeDagWorkflow -- persisted node output', () => {
     expect(data.node_output).toEndWith('\n\n… [truncated; original output was 32769 bytes]');
     expect(data.node_output_truncated).toBe(true);
     expect(data.node_output_original_bytes).toBe(32_769);
-    expect(data.node_output_spill_path).toBe(
-      join(
-        testDir,
-        'artifacts',
-        '.archon',
-        'node-output-spills',
-        'persisted',
-        'script-over-cap.nodeoutput'
-      )
+    expect(dirname(data.node_output_spill_path)).toBe(
+      join(testDir, 'artifacts', '.archon', 'node-output-spills', 'persisted')
     );
+    expect(data.node_output_spill_path).toEndWith('.script-over-cap.nodeoutput');
     expect(await readFile(data.node_output_spill_path, 'utf8')).toBe('x'.repeat(32_769));
   });
 
