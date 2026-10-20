@@ -32,6 +32,7 @@ for (const mode of ['broken', 'delayed', 'collision'] as const) {
     async () => {
       const root = await mkdtemp(join(tmpdir(), 'claude-mcp-boundary-'));
       let modelCalls = 0;
+      let modelCalledBeforeConnected = false;
       const observations: MessageChunk[] = [];
       const model = Bun.serve({
         hostname: '127.0.0.1',
@@ -39,11 +40,13 @@ for (const mode of ['broken', 'delayed', 'collision'] as const) {
         fetch(request) {
           if (new URL(request.url).pathname.endsWith('/messages')) {
             modelCalls++;
-            expect(observations).toContainEqual({
-              type: 'mcp_server_status',
-              server: name,
-              status: 'connected',
-            });
+            // An expect here would only fail the fixture's response, not the test.
+            if (
+              !observations.some(
+                c => c.type === 'mcp_server_status' && c.server === name && c.status === 'connected'
+              )
+            )
+              modelCalledBeforeConnected = true;
           }
           return Response.json(
             { error: { type: 'invalid_request_error', message: 'local fixture' } },
@@ -102,6 +105,7 @@ for (const mode of ['broken', 'delayed', 'collision'] as const) {
           if (chunk.type === 'mcp_server_status' && chunk.status === 'pending')
             await writeFile(release, 'ready');
         }
+        expect(modelCalledBeforeConnected).toBe(false);
         if (broken) {
           expect(modelCalls).toBe(0);
           expect(observations).toContainEqual(
