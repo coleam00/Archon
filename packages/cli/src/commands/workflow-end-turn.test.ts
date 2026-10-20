@@ -45,7 +45,10 @@ describe('workflow end-turn', () => {
     expect(await workflowEndTurnCommand(host, RUN_ID)).toBe(0);
     expect(updateWorkflowRun).toHaveBeenCalledWith(RUN_ID, {
       metadata: {
-        end_turn_request: { streamIds: ['stream-1'], requestedAt: expect.any(String) },
+        end_turn_request: {
+          stalls: { 'stream-1': stalledCall.raisedAt },
+          requestedAt: expect.any(String),
+        },
       },
     });
   });

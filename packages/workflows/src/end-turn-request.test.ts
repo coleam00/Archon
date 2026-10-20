@@ -49,37 +49,42 @@ describe('planEndTurn', () => {
       new Date('2026-10-18T08:00:00.000Z')
     );
     expect(plan.kind === 'request' && plan.metadata).toEqual({
-      end_turn_request: { streamIds: ['a', 'b'], requestedAt: '2026-10-18T08:00:00.000Z' },
+      end_turn_request: {
+        stalls: { a: '2026-10-18T06:56:10.000Z', b: '2026-10-18T07:00:00.000Z' },
+        requestedAt: '2026-10-18T08:00:00.000Z',
+      },
     });
   });
 });
 
 describe('isEndTurnRequested', () => {
-  const request = {
-    end_turn_request: { streamIds: ['a'], requestedAt: '2026-10-18T08:00:00.000Z' },
-  };
-
-  it('ends the stall the operator saw', async () => {
-    expect(
-      await isEndTurnRequested(storeWith(request), 'run', {
-        streamId: 'a',
-        raisedAt: '2026-10-18T06:55:59.000Z',
-      })
-    ).toBe(true);
-  });
-
-  it('leaves a stall raised after the request, and other streams, running', async () => {
-    expect(
-      await isEndTurnRequested(storeWith(request), 'run', {
-        streamId: 'a',
-        raisedAt: '2026-10-18T08:30:00.000Z',
-      })
-    ).toBe(false);
-    expect(
-      await isEndTurnRequested(storeWith(request), 'run', {
-        streamId: 'b',
-        raisedAt: '2026-10-18T06:55:59.000Z',
-      })
-    ).toBe(false);
-  });
+  it.each(['2026-10-18T05:00:00.000Z', '2026-10-18T10:00:00.000Z'])(
+    'matches only observed stalls when the requester clock is %s',
+    async requestedAt => {
+      const plan = planEndTurn(
+        run('running', [call('a', '2026-10-18T06:55:59.000Z')]),
+        new Date(requestedAt)
+      );
+      if (plan.kind !== 'request') throw new Error('expected a request');
+      const store = storeWith(plan.metadata);
+      expect(
+        await isEndTurnRequested(store, 'run', {
+          streamId: 'a',
+          raisedAt: '2026-10-18T06:55:59.000Z',
+        })
+      ).toBe(true);
+      expect(
+        await isEndTurnRequested(store, 'run', {
+          streamId: 'a',
+          raisedAt: '2026-10-18T07:00:00.000Z',
+        })
+      ).toBe(false);
+      expect(
+        await isEndTurnRequested(store, 'run', {
+          streamId: 'b',
+          raisedAt: '2026-10-18T06:55:59.000Z',
+        })
+      ).toBe(false);
+    }
+  );
 });

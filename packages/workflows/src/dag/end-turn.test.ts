@@ -60,9 +60,15 @@ describe('ending a stalled turn', () => {
     await removeTempTree(testDir);
   });
 
-  it.each(['agent', 'loop', 'structured loop'] as const)(
-    'fails the %s attempt as a timeout once the operator ends it',
-    async kind => {
+  it.each([
+    { kind: 'agent', retry: false, payload: true },
+    { kind: 'loop', retry: false, payload: true },
+    { kind: 'structured loop', retry: false, payload: true },
+    { kind: 'structured loop', retry: true, payload: true },
+    { kind: 'structured loop', retry: true, payload: false },
+  ] as const)(
+    'ends $kind with payload=$payload and retry=$retry under its retry policy',
+    async ({ kind, retry, payload }) => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`end-turn-${kind}`);
       store.getWorkflowRun.mockImplementation(async () => workflowRun);
@@ -76,7 +82,14 @@ describe('ending a stalled turn', () => {
         return true;
       });
       let signal: AbortSignal | undefined;
+      let attempts = 0;
       mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
+        attempts++;
+        if (attempts > 1) {
+          yield { type: 'result', sessionId: 'retry', structuredOutput: { done: true } };
+          yield { type: 'settled' };
+          return;
+        }
         signal = options?.abortSignal;
         yield {
           type: 'subtask',
@@ -85,8 +98,10 @@ describe('ending a stalled turn', () => {
           taskType: 'command_execution',
           description: 'while true; do gh run view; sleep 30; done',
         };
-        yield { type: 'agent_message_chunk', text: '{"done":true}' };
-        yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+        if (payload) {
+          yield { type: 'agent_message_chunk', text: '{"done":true}' };
+          yield { type: 'result', sessionId: 'session', structuredOutput: { done: true } };
+        }
         // The background command never ends, so the provider never settles.
         await new Promise<void>(resolve => {
           signal?.addEventListener('abort', () => resolve());
@@ -99,13 +114,13 @@ describe('ending a stalled turn', () => {
               kind: 'agent' as const,
               source: { kind: 'command' as const, name: 'my-cmd' },
               idle_timeout: 10,
-              retry: { max_attempts: 0 },
+              retry: { max_attempts: retry ? 1 : 0, delay_ms: 1 },
             }
           : {
               id: 'ci',
               kind: 'loop' as const,
               idle_timeout: 10,
-              retry: { max_attempts: 0 },
+              retry: { max_attempts: retry ? 1 : 0, delay_ms: 1 },
               ...structuredLoop(kind === 'structured loop'),
             };
       const execution = executeDagWorkflow(
@@ -139,12 +154,18 @@ describe('ending a stalled turn', () => {
       await execution;
 
       expect(signal?.aborted).toBe(true);
-      const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-      expect(failed?.data?.failure_kind).toBe('timeout');
-      expect(String(failed?.data?.error)).toContain('was ended by the operator');
-      expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(
-        false
-      );
+      const events = persistedEvents(store);
+      if (retry) {
+        expect(attempts).toBe(2);
+        expect(events.some(event => event.event_type === 'node_retry_scheduled')).toBe(true);
+        expect(events.some(event => event.event_type === 'node_completed')).toBe(true);
+        expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+      } else {
+        const failed = events.find(event => event.event_type === 'node_failed');
+        expect(failed?.data?.failure_kind).toBe('timeout');
+        expect(String(failed?.data?.error)).toContain('was ended by the operator');
+        expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+      }
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     }
   );

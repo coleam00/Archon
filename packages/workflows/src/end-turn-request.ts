@@ -28,7 +28,7 @@ import type { StreamStall } from './tool-call-attention';
 export const END_TURN_REQUEST_METADATA_KEY = 'end_turn_request';
 
 const endTurnRequestSchema = z.object({
-  streamIds: z.array(z.string().min(1)),
+  stalls: z.record(z.string().min(1), z.iso.datetime()),
   requestedAt: z.iso.datetime(),
 });
 
@@ -47,19 +47,26 @@ export function planEndTurn(
   );
   const calls = parsed.success ? parsed.data : [];
   if (calls.length === 0) return { kind: 'refused', reason: 'nothing_stalled' };
+  const stalls = new Map<string, string>();
+  for (const call of calls) {
+    const observed = stalls.get(call.streamId);
+    if (observed === undefined || call.raisedAt > observed) {
+      stalls.set(call.streamId, call.raisedAt);
+    }
+  }
   return {
     kind: 'request',
     calls,
     metadata: {
       [END_TURN_REQUEST_METADATA_KEY]: {
-        streamIds: [...new Set(calls.map(call => call.streamId))],
+        stalls: Object.fromEntries(stalls),
         requestedAt: now.toISOString(),
       },
     },
   };
 }
 
-/** Whether the operator asked to end this stall: its stream, after it was raised. */
+/** Match against owner timestamps the operator observed, independent of the CLI clock. */
 export async function isEndTurnRequested(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   runId: string,
@@ -69,7 +76,7 @@ export async function isEndTurnRequested(
   const request = endTurnRequestSchema.safeParse(run?.metadata[END_TURN_REQUEST_METADATA_KEY]);
   return (
     request.success &&
-    request.data.streamIds.includes(stall.streamId) &&
-    Date.parse(stall.raisedAt) <= Date.parse(request.data.requestedAt)
+    Object.hasOwn(request.data.stalls, stall.streamId) &&
+    stall.raisedAt <= request.data.stalls[stall.streamId]
   );
 }

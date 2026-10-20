@@ -151,13 +151,18 @@ export async function failedStream(
   if (attempt.abort.signal.aborted && !attempt.cutOff) {
     return failed(await stoppedDuringStream(run, state, i, attempt));
   }
-  // A cut-off `output_format` iteration with no payload is exempt from both checks
+  // An idle-timeout `output_format` iteration with no payload is exempt from both checks
   // below: the structured gate owns it, naming the contract that failed and failing on
   // the first attempt, and canReask excludes it too — a retry would spend another full
   // idle_timeout window per attempt for the same answer. One that already carries a
   // payload was cut off before it settled, so it fails as unsettled rather than reaching
   // a gate that would accept the payload (executeAgentNode's assertTurnSettled).
-  if (scope.wantsStructured && attempt.cutOff && attempt.structured === undefined) return undefined;
+  if (
+    scope.wantsStructured &&
+    attempt.cutOff === 'idle_timeout' &&
+    attempt.structured === undefined
+  )
+    return undefined;
   const failure =
     emptyOutputFailure(run, i, attempt, scope.iterationStart) ??
     unsettledFailure(run, i, attempt, scope.iterationStart);
@@ -288,9 +293,7 @@ export async function gateStructuredAttempt(
       state,
       attempt.cutOff === 'idle_timeout'
         ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(attempt.lastWatchdogReset)}`
-        : attempt.cutOff === 'operator'
-          ? `Loop node '${node.id}' iteration ${String(i)} ${cutOffClause(attempt.cutOff, node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS)}, before producing the required structured output.`
-          : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
+        : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
       {
         failureKind: attempt.cutOff ? 'timeout' : 'output_contract',
         output: state.lastOutput,
