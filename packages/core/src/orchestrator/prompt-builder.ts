@@ -318,13 +318,8 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   );
 }
 
-/**
- * How the chat agent launches workflows and registers projects. `tools`: the typed
- * `invoke_workflow` and `register_project` native tools (providers with in-process
- * tools). `commands`: `/invoke-workflow` and `/register-project` lines the command
- * scan reads from the reply (every other provider).
- */
-export type LaunchChannel = 'tools' | 'commands';
+/** The provider transport for launching and managing workflow runs. */
+export type LaunchChannel = 'tools' | 'cli';
 
 /**
  * Build the routing rules section, optionally scoped to a specific project.
@@ -356,7 +351,8 @@ In the examples below, {workflow-name} is an illustrative placeholder: replace i
   const exampleTask =
     'Fix GitHub issue #42: the login form rejects valid email addresses. Check the issue against the current code, fix the root cause, and open a reviewed pull request.';
 
-  const projectMaintenance = `To update a project's path:
+  const projectMaintenance = `Ask the user to submit these project-maintenance commands in this conversation.
+To update a project's path:
    /update-project {project-name} {new-path}
 
 To remove a registered project:
@@ -364,6 +360,11 @@ To remove a registered project:
 
 Before cloning, choose an unoccupied source path. Prefer ${workspaces}/{owner}/{repo}/source; if occupied, choose a readable suffix such as ${workspaces}/{owner}/{repo}-2/source. Honor a user-specified location, but never overwrite an occupied checkout.
 Use the name returned by registration for subsequent workflow and project commands; registration may add a suffix. Two clones of one registered remote cannot be separate projects; use worktrees for parallel checkouts.`;
+
+  const projectSelection = `## Project Selection
+
+Ask the user to submit \`/setproject <name>\` in this conversation or thread to persist its active project and enable project run management. Registration alone does not bind the conversation. General questions work without a project.
+${!projectName && channel === 'cli' ? 'Before launching or managing runs, ask the user to select a registered project with /setproject <name>.' : 'If a requested project is ambiguous, ask which project the user means.'}`;
 
   if (channel === 'tools') {
     const invokeExample = {
@@ -378,6 +379,8 @@ Use the name returned by registration for subsequent workflow and project comman
       folder: false,
     } satisfies Record<keyof typeof REGISTER_PROJECT_SCHEMA.properties, string | boolean>;
     return `${routingRules}
+
+${projectSelection}
 
 ## Invoking a Workflow
 
@@ -422,46 +425,33 @@ ${projectMaintenance}`;
 
   return `${routingRules}
 
-## Workflow Invocation Format
+${projectSelection}
 
-When invoking a workflow, output the command as the VERY LAST line of your response:
-/invoke-workflow {workflow-name} --project {project-name} --prompt "{task description}"
+## Workflow Launch via CLI
 
-Rules:
-- Use the project NAME (e.g., "my-project"), not an ID or path.
-${promptRules('--prompt')}
-- You may include a brief explanation before the command. The user will see this text.
-- /invoke-workflow MUST be the absolute last thing in your response. Do NOT use any tools or generate additional text after it.
-
-Routing behavior:
-- If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → include a brief explanation of what you're doing, then invoke the workflow.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may offer to run a suitable workflow from Available Workflows if one fits, but do NOT include /invoke-workflow in your response.
-
-Example (clear intent):
-User: "Fix issue #42, the login form rejects valid emails"
-Response: I'll take issue #42 through to a reviewed pull request.
-/invoke-workflow {workflow-name} --project my-project --prompt "${exampleTask}"
-
-Example (ambiguous — answer directly):
-User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run one if a suitable workflow is available."
+${projectName ? 'Launch only when the user clearly requests work and a listed workflow fits. Use the existing CLI in the registered project directory.' : 'Once the user selects a project, use the existing CLI in its registered directory. Do not launch from the projectless workspace.'}
+- Use \`archon workflow run <workflow> "<message>" --detach\`.
+${promptRules('message argument')}
+- Pass declared workflow inputs with \`--input name=value\` for each value. Ask for missing required inputs before launching.
+- Quote every shell argument safely, including paths, task text and inputs. Preserve embedded quotes and apostrophes; never interpolate user text as shell code.
+- Use the selected project's listed directory. If the user explicitly chooses another project, change to that project's listed directory first.
+- Launch at most once per reply. For questions or unclear intent, answer directly without launching.
+- Detached launches are headless: they use CLI identity, have no originating-chat progress or result delivery, and return a run ID. Inspect that ID with the CLI; never claim the run has finished just because launch returned.
 
 ## Project Setup
 
-When a user asks to register an existing local directory, emit:
+Ask the user to submit an explicit command:
    /register-project {project-name} "{path}"
-Use the explicit folder choice when the user wants Archon to run in place without managing git:
+For in-place execution without Archon-managed git:
    /register-project --folder {project-name} "{path}"
-A folder project may itself be a git repository. Git belongs to the user and agent.
-Without --folder, git paths are repo projects and non-git paths are folder projects.
+A folder project may itself be a git repository. Without --folder, git paths are repo projects and non-git paths are folder projects.
+Displaying a command does not execute it. After registration, ask the user to submit /setproject <name> in this conversation.
 
-When a user asks to clone a new repository:
-1. Following the path guidance below, choose an unoccupied source path under ${workspaces}/:
+When asked to clone a repository, choose an unoccupied source path following the guidance below:
    git clone https://github.com/{owner}/{repo} "{unoccupied-source-path}"
-2. Register it by emitting this command on its own line:
+Then ask the user to submit:
    /register-project {project-name} {path-to-source}
-
-Example:
+For example:
    /register-project my-new-app ${workspaces}/user/my-new-app/source
 
 ${projectMaintenance}`;
@@ -546,25 +536,13 @@ ${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodeb
   return prompt;
 }
 
-/**
- * Build the run-management section of the orchestrator prompt.
- *
- * Teaches the chat agent it can inspect and control workflow runs directly via
- * the `archon` CLI over bash — the delivery of the `manage-run` skill for
- * providers WITHOUT the in-process `manage_run` tool. Direct chat is the one path
- * where the `skills:` option is NOT consumed (it is workflow-node-only), so the
- * system prompt is the only channel that reaches OpenCode/Copilot.
- * `prepareChatTurnRequest` (chat-request.ts) appends this ONLY for project-scoped
- * chats on non-nativeTools providers — Claude/Codex/Pi use the native tool instead, and the
- * CLI commands require a git-repo cwd that unscoped chats don't have. Invocation
- * inherits the same `archon`-on-PATH convention the `archon` skill already assumes.
- */
+/** CLI transport for inspecting and controlling runs in a registered project. */
 export function buildRunManagementSection(): string {
   return `## Managing Workflow Runs
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
-Run these from within the project's git repo (any subdirectory works — they resolve to the repo root, which also scopes \`runs\` and \`status\` to this project). In an unregistered git checkout, \`workflow status\` falls back to install-wide active runs and reports \`scopeFallback: true\` in JSON. A non-repo path such as \`${getArchonWorkspacesPath()}/\` still fails with "Not in a git repository".
+Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Project scope applies to \`runs\` and \`status\`; use \`--all\` only when the user asks for install-wide visibility.
 
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
@@ -579,14 +557,7 @@ Run these from within the project's git repo (any subdirectory works — they re
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
 }
 
-/**
- * Build the static orchestrator context string for use as a cacheable system prompt append.
- * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
- * on whether the conversation is scoped to a project, with launch instructions for the
- * given channel. The run-management section is NOT
- * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
- * providers) via buildRunManagementSection().
- */
+/** Build cacheable chat context with the selected launch and run-management transport. */
 export async function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
@@ -597,7 +568,10 @@ export async function buildOrchestratorSystemAppend(
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
-  return scopedCodebase
+  const prompt = await (scopedCodebase
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, channel)
-    : buildOrchestratorPrompt(codebases, workflows, channel);
+    : buildOrchestratorPrompt(codebases, workflows, channel));
+  return scopedCodebase && channel === 'cli'
+    ? `${prompt}\n\n${buildRunManagementSection()}`
+    : prompt;
 }

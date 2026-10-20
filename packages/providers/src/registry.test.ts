@@ -20,7 +20,7 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
-import { deprecatedForRemovalNotice } from './community/deprecation';
+import { deprecatedChatProviderNotice, deprecatedForRemovalNotice } from './community/deprecation';
 import type { ProviderRegistration, IAgentProvider } from './types';
 import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
@@ -526,11 +526,17 @@ describe('registry', () => {
           'plugin: https://archon.diy/guides/publishing-plugins/'
       );
       expect(getRegistration('copilot').deprecationNotice).toBe(
-        deprecatedForRemovalNotice('Copilot')
+        deprecatedChatProviderNotice('Copilot')
       );
       expect(getRegistration('opencode').deprecationNotice).toBe(
-        deprecatedForRemovalNotice('OpenCode')
+        deprecatedChatProviderNotice('OpenCode')
       );
+      for (const provider of ['copilot', 'opencode']) {
+        const notice = getRegistration(provider).deprecationNotice;
+        expect(notice).toContain('headless');
+        expect(notice).toContain('CLI identity');
+        expect(notice).toContain('do not deliver progress or results');
+      }
     });
 
     test('is idempotent', () => {

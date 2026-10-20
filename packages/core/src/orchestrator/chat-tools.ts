@@ -34,8 +34,7 @@ export interface ChatLaunch {
 
 /**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
- * Case-insensitive. Shared by the command scan and `invoke_workflow`, so both resolve a
- * project name the same way.
+ * Project names are case-insensitive.
  */
 export function findCodebaseByName(
   codebases: readonly Codebase[],
@@ -147,7 +146,7 @@ function describeInputs(inputs: Record<string, string>): string {
 /**
  * The `invoke_workflow` native tool. Resolves the workflow, project and declared inputs at
  * call time and queues the launch; the orchestrator dispatches it once the turn ends, through
- * the same path the command scan uses, so gates (including the inputs gate, which validates
+ * the shared dispatch path, so gates (including the inputs gate, which validates
  * the map again before any cost), isolation hints and foreground/background choice stay
  * identical. Dispatching inside the call would block the agent loop for a whole
  * foreground workflow.
@@ -167,7 +166,6 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
         if (projectName === '') return 'invoke_workflow: project is required.';
         if (prompt === '') return 'invoke_workflow: prompt is required.';
 
-        // Exact name, as the command scan requires.
         const entry = ctx.workflows.find(w => w.workflow.name === workflowName);
         if (entry === undefined) {
           const names = ctx.workflows.map(w => w.workflow.name).join(', ');

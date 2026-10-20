@@ -644,7 +644,6 @@ mock.module('../orchestrator/prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
   buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
   buildOrchestratorSystemAppend: mock(() => 'orchestrator system append'),
-  buildRunManagementSection: mock(() => '## Managing Workflow Runs\n(mocked)'),
   formatWorkflowContextSection: mock((results: unknown[]) =>
     results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
   ),

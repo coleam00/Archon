@@ -14,6 +14,7 @@ import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
 import {
+  DEFAULT_PROVIDER_CAPS,
   CAPTURED_SOURCE_ROOTS,
   capturedSourceOwnerCalls,
   makeCodebase,
@@ -974,19 +975,27 @@ describe('workflow dispatch routing', () => {
         mockGetCodebase.mockResolvedValueOnce(makeCodebase());
         mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
         mockValidateAndResolveIsolation.mockClear();
+        const providers = await import('@archon/providers');
+        const caps = providers.getProviderCapabilities as ReturnType<typeof mock>;
+        caps.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: true });
         const platform = makeForegroundPlatform();
         if (entry === 'slash command')
           mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
         else {
-          mockListCodebases.mockResolvedValueOnce([makeCodebase()]);
+          mockListCodebases.mockResolvedValue([makeCodebase()]);
           platform.getStreamingMode.mockReturnValue(
             entry === 'stream invocation' ? 'stream' : 'batch'
           );
-          mockSendQuery.mockImplementationOnce(async function* () {
-            yield {
-              type: 'agent_message_chunk',
-              text: '/invoke-workflow test-workflow --project test-repo',
-            };
+          mockSendQuery.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
+            const tool = options?.nativeTools?.find(t => t.name === 'invoke_workflow');
+            if (!tool) throw new Error('Missing workflow launch tool');
+            const result = await tool.handler({
+              workflow: 'test-workflow',
+              project: 'test-repo',
+              prompt: 'Continue the workflow',
+            });
+            expect(result).toContain('Queued');
+            yield { type: 'agent_message_chunk', text: 'Continuing.' };
             yield { type: 'result', sessionId: 'session-1' };
           });
         }
@@ -1017,6 +1026,7 @@ describe('workflow dispatch routing', () => {
           }
         } finally {
           lookup.mockRestore();
+          caps.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
         }
       });
     }

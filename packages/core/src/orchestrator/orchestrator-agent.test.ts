@@ -743,7 +743,7 @@ describe('typed chat tools', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('the command scan is off: a /invoke-workflow line in the reply is plain text', async () => {
+  test('a /invoke-workflow line in the reply is plain text', async () => {
     const reply = '/invoke-workflow test-workflow --project test-repo --prompt "x"\n';
     agentInvokes([], [], reply);
     const platform = makePlatform();

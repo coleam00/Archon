@@ -18,7 +18,20 @@ import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import type { ProjectRegistration } from './chat-tools';
 import { getLog } from './agent-log';
-import { parseProjectRegistration } from './command-scan';
+import { parseSlashCommand } from '../utils/command-args';
+
+function parseProjectRegistration(message: string): ProjectRegistration | null {
+  const { command, args } = parseSlashCommand(message);
+  if (command !== 'register-project') return null;
+  const folder = args[0] === '--folder';
+  const [projectName, ...pathParts] = folder ? args.slice(1) : args;
+  if (!projectName || pathParts.length === 0) return null;
+  return {
+    projectName,
+    projectPath: pathParts.join(' '),
+    ...(folder ? { folder: true } : {}),
+  };
+}
 
 /**
  * Resolve a codebase by name using 4-tier fuzzy matching.
