@@ -49,6 +49,14 @@ nodes:
       console.log(JSON.stringify({ bump, dryRun: String(dryRun) }));
     runtime: bun
     timeout: 5000
+    # Declared because the release tail reads these fields by name: a mistyped
+    # reference fails the load, and a producer that changes the encoding fails here.
+    output_format:
+      type: object
+      properties:
+        bump: { type: string, enum: [patch, minor, major] }
+        dryRun: { type: string, enum: ["true", "false"] }
+      required: [bump, dryRun]
 
   - id: validate-state
     bash: |
@@ -412,7 +420,8 @@ nodes:
         ─────────────────────────────────────────────────────────────────
 
         Approve to continue, or reject to cancel the release.
-        - In dry-run mode the workflow ends here without modifying any files.
+        - In dry-run mode the workflow ends here without writing any release files;
+          the live dev checkout was already fetched and fast-forwarded.
         - In full mode approval triggers: write files, commit + push to dev,
           open a PR dev → main, then pause again before tag/release.
     depends_on: [format-changelog, collect-commits, bump-version, parse-args]
