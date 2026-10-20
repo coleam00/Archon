@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
-import { mkdir, rm, writeFile } from 'fs/promises';
-import { delimiter, dirname, join } from 'path';
+import { delimiter, join } from 'path';
+import { removeArtifactFile, writeArtifactFile } from './artifact-writes';
 import {
   MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS,
   type WorkflowDeps,
@@ -195,9 +195,24 @@ async function resolveUserGithubEnvForWorkflow(
  * or after fresh credential resolution fails.
  */
 export async function clearManagedProviderCredentialFiles(artifactsDir: string): Promise<void> {
-  for (const relativePath of MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS) {
-    await rm(join(artifactsDir, relativePath), { force: true });
+  await removeEach(managedCredentialPaths(artifactsDir));
+}
+
+function managedCredentialPaths(artifactsDir: string): string[] {
+  return MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS.map(path => join(artifactsDir, path));
+}
+
+/** Remove every path even when one is refused, then throw the first failure. */
+async function removeEach(paths: readonly string[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const path of paths) {
+    try {
+      await removeArtifactFile(path);
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  if (failures.length > 0) throw failures[0];
 }
 
 /**
@@ -211,7 +226,7 @@ export async function clearManagedProviderCredentialFiles(artifactsDir: string):
  * failures stop execution rather than falling back to ambient credentials.
  */
 export async function resolveUserProviderEnvForWorkflow(
-  deps: WorkflowDeps,
+  deps: Pick<WorkflowDeps, 'isPerUserProviderKeysEnabled' | 'getUserProviderEnv'>,
   userId: string | undefined,
   artifactsDir: string,
   requirements: readonly RunCredentialRequirement[],
@@ -239,13 +254,17 @@ export async function resolveUserProviderEnvForWorkflow(
   const written: string[] = [];
   try {
     for (const f of files) {
-      await mkdir(dirname(f.path), { recursive: true });
       written.push(f.path);
-      await writeFile(f.path, f.contents, { encoding: 'utf8', mode: 0o600 });
+      await writeArtifactFile(f.path, f.contents, { mode: 0o600 });
     }
-  } catch {
-    for (const path of written.reverse()) await rm(path, { force: true });
-    await clearManagedProviderCredentialFiles(artifactsDir);
+  } catch (error) {
+    // The error names paths, never contents; the thrown message carries neither.
+    getLog().error({ err: error as Error }, 'workflow.provider_credential_write_failed');
+    try {
+      await removeEach([...written.reverse(), ...managedCredentialPaths(artifactsDir)]);
+    } catch (cleanupError) {
+      getLog().error({ err: cleanupError as Error }, 'workflow.provider_credential_cleanup_failed');
+    }
     throw new Error('Could not safely write provider credential files');
   }
 

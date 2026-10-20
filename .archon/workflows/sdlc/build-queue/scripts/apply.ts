@@ -3,7 +3,7 @@
  *
  * The decision is the last agent's that ran: answer's over route's. At the round cap an
  * answer that asks is the scope question. A route that launched is answered after its round, so its own decision is
- * recorded only when it asked. A push the answer declared is made whatever the run
+ * recorded only when it asked or found the pull request already Ready; then apply takes it out of draft. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
@@ -13,23 +13,24 @@
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP from facts.
+ * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
 import { withBuild } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { launchNextRound } from '../../.shared/launch.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { viewPr } from '../../.shared/pr.ts';
+import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
-  readonly decision: 'launch' | 'ask';
+  readonly decision: 'launch' | 'ask' | 'ready';
+  readonly ready_head?: string | null;
   readonly brief: string;
   readonly reason: string;
   readonly attention: BuildAttention | null;
@@ -85,6 +86,7 @@ function decide(
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
   if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
+  if (route.decision === 'ready') return { kind: 'ready', reason: route.reason };
   // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
 }
@@ -96,6 +98,31 @@ function pushTo(pr: QualifiedPr): string {
   if (view.pr.head_revision === gitOrThrow('rev-parse', 'HEAD')) return 'its head already holds the checkout';
   const pushed = pushHead({ repo: pr.repo, head_repo: view.pr.head_repo, head: view.pr.head });
   return `pushed ${pushed} to ${view.pr.head}`;
+}
+
+/**
+ * Take the pull request route found already Ready out of draft. Only while its head is
+ * still the commit route judged: a push since then needs a new review.
+ */
+function markReady(pr: PrRecord | null, head: string | null | undefined): string {
+  if (pr === null) throw new Error('route declared ready with no pull request');
+  if (typeof head !== 'string' || head === '') throw new Error('route declared ready without the head it judged');
+  const source = forgeSource();
+  const ref = { repo: pr.repo, number: pr.number };
+  const now = viewPr(ref, source).pr;
+  if (now.state !== 'open' || now.head_revision !== head)
+    throw new Error(`${now.url} is ${now.state} at ${String(now.head_revision)}; route judged it at ${head}`);
+  const after = setPrDraft(ref, false, source);
+  if (after.is_draft || after.head_revision !== head)
+    throw new Error(`${after.url} reads back draft=${String(after.is_draft)} at ${String(after.head_revision)}`);
+  return `${after.url} marked ready at ${head}`;
+}
+
+/** The pull request write the decision declared: a push, taking it out of draft, or none. */
+function writePullRequest(route: RouteOutput | null, answer: AnswerOutput | null, push: QualifiedPr | null): string | null {
+  if (answer === null && route?.decision === 'ready')
+    return markReady(nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null, route.ready_head);
+  return push === null ? null : pushTo(push);
 }
 
 const STATUS = {
@@ -111,8 +138,8 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(summary: string, pushed: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
-  const written = pushed === null ? summary : `${summary} (${pushed})`;
+function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
+  const written = wrote === null ? summary : `${summary} (${wrote})`;
   return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId)}` : written;
 }
 
@@ -137,9 +164,10 @@ function main(): void {
   const round: BuildRound | null =
     ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
+  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
   const decision = decide(
     path,
-    nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null,
+    route,
     answer,
     text(process.env.INPUTS_AT_CAP) === 'true'
   );
@@ -165,12 +193,12 @@ function main(): void {
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
 
-  const pushed = push === null ? null : pushTo(push);
+  const wrote = writePullRequest(route, answer, push);
   const entry: DecisionEntry = {
     at,
     run_id: runId,
     decision: asking === null ? decision.kind : `ask ${asking.by}`,
-    reason: pushed === null ? decision.reason : `${decision.reason} (${pushed})`,
+    reason: wrote === null ? decision.reason : `${decision.reason} (${wrote})`,
     links,
   };
   updateClaimed(item, runId, doc =>
@@ -184,7 +212,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: afterWrite(result.summary, pushed, decision, item, runId) });
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 
 try {
