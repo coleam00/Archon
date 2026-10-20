@@ -123,7 +123,14 @@ describe('workflowRunCommand — progress rendering', () => {
   });
 
   it('renders aligned completed execution and succeeded authored outcome', async () => {
-    await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
+    await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded', {
+      total_cost_usd: 0.05,
+      total_tokens_in: 100,
+      total_tokens_out: 20,
+    });
+    expect(consoleSpy).toHaveBeenCalledWith('  Cost: $0.05');
+    expect(consoleSpy).toHaveBeenCalledWith('  Input tokens: 100');
+    expect(consoleSpy).toHaveBeenCalledWith('  Output tokens: 20');
 
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: succeeded'
@@ -201,6 +208,7 @@ describe('workflowRunCommand — progress rendering', () => {
     ],
     [{ total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 }, '$0', '0', '0'],
     [{}, 'unknown', 'unknown', 'unknown'],
+    [{ total_cost_usd: null, total_tokens_in: 10, total_tokens_out: 2 }, 'unknown', '10', '2'],
     [
       { total_cost_usd: 'free', total_tokens_in: 'unknown', total_tokens_out: 3 },
       'unknown',
