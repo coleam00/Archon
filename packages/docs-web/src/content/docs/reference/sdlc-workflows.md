@@ -139,7 +139,7 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 
 #### `archon-worktree-cleanup`
 
-Runs `archon isolation cleanup --merged` across every registered project: each worktree whose pull request merged goes, with the branch Archon created and its remote branch. A worktree with uncommitted changes, a live run, or commits its pull request did not carry stays. `include_closed: "true"` also removes worktrees whose pull request was closed.
+Runs `archon isolation cleanup --merged` across every registered project: each worktree whose pull request merged goes, with its local branch. Cleanup also attempts remote branch deletion. If it fails or times out, cleanup warns and can still finish local removal, leaving the remote branch behind. A worktree with uncommitted changes, a live run, or commits its pull request did not carry stays. `include_closed: "true"` also removes worktrees whose pull request was closed.
 
 **When to use it**: You run Archon without a server, whose cleanup schedule already does this, and merged worktrees pile up. Add the schedule binding the SDLC pack README's "Worktree cleanup" section shows; the pack installs none.
 

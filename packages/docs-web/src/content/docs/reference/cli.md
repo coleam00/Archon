@@ -734,7 +734,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; `isolation cleanup --merged` removes it after its PR merges |
+| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and attempt remote branch deletion |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1481,9 +1481,11 @@ and keeps the environment active; inspect that path before removing it manually.
 
 Cleanup deletes an environment's local branch only when Archon created that branch.
 A branch that already existed when the run started (see `--branch` above) is kept,
-since it may hold commits that exist nowhere else. It is deleted only together with
-its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
-finished, or by `archon complete`.
+since it may hold commits that exist nowhere else. These branches are eligible for
+local deletion by `--merged` (and `--include-closed`) once their PR or branch is
+finished, or by `archon complete`. Those commands also attempt remote branch deletion.
+A remote deletion failure or timeout produces a warning; local removal and registration
+retirement can still complete while the remote branch remains.
 Records created before Archon tracked this are treated the same way, keeping their branch.
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
@@ -1496,7 +1498,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into the base branch (also deletes remote branches)
+# Remove environments with branches merged into the base branch (also attempts remote deletion)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -1599,7 +1601,9 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 
 ### `complete <branch> [branch2 ...]`
 
-Remove a branch's worktree, local branch, and remote branch, and mark its isolation environment as destroyed.
+Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
+Also attempt remote branch deletion. If that fails or times out, completion warns and
+can still finish local removal, leaving the remote branch behind.
 
 ```bash
 archon complete feature-auth

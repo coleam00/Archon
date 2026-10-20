@@ -19,8 +19,8 @@ export async function destroyEnvironment(
   const provider = getIsolationProvider();
   const log = createLogger('cleanup');
   // A branch this environment did not create (an existing branch it checked out)
-  // may hold the only copy of someone's commits, so it is deleted only together
-  // with its remote branch. Callers request that only when the branch is finished:
+  // may hold the only copy of someone's commits, so local deletion requires a
+  // request for remote cleanup. Callers request that only when the branch is finished:
   // merged, or an operator's explicit `--include-closed` or `archon complete`.
   const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
   const destroyResult = await provider.destroy(env.working_path, {

@@ -49,9 +49,9 @@ archon isolation cleanup                      # remove eligible environments old
 archon isolation cleanup 14                   # ... older than 14 days
 archon isolation cleanup --merged             # remove environments whose branches merged
 archon isolation cleanup --merged --include-closed   # also those whose PRs closed unmerged
-archon complete fix/login                     # remove a branch's worktree, local and remote branch
+archon complete fix/login                     # remove a branch's worktree and local branch; attempt remote deletion
 ```
 
-Cleanup keeps live runs, resumable failed runs, worktrees with uncommitted changes and commits that exist on no remote. `--merged` also deletes the remote branches of the worktrees it removes. A completed run removes its own worktree when the worktree is clean and every commit is on a remote, keeping the branch.
+Cleanup keeps live runs, resumable failed runs, worktrees with uncommitted changes and commits that exist on no remote. `--merged` and `archon complete` also attempt remote branch deletion. If it fails or times out, cleanup warns and can still finish local removal, leaving the remote branch behind. A completed run removes its own worktree when the worktree is clean and every commit is on a remote, keeping the branch.
 
 Without a server, schedule merged cleanup with the SDLC pack's `archon-worktree-cleanup` workflow. A failed run keeps its worktree so you can resume it with `archon workflow resume <run-id>`, or mark it cancelled with `archon workflow abandon <run-id>` and let cleanup remove the worktree.

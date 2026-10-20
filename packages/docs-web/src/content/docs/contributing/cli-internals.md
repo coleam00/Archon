@@ -323,9 +323,13 @@ archon isolation cleanup [days] (default: 7)
 │ Guard checks: no uncommitted changes, no run lock (checkRemoval │
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
-│ provider.destroy() → remove worktree + delete remote branch     │
+│ provider.destroy() → remove worktree and local branch           │
+│ → attempt remote deletion; failure/timeout warns                │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+A remote deletion failure or timeout can leave the remote branch behind even after
+local removal and registration retirement complete. The cleanup report includes the warning.
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or
