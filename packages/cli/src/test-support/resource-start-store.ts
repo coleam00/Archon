@@ -80,6 +80,7 @@ export function createInMemoryResourceStartStore(
     const reusable = await listReusableCheckouts();
     return {
       capacity: capacities.get(resource) ?? 1,
+      reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
       queue: [...requests.values()].filter(

@@ -27,6 +27,7 @@ function launch(guard = true, branch?: string): PreparedWorkflowLaunch {
 }
 const slot = (): ResourceSlotOccupancy => ({
   capacity: 3,
+  reusableCheckouts: [],
   holders: [],
   waiters: [],
   queue: [],
@@ -127,6 +128,36 @@ test('local holders project registered path and branch aliases before and after 
             id: 'local',
           });
       }
+    }
+  }
+});
+
+test('drains reserve registered aliases in both orders, including read-only and independent lanes', () => {
+  for (const guard of [true, false]) {
+    for (const branchFirst of [false, true]) {
+      const path = launch(guard);
+      const branch = launch(guard, 'reusable');
+      const ordered = branchFirst ? [branch, path] : [path, branch];
+      const independent = launch(guard);
+      independent.execution.isolation = { kind: 'worktree' };
+      const different = launch(guard, 'different');
+      const queue = [...ordered, independent, different].map(launch => ({
+        id: launch.run.id,
+        hostId: 'host',
+        launch,
+      }));
+      expect(
+        drainableStarts(
+          {
+            ...slot(),
+            reusableCheckouts: [
+              { codebaseId: 'codebase', branch: 'reusable', workingPath: '/shared' },
+            ],
+            queue,
+          },
+          'host'
+        ).map(start => start.id)
+      ).toEqual([ordered[0]!.run.id, independent.run.id, different.run.id]);
     }
   }
 });

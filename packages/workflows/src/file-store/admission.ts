@@ -211,6 +211,7 @@ export function createAdmissionTransaction(
     const reusable = await listReusableCheckouts();
     return {
       capacity: row.capacity,
+      reusableCheckouts: reusable,
       holders: row.holders,
       waiters: capacityWaiters(
         admittedRuns.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))

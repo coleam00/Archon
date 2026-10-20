@@ -261,6 +261,7 @@ export async function resourceStartOccupancy(
     }));
   return {
     capacity,
+    reusableCheckouts: reusable.rows,
     holders,
     waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
     queue: queued.rows.map(row => ({

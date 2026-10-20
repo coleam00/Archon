@@ -599,3 +599,73 @@ for (const { late, local } of [
     expect(await drain()).toMatchObject([{ runId: incoming.run.id }]);
   });
 }
+
+for (const branchFirst of [false, true]) {
+  test(`drains registered checkout aliases one at a time, branch first=${String(branchFirst)}`, async () => {
+    const home = roots(await mkdtemp(join(tmpdir(), 'file-host-alias-drain-')));
+    process.env.ARCHON_HOME = home;
+    process.env.DATABASE_URL = '';
+    const host = await createFileWorkflowHost(join(home, 'store'));
+    const store = host.deps.store;
+    const codebase = await host.records.codebases.createCodebase({
+      name: 'project',
+      default_cwd: home,
+      kind: 'folder',
+    });
+    const workingPath = join(home, 'checkout');
+    const makeLaunch = (): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        codebase_id: codebase.id,
+        workflow_name: 'test',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: home, conversationId: 'conversation', isolation: { kind: 'in-place' } },
+    });
+    await host.records.isolation.create({
+      codebase_id: codebase.id,
+      workflow_type: 'task',
+      workflow_id: 'reusable',
+      working_path: workingPath,
+      branch_name: toBranchName('different-git-branch'),
+    });
+
+    const inPlace = makeLaunch();
+    inPlace.execution.cwd = workingPath;
+    const branch = makeLaunch();
+    branch.execution.isolation = { kind: 'worktree', branch: 'reusable' };
+    const queued = branchFirst ? [branch, inPlace] : [inPlace, branch];
+    const input = (launch: PreparedWorkflowLaunch) => ({
+      resource: 'alias-drain',
+      capacity: 2,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch,
+    });
+    const holder = await store.createWorkflowRun(makeLaunch().run);
+    await store.claimPendingWorkflowRun(holder.id, workingPath);
+    for (const launch of queued)
+      expect(await store.admitResourceStart(input(launch))).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.id },
+      });
+    const drain = () => store.drainResourceStarts({ resource: 'alias-drain', hostId: 'host' });
+    expect(await drain()).toEqual([]);
+    await store.completeWorkflowRun(holder.id, { duration_ms: 1 });
+    expect(await drain()).toEqual([
+      { status: 'admitted', requestId: queued[0]!.run.id, runId: queued[0]!.run.id },
+    ]);
+    expect(await store.getResourceStartRequest(queued[1]!.run.id)).toMatchObject({
+      status: 'queued',
+    });
+    expect(await store.getWorkflowRun(queued[1]!.run.id)).toBeNull();
+    expect(await drain()).toEqual([]);
+    await store.claimPendingWorkflowRun(queued[0]!.run.id, workingPath);
+    await store.completeWorkflowRun(queued[0]!.run.id, { duration_ms: 1 });
+    expect(await drain()).toEqual([
+      { status: 'admitted', requestId: queued[1]!.run.id, runId: queued[1]!.run.id },
+    ]);
+  });
+}

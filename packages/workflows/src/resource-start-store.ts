@@ -216,6 +216,7 @@ export interface ResourceSlotOccupancy {
   /** `heldCheckouts` of the live runs admitted on the resource. */
   heldCheckouts: ReadonlyMap<string, string>;
   foreignHeldCheckouts: ReadonlyMap<string, string>;
+  reusableCheckouts: readonly ReusableCheckout[];
 }
 
 /** The run whose checkout `launch` would fail to lock. */
@@ -270,8 +271,8 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
     if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
     if (start.hostId !== hostId) break;
     admitted.push(start);
-    const checkout = launchCheckout(start.launch);
-    if (checkout !== undefined) held.set(checkout, start.id);
+    for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
+      held.set(checkout, start.id);
   }
   return admitted;
 }
