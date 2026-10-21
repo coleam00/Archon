@@ -1,11 +1,12 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
 
+const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
-  createLogger: mock(() => createMockLogger()),
+  createLogger: mock(() => mockLogger),
 }));
 
 import {
@@ -317,6 +318,23 @@ describe('AppServerConnection', () => {
     });
     await AppServerConnection.start(BINARY, [], {}, hangs.spawner).shutdown(20);
     expect(signals).toEqual(['SIGTERM']);
+  });
+
+  test('a process that ignores SIGTERM is logged as a lifecycle event', async () => {
+    const ignores = rawChild();
+    // Collapse the 30s post-SIGTERM grace so the test does not wait it out.
+    const realSetTimeout = globalThis.setTimeout;
+    const timeouts = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) =>
+      realSetTimeout(fn, 0)) as unknown as typeof setTimeout);
+    try {
+      await AppServerConnection.start(BINARY, [], {}, ignores.spawner).shutdown(20);
+    } finally {
+      timeouts.mockRestore();
+    }
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: 'process_ignored_sigterm' }),
+      'codex.app_server_ignored_sigterm'
+    );
   });
 });
 

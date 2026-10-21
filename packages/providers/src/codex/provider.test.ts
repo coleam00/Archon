@@ -161,6 +161,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  mockLogger.error.mockClear();
   mockLogger.warn.mockClear();
   mockLogger.info.mockClear();
 });
@@ -728,6 +729,10 @@ describe('CodexProvider', () => {
       const chunks = await run(provider);
       expect(chunks.map(c => c.type)).toEqual(['result']);
       expect(server.processes[0].signals).toEqual([]);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: 'process_abnormal_exit' }),
+        'codex.app_server_abnormal_exit'
+      );
     });
 
     test('lost observation after the result never invents an end or settles', async () => {
