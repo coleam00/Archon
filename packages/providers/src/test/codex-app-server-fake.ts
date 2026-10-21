@@ -75,6 +75,11 @@ export interface FakeTurnScript {
   ignoreInterrupt?: boolean;
   /** Keep running when stdin closes; only a signal ends the process. */
   ignoreStdinClose?: boolean;
+  /**
+   * Exit cleanly this long after stdin closes, and let no signal end the process sooner,
+   * as a Codex still shutting down on a loaded machine does.
+   */
+  exitsAfterStdinCloseMs?: number;
   /** MCP server names the user's config defines, as `config/read` reports them. */
   configuredServers?: string[];
   /** Installed plugins in one local marketplace: id (`name@fixture`) to its MCP server names. */
@@ -168,7 +173,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       pid: 4242,
       kill: (signal: string = 'SIGTERM') => {
         record.signals.push(signal);
-        close(null, signal);
+        if (turn.exitsAfterStdinCloseMs === undefined) close(null, signal);
         return true;
       },
     });
@@ -356,7 +361,9 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     });
     stdin.on('finish', () => {
       record.stdinEnded = true;
-      if (!turn.ignoreStdinClose) close(0, null);
+      if (turn.exitsAfterStdinCloseMs !== undefined)
+        setTimeout(() => close(0, null), turn.exitsAfterStdinCloseMs);
+      else if (!turn.ignoreStdinClose) close(0, null);
     });
     return child;
   }) as unknown as Spawner & { processes: FakeProcess[] };

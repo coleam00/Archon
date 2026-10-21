@@ -1,3 +1,4 @@
+import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash } from 'node:crypto';
@@ -48,7 +49,8 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
 async function admit(
   host: WorkflowHost,
   run: WorkflowRun,
-  cursor: WorkflowResumeCursor
+  cursor: WorkflowResumeCursor,
+  deferScratchCleanup?: WorkflowResumeOptions['deferScratchCleanup']
 ): Promise<ContinuationAdmission> {
   return resumeWorkflowContinuation(
     host,
@@ -99,7 +101,9 @@ async function admit(
         conversationId: freshRun.conversation_id ?? freshRun.id,
       };
     },
-    cursor
+    cursor,
+    undefined,
+    { deferScratchCleanup }
   );
 }
 
@@ -334,11 +338,12 @@ async function wake(
   let ok = true;
   try {
     do {
+      const cleanups: (() => Promise<void>)[] = [];
       try {
         const outcomes = await wakeDueWorkflowContinuations(
           host.deps.store,
           new Date(),
-          (run, cursor) => admit(host, run, cursor)
+          (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
         ok = passOk && ok;
@@ -346,6 +351,8 @@ async function wake(
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
         else console.error(`wake: ${errorMessage(error)}`);
+      } finally {
+        await Promise.all(cleanups.map(cleanup => cleanup()));
       }
       if (!values.watch || stopped) break;
       await new Promise<void>(resolve => {
