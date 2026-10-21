@@ -22,6 +22,7 @@ import { getArchonHome, isDocker } from './home-paths';
 import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
 import { readSourceCommit } from './source-commit';
 import { createLogger } from './logger';
+import type { WORKFLOW_SOURCES } from './workflow-source';
 
 /**
  * Bumped when the captured property set changes (documented in README). 7 is
@@ -152,9 +153,7 @@ function collectMachineProperties(): Record<string, string | boolean> {
   };
 }
 
-/** Discovery source of a workflow, mirrored from `@archon/workflows` as a
- * plain string union so `@archon/paths` keeps zero `@archon/*` dependencies. */
-export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project' | 'installed';
+export type WorkflowTelemetrySource = (typeof WORKFLOW_SOURCES)[number];
 
 /**
  * Apply the workflow-name privacy rule: bundled (Archon-authored) workflows
