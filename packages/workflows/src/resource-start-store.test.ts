@@ -193,6 +193,15 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
   const branchless = launch();
   branchless.execution.isolation = { kind: 'worktree' };
   const occupied = { ...slot(), unknownForeignCheckoutHolder: 'unknown' };
+  expect(
+    resourceStartBlocker(
+      {
+        ...occupied,
+        foreignHeldCheckouts: heldCheckouts([{ id: 'known', working_path: '/shared' }]),
+      },
+      launch()
+    )
+  ).toEqual({ kind: 'run', id: 'known' });
   for (const incoming of [launch(), launch(true, 'explicit')])
     expect(resourceStartBlocker(occupied, incoming)).toEqual({ kind: 'run', id: 'unknown' });
   for (const incoming of [readOnly, branchless])
