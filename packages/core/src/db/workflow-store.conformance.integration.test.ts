@@ -32,6 +32,72 @@ describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
 
+test.each([null, '2026-10-20 01:02:03', '2026-10-20 01:02:03.456'])(
+  'failed resume preparation preserves SQLite timestamp ordering (%s)',
+  async timestamp => {
+    const harness = await makeHarness();
+    try {
+      const { store, db } = harness;
+      const input = {
+        workflow_name: 'timestamp-rollback',
+        working_path: '/timestamp-rollback',
+        user_message: '',
+      };
+      const older = await store.createWorkflowRun(input);
+      const newer = await store.createWorkflowRun(input);
+      const approval = { nodeId: 'review', message: 'Review changes', type: 'approval' as const };
+      for (const run of [older, newer]) {
+        await store.claimPendingWorkflowRun(run.id);
+        await store.pauseWorkflowRun(run.id, approval);
+      }
+      await db.query(
+        `UPDATE remote_agent_workflow_runs
+           SET started_at = $2, completed_at = $3, last_activity_at = $3
+         WHERE id = $1`,
+        [older.id, '2026-10-20 00:00:00', timestamp]
+      );
+      await db.query('UPDATE remote_agent_workflow_runs SET started_at = $2 WHERE id = $1', [
+        newer.id,
+        '2026-10-20 12:00:00',
+      ]);
+      const before = await store.getWorkflowRun(older.id);
+      const setupError = new Error('container restart failed');
+      await expect(
+        store.resumeWorkflowRun(older.id, undefined, async () => {
+          throw setupError;
+        })
+      ).rejects.toBe(setupError);
+
+      expect(await store.getWorkflowRun(older.id)).toEqual(before);
+      expect((await store.findResumableRun(input.workflow_name, input.working_path))?.id).toBe(
+        newer.id
+      );
+      const restored = await db.query<{
+        started_at: string;
+        completed_at: string | null;
+        last_activity_at: string | null;
+        activity_before_cutoff: number | null;
+        completion_before_cutoff: number | null;
+      }>(
+        `SELECT started_at, completed_at, last_activity_at,
+                last_activity_at < datetime('2026-10-20 12:00:00') AS activity_before_cutoff,
+                completed_at < datetime('2026-10-20 12:00:00') AS completion_before_cutoff
+           FROM remote_agent_workflow_runs WHERE id = $1`,
+        [older.id]
+      );
+      expect(restored.rows[0]).toEqual({
+        started_at: '2026-10-20 00:00:00',
+        completed_at: timestamp,
+        last_activity_at: timestamp,
+        activity_before_cutoff: timestamp === null ? null : 1,
+        completion_before_cutoff: timestamp === null ? null : 1,
+      });
+    } finally {
+      await harness.close();
+    }
+  }
+);
+
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();
   try {

@@ -183,6 +183,15 @@ function resumeMetadata(prior: Pick<WorkflowRunRow, 'status' | 'metadata'> | und
   return { metadataPatch, scheduled, triggeredAt };
 }
 
+function storedResumeTimestamp(value: Date | null): string | null {
+  if (value === null) return null;
+  const iso = value.toISOString();
+  // SQLite's raw timestamp comparisons require the same separator as datetime('now').
+  return getDatabaseType() === 'sqlite'
+    ? iso.replace('T', ' ').replace('.000Z', '').replace('Z', '')
+    : iso;
+}
+
 export async function resumeWorkflowRun(
   id: string,
   cursor?: WorkflowResumeCursor,
@@ -415,9 +424,9 @@ export async function resumeWorkflowRun(
         [
           id,
           restored.status,
-          restored.started_at.toISOString(),
-          restored.completed_at?.toISOString() ?? null,
-          restored.last_activity_at?.toISOString() ?? null,
+          storedResumeTimestamp(restored.started_at),
+          storedResumeTimestamp(restored.completed_at),
+          storedResumeTimestamp(restored.last_activity_at),
           JSON.stringify(restored.metadata),
           undo.claim,
         ]
