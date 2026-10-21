@@ -986,10 +986,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       expect(output.attention).toContain('Recommendation: `other`** (high confidence)');
       expect(output.attention).toContain('Evidence: Return is unavailable because the sweep supplied no build brief.');
       expect(output.attention).toContain('What would change it: A nonblank build brief would make return available.');
-      for (const part of Object.values(attention.recommendation)) expect(prepared.why).toContain(part);
-      expect(prepared.why).toContain(`The sweep originally recommended \`${attention.recommendation.choice}\``);
     } else expect(prepared.recommendation).toEqual(attention.recommendation);
-    for (const part of [attention.what, attention.why, attention.recommendation.evidence, PR_URL, 'no build brief']) {
+    for (const part of [attention.what, attention.why, PR_URL, 'no build brief']) {
       expect(output.attention).toContain(part);
     }
     if (returnOnly) expect(output.attention).toContain('Recommendation: `other`');
@@ -1039,8 +1037,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
       expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
       expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
-      for (const part of Object.values(attention.recommendation)) expect(prepared.why).toContain(part);
-      expect(prepared.why).toContain(`The sweep originally recommended \`${attention.recommendation.choice}\``);
     } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');

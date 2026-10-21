@@ -65,7 +65,6 @@ function withQueueOther(attention: MergeAttention, item: Item, brief: string): M
   if (prepared.choices.some(choice => choice.id === attention.recommendation.choice)) return prepared;
   return {
     ...prepared,
-    why: `${prepared.why}\n\nThe sweep originally recommended \`${attention.recommendation.choice}\` (${attention.recommendation.confidence} confidence): ${attention.recommendation.why} Original evidence: ${attention.recommendation.evidence} What would have changed that recommendation: ${attention.recommendation.would_change}`,
     recommendation: {
       choice: 'other',
       why: 'Record your ruling and park this item without starting a build round, because the recommended return is unavailable.',

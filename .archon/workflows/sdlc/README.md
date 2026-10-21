@@ -685,8 +685,7 @@ then the project's file, whose lines win where the two conflict.
   and what would change it, the declared choices, what happens if nobody answers, and
   links. A build-owned ask with a blank brief still raises its question, with all
   return effects omitted and an explanation that no build brief was supplied. A
-  removed recommendation stays visible as the sweep's original advice; the
-  actionable recommendation becomes `other` so the operator can record a ruling,
+  removed recommendation becomes `other` so the operator can record a ruling,
   with evidence, confidence and a change condition describing that park choice.
   The same rule applies when an own pull request's return choice is removed.
   Every pull-request item also offers `other`; for a build item with a nonblank
