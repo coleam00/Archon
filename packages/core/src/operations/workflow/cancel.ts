@@ -1,6 +1,6 @@
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
-import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { isExecNodeRecord, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
@@ -171,10 +171,7 @@ async function cooperativeCancel(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<CancelWorkflowResult> {
-  const warnings =
-    process.platform !== 'win32' && (await hasCompletedHostCommand(ctx, run))
-      ? [COMPLETED_HOST_COMMAND_WARNING]
-      : [];
+  const warnings = process.platform !== 'win32' ? await hostCommandWarnings(ctx, run) : [];
   const { cancelled } = await cancelByOperator(ctx, run.id, warnings);
   return {
     kind: 'cooperative',
@@ -184,23 +181,26 @@ async function cooperativeCancel(
   };
 }
 
-async function hasCompletedHostCommand(ctx: OperationContext, run: WorkflowRun): Promise<boolean> {
+async function hostCommandWarnings(ctx: OperationContext, run: WorkflowRun): Promise<string[]> {
+  const warnings: string[] = [];
   if (!isContainerRun(run)) {
-    // Persisted node history also covers a sub-run whose owner is in another process.
     const events = await ctx.store.listWorkflowEvents(run.id);
     if (
       events.some(event => {
-        if (event.event_type !== 'node_completed') return false;
+        // A started command can exit while cancellation awaits descendants or its state write.
+        if (event.event_type !== 'node_started' && event.event_type !== 'node_completed')
+          return false;
         const record = readNodeRecordEvent(event);
-        return record?.metadata
-          ? record.metadata.node.kind === 'exec'
-          : record?.data.type === 'bash' || record?.data.type === 'script';
+        return record !== undefined && isExecNodeRecord(record);
       })
-    )
-      return true;
+    ) {
+      warnings.push(
+        `Run ${run.id} checkout ${JSON.stringify(run.working_path)}: ${COMPLETED_HOST_COMMAND_WARNING}`
+      );
+    }
   }
   for (const child of await ctx.store.findChildRuns(run.id)) {
-    if (await hasCompletedHostCommand(ctx, child)) return true;
+    warnings.push(...(await hostCommandWarnings(ctx, child)));
   }
-  return false;
+  return warnings;
 }
