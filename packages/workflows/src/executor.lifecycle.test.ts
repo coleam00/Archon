@@ -21,6 +21,9 @@ import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { NodeEventWriteError } from './node-event-write';
+import * as resume from './run-resume';
+import * as source from './run-source';
+import { liveSourceRoots } from './workflow-source';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
 import type { ContainerPauseReceipt } from './dag/pause';
@@ -534,6 +537,67 @@ describe('finally backstop', () => {
     (failSpy.mock.calls as unknown[][]).filter(
       c => typeof c[1] === 'string' && c[1].includes('exited without finalizing')
     );
+
+  it('leaves finalization to the continued fan-out execution after its pause is resumed', async () => {
+    const parent = makeRun({
+      status: 'paused',
+      working_path: '/project',
+      metadata: {
+        approval: {
+          type: 'fan_out',
+          nodeId: 'children',
+          message: '',
+          childRunIds: ['child'],
+        },
+      },
+    });
+    const resolve = spyOn(source, 'resolveContinuationWorkflow').mockResolvedValue({
+      workflow: makeWorkflow(),
+      roots: liveSourceRoots('/project'),
+      workflows: [],
+      errors: [],
+    });
+    const hydrate = spyOn(resume, 'hydrateResumableRun').mockResolvedValue({
+      ...resumeOf(makeRun()),
+      resumeCause: 'continue_after_wait',
+      priorFailedNodes: new Map(),
+      priorUsage: {},
+      priorNodeSessions: [],
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => parent),
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      findChildRuns: mock(async () => [makeRun({ id: 'child', status: 'completed' })]),
+    });
+    mockExecuteDagWorkflow.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+      parent.metadata = {
+        execution_claim: 'successor',
+        approval: { type: 'approval', nodeId: 'review', message: '', pauseId: 'next' },
+      };
+      return {
+        kind: 'container_pause',
+        pause: {
+          kind: 'gate',
+          context: {
+            type: 'approval',
+            nodeId: 'review',
+            message: '',
+            pauseId: 'next',
+          },
+        },
+      };
+    });
+    try {
+      const result = await startWorkflow({ store });
+      expect(result).toMatchObject({ success: true, handedOff: true });
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(2);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    } finally {
+      hydrate.mockRestore();
+      resolve.mockRestore();
+    }
+  });
 
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });

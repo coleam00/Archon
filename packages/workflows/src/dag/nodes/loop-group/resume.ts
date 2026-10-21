@@ -34,6 +34,7 @@ import {
 import { nodeTemplateReferences } from '../../references';
 import {
   findLoopGroupTerminalSuspendNode,
+  ownsTerminalWait,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
   type LoopGroupProgress,
@@ -336,7 +337,9 @@ export async function resumeTerminalWait(
       state: 'running',
       output: '',
       loopIterations: resumeIteration,
-      suspensionPoint: 'wait',
+      ...((await ownsTerminalWait(run, resumeIteration, terminalNode.id))
+        ? { suspensionPoint: 'wait' as const }
+        : {}),
     };
   }
   ctx.nodeOutputs.set(bodyStepNamePrefix + terminalNode.id, waitOutput);

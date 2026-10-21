@@ -4,7 +4,7 @@ import * as nodeEventWrite from '../node-event-write';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { describe, it, expect, afterEach, mock, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { dagNodeSchema, isApprovalContext } from '../schemas';
+import { dagNodeSchema, isApprovalContext, isWorkflowWaitContext } from '../schemas';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -13,6 +13,7 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  ready,
   mockLogger,
   mockSendQueryDag,
   stubMissingContainer,
@@ -550,6 +551,84 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(backend.suspend).toHaveBeenCalledTimes(1);
     expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
   });
+
+  it.each(['time', 'event', 'attention'] as const)(
+    'records only the selected loop-group terminal %s wait as suspended',
+    async kind => {
+      const wait =
+        kind === 'time'
+          ? { duration_ms: 60_000 }
+          : kind === 'event'
+            ? { event: 'ready', deadline_ms: 60_000 }
+            : { attention: 'Continue?', form: 'approval' };
+      const { options, store, run } = await realPauseFixture(
+        ['selected', 'deferred'].map(id =>
+          dagNodeSchema.parse({
+            id,
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 1,
+              nodes: [{ id: 'hold', wait }],
+            },
+          })
+        )
+      );
+      await executeDagWorkflow(options);
+      const current = await store.getWorkflowRun(run.id);
+      const cursor = current?.metadata.wait;
+      if (!isWorkflowWaitContext(cursor)) throw new Error('Missing wait cursor');
+      const selected = cursor.nodeId;
+      expect(cursor).toMatchObject({
+        owner: 'loop_group',
+        nodeId: selected,
+        bodyWaitId: 'hold',
+        iteration: 1,
+      });
+      const events = await store.listWorkflowEvents(run.id);
+      expect(
+        events.filter(event => event.event_type === 'node_suspended').map(event => event.step_name)
+      ).toEqual([selected, `${selected}.hold`]);
+      expect(
+        events.find(event => event.step_name === selected && event.event_type === 'node_suspended')
+          ?.data
+      ).toMatchObject({ suspend_point: 'wait' });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+
+      options.workflow = ready({
+        name: 'pause',
+        nodes: options.workflow.nodes.filter(node => node.id === selected),
+      });
+      options.workflowRun = await store.resumeWorkflowRun(run.id);
+      options.priorCompletedNodes = (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs;
+      await executeDagWorkflow(options);
+      const continued = await store.listWorkflowEvents(run.id);
+      expect(
+        continued
+          .slice(events.length)
+          .filter(event => event.event_type === 'node_suspended')
+          .map(event => event.step_name)
+      ).toEqual([selected, `${selected}.hold`]);
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(current?.metadata.wait);
+
+      options.workflowRun = await store.resumeWorkflowRun(run.id);
+      options.priorCompletedNodes = (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs;
+      options.workflow = ready({
+        name: 'pause',
+        nodes: [reviewNode('winner'), ...options.workflow.nodes],
+      });
+      await executeDagWorkflow(options);
+      const lost = await store.listWorkflowEvents(run.id);
+      expect(
+        lost
+          .slice(continued.length)
+          .filter(event => event.event_type === 'node_suspended')
+          .map(event => event.step_name)
+      ).toEqual(['winner']);
+      expect((await store.getWorkflowRun(run.id))?.metadata.approval).toMatchObject({
+        nodeId: 'winner',
+      });
+    }
+  );
 
   it('keeps deferred loop spend durable and selected loop spend on its gate', async () => {
     const query = async function* () {

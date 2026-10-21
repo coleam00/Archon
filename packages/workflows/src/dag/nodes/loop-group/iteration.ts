@@ -13,7 +13,7 @@ import { recordDerivedExecution } from '../../../node-event-write';
 import { spellWorkflowCommand } from '../../../deps';
 import { gateOccurrence } from '../../../schemas/workflow-run';
 import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../schemas';
-import { canSuspend, isGateNode, isWorkflowWaitContext } from '../../../schemas';
+import { canSuspend, isGateNode } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
@@ -33,6 +33,7 @@ import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
+  ownsTerminalWait,
   logGroupIterationEventError,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
@@ -387,19 +388,22 @@ async function suspendedBody(
   body: BodyRun,
   postBodyStatus: string | null
 ): Promise<LoopGroupBodyResult | undefined> {
-  if (
-    run.ctx.containerPause?.publish &&
-    run.ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause'
-  ) {
-    return { state: 'running', output: state.lastOutput, ...run.progress.usage, loopIterations: i };
-  }
-  if (postBodyStatus !== 'paused') return undefined;
+  const staged =
+    run.ctx.containerPause?.publish !== undefined &&
+    run.ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause';
   const running: LoopGroupBodyResult = {
     state: 'running',
     output: state.lastOutput,
     ...run.progress.usage,
     loopIterations: i,
   };
+  if (staged) {
+    const terminal = body.terminalSuspendNode;
+    return terminal?.kind === 'wait' && (await ownsTerminalWait(run, i, terminal.id))
+      ? { ...running, suspensionPoint: 'wait' }
+      : running;
+  }
+  if (postBodyStatus !== 'paused') return undefined;
   const { terminalSuspendNode, scopedNodeOutputs } = body;
   if (terminalSuspendNode) {
     const suspendOutput = scopedNodeOutputs.get(terminalSuspendNode.id);
@@ -431,15 +435,7 @@ async function ownedSuspensionPoint(
   if (isGateNode(terminalSuspendNode)) {
     return suspendOutput?.execution?.lifecycle.status === 'suspended' ? 'approval' : undefined;
   }
-  const freshRun = await run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id);
-  const freshWait = freshRun?.metadata?.wait;
-  return isWorkflowWaitContext(freshWait) &&
-    freshWait.owner === 'loop_group' &&
-    freshWait.nodeId === run.node.id &&
-    freshWait.bodyWaitId === terminalSuspendNode.id &&
-    freshWait.iteration === i
-    ? 'wait'
-    : undefined;
+  return (await ownsTerminalWait(run, i, terminalSuspendNode.id)) ? 'wait' : undefined;
 }
 
 /**

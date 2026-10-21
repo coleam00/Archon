@@ -584,7 +584,10 @@ export async function executeWorkflow(
       resolveChildIsolation,
       opts.onExecutionClaimed
     );
-    if (continued !== undefined) return continued;
+    if (continued !== undefined) {
+      executionStopped = true;
+      return continued;
+    }
     if (finalStatus?.status === 'completed') {
       return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
     } else if (finalStatus?.status === 'paused') {

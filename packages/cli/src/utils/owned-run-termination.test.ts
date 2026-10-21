@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -330,6 +330,57 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       } finally {
         deregister();
         exitSpy.mockRestore();
+      }
+    }
+  );
+}
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  test.each(['rejected write', 'lost claim'] as const)(
+    `${signal} warns when ownership cannot authorize cleanup (%s)`,
+    async failure => {
+      const exited = Promise.withResolvers<void>();
+      const exit = spyOn(process, 'exit').mockImplementation((() => exited.resolve()) as never);
+      const warning = spyOn(console, 'error').mockImplementation(() => undefined);
+      const teardown = mock(async () => undefined);
+      const before = process.listeners(signal);
+      const deregister = registerOwnedRunTermination({
+        store: {
+          failWorkflowRun: async () => {
+            if (failure === 'rejected write') throw new Error('store unavailable');
+            return { failed: false };
+          },
+        },
+        runId: 'unconfirmed-run',
+        getExecutionClaim: () => 'old-claim',
+        logModule: 'owned-run-termination.test',
+        liveOwner: {
+          close: async () => undefined,
+          isStopRequested: () => false,
+          registerTerminationPreparation: () => () => undefined,
+        },
+        detachedProcessOwner: false,
+        teardown,
+      });
+      try {
+        const handler = process.listeners(signal).find(listener => !before.includes(listener));
+        expect(handler).toBeDefined();
+        handler?.(signal);
+        await exited.promise;
+        expect(teardown).not.toHaveBeenCalled();
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `run unconfirmed-run could not be confirmed as owned on ${signal}`
+          )
+        );
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining('archon workflow get unconfirmed-run')
+        );
+        expect(exit).toHaveBeenCalledWith(1);
+      } finally {
+        deregister();
+        warning.mockRestore();
+        exit.mockRestore();
       }
     }
   );

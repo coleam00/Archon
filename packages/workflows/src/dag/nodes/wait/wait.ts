@@ -306,8 +306,12 @@ export async function executeWaitNode(
                 )
               );
       },
-      () =>
-        execution === undefined ? { state: 'running', output: '' } : serializeNodeOutput(execution)
+      selected => {
+        if (selected && ctx.containerPause !== undefined) ctx.containerPause.selectedWait = context;
+        return execution === undefined
+          ? { state: 'running', output: '' }
+          : serializeNodeOutput(execution);
+      }
     );
   }
 

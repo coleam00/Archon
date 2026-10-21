@@ -10,7 +10,12 @@ import type {
   WaitNode,
   WorkflowWaitContext,
 } from '../../../schemas';
-import { isGateNode, loopGroupOutputNodes, loopGroupSoleTerminalSink } from '../../../schemas';
+import {
+  isWorkflowWaitContext,
+  isGateNode,
+  loopGroupOutputNodes,
+  loopGroupSoleTerminalSink,
+} from '../../../schemas';
 import type { ModelAliasPreset, TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import type { RunLayersContext, SequentialSessionCursor } from '../../run-context';
@@ -130,4 +135,23 @@ export function loopGroupIterationOutput(
 
 export function logGroupIterationEventError(nodeId: string, err: Error, iteration: number): void {
   getLog().error({ err, nodeId, iteration }, 'loop_group_node.iteration_event_failed');
+}
+
+export async function ownsTerminalWait(
+  run: LoopGroupRun,
+  iteration: number,
+  bodyWaitId: string
+): Promise<boolean> {
+  const boundary = run.ctx.containerPause;
+  const wait =
+    boundary === undefined
+      ? (await run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id))?.metadata.wait
+      : boundary.selectedWait;
+  return (
+    isWorkflowWaitContext(wait) &&
+    wait.owner === 'loop_group' &&
+    wait.nodeId === run.node.id &&
+    wait.bodyWaitId === bodyWaitId &&
+    wait.iteration === iteration
+  );
 }

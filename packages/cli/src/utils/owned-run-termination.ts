@@ -86,7 +86,16 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       })
       // After the failed status write: ending a tree first lets the executor fail the
       // run through its own path and win the status write, losing stop_reason.
-      .then(() => (registered && cleanupAllowed ? nodeTrees?.end() : undefined))
+      .then(() => {
+        if (!registered) return;
+        if (cleanupAllowed) return nodeTrees?.end();
+        return console.error(
+          `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}; ` +
+            'cleanup was skipped, so subprocesses and any isolation container may still be running. ' +
+            `Inspect ownership before stopping them: archon workflow get ${runId}. ` +
+            'Inspect containers with: docker ps -a --filter label=diy.archon.managed=true'
+        );
+      })
       .catch((error: unknown) => {
         console.error(
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
