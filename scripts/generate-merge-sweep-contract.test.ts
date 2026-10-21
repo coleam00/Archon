@@ -13,8 +13,9 @@ import {
 
 const track = trackTempRoots();
 
-function diagnostics(source: string): string[] {
-  const file = resolve('synthetic-merge-contract.ts');
+async function diagnostics(source: string): Promise<string[]> {
+  const file = join(track(await mkdtemp(join(tmpdir(), 'merge-contract-types-'))), 'contract.ts');
+  await writeFile(file, source);
   const options: ts.CompilerOptions = {
     strict: true,
     noEmit: true,
@@ -22,14 +23,8 @@ function diagnostics(source: string): string[] {
     types: [],
     target: ts.ScriptTarget.ES2022,
   };
-  const host = ts.createCompilerHost(options);
-  const getSourceFile = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, version, onError, fresh) =>
-    name === file
-      ? ts.createSourceFile(name, source, version, true)
-      : getSourceFile(name, version, onError, fresh);
   return ts
-    .getPreEmitDiagnostics(ts.createProgram([file], options, host))
+    .getPreEmitDiagnostics(ts.createProgram([file], options))
     .map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
 }
 
@@ -106,7 +101,7 @@ describe('merge sweep contract generation', () => {
     expect(run('--check').exitCode).toBe(0);
   });
 
-  test('types required, optional, nullable and nested values, including readonly arrays and enums', () => {
+  test('types required, optional, nullable and nested values, including readonly arrays and enums', async () => {
     const declaration = emitType({
       type: 'object',
       properties: {
@@ -136,7 +131,7 @@ describe('merge sweep contract generation', () => {
       required: ['count', 'nothing', 'nested'],
     });
     expect(
-      diagnostics(`type Value = ${declaration};
+      await diagnostics(`type Value = ${declaration};
 const valid: Value = { count: 1, nothing: null, nested: { rows: [{ ok: true, label: 'yes' }] } };
 const nullable: Value = { count: 1, nothing: null, nested: null };
 const optional: Value = { ...valid, optional: 2, nullableText: null, nullableEnum: 'yes' };
@@ -162,13 +157,13 @@ if (valid.nested) {
     ).toEqual([]);
   });
 
-  test('generated aliases and reader compile with the schema-derived shape', () => {
+  test('generated aliases and reader compile with the schema-derived shape', async () => {
     const generated = generateContract(fixture()).replace(
       "import { nullableJson } from './io.ts';",
       'declare function nullableJson(value: string | undefined): unknown;'
     );
     expect(
-      diagnostics(`${generated}
+      await diagnostics(`${generated}
 const decision: SweepDecision = { action: 'wait', class: 'clear', attention: null };
 const sweep: Sweep = { decisions: [decision], base: { attention: { choices: [{ effect: 'hold' }] } } };
 const read: Sweep | null = readSweep(JSON.stringify(sweep));
