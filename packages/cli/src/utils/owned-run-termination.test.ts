@@ -4,11 +4,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runSubprocess } from '@archon/workflows/subprocess';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  createInMemoryWorkflowStore,
+  createInMemoryWorkflowHostStore,
+} from '../test-support/workflow-store';
 import { registerOwnedRunTermination } from './owned-run-termination';
 
 const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
 const strayPids: number[] = [];
+
+async function runningRun(): Promise<WorkflowRun> {
+  const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+  const run = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
+  const claimed = await store.claimPendingWorkflowRun(run.id);
+  if (!claimed) throw new Error('Run was not claimed');
+  return claimed;
+}
 
 afterEach(() => {
   for (const pid of strayPids.splice(0)) {
@@ -58,9 +71,10 @@ async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise
   const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
     exited();
   }) as never);
+  const run = await runningRun();
   const deregister = registerOwnedRunTermination({
     store: {
-      getWorkflowRunStatus: async () => 'running',
+      getWorkflowRun: async () => run,
       failWorkflowRun: async (_runId, _error, reason) => {
         // Long enough for a tree ended before this write to have exited.
         await new Promise<void>(resolve => setTimeout(resolve, 300));
@@ -116,7 +130,11 @@ async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise
 posixOnly('an interrupt fails the run first, then ends the in-flight node tree', async () => {
   const result = await interruptWithNodeInFlight(false);
 
-  expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
+  expect(result.failedWith).toEqual({
+    exitReason: 'process_terminated',
+    signal: 'SIGTERM',
+    expectedExecutionClaim: null,
+  });
   expect(result.descendantAliveAtFail).toBe(true);
   await waitUntil('the descendant to exit', () => !processExists(result.descendant));
 });
@@ -124,7 +142,11 @@ posixOnly('an interrupt fails the run first, then ends the in-flight node tree',
 posixOnly('a genuine interrupt also ends detached command groups', async () => {
   const result = await interruptWithNodeInFlight(true);
 
-  expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
+  expect(result.failedWith).toEqual({
+    exitReason: 'process_terminated',
+    signal: 'SIGTERM',
+    expectedExecutionClaim: null,
+  });
   // A group kill returns once SIGKILL is sent; give it time to land before asserting.
   await new Promise<void>(resolve => setTimeout(resolve, 300));
   await waitUntil('the detached descendant to exit', () => !processExists(result.descendant));
@@ -141,7 +163,7 @@ posixOnly(
     let teardownCalls = 0;
     const deregister = registerOwnedRunTermination({
       store: {
-        getWorkflowRunStatus: async () => 'running',
+        getWorkflowRun: async () => runningRun(),
         failWorkflowRun: async () => {
           throw new Error('Controller owns the terminal write');
         },
@@ -174,8 +196,9 @@ posixOnly(
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   test(`${signal} cleanup retires while its status read is in flight`, async () => {
-    let resolveStatus!: (status: 'running') => void;
-    const status = new Promise<'running'>(resolve => {
+    const run = await runningRun();
+    let resolveStatus!: (status: WorkflowRun) => void;
+    const status = new Promise<WorkflowRun>(resolve => {
       resolveStatus = resolve;
     });
     let statusReads = 0;
@@ -189,7 +212,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     const before = process.listeners(signal);
     const deregister = registerOwnedRunTermination({
       store: {
-        getWorkflowRunStatus: async () => {
+        getWorkflowRun: async () => {
           statusReads++;
           return status;
         },
@@ -216,7 +239,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       handler?.(signal);
       expect(statusReads).toBe(1);
       deregister();
-      resolveStatus('running');
+      resolveStatus(run);
       await exitCalled;
       expect(failures).toBe(0);
       expect(teardowns).toBe(0);
@@ -228,4 +251,73 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       exitSpy.mockRestore();
     }
   });
+}
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  for (const resumed of [false, true]) {
+    test(`${signal} in-flight failure preserves a successor (predecessor resumed: ${resumed})`, async () => {
+      const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-signal-claim-')));
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const store = await createFileWorkflowStore({ root, getCodebase: async () => null });
+      const run = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
+      await store.claimPendingWorkflowRun(run.id);
+      const approval = { nodeId: 'review', message: 'Review', type: 'approval' as const };
+      if (resumed) {
+        await store.pauseWorkflowRun(run.id, approval);
+        await store.resumeWorkflowRun(run.id);
+      }
+      let entered!: () => void;
+      const writeEntered = new Promise<void>(resolve => {
+        entered = resolve;
+      });
+      let release!: () => void;
+      const writeReleased = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let exited!: () => void;
+      const exitCalled = new Promise<void>(resolve => {
+        exited = resolve;
+      });
+      const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
+      const before = process.listeners(signal);
+      const deregister = registerOwnedRunTermination({
+        runId: run.id,
+        logModule: 'owned-run-termination.test',
+        store: {
+          getWorkflowRun: id => store.getWorkflowRun(id),
+          failWorkflowRun: async (...args) => {
+            entered();
+            await writeReleased;
+            return store.failWorkflowRun(...args);
+          },
+        },
+        liveOwner: {
+          close: async () => undefined,
+          isStopRequested: () => false,
+          registerTerminationPreparation: () => () => undefined,
+        },
+        detachedProcessOwner: false,
+      });
+      try {
+        const handler = process.listeners(signal).find(listener => !before.includes(listener));
+        expect(handler).toBeDefined();
+        handler?.(signal);
+        await writeEntered;
+        await store.pauseWorkflowRun(run.id, approval);
+        deregister();
+        await store.resumeWorkflowRun(run.id);
+        const successor = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        release();
+        await exitCalled;
+        expect(successor?.status).toBe('running');
+        expect(await store.getWorkflowRun(run.id)).toEqual(successor);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+      } finally {
+        release();
+        deregister();
+        exitSpy.mockRestore();
+      }
+    });
+  }
 }

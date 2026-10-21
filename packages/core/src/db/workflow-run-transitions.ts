@@ -327,7 +327,7 @@ export async function failWorkflowRun(
   error: string,
   options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): Promise<{ failed: boolean }> {
-  const { exitReason, signal, pendingLaunchToken } = options;
+  const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -343,6 +343,14 @@ export async function failWorkflowRun(
     RUN_STOP_REASON_METADATA_KEY,
     PAUSE_CAUSE_METADATA_KEY
   );
+  const claimPredicate =
+    expectedExecutionClaim === undefined
+      ? ''
+      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+          expectedExecutionClaim === null
+            ? 'IS NULL'
+            : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
+        }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
@@ -353,7 +361,7 @@ export async function failWorkflowRun(
            pendingLaunchToken !== undefined
              ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
              : "status IN ('running', 'pending')"
-         }`,
+         }${claimPredicate}`,
         [
           id,
           JSON.stringify({
@@ -368,6 +376,7 @@ export async function failWorkflowRun(
               : {}),
           }),
           ...(pendingLaunchToken !== undefined ? [pendingLaunchToken] : []),
+          ...(typeof expectedExecutionClaim === 'string' ? [expectedExecutionClaim] : []),
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
@@ -385,7 +394,8 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
-    if (pendingLaunchToken !== undefined) return { failed: false };
+    if (pendingLaunchToken !== undefined || expectedExecutionClaim !== undefined)
+      return { failed: false };
     const status = await getWorkflowRunStatus(id);
     if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return { failed: false };
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');

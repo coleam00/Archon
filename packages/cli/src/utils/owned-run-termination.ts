@@ -1,4 +1,4 @@
-import type { IWorkflowStore } from '@archon/workflows/store';
+import { executionClaim, type IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
@@ -10,7 +10,7 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
-  store: Pick<IWorkflowStore, 'getWorkflowRunStatus' | 'failWorkflowRun'>;
+  store: Pick<IWorkflowStore, 'getWorkflowRun' | 'failWorkflowRun'>;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
   /** Logger module of the command that owns the run, so its lines name that command. */
@@ -57,18 +57,19 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      const status = await input.store.getWorkflowRunStatus(runId);
+      const run = await input.store.getWorkflowRun(runId);
+      const status = run?.status ?? null;
       if (!registered) return;
-      if (status !== 'running') {
+      if (!run || status !== 'running') {
         // Externally transitioned (paused at a new gate, completed, cancelled,
         // failed) or never claimed (still pending) — not this handler's to mutate.
         log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
         return;
       }
-      // A running-status CAS also leaves a concurrently committed pause intact.
       await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
         exitReason: 'process_terminated',
         signal,
+        expectedExecutionClaim: executionClaim(run.metadata),
       });
     })()
       .catch((err: unknown) => {

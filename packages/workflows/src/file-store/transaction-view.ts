@@ -1,3 +1,4 @@
+import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
@@ -29,7 +30,6 @@ import {
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
-  DETACHED_LAUNCH_METADATA_KEY,
   sourceReleasedEvent,
 } from '../store';
 import {
@@ -366,28 +366,8 @@ export function createTransactionView(
       });
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
-      if (options?.pendingLaunchToken !== undefined) {
-        const current = runs.get(id);
-        if (
-          current?.status !== 'pending' ||
-          current.metadata[DETACHED_LAUNCH_METADATA_KEY] !== options.pendingLaunchToken
-        )
-          return { failed: false };
-      }
-      const run = structuredClone(row(id));
-      if (isTerminalRunStatus(run.status)) return { failed: false };
-      if (run.status !== 'running' && run.status !== 'pending')
-        throw new Error('Run not in pending/running state');
-      run.status = 'failed';
-      delete run.metadata.scheduled_resume;
-      delete run.metadata.stop_reason;
-      delete run.metadata[PAUSE_CAUSE_METADATA_KEY];
-      run.metadata.error = error;
-      if (options?.exitReason)
-        run.metadata.stop_reason = {
-          reason: options.exitReason,
-          ...(options.signal ? { signal: options.signal } : {}),
-        };
+      const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);
+      if (!run) return { failed: false };
       await terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.failed,

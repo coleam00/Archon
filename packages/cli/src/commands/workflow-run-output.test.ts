@@ -711,17 +711,17 @@ describe('workflowRunCommand — progress rendering', () => {
     host.deps.store.getWorkflowRun = async id => {
       if (signalAt === 'lookup') await signalOnce();
       if (end === 'lookup-fails') throw new Error('store unavailable');
-      if (end !== 'unresolved-writeback') return getRun(id);
+      if (!runSettled) return getRun(id);
       return {
         id,
         workflow_name: 'assist',
         conversation_id: null,
         parent_conversation_id: null,
         codebase_id: 'cb-folder',
-        status: 'failed',
+        status: end === 'unresolved-writeback' ? 'failed' : (status ?? 'running'),
         outcome: null,
         user_message: 'go',
-        metadata: { pending_writeback: { envId: 'env-1' } },
+        metadata: end === 'unresolved-writeback' ? { pending_writeback: { envId: 'env-1' } } : {},
         started_at: new Date(),
         completed_at: new Date(),
         last_activity_at: null,
