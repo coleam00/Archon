@@ -30,7 +30,7 @@ import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
-  type Decision,
+  type BaseAttention,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -38,11 +38,10 @@ import {
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
+  type PolicyClass,
   type PrFacts,
   readBase,
   readPr,
-  readSweep,
-  type Sweep,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
@@ -76,6 +75,28 @@ interface Item {
   readonly record: MergeRecord | null;
   /** An enrolled maintainer's own pull request: no build round owns it. */
   readonly own_pr?: boolean;
+}
+
+interface Decision {
+  readonly number: number;
+  readonly action: SweepAction;
+  readonly class: PolicyClass;
+  readonly head: string;
+  readonly reran: boolean;
+  readonly reason: string;
+  readonly brief: string;
+  readonly attention: MergeAttention | null;
+}
+
+export interface Sweep {
+  readonly decisions: readonly Decision[];
+  readonly base: {
+    readonly summary: string;
+    /** The sweep re-ran the default branch's failed jobs this run. */
+    readonly reran: boolean;
+    readonly attention: BaseAttention | null;
+  };
+  readonly summary: string;
 }
 
 function message(error: unknown): string {
@@ -284,7 +305,7 @@ function main(): void {
     });
     return;
   }
-  const sweep = readSweep(process.env.INPUTS_SWEEP);
+  const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const { decisions, refused } = decide(items, sweep);
   const base = nullableJson(process.env.INPUTS_BASE) as Base | null;

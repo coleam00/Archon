@@ -13,7 +13,6 @@
  */
 
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
-import { nullableJson } from './io.ts';
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
@@ -34,33 +33,6 @@ export const SWEEP_ACTIONS = ['merged', 'return', 'ask', 'wait'] as const;
 export type SweepAction = (typeof SWEEP_ACTIONS)[number];
 export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
-export interface Decision {
-  readonly number: number;
-  readonly action: SweepAction;
-  readonly class: PolicyClass;
-  readonly head: string;
-  readonly reran: boolean;
-  readonly reason: string;
-  readonly brief: string;
-  readonly attention: MergeAttention | null;
-}
-
-export interface Sweep {
-  readonly decisions: readonly Decision[];
-  readonly base: {
-    readonly summary: string;
-    /** The sweep re-ran the default branch's failed jobs this run. */
-    readonly reran: boolean;
-    readonly attention: BaseAttention | null;
-  };
-  readonly summary: string;
-}
-
-/** Reads the engine-validated sweep output, or null when the sweep was skipped. */
-export function readSweep(value: string | undefined): Sweep | null {
-  return nullableJson(value) as Sweep | null;
-}
-
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
 /** Which attention item a run raised: its class label, which the YAML also declares. */

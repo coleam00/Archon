@@ -95,7 +95,7 @@ test('the complete sweep output conforms to the recorder contract', () => {
   expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
     type: 'integer', minimum: 1,
   });
-  const file = resolve(pack, '.shared/merge.ts');
+  const file = resolve(pack, 'merge-queue/scripts/record.ts');
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
