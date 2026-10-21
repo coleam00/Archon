@@ -64,12 +64,14 @@ describe('CommandHandler', () => {
         conversation_id: oldConversation.id,
         codebase_id: oldConversation.codebase_id,
       });
-      mockGetActiveWorkflowRun.mockResolvedValueOnce(oldRun);
+      mockGetActiveWorkflowRun.mockImplementationOnce(async (_conversationId, codebaseId) =>
+        !codebaseId || oldRun.codebase_id === codebaseId ? oldRun : null
+      );
 
       const result = await handleCommand(reboundConversation, command, operator);
 
       expect(result.success).toBe(true);
-      expect(mockGetActiveWorkflowRun).toHaveBeenCalledWith(oldConversation.id);
+      expect(mockGetActiveWorkflowRun).toHaveBeenCalledWith(oldConversation.id, 'cb-new');
       expect(result.message).not.toContain(oldRun.workflow_name);
       expect(result.message).not.toContain(oldRun.id);
       expect(result.message).not.toContain('Cancel:');
@@ -80,6 +82,55 @@ describe('CommandHandler', () => {
       }
     }
   );
+
+  test.each([
+    ['/workflow cancel', 'cb-current'],
+    ['/workflow cancel', null],
+    ['/status', 'cb-current'],
+    ['/status', null],
+  ])('%s selects the newest run within scope %s', async (command, codebaseId) => {
+    const current = makeWorkflowRun({
+      id: `current-${crypto.randomUUID()}`,
+      workflow_name: 'current-project-workflow',
+      codebase_id: 'cb-current',
+      started_at: new Date('2026-10-21T10:00:00Z'),
+    });
+    const foreign = makeWorkflowRun({
+      id: 'foreign-run',
+      workflow_name: 'foreign-project-workflow',
+      codebase_id: 'cb-foreign',
+      started_at: new Date('2026-10-21T11:00:00Z'),
+    });
+    mockGetActiveWorkflowRun.mockImplementationOnce(
+      async (_conversationId, codebaseId) =>
+        [foreign, current].find(run => !codebaseId || run.codebase_id === codebaseId) ?? null
+    );
+    const selected = codebaseId ? current : foreign;
+    if (command === '/workflow cancel') mockGetWorkflowRun.mockResolvedValueOnce(selected);
+    const owner = await startRunLiveOwner(selected.id);
+    try {
+      const result = await handleCommand(
+        makeConversation({ codebase_id: codebaseId }),
+        command,
+        operator
+      );
+      expect(result.success).toBe(true);
+      expect(result.message).toContain(selected.workflow_name);
+      expect(result.message).not.toContain(
+        codebaseId ? foreign.workflow_name : current.workflow_name
+      );
+      if (command === '/workflow cancel') {
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(selected.id, {
+          cancel_reason: 'operator',
+        });
+      } else {
+        expect(result.message).toContain('Cancel: `/workflow cancel`');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+      }
+    } finally {
+      await owner.close();
+    }
+  });
 
   test.each(['cancel', 'resume', 'abandon', 'approve', 'reject', 'respond', 'get'])(
     'refuses a foreign full run ID for /workflow %s before any global lookup',

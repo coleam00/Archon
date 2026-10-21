@@ -63,8 +63,7 @@ export async function resolveChatRunId(arg: string, conversation: Conversation):
 }
 
 export async function getActiveChatWorkflowRun(conversation: Conversation) {
-  const run = await workflowDb.getActiveWorkflowRun(conversation.id);
-  return conversation.codebase_id && run?.codebase_id !== conversation.codebase_id ? null : run;
+  return workflowDb.getActiveWorkflowRun(conversation.id, conversation.codebase_id ?? undefined);
 }
 
 /** What a run needs from the operator, and the commands that answer it, one line each. */
