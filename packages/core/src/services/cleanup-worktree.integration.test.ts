@@ -653,6 +653,19 @@ describe('completed run worktree release', () => {
     });
   });
 
+  test('a commit made after a push that left tracking refs stale keeps the checkout', async () => {
+    await commitInWorktree();
+    await pushByUrl();
+    await writeFile(join(env.working_path, 'later'), 'later');
+    await git(env.working_path, 'add', 'later');
+    await git(env.working_path, 'commit', '-qm', 'later');
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '1 commit(s) on no remote',
+    });
+  });
+
   test('uncommitted changes keep the checkout', async () => {
     await writeFile(join(env.working_path, 'file'), 'edited');
     expect(await assess()).toEqual({
@@ -661,10 +674,20 @@ describe('completed run worktree release', () => {
     });
   });
 
+  // A push by URL leaves no remote-tracking ref, so only the live remote proves it.
+  const pushByUrl = (): Promise<string> =>
+    git(
+      env.working_path,
+      'push',
+      '-q',
+      join(root, 'remote.git'),
+      `HEAD:refs/heads/${env.branch_name}`
+    );
+
   test('a pushed run-named checkout is removed, keeping its local and remote branch', async () => {
     await commitInWorktree();
-    await git(env.working_path, 'push', '-q', 'upstream', `HEAD:refs/heads/${env.branch_name}`);
-    await git(repo, 'fetch', '-q', 'upstream');
+    await pushByUrl();
+    expect(await git(repo, 'branch', '--remotes')).not.toContain(env.branch_name);
     const completed = { ...run, status: 'completed' as const };
     expect(await assessCompletedRunWorktree(completed, store, readers())).toEqual({
       disposition: 'release',

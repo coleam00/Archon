@@ -44,6 +44,7 @@ import {
   localBranchExists,
   isRevCoveredBy,
   countCommitsMissingFromRemotes,
+  execFileAsync,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
@@ -637,19 +638,35 @@ function toUnpushedLock(
   };
 }
 
+/** `liveRemote` also asks the remote's live branches, which a push by URL or refspec
+ *  updates without a tracking ref. A live tip this clone lacks covers nothing. */
 async function countUnpushedCommits(
   env: { working_path: string; branch_name: string | null },
-  repoPath: RepoPath
+  repoPath: RepoPath,
+  liveRemote = false
 ): Promise<number> {
   const branchRevs =
     env.branch_name && (await localBranchExists(repoPath, toBranchName(env.branch_name)))
       ? [`refs/heads/${env.branch_name}`]
       : [];
   const worktreePath = toWorktreePath(env.working_path);
-  if (await worktreeExists(worktreePath)) {
-    return countCommitsMissingFromRemotes(worktreePath, ['HEAD', ...branchRevs]);
-  }
-  return countCommitsMissingFromRemotes(repoPath, branchRevs);
+  const [path, revs] = (await worktreeExists(worktreePath))
+    ? [worktreePath, ['HEAD', ...branchRevs]]
+    : [repoPath, branchRevs];
+  const tracked = await countCommitsMissingFromRemotes(path, revs);
+  if (tracked === 0 || !liveRemote) return tracked;
+  const remote = configuredRemote(await loadRepoConfig(repoPath));
+  const live = ['-C', repoPath, 'ls-remote', '--quiet', '--', remote, 'refs/heads/*'];
+  const tips = (await execFileAsync('git', live, { timeout: 10000 })).stdout
+    .split('\n')
+    .map(line => line.split('\t')[0])
+    .filter(Boolean);
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', path, 'rev-list', '--count', '--ignore-missing', '--stdin'],
+    { timeout: 10000, input: [...revs, '--not', '--remotes', ...tips].join('\n') }
+  );
+  return parseInt(stdout.trim(), 10);
 }
 
 /** Why an environment cannot be removed. */
@@ -1374,7 +1391,7 @@ async function judgeLocalCompletedWorktree(
   if ((await worktreeExists(path)) && (await hasUncommittedChangesStrict(path))) {
     return { disposition: 'retained', reason: 'uncommitted_changes' };
   }
-  const commits = await countUnpushedCommits(env, repo);
+  const commits = await countUnpushedCommits(env, repo, true);
   if (commits > 0) {
     return {
       disposition: 'retained',
