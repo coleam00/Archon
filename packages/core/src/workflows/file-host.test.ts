@@ -739,7 +739,8 @@ for (const corruption of ['launch', 'json', 'missing'] as const) {
     expect(started).toEqual([queued[2]!]);
     expect(error).toBeInstanceOf(ResourceStartDrainError);
     if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
-    expect(error.failures).toMatchObject([{ resource: 'a', error: expect.any(Error) }]);
+    expect(error.failures).toHaveLength(1);
+    expect(error.failures[0]?.resource).toBe('a');
     const failure = error.failures[0]?.error;
     if (!(failure instanceof Error)) throw new Error('expected original drain error');
     expect(failure.message).toContain("Resource 'a' drain failed");

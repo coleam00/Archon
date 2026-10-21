@@ -298,7 +298,7 @@ export interface ResourceStartHost extends WorkflowHost {
   startAdmitted: (requestId: string) => Promise<void>;
 }
 
-/** One failed start from a drain. `receiptId` is unset for queued work of unknown origin. */
+/** A preparation, dispatch, or resource drain failure. Unknown receipt origins omit `receiptId`. */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
   resource?: string;
@@ -313,7 +313,7 @@ export class ResourceStartDrainError extends AggregateError {
   constructor(readonly failures: readonly ResourceStartDrainFailure[]) {
     super(
       failures.map(failure => failure.error),
-      `${String(failures.length)} resource start(s) failed; inspect their receipt records.`
+      `${String(failures.length)} resource start operation(s) failed; inspect their receipts or resources.`
     );
     this.name = 'ResourceStartDrainError';
   }
