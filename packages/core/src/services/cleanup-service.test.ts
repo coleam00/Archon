@@ -17,6 +17,10 @@ import type * as ConversationDb from '../db/conversations';
 import type * as SessionDb from '../db/sessions';
 import type * as CodebaseDb from '../db/codebases';
 import type * as ConfigLoader from '../config/config-loader';
+import type * as WorkflowDb from '../db/workflows';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowStatusReadError } from '../db/workflow-run-status';
+import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const ageBasedPolicies = ['test', 'github', 'slack', 'cli', 'web', 'new-forge'].map(id => ({
   id,
@@ -230,8 +234,9 @@ mock.module('../db/isolation-environments', () => ({
   createIsolationStore: () => ({}),
 }));
 
+const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
 mock.module('../db/workflows', () => ({
-  getRunByIsolationEnvId: mock(() => Promise.resolve(null)),
+  getRunByIsolationEnvId: mockGetRunByIsolationEnvId,
 }));
 
 const mockGetConversationByPlatformId = mock<typeof ConversationDb.getConversationByPlatformId>();
@@ -301,6 +306,7 @@ beforeEach(() => {
   mockListByCodebase.mockReset().mockResolvedValue([]);
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);
   mockListActiveContainerEnvironments.mockReset().mockResolvedValue([]);
+  mockGetRunByIsolationEnvId.mockReset().mockResolvedValue(null);
   mockGetConversationByPlatformId.mockReset().mockResolvedValue(null);
   mockUpdateConversation.mockReset().mockResolvedValue(undefined);
   mockGetActiveSession.mockReset().mockResolvedValue(null);
@@ -334,6 +340,7 @@ import {
   removeEnvironment,
   onConversationClosed,
   cleanupContainerEnvironments,
+  listContainerEnvironments,
   reclaimContainerEnv,
   SESSION_RETENTION_DAYS,
   type MergedCleanupResult,
@@ -371,6 +378,36 @@ describe('reclaimContainerEnv', () => {
     expect(mockContainerDestroy.mock.calls.length).toBe(destroys);
     mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
     await expect(reclaimContainerEnv('supplied-env', store)).rejects.toThrow('Docker unavailable');
+  });
+});
+
+describe('listContainerEnvironments', () => {
+  beforeEach(() => {
+    mockListActiveContainerEnvironments.mockResolvedValue([
+      makeContainerEnvironment({ codebase_name: 'ops', days_since_created: 30 }),
+    ]);
+  });
+
+  test.each(workflowRunStatusSchema.options)('lists supported run status %s', async status => {
+    mockGetRunByIsolationEnvId.mockResolvedValue({ ...mockWorkflowRun, status });
+    expect(await listContainerEnvironments()).toMatchObject([
+      { runId: mockWorkflowRun.id, runStatus: status },
+    ]);
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
+  });
+
+  test('distinguishes a missing run from an unsupported persisted status', async () => {
+    expect(await listContainerEnvironments()).toMatchObject([{ runId: null, runStatus: null }]);
+    const err = new WorkflowStatusReadError('unsupported-run', 'unexpected');
+    mockGetRunByIsolationEnvId.mockRejectedValue(err);
+    expect(await listContainerEnvironments()).toMatchObject([
+      { runId: null, runStatus: 'lookup-failed' },
+    ]);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err, envId: expect.any(String) },
+      'container_env_list_lookup_failed'
+    );
+    expect(mockContainerDestroy).not.toHaveBeenCalled();
   });
 });
 
@@ -1907,7 +1944,7 @@ describe('worktree cleanup provider ownership', () => {
 // lock query is mocked in call order: first without a release (who claims the env),
 // then with one (who still claims it once the sweep's settlement is applied).
 describe('failed-run lock release', () => {
-  const FAILED_RUN = { id: 'run-failed-1234', status: 'failed' };
+  const FAILED_RUN = { id: 'run-failed-1234', status: 'failed' } as const;
 
   beforeEach(() => {
     mockWorktreeExists.mockResolvedValue(true);
@@ -2144,7 +2181,7 @@ describe('failed-run lock release', () => {
   });
 
   test('a paused run keeps its environment on every sweep, whatever its age', async () => {
-    const paused = { id: 'run-paused-1234', status: 'paused' };
+    const paused = { id: 'run-paused-1234', status: 'paused' } as const;
     mockGetLiveRunOwningEnv.mockResolvedValue(paused);
     mockListAllActiveWithCodebase.mockResolvedValue([staleEnv()]);
     mockListByCodebase.mockResolvedValue([makeEnvironment({ branch_name: 'paused' })]);
