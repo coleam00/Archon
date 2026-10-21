@@ -958,7 +958,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **What happens on resume:**
 
-1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`.
+1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events and private addressable-session handles, then transitions the row back to `running`. A paused run with an unfinished leaf and no durable completion or suspension record is refused before that transition, because replay could repeat side effects. See [resume recovery](/reference/cli/#workflow-resume).
 2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
@@ -974,7 +974,7 @@ Once the row reaches a terminal status, you can resume it explicitly via the pat
 
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
-**Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+**Fresh start**: If zero nodes completed in an eligible prior run, Archon starts with no nodes to skip. A paused run missing a required durable completion or suspension record is still refused, even when zero nodes completed; follow [resume recovery](/reference/cli/#workflow-resume).
 
 ### Opting Out of Resume Caching
 
