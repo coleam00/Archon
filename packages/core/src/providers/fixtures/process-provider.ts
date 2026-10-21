@@ -14,7 +14,7 @@ import type {
   ProviderDiagnostics,
   ProviderModelList,
 } from '@archon/provider-contract';
-import { descriptor as fixtureDescriptor, chunks } from './process-provider-data';
+import { descriptor as fixtureDescriptor, chunks, invalidMessages } from './process-provider-data';
 
 const mode = process.argv[2];
 const descriptor =
@@ -24,6 +24,11 @@ const descriptor =
 if (mode === 'mismatch') {
   descriptor.id = process.argv[4] ?? descriptor.id;
   descriptor.version = '2';
+}
+if (mode === 'invalid-message') {
+  const variant = process.argv[3];
+  if (variant !== 'json' && variant !== 'payload') throw new Error('unknown variant');
+  process.stdout.write(`${invalidMessages[variant]}\n`);
 }
 if (mode === 'record-pid' || mode === 'hung-models' || mode === 'hung-diagnose')
   writeFileSync(process.argv[3], String(process.pid));

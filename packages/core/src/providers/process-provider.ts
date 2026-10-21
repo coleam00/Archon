@@ -42,6 +42,29 @@ export class ProviderPluginExitedError extends Error {
   }
 }
 
+// detail and evidence hold no text from the plugin's line; cause can, so it stays unread.
+function protocolFailure(
+  descriptor: ProviderPluginDescriptor,
+  log: ReturnType<typeof createLogger>,
+  { line, reason, detail, evidence }: PluginProtocolError
+): Error {
+  log.error(
+    {
+      provider: descriptor.id,
+      line,
+      reason,
+      detail,
+      ...(evidence ? { messageBytes: evidence.bytes, message: evidence.message } : {}),
+      pluginVersion: descriptor.version,
+    },
+    'provider.plugin.protocol_failed'
+  );
+  const read = evidence ? `message ${evidence.message}, ${String(evidence.bytes)} bytes, ` : '';
+  return new Error(
+    `Provider plugin ${descriptor.id} protocol failed at line ${String(line)} (${reason}): ${detail} [${read}plugin version ${descriptor.version}]`
+  );
+}
+
 function startProcess(
   descriptor: ProviderPluginDescriptor,
   argv: readonly [string, ...string[]],
@@ -227,10 +250,7 @@ function startProcess(
           error.code,
           `Provider plugin ${descriptor.id} request failed (RPC ${String(error.code)})`
         );
-      if (error instanceof PluginProtocolError)
-        return new Error(
-          `Provider plugin ${descriptor.id} protocol failed at line ${String(error.line)} (${error.reason})`
-        );
+      if (error instanceof PluginProtocolError) return protocolFailure(descriptor, log, error);
       return new Error(redact(error instanceof Error ? error.message : String(error)));
     },
     dispose,

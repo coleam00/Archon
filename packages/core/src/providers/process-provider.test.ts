@@ -17,7 +17,7 @@ import {
 } from '@archon/provider-contract/plugin';
 import { ProviderPluginExitedError } from './process-provider';
 import { processProviderRegistration } from './process-registration';
-import { descriptor, chunks } from './fixtures/process-provider-data';
+import { descriptor, chunks, invalidMessages } from './fixtures/process-provider-data';
 
 const processLog = paths.createLogger('core.provider-process');
 const providerLog = paths.createLogger(`provider.${descriptor.id}`);
@@ -563,6 +563,50 @@ test('Claude resume and fork retain per-query cost and model across fresh proces
     await removeTempTree(directory);
   }
 });
+
+test.each([
+  ['json', 'malformed JSON', 'unknown'],
+  ['payload', 'invalid payload (chunk.name: invalid_type, expected string)', '_archon/chunk'],
+] as const)(
+  'an invalid %s plugin message surfaces content-free evidence in the error and log',
+  async (variant, detail, message) => {
+    const error = spyOn(processLog, 'error').mockImplementation(() => {});
+    try {
+      let failure: unknown;
+      try {
+        await collect(provider('invalid-message', variant).sendQuery('turn', tmpdir()));
+      } catch (caught) {
+        failure = caught;
+      }
+      if (!(failure instanceof Error)) throw new Error('expected the turn to fail');
+      const bytes = new TextEncoder().encode(invalidMessages[variant]).byteLength;
+      expect(failure.message).toMatch(
+        /^Provider plugin process-fixture protocol failed at line \d+ \(invalid_message\): /
+      );
+      expect(failure.message).toContain(
+        `${detail} [message ${message}, ${String(bytes)} bytes, plugin version ${descriptor.version}]`
+      );
+      expect(error.mock.calls).toEqual([
+        [
+          {
+            provider: descriptor.id,
+            line: expect.any(Number),
+            reason: 'invalid_message',
+            detail,
+            messageBytes: bytes,
+            message,
+            pluginVersion: descriptor.version,
+          },
+          'provider.plugin.protocol_failed',
+        ],
+      ]);
+      expect(failure.message).not.toContain('private-line-secret');
+      expect(JSON.stringify(error.mock.calls)).not.toContain('private-line-secret');
+    } finally {
+      error.mockRestore();
+    }
+  }
+);
 
 test('provider logs dispatch at the plugin severity', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
