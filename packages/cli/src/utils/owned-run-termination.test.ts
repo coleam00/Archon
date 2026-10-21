@@ -41,7 +41,7 @@ async function waitUntil(label: string, check: () => boolean): Promise<void> {
  * Register the handler, start a node whose background job outlives a root-only kill,
  * deliver SIGTERM, and report what the handler did by the time it exits.
  */
-async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<{
+async function interruptWithNodeInFlight(detachedProcessOwner: boolean): Promise<{
   descendant: number;
   descendantAliveAtFail: boolean;
   failedWith: unknown;
@@ -50,6 +50,7 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
   let descendant = 0;
   let descendantAliveAtFail = false;
   let failedWith: unknown;
+  const teardownSignals: string[] = [];
   let exited!: () => void;
   const exitCalled = new Promise<void>(resolve => {
     exited = resolve;
@@ -70,15 +71,28 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
     },
     runId: 'run-1',
     logModule: 'owned-run-termination.test',
-    liveOwner: { close: async () => undefined, isStopRequested: () => false },
-    endNodeProcessTrees,
+    liveOwner: {
+      close: async () => undefined,
+      isStopRequested: () => false,
+      registerTerminationPreparation: () => () => undefined,
+    },
+    detachedProcessOwner,
+    teardown: async signal => {
+      teardownSignals.push(signal);
+    },
   });
   try {
     const node = runSubprocess(
       { kind: 'host' },
       '/bin/bash',
       ['-c', `/bin/sleep 30 & echo $! > '${pidFile}'; wait`],
-      { cwd: import.meta.dir, timeout: 30_000, env: {}, retention: { standalone: true } }
+      {
+        cwd: import.meta.dir,
+        timeout: 30_000,
+        env: {},
+        retention: { standalone: true },
+        endTreeOnTimeout: true,
+      }
     );
     node.catch(() => undefined);
     await waitUntil(
@@ -90,6 +104,7 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
 
     process.emit('SIGTERM', 'SIGTERM');
     await exitCalled;
+    expect(teardownSignals).toEqual(['SIGTERM']);
 
     return { descendant, descendantAliveAtFail, failedWith };
   } finally {
@@ -99,18 +114,60 @@ async function interruptWithNodeInFlight(endNodeProcessTrees: boolean): Promise<
 }
 
 posixOnly('an interrupt fails the run first, then ends the in-flight node tree', async () => {
-  const result = await interruptWithNodeInFlight(true);
+  const result = await interruptWithNodeInFlight(false);
 
   expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
   expect(result.descendantAliveAtFail).toBe(true);
   await waitUntil('the descendant to exit', () => !processExists(result.descendant));
 });
 
-posixOnly('a detached owner leaves its node trees to the cancel controller', async () => {
-  const result = await interruptWithNodeInFlight(false);
+posixOnly('a genuine interrupt also ends detached command groups', async () => {
+  const result = await interruptWithNodeInFlight(true);
 
   expect(result.failedWith).toEqual({ exitReason: 'process_terminated', signal: 'SIGTERM' });
   // A group kill returns once SIGKILL is sent; give it time to land before asserting.
   await new Promise<void>(resolve => setTimeout(resolve, 300));
-  expect(processExists(result.descendant)).toBe(true);
+  await waitUntil('the detached descendant to exit', () => !processExists(result.descendant));
 });
+
+posixOnly(
+  'detached preparation leaves owner resources intact when a stop is released and retried',
+  async () => {
+    const { startRunLiveOwner, requestRunLiveOwnerStop } = await import(
+      '@archon/core/services/run-live-owner'
+    );
+    const runId = `teardown-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+    let teardownCalls = 0;
+    const deregister = registerOwnedRunTermination({
+      store: {
+        getWorkflowRunStatus: async () => 'running',
+        failWorkflowRun: async () => {
+          throw new Error('Controller owns the terminal write');
+        },
+      },
+      runId,
+      logModule: 'owned-run-termination.test',
+      liveOwner: owner,
+      detachedProcessOwner: true,
+      teardown: async () => {
+        teardownCalls++;
+      },
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const lease = await requestRunLiveOwnerStop(runId);
+        try {
+          expect(await lease.commit()).toEqual({ groups: [], warnings: [] });
+          expect(teardownCalls).toBe(0);
+        } finally {
+          lease.release();
+        }
+        await waitUntil('the controller to disconnect', () => !owner.isStopRequested());
+      }
+    } finally {
+      deregister();
+      await owner.close();
+    }
+  }
+);

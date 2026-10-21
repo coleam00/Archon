@@ -54,4 +54,4 @@ archon complete fix/login                     # remove a branch's worktree, loca
 
 Cleanup keeps live runs, resumable failed runs, worktrees with uncommitted changes and commits that exist on no remote. `--merged` also deletes the remote branches of the worktrees it removes. A completed run removes its own worktree when the worktree is clean and every commit is on a remote, keeping the branch.
 
-Without a server, schedule merged cleanup with the SDLC pack's `archon-worktree-cleanup` workflow. A failed run keeps its worktree so you can resume it with `archon workflow resume <run-id>`, or mark it cancelled with `archon workflow abandon <run-id>` and let cleanup remove the worktree.
+Without a server, schedule merged cleanup with the SDLC pack's `archon-worktree-cleanup` workflow. A failed run keeps its worktree so you can resume it with `archon workflow resume <run-id>`, or discard it with `archon workflow abandon <run-id>`, which attempts worktree removal while keeping the branch. Owner warnings retain the checkout for inspection: use `lsof` when output is still held, resolve the warning, then retry abandonment on the cancelled run.

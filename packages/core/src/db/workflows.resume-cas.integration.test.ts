@@ -96,6 +96,7 @@ const operationDeps = {
   getUserRole: async () => undefined,
   store: {
     ...workflowDb,
+    persistWorkflowEvent: createWorkflowStore().persistWorkflowEvent,
     listWorkflowRuns: workflowDb.listDashboardRuns,
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     deleteWorkflowNodeSessions: async () => {
