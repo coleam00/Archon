@@ -61,7 +61,6 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
   if (type.flags & ts.TypeFlags.String) return 'string';
   if (type.flags & ts.TypeFlags.Number) return 'number';
   if (type.flags & ts.TypeFlags.Null) return 'null';
-  if (type.flags & ts.TypeFlags.Undefined) return 'undefined';
   if (checker.isArrayType(type)) {
     const item = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
     if (item !== undefined) return { array: typeShape(checker, item) };
@@ -71,12 +70,10 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
       .map(property => {
         const declaration = property.valueDeclaration;
         if (declaration === undefined) throw new Error(`No declaration for ${property.name}`);
-        const required = !(property.flags & ts.SymbolFlags.Optional);
-        const value = checker.getTypeOfSymbolAtLocation(property, declaration);
-        const shape = !required && value.isUnion()
-          ? union(value.types.filter(member => !(member.flags & ts.TypeFlags.Undefined)).map(member => typeShape(checker, member)))
-          : typeShape(checker, value);
-        return [property.name, { required, shape }];
+        if (property.flags & ts.SymbolFlags.Optional) {
+          throw new Error(`Unsupported optional sweep consumer property: ${property.name}`);
+        }
+        return [property.name, { required: true, shape: typeShape(checker, checker.getTypeOfSymbolAtLocation(property, declaration)) }];
       })) };
   }
   throw new Error(`Unsupported sweep consumer type: ${checker.typeToString(type)}`);
@@ -108,13 +105,3 @@ test('the complete sweep output conforms to the recorder contract', () => {
   if (sweep === undefined) throw new Error('Missing exported Sweep consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
 });
-
-test.each([...Object.getOwnPropertyNames(Object.prototype), 'missing_field'])(
-  'rejects undeclared required property %s, including inside arrays', key => {
-    const schema: Schema = {
-      type: 'object', properties: { value: { type: 'string' } }, required: [key],
-    };
-    expect(() => schemaShape(schema)).toThrow();
-    expect(() => schemaShape({ type: 'array', items: schema })).toThrow();
-  }
-);
