@@ -181,7 +181,7 @@ For POSIX host commands that started or completed, cancellation reports possible
 background work in the cancel result and run event, including after continuation under a
 new detached owner. Neither a survivor nor cleanup is confirmed. Inspect checkout processes
 with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal.
-Owned checkouts are retained when cleanup warnings are reported.
+Owner-stop warnings retain owned checkouts for inspection.
 Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
