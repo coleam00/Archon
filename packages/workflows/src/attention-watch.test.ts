@@ -647,7 +647,7 @@ describe('watchAttentionQueue', () => {
   });
 
   test.each(['attention', 'ready'] as const)(
-    'rejecting initial %s delivery rejects startup without starting background work',
+    'startup waits for initial %s delivery and rejects without starting background work',
     async type => {
       const store = await makeStore();
       await pausedAtAsk(store);
@@ -678,9 +678,11 @@ describe('watchAttentionQueue', () => {
         error => ({ status: 'rejected' as const, error: error as unknown })
       );
       await entered.promise;
+      const pending = await Promise.race([startup, Bun.sleep(10).then(() => 'pending' as const)]);
       delivery.reject(cause);
       const result = await startup;
       if (result.status === 'resolved') await result.handle.close();
+      expect(pending).toBe('pending');
       expect(result).toEqual({ status: 'rejected', error: cause });
       expect(lines.map(line => line.type)).toEqual(
         type === 'attention' ? ['attention'] : ['attention', 'attention', 'ready']
