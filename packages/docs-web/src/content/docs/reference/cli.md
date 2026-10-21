@@ -731,8 +731,8 @@ checkout and is logged. Otherwise it is
 
 | Reason | Meaning |
 |---|---|
-| `resumable` | The run failed and can resume; `workflow abandon` or the stale sweep releases it |
-| `cancelled` | The run was cancelled; `workflow abandon` releases it |
+| `resumable` | The run failed and can resume; `workflow abandon` attempts release, retaining owner warnings for inspection, or the stale sweep can release eligible checkouts |
+| `cancelled` | The run was cancelled; `workflow abandon` attempts release, retaining checkouts with owner warnings for inspection and retry |
 | `workspace_retained` | The originating platform keeps its workspaces |
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
@@ -951,7 +951,7 @@ shows "Running · owner unknown". Neither is shown as live progress.
   gate type this build does not know, a sub-run pointer with no row). `detail` says which.
   It also reports `reason: source_release_not_continued` for a container paused by a
   host-local captured-source read failure. Resume that container by hand on a host
-  that can read its source; see [Attention queue](/guides/attention-queue/).
+  that can read its source; see [Operate runs](/getting-started/operate/).
 
 Two pauses deliberately do **not** wake a waiter, because neither is owed a response: a
 gate or attention wait that has already been answered and is awaiting continuation, and a
@@ -982,7 +982,7 @@ inspect the run normally with `workflow get <run-id>`.
 
 ### `workflow attention`
 
-List, count, stream or read the [attention queue](/guides/attention-queue/): every paused
+List, count, stream or read the [attention queue](/getting-started/operate/): every paused
 run that needs an answer or inspection, plus observable provider usage- and rate-limit waits.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. Read-only.
@@ -1015,7 +1015,7 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 `item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
 item of the child that holds the pause, or to its own `unreadable` item when its sub-run
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
-exits `1`. The item shape is described in the [guide](/guides/attention-queue/#queue-items).
+exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
 item in scope, then `ready`, then follows changes any process commits, as
@@ -1033,7 +1033,7 @@ snapshot, replays readable feed events strictly after it. Multiple lines can sha
 event cursor; resuming after it excludes all of them. For a partially handled event,
 replay from an earlier checkpoint as described in the guide. A `degraded` warning means replay may have
 gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
-the [guide](/guides/attention-queue/#stream-the-queue). Exit codes: `0` when a signal or a
+the [Operate page](/getting-started/operate/#stream-the-queue). Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is
@@ -1141,8 +1141,15 @@ who owns the run:
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
-  contacts that process, terminates its host process tree, confirms termination, and
-  only then records the run as `cancelled`.
+  contacts that process and stops its owner before recording the run as `cancelled`.
+  On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
+  then confirms those groups and the owner group are gone. A group whose leader was already
+  reaped is never signalled. If a node's output pipes remain held, cancellation still ends
+  the run and reports in `cleanupWarnings` and the run's cancellation event that some
+  process outside the run's process group holds the output and was not signalled.
+  Archon does not identify it; use `lsof` on the run's checkout before reusing or removing
+  that checkout. Background jobs left by completed nodes are excluded. Windows uses
+  the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run
@@ -1203,7 +1210,8 @@ Once cancellation is recorded, further managed container reclamation is best-eff
 the run stays `cancelled`, but container resources may remain allocated. Every cancel
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
-`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+`cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
+and output pipes still held by an unsignalled process; the field is omitted
 when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
 
 ### `workflow abandon`
@@ -1213,7 +1221,15 @@ worktree lock and resource slot, so abandon first asks the run's live-owner endp
 this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
-  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+  (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
+  The output-holder warning and `lsof` action described above apply here too; inspect
+  warnings before reusing or removing the checkout. Abandon retains owned checkouts
+  when owner-stop warnings report held output, including descendant checkouts and
+  their root. Warnings learned after cancellation during descendant cleanup or
+  conversation reset are appended to that run as `workflow_cleanup_warning` events.
+  If writing a warning event fails, cleanup continues and the command reports the
+  persistence failure with the cleanup warnings. Keep that command result: those
+  warnings may be missing from the run history.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:
@@ -1235,8 +1251,10 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
-Abandon also removes the worktree Archon created for this run, and for each cancelled
-`workflow:` sub-run. Abandon is final for that checkout: removal is forced, so
+Abandon also attempts to remove the worktree Archon created for this run, and for each
+cancelled `workflow:` sub-run. Owner warnings retain affected checkouts for inspection;
+use `lsof` on the checkout when output is still held, then retry abandonment after
+resolving the warning. When removal proceeds, it is forced, so
 uncommitted, untracked, and ignored files (including copied `.env` files) and
 initialized submodules are deleted with it. The branch is kept, so committed work,
 pushed or not, stays recoverable. The result lists each removed worktree and its
@@ -1256,7 +1274,8 @@ Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
 Successful `--json` responses include an optional `cleanupWarnings` array of warning
-strings when reclamation fails; the field is omitted when there are no cleanup
+strings for container reclamation failures, owner-stop cleanup failures, and output pipes
+still held by an unsignalled process; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/guides/authoring-workflows/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
@@ -1507,11 +1526,12 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 ### `isolation cleanup [days]`
 
-To explicitly discard a resumable run and remove the worktree it created, use
+To explicitly discard a resumable run and attempt removal of the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
 of this section. Abandon removes a checkout only when the run holds its matching creation
-proof, even if the checkout has since been adopted. It deletes uncommitted work there and
-keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
+proof, even if the checkout has since been adopted. Owner warnings retain the checkout:
+inspect it (`lsof` when output is still held), resolve the warning, then retry abandonment.
+When removal proceeds, it deletes uncommitted work there and keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,
@@ -1761,7 +1781,7 @@ archon version
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `artifacts`, `wait`, `attention`, `project list`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
-| `--after <cursor>` | For `workflow attention --watch`: replay readable feed events strictly after this cursor, excluding all lines at that cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/guides/attention-queue/#stream-the-queue). |
+| `--after <cursor>` | For `workflow attention --watch`: replay readable feed events strictly after this cursor, excluding all lines at that cursor. A `degraded` warning means coverage may have gaps; see [repair and replay](/getting-started/operate/#stream-the-queue). |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |

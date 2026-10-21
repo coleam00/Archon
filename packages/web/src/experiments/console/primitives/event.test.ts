@@ -36,6 +36,20 @@ describe('toRunEvent — base mapping', () => {
     }
   );
 
+  test.each(['workflow_cleanup_warning', 'workflow_cancelled'])(
+    '%s warnings are visible text and preserve every inspection instruction',
+    event_type => {
+      const warnings = [
+        'Output is still held outside the process group; it was not signalled. Use lsof on the checkout.',
+        `Retain the checkout and inspect it before retrying abandonment. ${'More detail. '.repeat(30)}`,
+      ];
+      expect(toRunEvent(raw({ event_type, data: { warnings } }))).toMatchObject({
+        kind: 'text',
+        content: `⚠️ Workflow cleanup warnings:\n${warnings.map(w => `- ${w}`).join('\n')}`,
+      });
+    }
+  );
+
   test('maps id, runId, timestamp, nodeId from the row', () => {
     const e = toRunEvent(raw({ event_type: 'node_started', step_name: 'plan' }));
     expect(e.id).toBe('e1');
@@ -731,4 +745,16 @@ test('an undelivered pause notice is a system row, not a failure', () => {
     label: 'Pause notice not delivered; the run is still waiting',
     detail: 'slack',
   });
+});
+
+describe('cleanup warning payload validation', () => {
+  test.each([{}, { warnings: 'lost' }, { warnings: [] }, { warnings: ['valid', 123] }])(
+    'reports malformed cleanup warning data %j',
+    data => {
+      expect(toRunEvent(raw({ event_type: 'workflow_cleanup_warning', data }))).toMatchObject({
+        kind: 'text',
+        content: expect.stringContaining('Invalid workflow_cleanup_warning payload'),
+      });
+    }
+  );
 });

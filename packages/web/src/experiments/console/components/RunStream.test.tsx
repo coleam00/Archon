@@ -4,6 +4,7 @@ import { RunStream, pairProviderToolCalls } from './RunStream';
 import type { ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import { mergeProviderEventRecords } from '../lib/provider-events';
 import type { Message } from '../primitives/message';
+import { toRunEvent } from '../primitives/event';
 import type { NodeTransitionEvent } from '../primitives/event';
 import { StreamContextProvider } from '../lib/stream-context';
 
@@ -440,5 +441,38 @@ describe('RunStream tool rendering', () => {
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {
     expect(render(new Map())).toContain('InlineOnly');
+  });
+});
+
+describe('RunStream cleanup warnings', () => {
+  test.each([false, true])('renders full normalized warning with showSystem=%s', showSystem => {
+    const warnings = [
+      'Some process outside the run process group still holds output; it was not signalled.',
+      `Retain the checkout. ${'Inspection detail. '.repeat(30)}Use lsof on the checkout before retrying abandonment.`,
+    ];
+    const event = toRunEvent({
+      id: 'warning',
+      workflow_run_id: 'r1',
+      event_type: 'workflow_cleanup_warning',
+      step_index: null,
+      step_name: null,
+      data: { warnings },
+      created_at: '2026-10-02T10:00:00.000Z',
+    });
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
+        <RunStream
+          messages={[]}
+          events={[event]}
+          nodes={[]}
+          providerEvents={new Map()}
+          showToolCalls={false}
+          showSystem={showSystem}
+          selectedNodeId="all"
+        />
+      </StreamContextProvider>
+    );
+    for (const warning of warnings) expect(html).toContain(warning);
+    expect(html).not.toContain('Waiting for first event');
   });
 });

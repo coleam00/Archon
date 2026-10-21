@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
-import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
+import {
+  makeSqlConformanceHarness,
+  describeSqlStatusReadConformance,
+} from './workflow-store.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
 const trackTempRoot = trackTempRoots();
@@ -18,13 +21,17 @@ const makeHarness = async () => {
     await removeTempTree(root);
   };
   try {
-    return await makeSqlConformanceHarness(db, sqliteDialect, 'sqlite', close);
+    const harness = await makeSqlConformanceHarness(db, sqliteDialect, 'sqlite', close);
+    return { ...harness, db };
   } catch (error) {
     await close();
     throw error;
   }
 };
 describeWorkflowStoreConformance('SQLite', makeHarness);
+
+describeSqlStatusReadConformance(makeHarness);
+
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();
   try {

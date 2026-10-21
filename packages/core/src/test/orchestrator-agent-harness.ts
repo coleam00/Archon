@@ -116,11 +116,11 @@ export const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 );
 
 export const mockLogger = createMockLogger();
-
 export const mockCloseRunLiveOwner = mock(() => Promise.resolve());
 const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
   close: mockCloseRunLiveOwner,
   isStopRequested: () => false,
+  registerTerminationPreparation: () => () => undefined,
 };
 export const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(() =>
   Promise.resolve(mockRunLiveOwner)

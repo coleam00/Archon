@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const guide = readFileSync(
-  join(import.meta.dir, '../packages/docs-web/src/content/docs/guides/attention-queue.md'),
+  join(import.meta.dir, '../packages/docs-web/src/content/docs/getting-started/operate.md'),
   'utf8'
 );
 function extractHandler(guide: string): string {

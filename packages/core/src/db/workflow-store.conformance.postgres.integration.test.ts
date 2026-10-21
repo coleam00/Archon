@@ -9,7 +9,10 @@ import {
   CONFORMANCE_CONVERSATION_ID,
   CONFORMANCE_CODEBASE_ID,
 } from '@archon/workflows/store-conformance';
-import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
+import {
+  makeSqlConformanceHarness,
+  describeSqlStatusReadConformance,
+} from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
 
@@ -125,6 +128,8 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       });
     }
   }
+
+  describeSqlStatusReadConformance(makeHarness);
   test.each([false, true])(
     'source suspension excludes a resume on another connection (resumed=%s)',
     async resumed => {
