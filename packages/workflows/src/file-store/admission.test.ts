@@ -564,14 +564,65 @@ test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn'] as const)
   }
 );
 
-test('host queued listing fully validates a request with its own host envelope', async () => {
-  const { root, store } = await fixture();
-  await store.admitResourceStart(intent());
-  const queued = intent();
-  await store.admitResourceStart(queued);
-  await corruptRequest(root, queued.launch.run.id, 'launch');
-  await expect(store.listQueuedResourceStartsForHost('host')).rejects.toThrow();
-});
+test.each(['id', 'resource', 'overlap', 'blocker', 'launch', 'position'] as const)(
+  'host listing isolates a selected request with corrupt %s and drains an independent resource',
+  async field => {
+    const { root, store } = await fixture();
+    const holder = intent(),
+      queued = intent();
+    const otherHolder = intent(),
+      corrupt = intent();
+    for (const start of [otherHolder, corrupt]) {
+      start.resource = 'other';
+      start.launch.execution.cwd = '/other';
+    }
+    await store.admitResourceStart(holder);
+    await store.admitResourceStart(queued);
+    await store.admitResourceStart(otherHolder);
+    await store.admitResourceStart(corrupt);
+    const path = join(
+      'resource/requests',
+      `${createHash('sha256').update(corrupt.launch.run.id).digest('hex')}.json`
+    );
+    const target = join(root, path);
+    const row = JSON.parse(await readFile(target, 'utf8'));
+    row[field] = field === 'blocker' ? {} : null;
+    const damaged = JSON.stringify(row);
+    await writeFile(target, damaged);
+    const logs: string[] = [];
+    setLogSink(line => logs.push(line));
+    try {
+      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual([
+        queued.launch.run.id,
+      ]);
+      await finishRun(root, holder.launch.run.id);
+      const listed = await store.listQueuedResourceStartsForHost('host');
+      expect(listed.map(row => row.id)).toEqual([queued.launch.run.id]);
+      for (const resource of new Set(listed.map(row => row.resource))) {
+        expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
+          { status: 'admitted', runId: queued.launch.run.id },
+        ]);
+      }
+      expect(logs.map(line => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({
+          document: path,
+          msg: 'queued_start_document_invalid_listing_omitted',
+        })
+      );
+    } finally {
+      setLogSink(undefined);
+    }
+    expect(await readFile(target, 'utf8')).toBe(damaged);
+    expect(await store.getWorkflowRun(corrupt.launch.run.id)).toBeNull();
+    expect(await store.getWorkflowRun(otherHolder.launch.run.id)).toMatchObject({
+      status: 'pending',
+    });
+    await expect(store.getResourceStartRequest(corrupt.launch.run.id)).rejects.toThrow();
+    await expect(
+      store.drainResourceStarts({ resource: 'other', hostId: 'host' })
+    ).rejects.toThrow();
+  }
+);
 
 const queuedCorruptions = [
   'json',

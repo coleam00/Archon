@@ -202,7 +202,7 @@ Guarded starts also wait behind live runs outside the resource, including manual
 
 A drain processes untouched queued requests assigned to one host and admits them while the resource has free capacity.
 
-In the file store, host listing logs `queued_start_document_invalid_listing_omitted` with the document path when a slot queue or queued request envelope is missing or corrupt, and omits that candidate so independent hosts can drain. The listing leaves stored data unchanged for repair. Direct resource drains remain strict, and request inspection still rejects malformed request data. A request with a valid host/status envelope is fully validated when listed for its host.
+In the file store, host listing logs `queued_start_document_invalid_listing_omitted` with the document path when a slot queue or queued request is missing or corrupt, including invalid fields in a request assigned to the selected host. It omits that candidate so independent resources and hosts can drain. The listing leaves stored data unchanged for repair. Direct resource drains remain strict, and request inspection still rejects malformed request data.
 
 The server rechecks its own host about every five seconds, including requests waiting on foreign holders. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. For CLI-only hosts, schedule this drain to keep queued work advancing after a foreign holder ends. Neither recovers a request that was already admitted to a run.
 
