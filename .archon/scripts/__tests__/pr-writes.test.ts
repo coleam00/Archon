@@ -646,6 +646,29 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
   });
 
+  it.each(['gh', 'forge'] as const)('retains named and reconciled PR identities after a failed description edit through %s', source => {
+    for (const { existing, priorClaim } of [42, null].flatMap(existing => [false, true].map(priorClaim => ({ existing, priorClaim })))) {
+      const result = publishSection({ source, target: { existing },
+        artifacts: priorClaim ? { 'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) } : {},
+        forgeAt: head => ({ kind: 'fake', response: [
+          ...(existing === null ? [] : [forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) })]),
+          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+          forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
+        ] }),
+        preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('edit unavailable');
+      const report = runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null' },
+        artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
+      });
+      expect(report.code).toBe(0);
+      expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
+    }
+  });
+
   it.each(['gh', 'forge'] as const)('names the verified PR when recording its identity fails after create through %s', source => {
     const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
       forgeAt: head => ({ kind: 'fake', response: [

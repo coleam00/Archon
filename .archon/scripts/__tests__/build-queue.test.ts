@@ -140,6 +140,18 @@ describe('the build record', () => {
     expect(itemPullRequest([unresolved, round('r3', AT)], TRIAGE, PR.repo)).toEqual(PR);
   });
 
+  test('a newer explicit re-triage reconciles an unresolved create, overriding an older PR', () => {
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    for (const prior of [[], [round('r1', AT)]]) {
+      for (const at of ['2026-10-15T23:00:00.000Z', AT]) {
+        expect(() => itemPullRequest([...prior, unresolved], { ...TRIAGE, at, pull_request: 43 }, PR.repo)).toThrow('unresolved PR create');
+      }
+      const newer = { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 43 };
+      expect(itemPullRequest([...prior, unresolved], newer, PR.repo)).toEqual({ ...PR, number: 43 });
+      expect(() => itemPullRequest([...prior, unresolved], { ...newer, pull_request: null }, PR.repo)).toThrow('unresolved PR create');
+    }
+  });
+
   test('the rounds since a re-triage or a maintainer answer count toward the round cap', () => {
     const rounds = [round('a', '2026-10-16T00:30:00.000Z'), round('b', '2026-10-16T01:30:00.000Z'), round('c', '2026-10-16T02:30:00.000Z')];
     expect(countedRounds(triaged({}, record({ rounds })))).toBe(3);
@@ -518,6 +530,16 @@ describe('the build queue scripts', () => {
     seed(at, triaged({ claim: null }, record({ rounds, decisions: [answered] })));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: false });
   }, 60_000);
+
+  test('facts verifies a PR explicitly reconciled by newer triage before continuing it', () => {
+    const at = install();
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
+    seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
+    const result = run(at, 'facts', {}, { source: 'gh' });
+    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
+  });
 
   test("facts puts an item with an open pull request on that pull request's branch, and names a first round's branch after the issue", () => {
     const at = install();

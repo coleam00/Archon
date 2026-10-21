@@ -5,7 +5,7 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { PR, PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, forgePrRecord, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -223,7 +223,7 @@ describe("deliver's report after a node failure", () => {
         artifacts: {
           'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
           'nodes/publish.json': JSON.stringify({ url: PR_URL }),
-          [record]: JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+          [record]: JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
         },
         preload: `import { utimesSync } from 'node:fs';
           utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${recoveryIsLatest ? 100 : 300});
@@ -240,8 +240,8 @@ describe("deliver's report after a node failure", () => {
     const run = runPackScript('deliver/scripts/report', {
       inputs: { INPUTS_OUTCOME: 'null' },
       artifacts: {
-        'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }),
-        'pr-create-verified.json': JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+        'pr-create-started': JSON.stringify({ pr: forgePrRecord() }),
+        'pr-create-verified.json': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
       },
       preload: `import { utimesSync } from 'node:fs';
         utimesSync('{ARTIFACTS}/pr-create-started', 100, ${recoveryIsLatest ? 100 : 300});
@@ -257,7 +257,7 @@ describe("deliver's report after a node failure", () => {
       artifacts: {
         'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }, { path: 'nodes/missing.json' }] }, errors: [] }),
         'nodes/publish.json': JSON.stringify({ url: PR_URL }),
-        'pr-create-started': JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+        'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
       },
       preload: `import { utimesSync } from 'node:fs';
         utimesSync('{ARTIFACTS}/nodes/publish.json', 300, 300);
@@ -271,12 +271,24 @@ describe("deliver's report after a node failure", () => {
     const run = runPackScript('deliver/scripts/report', {
       inputs: { INPUTS_OUTCOME: 'null' },
       artifacts: {
-        'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }),
+        'pr-create-started': JSON.stringify({ pr: forgePrRecord() }),
         'pr-create-verified.json': 'invalid JSON',
       },
     });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ pr_url: PR_URL, summary: expect.stringContaining('pr-create-verified.json') });
+  });
+
+  it.each(['pr-create-started', 'pr-create-verified.json'])('does not certify a URL without a complete PR record in %s', name => {
+    const result = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: { [name]: JSON.stringify({ pr: { url: PR_URL } }) },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      reason: name === 'pr-create-started' ? 'pr_create_unresolved' : 'failed',
+      pr_url: '', summary: expect.stringContaining('invalid pull-request record'),
+    });
   });
 
   it.each([true, false])('orders an unresolved claim against typed output (claim latest: %s)', claimIsLatest => {
@@ -285,7 +297,7 @@ describe("deliver's report after a node failure", () => {
       artifacts: {
         'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
         'nodes/publish.json': JSON.stringify({ url: PR_URL }),
-        'pr-create-started': JSON.stringify({ repo: PR.repo, head: 'feature' }),
+        'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }),
       },
       preload: `import { utimesSync } from 'node:fs';
         utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${claimIsLatest ? 100 : 300});
@@ -303,7 +315,7 @@ describe("deliver's report after a node failure", () => {
         const run = runPackScript(script, {
           inputs: { INPUTS_OUTCOME: 'null' },
           artifacts: kind === 'directory' ? {} : {
-            'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, head: 'feature' }) : 'invalid JSON',
+            'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
           },
           preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
         });

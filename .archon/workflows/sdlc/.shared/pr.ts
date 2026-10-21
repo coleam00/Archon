@@ -29,6 +29,31 @@ export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
 export const PR_CREATE_RECORD = 'pr-create-started';
 export const PR_CREATE_VERIFIED_RECORD = 'pr-create-verified.json';
 
+export type PrPublicationRecord =
+  | { readonly repo: QualifiedPr['repo']; readonly headRepo: QualifiedPr['repo']; readonly head: string }
+  | { readonly pr: PrRecord };
+
+export function encodePrPublicationRecord(value: PrPublicationRecord): string {
+  return JSON.stringify(value);
+}
+
+export function decodePrPublicationRecord(value: unknown):
+  | { readonly state: 'started' }
+  | { readonly state: 'verified'; readonly pr: PrRecord } {
+  const row = record(value);
+  if (row && 'pr' in row) return { state: 'verified', pr: parsePrRecord(row.pr) };
+  const repo = record(row?.repo);
+  const headRepo = record(row?.headRepo);
+  if (
+    typeof repo?.host !== 'string' || repo.host.trim() === '' ||
+    typeof repo.path !== 'string' || repo.path.trim() === '' ||
+    typeof headRepo?.host !== 'string' || headRepo.host.trim() === '' ||
+    typeof headRepo.path !== 'string' || headRepo.path.trim() === '' ||
+    typeof row?.head !== 'string' || row.head === ''
+  ) throw new Error('invalid PR publication record');
+  return { state: 'started' };
+}
+
 export interface PrView {
   readonly pr: PrRecord;
   readonly title: string;

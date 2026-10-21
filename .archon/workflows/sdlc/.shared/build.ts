@@ -188,6 +188,9 @@ export function itemPullRequest(
 ): QualifiedPr | null {
   const unresolved = rounds.map(round => round.reason).lastIndexOf(PR_CREATE_UNRESOLVED);
   if (unresolved >= 0 && !rounds.slice(unresolved + 1).some(round => round.pr_url !== '')) {
+    if (triage?.pull_request != null && triage.at > (rounds[unresolved]?.at ?? '')) {
+      return { repo, number: triage.pull_request };
+    }
     throw new Error(`round ${rounds[unresolved]?.run_id} has an unresolved PR create; reconcile its artifacts and continue that PR explicitly`);
   }
   const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;

@@ -33,7 +33,7 @@
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { encodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
@@ -168,19 +168,19 @@ function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read(
   return pr;
 }
 
-function recordCreatedPr(claimPath: string, pr: PrRecord): void {
+function recordPublishedPr(claimPath: string, pr: PrRecord): void {
   try {
-    writeFileSync(claimPath, JSON.stringify({ repo: pr.repo, headRepo: pr.head_repo, head: pr.head, pr }), { mode: 0o600 });
+    writeFileSync(claimPath, encodePrPublicationRecord({ pr }), { mode: 0o600 });
   } catch (error) {
     const recoveryPath = join(artifactsDir(), PR_CREATE_VERIFIED_RECORD);
     let recoveryError: unknown;
     try {
-      writeFileSync(recoveryPath, JSON.stringify({ pr }), { mode: 0o600 });
+      writeFileSync(recoveryPath, encodePrPublicationRecord({ pr }), { mode: 0o600 });
     } catch (failure) {
       recoveryError = failure;
     }
     throw new Error(
-      `created and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}` +
+      `published and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}` +
       (recoveryError === undefined ? '' : `; recovery record ${recoveryPath} also failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`),
       { cause: recoveryError === undefined ? error : new AggregateError([error, recoveryError]) }
     );
@@ -219,7 +219,9 @@ function publish(): PrRecord {
     const pushed = pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
     // The run continues a named pull request: its draft state belongs to its author,
     // and its description changes only by the section publish() applies when allowed.
-    return awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
+    const pr = awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    return pr;
   }
 
   const head = branch || text(process.env.INPUTS_HEAD);
@@ -228,7 +230,9 @@ function publish(): PrRecord {
   const open = findOpenPrByHead(repo, headRepo, head, source);
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
-    return awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
+    const pr = awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    return pr;
   }
 
   const body = record(nullableJson(process.env.INPUTS_BODY));
@@ -250,7 +254,7 @@ function publish(): PrRecord {
   // after success: a retry may only reconcile it.
   const claimPath = join(artifacts, PR_CREATE_RECORD);
   try {
-    writeFileSync(claimPath, JSON.stringify({ repo, headRepo, head }), { flag: 'wx', mode: 0o600 });
+    writeFileSync(claimPath, encodePrPublicationRecord({ repo, headRepo, head }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
       throw new Error(
@@ -273,7 +277,7 @@ function publish(): PrRecord {
       },
       source
     );
-    recordCreatedPr(claimPath, pr);
+    recordPublishedPr(claimPath, pr);
     return pr;
   } catch (error) {
     // A forge refusal is definite: no write was sent, so the claim would only block

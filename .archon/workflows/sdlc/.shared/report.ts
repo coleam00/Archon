@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
+import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -199,12 +199,11 @@ export function caveats(
   return discoveries(artifacts, options.listingFile);
 }
 
-/** A create verified before a later description edit failed has no typed output. */
+/** A verified publication can outlive a failed node with no typed output. */
 function creationRecord(path: string): { url: string; at?: number; problem?: string } {
   try {
-    const claim: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const pr = isObject(claim) ? claim.pr : undefined;
-    return { url: isObject(pr) && typeof pr.url === 'string' ? pr.url : '', at: modified(path) };
+    const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
+    return { url: claim.state === 'verified' ? claim.pr.url : '', at: modified(path) };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
     return { url: '', at: modified(path), problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
