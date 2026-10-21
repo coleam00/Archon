@@ -12,11 +12,12 @@ facts:
   policy_defaults: /stub/policy
   pull_request: { schemaVersion: 1, repo: { host: github.com, path: example/repo }, number: 42, url: "https://github.com/example/repo/pull/42", head: feature, base: dev, is_draft: true, state: open, head_repo: { host: github.com, path: example/repo }, head_revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, base_revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, maintainer_can_modify: null }
   continues: 42
-  branch: ""
+  branch: "build/7-stub-fixture"
   blocked: []
   blocked_count: 0
 route:
   decision: ready
+  continues: null
   ready_head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   brief: "stub: already delivered"
   reason: "stub: Ready and green at the head"

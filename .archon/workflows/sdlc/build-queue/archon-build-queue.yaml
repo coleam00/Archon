@@ -85,11 +85,12 @@ nodes:
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
-        # The number of that pull request when the round continues it: it is open and
-        # its head is in the item's repository. Null otherwise.
+        # The number of that pull request when a round may continue it: it is open and
+        # its head is in the item's repository. Null otherwise. Route decides whether
+        # the round does.
         continues: { type: [integer, 'null'] }
-        # The branch the round opens its pull request from when it continues none: a new
-        # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
+        # The branch the round opens its pull request from when route continues none: a
+        # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
         # The blocked items due a revisit; empty unless retriage_as is set and no item
         # is named.
@@ -113,10 +114,15 @@ nodes:
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
       pull_request: { from: "$facts.output.pull_request" }
+      continues: "$facts.output.continues"
     output_format:
       type: object
       properties:
         decision: { type: string, enum: [launch, ask, ready] }
+        # On launch, the number of the pull request the round continues: the candidate
+        # facts reports, or null when the issue's dated scope or a recorded answer
+        # supersedes it and the round starts fresh from the new branch. Null otherwise.
+        continues: { type: [integer, 'null'] }
         # On ready, the full head SHA the pull request is already reviewed Ready and
         # green at; apply takes it out of draft only while its head is still this
         # commit. Null otherwise.
@@ -157,10 +163,11 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, ready_head, brief, reason, attention]
+      required: [decision, continues, ready_head, brief, reason, attention]
 
-  # A round that continues a pull request starts from that pull request's head, not
-  # from the branch the run's checkout was cut from, so its publish fast-forwards.
+  # A round that continues a pull request (route's declaration) starts from that pull
+  # request's head, not from the branch the run's checkout was cut from, so its publish
+  # fast-forwards. A fresh round stays on the base.
   - id: checkout
     script: checkout
     runtime: bun
@@ -168,7 +175,8 @@ nodes:
     when: "$route.output.decision == 'launch'"
     with:
       pull_request: { from: "$facts.output.pull_request" }
-      continues: "$facts.output.continues"
+      candidate: "$facts.output.continues"
+      continues: "$route.output.continues"
     output_format:
       type: object
       properties:
@@ -181,7 +189,7 @@ nodes:
     when: "$route.output.decision == 'launch'"
     with:
       target: "$route.output.brief"
-      pull_request: "$facts.output.continues"
+      pull_request: "$route.output.continues"
       branch: "$facts.output.branch"
 
   - id: answer

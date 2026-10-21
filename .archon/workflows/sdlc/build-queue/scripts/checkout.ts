@@ -10,7 +10,9 @@
  * nothing local is lost.
  *
  * Bound inputs: INPUTS_PULL_REQUEST, the item's pull request from facts, or null;
- * INPUTS_CONTINUES, its number when the round continues it, else empty or `null`.
+ * INPUTS_CANDIDATE, the number facts found continuable, else empty or `null`;
+ * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`.
+ * Route may decline the candidate, never name another pull request.
  */
 
 import type { PrRecord } from '../../.shared/forge.ts';
@@ -26,9 +28,12 @@ function main(): void {
     emit({ head: null });
     return;
   }
+  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
+  if (continues !== candidate)
+    throw new Error(`route continues pull request ${String(continues)}, but only ${String(candidate ?? 'none')} can be continued`);
   const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (known === null || known.number !== continues)
-    throw new Error(`facts continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
+    throw new Error(`route continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
   const pr = viewPr({ repo: known.repo, number: continues }, forgeSource()).pr;
   if (pr.state !== 'open' || pr.head_revision === null)
     throw new Error(`${pr.url} is ${pr.state}; the round cannot continue it`);

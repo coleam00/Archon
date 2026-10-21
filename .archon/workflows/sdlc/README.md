@@ -514,10 +514,14 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   A `continue` starts the item's next round at once, a detached `archon-build-queue
   --input number=<n>` on the run config this run started with; if that launch fails,
   the item waits for the next queue run.
-  A round for an item with an open pull request in its repository passes it to
+  Facts reports the open pull request in the item's repository as the candidate, and
+  the `route` agent declares whether the round continues it: unless a dated scope
+  section or a recorded answer supersedes it. A continued pull request goes to
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
-  takes, pushing onto its head so the same pull request updates. A round that failed
-  after publishing still records its pull request. Otherwise the round opens its
+  takes, pushing onto its head so the same pull request updates. A superseded one is
+  never checked out or pushed to; the round starts fresh and its brief asks for the old
+  pull request to be closed as superseded once the replacement opens. A round that failed
+  after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
   merged pull request, or one from a fork, is asked about.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)

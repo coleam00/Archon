@@ -10,7 +10,7 @@
  * revisit, for the revisit agent beside the item's path.
  *
  * It also resolves the item's pull request as the forge reports it now. An open one
- * whose head is in the item's repository is the pull request the round continues;
+ * whose head is in the item's repository is the candidate the round continues;
  * otherwise the round opens one from a new branch named after the issue.
  */
 
@@ -46,7 +46,11 @@ function writeIssue(title: string, url: string, body: string): void {
   writeFileSync(join(dir, 'issue.md'), `# ${title}\n\n${url}, now.\n\n${body}\n`);
 }
 
-/** For an open item, exactly one of `continues` and `branch` is set. */
+/**
+ * `continues` is the candidate: the open same-repository pull request a round may
+ * continue. Whether it does is the route agent's call, since a dated ruling can
+ * supersede it, so `branch` is always set for a round that continues none.
+ */
 interface ItemPr {
   readonly pull_request: PrRecord | null;
   readonly continues: number | null;
@@ -64,10 +68,11 @@ function resolvePr(
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
   const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
+  const branch = buildBranch(subject.number, title, runId);
   if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
-    return { pull_request: pr, continues: pr.number, branch: '' };
+    return { pull_request: pr, continues: pr.number, branch };
   }
-  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId) };
+  return { pull_request: pr, continues: null, branch };
 }
 
 function emitItem(
