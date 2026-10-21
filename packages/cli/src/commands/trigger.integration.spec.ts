@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -53,6 +54,97 @@ async function waitFor<T>(read: () => T | undefined, label: string): Promise<T> 
   const detail = lastError instanceof Error ? `: ${lastError.message}` : '';
   throw new Error(`Timed out waiting for ${label}${detail}`);
 }
+
+function readRecordedPids(pidFile: string): [owner: number, node: number] | undefined {
+  if (!existsSync(pidFile)) return undefined;
+  const record = readFileSync(pidFile, 'utf8');
+  // The shell's terminating newline publishes the complete owner/node pair.
+  const match = /^([1-9]\d*) ([1-9]\d*)\n$/.exec(record);
+  if (!match || match[0] !== record) return undefined;
+  const owner = Number(match[1]);
+  const node = Number(match[2]);
+  return Number.isSafeInteger(owner) && Number.isSafeInteger(node) ? [owner, node] : undefined;
+}
+
+function stagedPidWriter(pidFile: string): string {
+  return `node_pid=$$; echo "$PPID $$" > '${pidFile}.ready'; printf '%s %s' "$PPID" "\${node_pid:0:1}" > '${pidFile}'; while [ ! -f '${pidFile}.publish' ]; do sleep 0.025; done; printf '%s\\n' "\${node_pid:1}" >> '${pidFile}'; exec sleep 60`;
+}
+
+async function publishPidsAfterConsumerWaits(
+  pidFile: string,
+  consumer: Promise<[owner: number, node: number]>
+): Promise<[owner: number, node: number]> {
+  const expected = await waitFor(
+    () => readRecordedPids(`${pidFile}.ready`),
+    'node to prepare its complete PID pair'
+  );
+  await waitFor(
+    () =>
+      existsSync(pidFile) &&
+      readFileSync(pidFile, 'utf8') === `${expected[0]} ${String(expected[1])[0]}`
+        ? true
+        : undefined,
+    'node to pause with a positive partial second PID'
+  );
+  let consumed = false;
+  const result = consumer.then(pids => {
+    consumed = true;
+    return pids;
+  });
+  try {
+    // Allow several consumer polls while the shell is held at the publication gate.
+    await Bun.sleep(100);
+    expect(consumed).toBe(false);
+    if (process.platform !== 'win32') expect(processAlive(expected[0])).toBe(true);
+  } finally {
+    writeFileSync(`${pidFile}.publish`, '');
+  }
+  const pids = await result;
+  expect(pids).toEqual(expected);
+  return pids;
+}
+
+describe('trigger fixture PID records', () => {
+  test.each([
+    '',
+    '12345',
+    '12345 ',
+    '12345 6',
+    '12345 67890',
+    '0 67890\n',
+    '12345 0\n',
+    '-12345 67890\n',
+    '12345 -67890\n',
+    'owner 67890\n',
+    '12345 node\n',
+    '12345 6.5\n',
+    '12345 6e3\n',
+    '9007199254740993 67890\n',
+    '12345 9007199254740993\n',
+    '12345 67890 42\n',
+    '12345 67890\n\n',
+    '12345 67890\n42 43\n',
+  ])('rejects incomplete or invalid record %j', record => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-trigger-pids-'));
+    tempRoots.push(root);
+    const pidFile = join(root, 'owner.pid');
+    writeFileSync(pidFile, record);
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+  });
+
+  test('withholds both PIDs until the node finishes publishing its record', () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-trigger-pids-'));
+    tempRoots.push(root);
+    const pidFile = join(root, 'owner.pid');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    writeFileSync(pidFile, '12345 6');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    appendFileSync(pidFile, '7890');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    appendFileSync(pidFile, '\n');
+    expect(readRecordedPids(pidFile)).toEqual([12345, 67890]);
+  });
+});
 
 async function runCli(
   cliPath: string,
@@ -860,7 +952,7 @@ nodes:
           `name: signal-proof\ndescription: Signal proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
         );
       };
-      writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+      writeWorkflow(stagedPidWriter(pidFile));
 
       const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
       const databasePath = join(archonHome, 'archon.db');
@@ -907,11 +999,18 @@ nodes:
       let sleepPid: number | undefined;
       try {
         await runCli(cliPath, projectRoot, archonHome, fire);
-        const [ownerPid, nodePid] = await waitFor(() => {
-          if (runs()[0]?.status !== 'running' || !existsSync(pidFile)) return undefined;
-          const pids = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-          return pids.length === 2 ? pids : undefined;
-        }, 'trigger execution to start its node');
+        const first = await waitFor(() => {
+          const run = runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        activeRuns.add(first.id);
+        const [ownerPid, nodePid] = await publishPidsAfterConsumerWaits(
+          pidFile,
+          waitFor(() => {
+            if (runs()[0]?.status !== 'running') return undefined;
+            return readRecordedPids(pidFile);
+          }, 'trigger execution to start its node')
+        );
         sleepPid = nodePid;
 
         process.kill(ownerPid, 'SIGTERM');
@@ -930,6 +1029,7 @@ nodes:
             return true;
           }
         }, 'signalled owner to exit');
+        activeRuns.delete(first.id);
 
         // With the run terminal, the capacity-1 slot admits the next start at once.
         writeWorkflow('echo done');
@@ -973,7 +1073,7 @@ nodes:
       );
     };
     // A bash node's parent is the `trigger execute` process that owns the run.
-    writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+    writeWorkflow(stagedPidWriter(pidFile));
 
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
     const databasePath = join(archonHome, 'archon.db');
@@ -1030,16 +1130,7 @@ nodes:
         return run?.status === 'running' ? run : undefined;
       }, 'trigger execution to start');
       activeRuns.add(first.id);
-      // The node writes both PIDs with one echo, but the file can exist before the write
-      // finishes. Parse only a complete record, so a partial read never yields PID 0,
-      // which the cleanup below would turn into a signal to this runner's own group.
-      pids = await waitFor(() => {
-        if (!existsSync(pidFile)) return undefined;
-        const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-        return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
-          ? record
-          : undefined;
-      }, 'trigger node to record its PIDs');
+      pids = await publishPidsAfterConsumerWaits(pidFile, recordedPids(pidFile));
 
       // The next start captures its own source at intake and waits behind the slot.
       writeWorkflow('echo done');
@@ -1185,15 +1276,8 @@ nodes:
     };
   }
 
-  /** Both PIDs the held node records, parsed only from a complete record (never PID 0). */
   function recordedPids(pidFile: string): Promise<[owner: number, node: number]> {
-    return waitFor(() => {
-      if (!existsSync(pidFile)) return undefined;
-      const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-      return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
-        ? ([record[0], record[1]] as [number, number])
-        : undefined;
-    }, 'trigger node to record its PIDs');
+    return waitFor(() => readRecordedPids(pidFile), 'trigger node to record its PIDs');
   }
 
   function killAll(pids: number[]): void {

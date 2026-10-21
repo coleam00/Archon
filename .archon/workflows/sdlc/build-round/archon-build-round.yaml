@@ -17,6 +17,12 @@ inputs:
     description: The queue run whose claim this worker conditionally takes.
   selected_branch:
     description: The branch the queue passed as literal CLI --branch.
+  order:
+    default: '["urgency desc","importance desc","size asc","created asc"]'
+    description: The pickup order to preserve when this round starts the next queue run.
+  retriage_as:
+    default: ""
+    description: The maintainer login to preserve when this round starts the next queue run.
   round_limit:
     default: "3"
     description: >-

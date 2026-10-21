@@ -8,19 +8,20 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once, on the run config this run started with; if that launch fails,
- * the item waits for the next queue run.
+ * next round at once, on the run config and input selections this run started with; if
+ * that launch fails, the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts.
+ * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
+ * INPUTS_ORDER, INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
 import { withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { launchNextRound } from '../../.shared/launch.ts';
+import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
@@ -165,9 +166,16 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
+function afterWrite(
+  summary: string,
+  wrote: string | null,
+  decision: Decision,
+  item: QualifiedPr,
+  runId: string,
+  selections: BuildQueueSelections
+): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId)}` : written;
+  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
 }
 
 function main(): void {
@@ -228,7 +236,12 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  const selections: BuildQueueSelections = {
+    order: text(process.env.INPUTS_ORDER),
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
+    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+  };
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
 }
 
 try {

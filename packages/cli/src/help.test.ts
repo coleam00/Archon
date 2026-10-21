@@ -49,6 +49,21 @@ it('keeps run source and isolation flags consistent with the parser', () => {
 describe('CLI help output', () => {
   const help = renderHelp();
 
+  it('documents setup scope values and the default env file', () => {
+    expect(help).toContain('setup [--scope <home|project>]');
+    const options = scopedHelpOptions(['setup']);
+    expect(options).toContain('--scope <home|project>');
+    expect(options).toContain('~/.archon/.env (default)');
+    expect(options).toContain('<repo-root>/.archon/.env');
+  });
+
+  it('lists session reset and event emission globally and in workflow help', () => {
+    for (const output of [help, renderHelp('workflow')]) {
+      expect(output).toContain('workflow reset-sessions <workflow-name>');
+      expect(output).toContain('workflow event emit');
+    }
+  });
+
   it('lists the workflow resume command', () => {
     expect(help).toContain(
       'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
@@ -153,8 +168,6 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--dry-run');
   });
 
-  // Scoped-only commands must retain their Commands lines even though they
-  // do not appear in the global index.
   for (const sub of ['approve', 'reject', 'cleanup', 'reset-sessions', 'event']) {
     it(`renders a non-empty Commands block for workflow ${sub} --help`, () => {
       const scoped = renderHelp('workflow', sub);
@@ -198,12 +211,6 @@ describe('CLI help output', () => {
     });
   }
 
-  // Frozen pre-refactor template literal (557788e0d:packages/cli/src/cli.ts:140-260).
-  // The byte-identical guarantee on global help is a load-bearing contract: shell
-  // completions and downstream scripts pin the exact text. Embedding the frozen
-  // string here means any future drift — a dropped Commands entry, a reordered
-  // Options block, a column-width change in formatSpecLine — fails this test
-  // instead of silently shipping.
   const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
 
@@ -220,7 +227,7 @@ Commands:
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
-  setup                      Interactive setup wizard for credentials and config
+  setup [--scope <home|project>] Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
                              List compact workflow descriptions
                              Use <name> --full for one exact description
@@ -246,6 +253,9 @@ Commands:
                              ('approve'/'reject' are sugar for the dedicated commands)
   workflow answer <run-id> --occurrence <id>
                              Answer a paused attention wait in its declared form
+  workflow reset-sessions <workflow-name>
+                             Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])
+  workflow event emit        Emit a workflow event into a run
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -422,7 +432,12 @@ Examples:
     const options = scopedHelpOptions(['workflow', 'reset-sessions']);
     expect(options).toContain('--scope');
     expect(options).toContain('--node');
+    expect(options).toContain(
+      'Limit the reset to one node in the selected scope, or every scope with --yes when --scope is omitted'
+    );
     expect(options).toContain('--yes');
+    expect(options).toContain('Confirm cross-scope reset; refused without --scope or --yes');
+    expect(options).not.toContain('prompt');
   });
 
   it('renders --full in workflow list --help', () => {

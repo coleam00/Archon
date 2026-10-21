@@ -19,7 +19,6 @@ export {
   getHomeWorkflowsPath,
   getHomeCommandsPath,
   getHomeScriptsPath,
-  getLegacyHomeWorkflowsPath,
   logArchonPaths,
   isInsideArchonHome,
   getWebDistDir,

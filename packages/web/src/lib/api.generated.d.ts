@@ -1784,7 +1784,12 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody?: never;
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WorkflowRunLaunchJson'];
+          'multipart/form-data': components['schemas']['WorkflowRunLaunchMultipart'];
+        };
+      };
       responses: {
         /** @description Accepted */
         200: {
@@ -5404,6 +5409,90 @@ export interface components {
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
+    };
+    /** @description Launch a workflow. adopt_run_id and supersedes_run_id are mutually exclusive. */
+    WorkflowRunLaunchJson: {
+      conversationId: string;
+      message: string;
+      inputs?: {
+        [key: string]: string;
+      } | null;
+      tiers?: {
+        small?: string;
+        medium?: string;
+        large?: string;
+      } | null;
+      aliases?: {
+        [key: string]: string;
+      } | null;
+      config?: components['schemas']['WorkflowRunLaunchConfig'];
+      adopt_run_id?: string;
+      supersedes_run_id?: string;
+    };
+    /** @description Sparse raw run configuration. Use assistant or defaultAssistant, never both. Provider names, model presets and assistants settings are validated against the live provider registry. */
+    WorkflowRunLaunchConfig: {
+      assistant?: string;
+      assistants?: {
+        [key: string]: {
+          [key: string]: unknown;
+        };
+      };
+      aliases?: {
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+      };
+      tiers?: {
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+      };
+      workflows?: {
+        toolCallAttentionMs?: number;
+        autoResumeOnQuotaReset?: boolean;
+        quotaFallbackDelayMs?: number;
+        quotaMaxAttempts?: number;
+        quotaDeadlineMs?: number;
+      };
+      defaultAssistant?: string;
+      docs?: {
+        path?: string;
+      };
+      env?: {
+        [key: string]: string;
+      };
+    };
+    WorkflowRunLaunchMultipart: {
+      conversationId: string;
+      message: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.inputs. */
+      inputs?: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.tiers. */
+      tiers?: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.aliases. */
+      aliases?: string;
+      /** @description JSON encoding of WorkflowRunLaunchConfig. */
+      config?: string;
+      /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
+      files?: string[];
     };
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];

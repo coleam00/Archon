@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchDetached } from '../../.shared/launch.ts';
+import { type BuildQueueSelections, launchDetached } from '../../.shared/launch.ts';
 import { runDetail } from '../../.shared/state.ts';
 import { read, workItemName, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -12,7 +12,7 @@ function readItem(item: QualifiedPr): WorkItem {
   return stored.doc;
 }
 
-function dispatchWorker(item: QualifiedPr, runId: string, branch: string, roundLimit: string): { worker: string; receipt: string } {
+function dispatchWorker(item: QualifiedPr, runId: string, branch: string, selections: BuildQueueSelections): { worker: string; receipt: string } {
   const dir = join(artifactsDir(), 'build');
   mkdirSync(dir, { recursive: true });
   const receipt = join(dir, 'dispatch.json');
@@ -37,7 +37,7 @@ function dispatchWorker(item: QualifiedPr, runId: string, branch: string, roundL
       writeFileSync(marker, JSON.stringify({ pickup_run: runId, item, branch }), { flag: 'wx' });
       worker = launchDetached('archon-build-round', {
         repo_host: item.repo.host, repo_path: item.repo.path, number: String(item.number),
-        pickup_run: runId, selected_branch: branch, round_limit: roundLimit,
+        pickup_run: runId, selected_branch: branch, ...selections,
       }, { configFromRun: runId, branch });
     }
     writeFileSync(receipt, JSON.stringify({ run_id: worker }));
@@ -55,7 +55,11 @@ async function main(): Promise<void> {
   const runId = text(process.env.WORKFLOW_ID);
   const branch = trimmed(process.env.INPUTS_BRANCH);
   if (runId === '' || branch === '') throw new Error('run id and selected branch are required');
-  const { worker, receipt } = dispatchWorker(item, runId, branch, trimmed(process.env.INPUTS_ROUND_LIMIT));
+  const { worker, receipt } = dispatchWorker(item, runId, branch, {
+    order: text(process.env.INPUTS_ORDER),
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
+    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+  });
   const deadline = Date.now() + 30_000;
   while (!readItem(item).links.runs.includes(worker)) {
     if (Date.now() >= deadline)

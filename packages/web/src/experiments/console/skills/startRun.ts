@@ -1,3 +1,4 @@
+import type { paths } from '../../../lib/api.generated';
 import { requestJson, HttpError } from '../lib/http';
 import type { TierName } from '../lib/tiers';
 
@@ -33,6 +34,9 @@ export interface StartRunArgs {
   aliases?: Record<string, string>;
 }
 
+type WorkflowRunLaunchJson =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
+
 interface CreateConversationResponse {
   conversationId: string;
 }
@@ -66,7 +70,7 @@ export async function startRun({
         ...(hasInputs ? { inputs } : {}),
         ...(hasTiers ? { tiers } : {}),
         ...(hasAliases ? { aliases } : {}),
-      }),
+      } satisfies WorkflowRunLaunchJson),
     });
     return;
   }

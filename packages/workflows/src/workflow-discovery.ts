@@ -60,10 +60,6 @@ export { isValidWorkflowFolderSegment } from './packaged-workflow';
  *
  * When running as a compiled binary, bundled defaults are loaded from embedded
  * content. In source/dev mode they're loaded from the filesystem.
- *
- * Migration: if the retired `~/.archon/.archon/workflows/` path exists, the
- * first call per process logs a WARN with the exact `mv` command. The legacy
- * location is not read — users must migrate manually.
  */
 export async function discoverWorkflows(
   cwd: string | null,

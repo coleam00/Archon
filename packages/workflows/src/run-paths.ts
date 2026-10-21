@@ -16,11 +16,7 @@ import {
   type ResolvedWorkflow,
   type WorkflowRun,
 } from './schemas';
-import {
-  maybeWarnLegacyArtifactsPath,
-  maybeWarnLegacyStatePath,
-  maybeWarnLegacyCwdStoragePath,
-} from './state-migration';
+import { maybeWarnLegacyCwdStoragePath } from './state-migration';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -244,9 +240,8 @@ export interface PreparedRunPaths {
 }
 
 /**
- * Resolve the run's output directories, record its output root, warn about legacy
- * repo-local output, and create the directories its nodes write to. A directory that
- * cannot be created fails the run.
+ * Resolve the run's output directories, record its output root, and create the
+ * directories its nodes write to. A directory that cannot be created fails the run.
  */
 export async function prepareRunPaths(
   deps: WorkflowDeps,
@@ -272,21 +267,6 @@ export async function prepareRunPaths(
   });
 
   await persistRunOutputRoot(deps, workflowRun, outputRoot, identityResolution);
-
-  // Detect (never move) legacy repo-local `.archon/` output directories. State was a
-  // prompt convention; artifacts/logs the engine wrote itself on the unregistered-cwd
-  // fallback (#2311) — the case Archon caused must not be the quieter of the two.
-  // The run's ACTUAL posture, not the workflow's declared policy. `worktree.enabled`
-  // is only one input to the real decision (`pinnedEnabled ?? (!resume && !noWorktree)`,
-  // resolved in the CLI), so a workflow that leaves `worktree` unset and is run with
-  // `--no-worktree` executes IN PLACE while the declared policy still reads as isolated.
-  // That is the one case where this warning is actionable — the legacy files are sitting
-  // in the user's real repository — and it is exactly the case the declared policy gets
-  // backwards. A managed worktree always lives under ARCHON_HOME; an in-place checkout
-  // never does, so the cwd answers the question the policy cannot.
-  const isolated = archonPaths.isInsideArchonHome(cwd);
-  await maybeWarnLegacyStatePath(cwd, stateDir, isolated);
-  await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows, keyed like the session store. Undefined otherwise — zero new dirs.

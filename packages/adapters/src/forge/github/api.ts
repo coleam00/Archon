@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import type { ForgeError } from '@archon/forge/operations';
 import type { RepoRef } from '@archon/forge';
-import { parseGitHubHost, type GitHubHost } from '@archon/git';
+import { parseGitHubHost, resolveGitHubHost, type GitHubHost } from '@archon/git';
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -40,7 +40,10 @@ function githubHost(host: string): GitHubHost {
       true
     );
   }
-  return github;
+  const configured = resolveGitHubHost();
+  const protocol = new URL(configured.webUrl).protocol;
+  const requested = parseGitHubHost(`${protocol}//${host}`);
+  return configured.host === requested?.host ? configured : github;
 }
 
 /** The REST and GraphQL roots and encoded `owner/repo` segment for one qualified repository. */

@@ -13,9 +13,9 @@ import { getLog } from './api-route-kit';
 
 // Shared lock/dispatch/error handling for message and workflow endpoints
 /** Maximum allowed upload size per file (10 MB) */
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 /** Maximum number of files per message (enforced server-side) */
-const MAX_FILES_PER_MESSAGE = 5;
+export const MAX_FILES_PER_MESSAGE = 5;
 /**
  * Binary (non-text) MIME types explicitly allowed for upload.
  * All text/* types are accepted separately via isAllowedUploadType().
