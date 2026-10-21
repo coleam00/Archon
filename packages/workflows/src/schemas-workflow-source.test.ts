@@ -4,7 +4,7 @@ import { workflowSourceSchema } from './schemas/workflow';
 
 describe('workflow source schema', () => {
   test('accepts exactly the shared source vocabulary in its original order', () => {
-    expect(workflowSourceSchema.options).toEqual(WORKFLOW_SOURCES);
+    expect(workflowSourceSchema.options).toEqual([...WORKFLOW_SOURCES]);
     for (const source of WORKFLOW_SOURCES) {
       expect(workflowSourceSchema.parse(source)).toBe(source);
     }
