@@ -120,7 +120,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
 }
 
 /**
- * Let in-flight setup settle before admission rollback. Exiting or racing setup
+ * Let in-flight setup settle before failing the run. Exiting or racing setup
  * would leave Docker work running after the claim becomes available to a successor.
  */
 export function registerResumePreparationTermination(): {

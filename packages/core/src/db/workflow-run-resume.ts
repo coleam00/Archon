@@ -1,9 +1,3 @@
-import {
-  prepareResumedRun,
-  resumePreparationUndo,
-  restoreResumePreparation,
-  type ResumePreparationUndo,
-} from '@archon/workflows/resume-preparation';
 /**
  * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
@@ -137,31 +131,16 @@ export async function findResumableRunByParentConversation(
   }
 }
 
-function storedResumeTimestamp(value: Date | null): string | null {
-  if (value === null) return null;
-  const iso = value.toISOString();
-  // SQLite's raw timestamp comparisons require the same separator as datetime('now').
-  return getDatabaseType() === 'sqlite'
-    ? iso.replace('T', ' ').replace('.000Z', '').replace('Z', '')
-    : iso;
-}
-
 export async function resumeWorkflowRun(
   id: string,
-  cursor?: WorkflowResumeCursor,
-  prepare?: (admitted: WorkflowRun) => Promise<void>
+  cursor?: WorkflowResumeCursor
 ): Promise<WorkflowRun> {
   const dialect = getDialect();
 
   let updateResult:
     | { rowCount: 0 }
     | { busy: WorkflowResourceBusyError }
-    | {
-        admitted: WorkflowRun;
-        undo: ResumePreparationUndo | undefined;
-        eventIds: string[];
-        acquiredResource: string | undefined;
-      };
+    | { admitted: WorkflowRun };
   try {
     // Refresh started_at to NOW so the resumed row competes fairly with
     // currently-active rows in getActiveWorkflowRunByPath's older-wins
@@ -205,8 +184,10 @@ export async function resumeWorkflowRun(
       if (getDatabaseType() === 'sqlite') {
         await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
       }
-      const priorRows = await query<WorkflowRunRow & { resource_key?: string | null }>(
-        `SELECT w.*, CAST(w.origin AS TEXT) AS origin, q.resource_key
+      const priorRows = await query<
+        Pick<WorkflowRunRow, 'status' | 'metadata'> & { resource_key?: string | null }
+      >(
+        `SELECT w.status, w.metadata, q.resource_key
            FROM remote_agent_workflow_runs w
            LEFT JOIN remote_agent_resource_start_requests q
              ON q.id = w.id AND q.status = 'admitted'
@@ -226,7 +207,6 @@ export async function resumeWorkflowRun(
         )
       )
         return { rowCount: 0 };
-      let acquiredResource: string | undefined;
       const resourceKey = prior.resource_key ?? undefined;
       const status = prior.status;
       if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
@@ -254,7 +234,6 @@ export async function resumeWorkflowRun(
             );
           return { busy };
         }
-        if (!occupancy.holders.some(holder => holder.id === id)) acquiredResource = resourceKey;
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
       const { metadataPatch, events } = resumeTransition({
@@ -283,21 +262,14 @@ export async function resumeWorkflowRun(
       );
 
       if (result.rowCount === 0) return { rowCount: 0 as const };
-      const eventIds: string[] = [];
-      for (const event of events) eventIds.push(await insertWorkflowEvent(query, event));
+      for (const event of events) await insertWorkflowEvent(query, event);
       const selected = await query<WorkflowRunRow>(
         'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
       );
       const row = selected.rows[0];
       if (!row) throw new Error(`Workflow run vanished after update (id: ${id})`);
-      const admitted = normalizeWorkflowRun(row);
-      return {
-        admitted,
-        undo: prepare ? resumePreparationUndo(normalizeWorkflowRun(prior), admitted) : undefined,
-        eventIds,
-        acquiredResource,
-      };
+      return { admitted: normalizeWorkflowRun(row) };
     });
   } catch (error) {
     const err = error as Error;
@@ -332,48 +304,7 @@ export async function resumeWorkflowRun(
     throw new WorkflowNotResumableError(id, currentStatus);
   }
 
-  const { admitted, undo, eventIds, acquiredResource } = updateResult;
-  if (!prepare) return admitted;
-  if (!undo) throw new Error(`Resume admission has no preparation inverse: ${id}`);
-  return prepareResumedRun(admitted, prepare, async () => {
-    await getDatabase().withTransaction(async query => {
-      if (getDatabaseType() === 'sqlite')
-        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-      const selected = await query<WorkflowRunRow>(
-        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-          WHERE id = $1${dialect.rowLock()}`,
-        [id]
-      );
-      const current = selected.rows[0];
-      if (!current) throw new Error(`Resume preparation run disappeared: ${id}`);
-      const restored = restoreResumePreparation(normalizeWorkflowRun(current), undo);
-      if (acquiredResource) await lockResourceSlot(query, acquiredResource);
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-          SET status = $2, started_at = $3, completed_at = $4, last_activity_at = $5, metadata = $6
-          WHERE id = $1 AND status = 'running'
-            AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} = $7`,
-        [
-          id,
-          restored.status,
-          storedResumeTimestamp(restored.started_at),
-          storedResumeTimestamp(restored.completed_at),
-          storedResumeTimestamp(restored.last_activity_at),
-          JSON.stringify(restored.metadata),
-          undo.claim,
-        ]
-      );
-      if (result.rowCount === 0)
-        throw new Error(`Resume preparation lost execution ownership: ${id}`);
-      if (acquiredResource)
-        await removeResourceSlotHolder(query, acquiredResource, { kind: 'run', id });
-      for (const eventId of eventIds)
-        await query(
-          'DELETE FROM remote_agent_workflow_events WHERE id = $1 AND workflow_run_id = $2',
-          [eventId, id]
-        );
-    });
-  });
+  return updateResult.admitted;
 }
 
 export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {

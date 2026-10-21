@@ -78,27 +78,30 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       }
       workflow = input.legacyWorkflow;
     }
-    let context: Pick<WorkflowResumeInput, 'cwd' | 'options'> = {
-      cwd: input.cwd,
-      options: input.options,
-    };
-    const prepare = input.prepareExecution;
-    const prepareExecution = prepare
-      ? async (run: WorkflowResumeInput['run']): Promise<void> => {
-          const prepared = await prepare(run);
-          rejectOptions(prepared.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
-          resolveRunExecutionMode(
-            prepared.options?.execContext,
-            prepared.options?.container,
-            run.metadata
-          );
-          context = prepared;
-        }
-      : undefined;
-    const hydrated = prepareExecution
-      ? await hydrateResumableRun(this.deps, input.run, input.cursor, prepareExecution)
-      : await hydrateResumableRun(this.deps, input.run, input.cursor);
+    const hydrated = await hydrateResumableRun(this.deps, input.run, input.cursor);
     if (hydrated === null) return { accepted: false, reason: 'nothing-to-resume' };
+
+    let context: Pick<WorkflowResumeInput, 'cwd' | 'options'> = input;
+    if (input.prepareExecution) {
+      try {
+        context = await input.prepareExecution(structuredClone(hydrated.preCreatedRun));
+        rejectOptions(context.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
+        resolveRunExecutionMode(
+          context.options?.execContext,
+          context.options?.container,
+          hydrated.preCreatedRun.metadata
+        );
+      } catch (error) {
+        await requireTerminalStatusWrite(
+          this.deps.store.failWorkflowRun(
+            hydrated.preCreatedRun.id,
+            error instanceof Error ? error.message : String(error)
+          ),
+          { workflowRunId: hydrated.preCreatedRun.id, site: 'engine.resume_preparation_failed' }
+        );
+        throw error;
+      }
+    }
 
     const settled = executeWorkflow(
       this.deps,

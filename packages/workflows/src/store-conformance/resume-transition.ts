@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { executionClaim } from '../store';
+import { executionClaim, WorkflowNotResumableError } from '../store';
 import type { WorkflowStoreHarness } from '../store-conformance';
 
 const approval = { nodeId: 'review', message: 'Choose', type: 'approval' as const };
@@ -12,6 +12,58 @@ const schedule = {
 };
 
 export function describeResumeTransitionConformance(getHarness: () => WorkflowStoreHarness): void {
+  test.each([
+    { status: 'failed', error: 'original error' },
+    { status: 'failed', error: '' },
+    { status: 'failed', error: null },
+    { status: 'failed', error: undefined },
+    { status: 'failed', error: 42 },
+    { status: 'paused', error: undefined },
+  ] as const)(
+    'resume from %j has one winner and preserves cleared failure evidence',
+    async ({ status, error }) => {
+      const { store } = getHarness();
+      const run = await store.createWorkflowRun({
+        workflow_name: 'resume',
+        user_message: '',
+        metadata: { keep: true },
+      });
+      await store.claimPendingWorkflowRun(run.id);
+      if (status === 'failed')
+        await store.failWorkflowRun(run.id, typeof error === 'string' ? error : '', {
+          exitReason: 'node_error',
+        });
+      else await store.pauseWorkflowRun(run.id, approval);
+      await store.updateWorkflowRun(run.id, { metadata: { error } });
+      const before = (await store.listWorkflowEvents(run.id)).map(event => event.event_type);
+      const results = await Promise.allSettled(
+        Array.from({ length: 8 }, () => store.resumeWorkflowRun(run.id))
+      );
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      for (const result of results)
+        if (result.status === 'rejected')
+          expect(result.reason).toBeInstanceOf(WorkflowNotResumableError);
+      expect(await store.getWorkflowRun(run.id)).toMatchObject({
+        status: 'running',
+        completed_at: null,
+        metadata: { keep: true },
+      });
+      const metadata = (await store.getWorkflowRun(run.id))?.metadata;
+      expect(metadata).not.toHaveProperty('error');
+      expect(metadata).not.toHaveProperty('stop_reason');
+      // Only the winning resume writes, and a resumed pause is in the feed.
+      expect((await store.listWorkflowEvents(run.id)).map(event => event.event_type)).toEqual([
+        ...before,
+        ...(status === 'failed' ? ['workflow_resumed'] : ['workflow_unpaused']),
+      ]);
+      if (status === 'failed') {
+        const resumed = (await store.listWorkflowEvents(run.id)).find(
+          event => event.event_type === 'workflow_resumed'
+        );
+        expect(resumed?.data).toEqual(typeof error === 'string' && error !== '' ? { error } : {});
+      }
+    }
+  );
   test.each([
     ['failed', false],
     ['failed', true],

@@ -87,7 +87,7 @@ type EventInsertQuery = (sql: string, params?: unknown[]) => Promise<QueryResult
 export async function insertWorkflowEvent(
   query: EventInsertQuery,
   data: WorkflowEventInput
-): Promise<string> {
+): Promise<void> {
   const dialect = getDialect();
   const id = dialect.generateUuid();
   await query(
@@ -102,7 +102,6 @@ export async function insertWorkflowEvent(
       JSON.stringify(data.data ?? {}),
     ]
   );
-  return id;
 }
 
 /**
@@ -153,9 +152,9 @@ function inRunOrder<T>(runId: string, write: () => Promise<T>): Promise<T> {
 
 /** Persist a correctness-critical event and propagate storage errors to the caller. */
 export function persistWorkflowEvent(data: WorkflowEventInput): Promise<void> {
-  return inRunOrder(data.workflow_run_id, async () => {
-    await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
-  });
+  return inRunOrder(data.workflow_run_id, () =>
+    insertWorkflowEvent((sql, params) => pool.query(sql, params), data)
+  );
 }
 
 /**

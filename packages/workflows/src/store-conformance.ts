@@ -1,5 +1,4 @@
 import { describeResumeTransitionConformance } from './store-conformance/resume-transition';
-import { describeResumePreparationConformance } from './store-conformance/resume-preparation';
 export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
@@ -1272,11 +1271,6 @@ export function describeWorkflowStoreConformance(
       expect(storedWait.bodySessionCursorAncestry).toEqual(bodySessionCursorAncestry);
     });
 
-    describeResumePreparationConformance(
-      () => harness,
-      CONFORMANCE_CODEBASE_ID,
-      CONFORMANCE_CONVERSATION_ID
-    );
     test('pending claim has exactly one winner and stamps the checkout', async () => {
       await assertWorkflowClaimRace(store);
     });

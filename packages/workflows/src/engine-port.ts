@@ -57,7 +57,7 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   cursor?: WorkflowResumeCursor;
   options?: WorkflowResumeOptions;
   /**
-   * Runs after committed admission; rejection releases only that admission.
+   * Runs after committed admission; rejection fails the admitted run.
    * Returns the full execution context, replacing the caller's cwd and options.
    * The returned options and isolation context are validated before execution.
    */

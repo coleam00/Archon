@@ -212,7 +212,7 @@ export function runWorkflowEngineContractTests(
         })
       );
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toBe(
+      expect(error instanceof Error ? error.message : String(error)).toBe(
         'Fresh execution requires a pending pre-created run; use resume instead.'
       );
       expect(created).toBe(0);
@@ -230,11 +230,7 @@ export function runWorkflowEngineContractTests(
           executionCodebase = id;
           return null;
         },
-        resumeWorkflowRun: async (_id, _cursor, prepare) => {
-          if (!prepare) throw new Error('Expected preparation');
-          await prepare(resumed);
-          return resumed;
-        },
+        resumeWorkflowRun: async () => resumed,
         getWorkflowRun: async () => ({ ...resumed, status: 'completed' }),
       });
       const engine = makeEngine(
@@ -250,7 +246,7 @@ export function runWorkflowEngineContractTests(
         run: makeRun({ status: 'paused' }),
         options: { codebaseId: 'caller-codebase' },
         prepareExecution: async run => {
-          expect(run).toBe(resumed);
+          expect(run).toEqual(resumed);
           entered.resolve();
           await ready.promise;
           return { cwd: '/prepared', options: { codebaseId: 'prepared-codebase' } };
@@ -267,24 +263,15 @@ export function runWorkflowEngineContractTests(
     });
 
     it.each(['setup', ...RESUME_FORBIDDEN_OPTIONS])(
-      'rejects prepared %s before execution or failure compensation',
+      'fails the admitted run when prepared %s is rejected',
       async field => {
-        let failed = false;
+        let failure: { id: string; error: string } | undefined;
         let executed = false;
-        let setupRejected = false;
         const resumed = makeRun({ status: 'running' });
         const store = resumableStore({
-          resumeWorkflowRun: async (_id, _cursor, prepare) => {
-            try {
-              await prepare?.(resumed);
-            } catch (error) {
-              setupRejected = true;
-              throw error;
-            }
-            return resumed;
-          },
-          failWorkflowRun: async () => {
-            failed = true;
+          resumeWorkflowRun: async () => resumed,
+          failWorkflowRun: async (id, error) => {
+            failure = { id, error };
             return { failed: true };
           },
         });
@@ -307,11 +294,46 @@ export function runWorkflowEngineContractTests(
           })
         );
         expect(error).toBeInstanceOf(Error);
-        expect(setupRejected).toBe(true);
         expect(executed).toBe(false);
-        expect(failed).toBe(false);
+        expect(failure).toEqual({
+          id: resumed.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     );
+
+    it('surfaces a failed terminal write after preparation rejection without executing', async () => {
+      const persistError = new Error('failure write refused');
+      let failureWrites = 0;
+      let executed = false;
+      const store = resumableStore({
+        failWorkflowRun: async () => {
+          failureWrites++;
+          throw persistError;
+        },
+      });
+      const engine = makeEngine(
+        makeDeps(providers, store, {
+          loadConfig: async () => {
+            executed = true;
+            return defaultConfig();
+          },
+        })
+      );
+      const error = await captureRejection(
+        engine.resume({
+          ...resumeCallInput(),
+          run: makeRun({ status: 'paused' }),
+          prepareExecution: async () => {
+            throw new Error('setup rejected');
+          },
+        })
+      );
+      expect(error).toBeInstanceOf(TerminalStatusWriteError);
+      expect(error).toMatchObject({ cause: persistError });
+      expect(failureWrites).toBe(1);
+      expect(executed).toBe(false);
+    });
 
     it('returns admission before execution settles', async () => {
       const config = Promise.withResolvers<WorkflowConfig>();

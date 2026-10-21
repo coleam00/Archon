@@ -60,32 +60,6 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 describe('hydrateResumableRun', () => {
-  it('forwards preparation only when there is resumable state', async () => {
-    const prepare = mock(async (_run: WorkflowRun) => {});
-    const candidate = makeRun({ status: 'paused' });
-    const snapshot = {
-      completedNodeOutputs: new Map([['first', { output: 'done' }]]),
-      failedNodes: new Map(),
-      fanOutSnapshots: new Map(),
-      unresolvedNodeStarts: new Set<string>(),
-      budget: { workUnits: 0, spendUsd: 0 },
-      costUsd: 0,
-    };
-    const claim = mock<ResumeStore['resumeWorkflowRun']>(async () => candidate);
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => snapshot),
-      resumeWorkflowRun: claim,
-    });
-    const cursor = { kind: 'answered' as const, nodeId: 'gate', pauseId: 'pause' };
-    await hydrateResumableRun(makeDeps(store), candidate, cursor, prepare);
-    expect(claim).toHaveBeenCalledWith(candidate.id, cursor, prepare);
-    claim.mockClear();
-    snapshot.completedNodeOutputs.clear();
-    expect(await hydrateResumableRun(makeDeps(store), candidate, cursor, prepare)).toBeNull();
-    expect(claim).not.toHaveBeenCalled();
-    expect(prepare).not.toHaveBeenCalled();
-  });
-
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);

@@ -120,8 +120,7 @@ export async function inspectResumableRun(
 export async function hydrateResumableRun(
   deps: ResumeStoreDeps,
   candidate: WorkflowRun,
-  cursor?: WorkflowResumeCursor,
-  prepare?: Parameters<ResumeStoreDeps['store']['resumeWorkflowRun']>[2]
+  cursor?: WorkflowResumeCursor
 ): Promise<{
   preCreatedRun: WorkflowRun;
   priorCompletedNodes: Map<string, PersistedNodeOutput>;
@@ -145,11 +144,9 @@ export async function hydrateResumableRun(
     row => completedNodeIds.has(row.node_id)
   );
   const preCreatedRun =
-    prepare !== undefined
-      ? await deps.store.resumeWorkflowRun(candidate.id, cursor, prepare)
-      : cursor === undefined
-        ? await deps.store.resumeWorkflowRun(candidate.id)
-        : await deps.store.resumeWorkflowRun(candidate.id, cursor);
+    cursor === undefined
+      ? await deps.store.resumeWorkflowRun(candidate.id)
+      : await deps.store.resumeWorkflowRun(candidate.id, cursor);
   getLog().info(
     { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
     'workflow.dag_resuming'

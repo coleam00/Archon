@@ -409,8 +409,9 @@ function submitRun(
  * BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
  * can't orphan a privileged container+volume. A PAUSED run keeps its (already
  * suspended, by the engine) container + volume for resume — destroying it would
- * discard the overlay the resume needs. Every OTHER outcome (completed / failed /
- * cancelled, or a pre-result throw) is terminal for this process → destroy. The
+ * discard the overlay the resume needs. Resumes that throw before returning a result
+ * also retain their overlay for retry, including prepared-context validation failures.
+ * Other outcomes (completed / failed / cancelled) destroy the container. The
  * write-back apply already ran inside the engine before completion, so a
  * completed run's live-root changes are safe before this teardown removes the
  * volume. Returns a destroy failure for the caller to judge.
@@ -442,7 +443,8 @@ async function settleRun(
       container.envId
     );
   }
-  execution.containerPreserved = !deregisterTermination || runPaused || unresolvedWriteback;
+  execution.containerPreserved =
+    (defersContainerResume(launch) && result === undefined) || runPaused || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
   // The signal handlers stay registered through it, so a Ctrl-C here still destroys

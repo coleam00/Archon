@@ -245,7 +245,7 @@ test.each([undefined, 'approved', 'rejected'] as const)(
 );
 
 test.each(['restart', 'credentials'] as const)(
-  '%s rejection preserves pause, decisions and overlay and permits retry',
+  '%s rejection fails the run, preserves decisions and overlay and permits retry',
   async failure => {
     await fixture(async f => {
       const candidate = await f.paused('approved');
@@ -261,8 +261,16 @@ test.each(['restart', 'credentials'] as const)(
       await expect(f.command(candidate)).rejects.toThrow(
         `${failure === 'restart' ? 'restart' : 'credentials'} refused`
       );
-      expect(await f.store.getWorkflowRun(candidate.id)).toEqual(candidate);
-      expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(beforeEvents);
+      const failed = await f.store.getWorkflowRun(candidate.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.metadata).not.toHaveProperty('pause_cause');
+      expect(failed?.metadata.pending_writeback).toEqual(candidate.metadata.pending_writeback);
+      expect(failed?.metadata.approval).toEqual(candidate.metadata.approval);
+      expect(await f.store.listWorkflowEvents(candidate.id)).toEqual([
+        ...beforeEvents,
+        expect.objectContaining({ event_type: 'workflow_unpaused' }),
+        expect.objectContaining({ event_type: 'workflow_failed' }),
+      ]);
       expect(f.overlay.contents).toBe('unapplied edits');
       expect(f.destroy).not.toHaveBeenCalled();
       expect(f.suspend).not.toHaveBeenCalled();
@@ -270,7 +278,8 @@ test.each(['restart', 'credentials'] as const)(
       expect(f.accepted).not.toHaveBeenCalled();
       expect(f.execute).not.toHaveBeenCalled();
       f.auth.mockResolvedValue();
-      await f.command(candidate);
+      if (!failed) throw new Error('Missing failed run');
+      await f.command(failed);
       expect(f.apply).toHaveBeenCalledTimes(1);
       expect((await f.store.getWorkflowRun(candidate.id))?.metadata.writeback_outcome).toBe(
         'applied'
@@ -279,95 +288,145 @@ test.each(['restart', 'credentials'] as const)(
   }
 );
 
-for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lease'] as const) {
-  for (const successor of stage === 'admission' ? [false] : [false, true]) {
-    test.each(['SIGINT', 'SIGTERM'] as const)(
-      `resume interruption during ${stage} preserves ${successor ? 'successor' : 'pause'} on %s`,
-      async signal => {
-        await fixture(async f => {
-          const candidate = await f.paused('approved');
-          let events = await f.store.listWorkflowEvents(candidate.id);
-          const baseline = process.listeners(signal);
-          const entered = Promise.withResolvers<void>();
-          const finish = Promise.withResolvers<void>();
-          const block = async () => {
-            entered.resolve();
-            await finish.promise;
-          };
-          if (stage === 'admission') {
-            const resume = f.host.engine.resume.bind(f.host.engine);
-            watch(spyOn(f.host.engine, 'resume')).mockImplementationOnce(async input => {
-              await block();
-              return resume(input);
-            });
-          } else if (stage === 'restart') {
-            const restart = f.resume.getMockImplementation()!;
-            f.resume.mockImplementationOnce(async id => {
-              await block();
-              return restart(id);
-            });
-          } else if (stage === 'credentials') {
-            f.auth.mockImplementation(async (...args) => {
-              if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
-                await block();
-            });
-          } else if (stage === 'conversation') {
-            watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
-          } else watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(block);
-          const pending = f.command(candidate).catch(error => error);
-          let expected = candidate;
-          try {
-            await entered.promise;
-            if (successor) {
-              await f.store.pauseWorkflowRun(candidate.id, {
-                type: 'approval',
-                nodeId: 'successor',
-                message: 'Review',
-                pauseId: 'new-pause',
-              });
-              expected = await f.store.resumeWorkflowRun(candidate.id);
-              events = await f.store.listWorkflowEvents(candidate.id);
-            }
-            const handlers = process
-              .listeners(signal)
-              .filter(handler => !baseline.includes(handler));
-            expect(handlers).toHaveLength(1);
-            handlers[0]?.(signal);
-          } finally {
-            finish.resolve();
-          }
-          const error = await pending;
-          expect(error).toBeInstanceOf(Error);
-          const interruption = { message: `Resume preparation interrupted (${signal})` };
-          expect(error).toMatchObject({
-            cause: successor ? { cause: interruption } : interruption,
-          });
-          if (successor) expect(error.message).toContain('lost execution ownership');
-          expect(f.resume).toHaveBeenCalledTimes(stage === 'admission' ? 0 : 1);
-          expect(await f.store.getWorkflowRun(candidate.id)).toEqual(expected);
-          expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
-          expect(f.overlay.contents).toBe('unapplied edits');
-          expect(f.destroy).not.toHaveBeenCalled();
-          expect(f.suspend).not.toHaveBeenCalled();
-          expect(f.apply).not.toHaveBeenCalled();
-          expect(f.accepted).not.toHaveBeenCalled();
-          expect(f.execute).not.toHaveBeenCalled();
-          expect(process.listeners(signal)).toEqual(baseline);
-          if (!successor) {
-            f.auth.mockResolvedValue();
-            await f.command(candidate);
-            expect(f.apply).toHaveBeenCalledTimes(1);
-          }
+test.each(['restart', 'credentials'] as const)(
+  '%s setup failure allows failed nodes to execute on ordinary resume',
+  async failure => {
+    await fixture(async f => {
+      const candidate = await f.paused();
+      await f.store.persistWorkflowEvent({
+        workflow_run_id: candidate.id,
+        event_type: 'node_failed',
+        step_name: 'second',
+        data: { error: 'prior node failure' },
+      });
+      if (failure === 'restart') f.resume.mockRejectedValueOnce(new Error('setup refused'));
+      else {
+        f.auth.mockImplementation(async (...args) => {
+          if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
+            throw new Error('setup refused');
         });
       }
-    );
+      await expect(f.command(candidate)).rejects.toThrow('setup refused');
+      const failed = await f.store.getWorkflowRun(candidate.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.metadata).not.toHaveProperty('pause_cause');
+      expect(f.execute).not.toHaveBeenCalled();
+      f.auth.mockResolvedValue();
+      if (!failed) throw new Error('Missing failed run');
+      await f.command(failed);
+      expect(f.execute).toHaveBeenCalledTimes(1);
+      expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('completed');
+      expect(
+        (await f.store.listWorkflowEvents(candidate.id)).filter(
+          event => event.event_type === 'node_completed' && event.step_name === 'second'
+        )
+      ).toHaveLength(1);
+    });
   }
+);
+
+for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lease'] as const) {
+  test.each(['SIGINT', 'SIGTERM'] as const)(
+    `resume interruption during ${stage} fails the admitted run on %s`,
+    async signal => {
+      await fixture(async f => {
+        const candidate = await f.paused('approved');
+        const baseline = process.listeners(signal);
+        const entered = Promise.withResolvers<void>();
+        const finish = Promise.withResolvers<void>();
+        const block = async () => {
+          entered.resolve();
+          await finish.promise;
+        };
+        if (stage === 'admission') {
+          const resume = f.host.engine.resume.bind(f.host.engine);
+          watch(spyOn(f.host.engine, 'resume')).mockImplementationOnce(async input => {
+            await block();
+            return resume(input);
+          });
+        } else if (stage === 'restart') {
+          const restart = f.resume.getMockImplementation()!;
+          f.resume.mockImplementationOnce(async id => {
+            await block();
+            return restart(id);
+          });
+        } else if (stage === 'credentials') {
+          f.auth.mockImplementation(async (...args) => {
+            if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
+              await block();
+          });
+        } else if (stage === 'conversation') {
+          watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
+        } else watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(block);
+        const pending = f.command(candidate).catch(error => error);
+        try {
+          await entered.promise;
+          const handlers = process.listeners(signal).filter(handler => !baseline.includes(handler));
+          expect(handlers).toHaveLength(1);
+          handlers[0]?.(signal);
+        } finally {
+          finish.resolve();
+        }
+        const error = await pending;
+        expect(error).toBeInstanceOf(Error);
+        const interruption = { message: `Resume preparation interrupted (${signal})` };
+        expect(error).toMatchObject({ cause: interruption });
+        expect(f.resume).toHaveBeenCalledTimes(stage === 'admission' ? 0 : 1);
+        const failed = await f.store.getWorkflowRun(candidate.id);
+        expect(failed?.status).toBe('failed');
+        expect((await f.store.listWorkflowEvents(candidate.id)).at(-1)?.event_type).toBe(
+          'workflow_failed'
+        );
+        expect(f.overlay.contents).toBe('unapplied edits');
+        expect(f.destroy).not.toHaveBeenCalled();
+        expect(f.suspend).not.toHaveBeenCalled();
+        expect(f.apply).not.toHaveBeenCalled();
+        expect(f.accepted).not.toHaveBeenCalled();
+        expect(f.execute).not.toHaveBeenCalled();
+        expect(process.listeners(signal)).toEqual(baseline);
+        f.auth.mockResolvedValue();
+        if (!failed) throw new Error('Missing failed run');
+        await f.command(failed);
+        expect(f.apply).toHaveBeenCalledTimes(1);
+      });
+    }
+  );
 }
 
-test('invalid prepared options undo admission before execution', async () => {
+test('prepared context rejection retains the resumed overlay for retry', async () => {
   await fixture(async f => {
     const candidate = await f.paused();
-    const events = await f.store.listWorkflowEvents(candidate.id);
+    const resume = f.host.engine.resume.bind(f.host.engine);
+    watch(spyOn(f.host.engine, 'resume')).mockImplementationOnce(async input => {
+      const prepare = input.prepareExecution;
+      if (!prepare) throw new Error('Expected deferred preparation');
+      return resume({
+        ...input,
+        prepareExecution: async run => {
+          const prepared = await prepare(run);
+          return { ...prepared, options: { ...prepared.options, container: undefined } };
+        },
+      });
+    });
+    await expect(f.command(candidate)).rejects.toThrow(
+      'Container execution requires a container backend context'
+    );
+    expect(f.resume).toHaveBeenCalledTimes(1);
+    expect(f.destroy).not.toHaveBeenCalled();
+    expect(f.suspend).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+    const failed = await f.store.getWorkflowRun(candidate.id);
+    expect(failed?.status).toBe('failed');
+    if (!failed) throw new Error('Missing failed run');
+    await f.command(failed);
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('completed');
+  });
+});
+
+test('invalid prepared options fail the admitted run before execution', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused();
     const options: WorkflowResumeOptions = {};
     Reflect.set(options, 'preCreatedRun', candidate);
     await expect(
@@ -385,8 +444,10 @@ test('invalid prepared options undo admission before execution', async () => {
         },
       })
     ).rejects.toThrow("Cannot supply 'preCreatedRun'");
-    expect(await f.store.getWorkflowRun(candidate.id)).toEqual(candidate);
-    expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+    expect((await f.store.listWorkflowEvents(candidate.id)).at(-1)?.event_type).toBe(
+      'workflow_failed'
+    );
     expect(f.execute).not.toHaveBeenCalled();
   });
 });
@@ -396,7 +457,6 @@ test.each(['execContext', 'container', 'both'] as const)(
   async field => {
     await fixture(async f => {
       const candidate = await f.paused(field === 'both' ? 'approved' : undefined);
-      const events = await f.store.listWorkflowEvents(candidate.id);
       const container = {
         envId: f.envId,
         writeBack: 'auto' as const,
@@ -461,8 +521,10 @@ test.each(['execContext', 'container', 'both'] as const)(
             ? 'Container execution requires a container backend context'
             : 'Container backend requires a container execution context'
         );
-        expect(await f.store.getWorkflowRun(candidate.id)).toEqual(candidate);
-        expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
+        expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+        expect((await f.store.listWorkflowEvents(candidate.id)).at(-1)?.event_type).toBe(
+          'workflow_failed'
+        );
         expect(f.execute).not.toHaveBeenCalled();
         expect(f.apply).not.toHaveBeenCalled();
       }

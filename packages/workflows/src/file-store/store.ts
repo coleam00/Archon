@@ -1,4 +1,3 @@
-import { prepareResumedRun, resumePreparationUndo } from '../resume-preparation';
 import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
 import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
 import {
@@ -207,35 +206,19 @@ export async function createFileWorkflowStore(
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
-    resumeWorkflowRun: async (id, cursor, prepare) => {
+    resumeWorkflowRun: async (id, cursor) => {
       // Repeated waiting refusals must also commit restored historical admission membership.
       const outcome = await write([id], async (view, admission) => {
         const run = view.resumableRun(id, cursor);
-        const { blocker, acquired } = await admission.resume(run);
-        if (!blocker) {
-          const beforeIds = new Set((await view.listWorkflowEvents(id)).map(event => event.id));
-          const admitted = await view.resumeWorkflowRun(id, cursor);
-          return {
-            admitted,
-            undo: resumePreparationUndo(run, admitted),
-            eventIds: (await view.listWorkflowEvents(id))
-              .filter(event => !beforeIds.has(event.id))
-              .map(event => event.id),
-            acquired,
-          };
-        }
+        const blocker = await admission.resume(run);
+        if (!blocker) return await view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
         if (busy.refusal !== 'waiting') throw busy;
         view.recordCapacityWait(id);
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;
-      return prepareResumedRun(outcome.admitted, prepare, () =>
-        write([id], async (view, admission) => {
-          await view.undoResumePreparation(id, outcome.undo, outcome.eventIds);
-          if (outcome.acquired) await admission.release(id);
-        })
-      );
+      return outcome;
     },
     releasePausedRunSlot: (id, cursor) =>
       write([id], async (view, admission) => {

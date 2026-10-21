@@ -153,41 +153,6 @@ describe('workflow run resume', () => {
   });
 
   describe('resumeWorkflowRun', () => {
-    test('restores PostgreSQL timestamps as ISO strings after preparation fails', async () => {
-      const before = {
-        ...mockWorkflowRun,
-        status: 'paused' as const,
-        completed_at: new Date('2026-10-20T01:02:03.456Z'),
-      };
-      const admitted = {
-        ...before,
-        status: 'running' as const,
-        completed_at: null,
-        metadata: { execution_claim: 'resume-claim' },
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([before]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([admitted]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([admitted]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      const failure = new Error('container restart failed');
-      await expect(
-        resumeWorkflowRun(before.id, undefined, async () => {
-          throw failure;
-        })
-      ).rejects.toBe(failure);
-      expect(mockQuery.mock.calls[5]?.[1]).toEqual([
-        before.id,
-        'paused',
-        before.started_at.toISOString(),
-        before.completed_at.toISOString(),
-        before.last_activity_at?.toISOString(),
-        JSON.stringify(before.metadata),
-        'resume-claim',
-      ]);
-    });
-
     test('updates run to running, clears completed_at, and returns updated row', async () => {
       const updatedRun = { ...mockWorkflowRun, status: 'running' as const, completed_at: null };
       // Pre-CAS read of the metadata about to be cleared (no prior error here)
@@ -203,7 +168,7 @@ describe('workflow run resume', () => {
       expect(result.completed_at).toBeNull();
       // First call: the row-pinning read of the error the CAS is about to clear.
       const [priorQuery, priorParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(priorQuery).toContain('SELECT w.*, CAST(w.origin AS TEXT) AS origin, q.resource_key');
+      expect(priorQuery).toContain('SELECT w.status, w.metadata, q.resource_key');
       // Postgres row lock — without it the value read is not guaranteed to be the
       // value the CAS clears, so the preserved error could be stale (#2348).
       expect(priorQuery).toContain('FOR UPDATE');

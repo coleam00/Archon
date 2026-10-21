@@ -1,5 +1,4 @@
 import { resumeRun } from './run-resume';
-import { restoreResumePreparation, type ResumePreparationUndo } from '../resume-preparation';
 import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
@@ -70,19 +69,12 @@ export type TransactionView = Omit<
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
-  | 'resumeWorkflowRun'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
   resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
-  resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
-  undoResumePreparation(
-    id: string,
-    undo: ResumePreparationUndo,
-    eventIds: readonly string[]
-  ): Promise<void>;
   recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
@@ -437,15 +429,6 @@ export function createTransactionView(
     },
     clearCapacityWait: id => {
       Reflect.deleteProperty(row(id).metadata, CAPACITY_WAIT_METADATA_KEY);
-    },
-    undoResumePreparation: async (id, undo, eventIds) => {
-      const run = row(id);
-      Object.assign(run, restoreResumePreparation(run, undo));
-      const retract = new Set(eventIds);
-      for (let index = events.length - 1; index >= 0; index--) {
-        const event = events[index];
-        if (event && retract.has(event.id)) events.splice(index, 1);
-      }
     },
     resumeWorkflowRun: async (id, cursor) => resumeRun(resumableRun(id, cursor), record),
     setToolCallAttention: async (id, streamId, calls) => {
