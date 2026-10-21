@@ -239,6 +239,36 @@ test.each(['failure', 'pause'] as const)(
   30000
 );
 
+test.each(['round', 'failure'] as const)(
+  'a fresh superseding %s run releases its own checkout, including after resume',
+  async workflow => {
+    const f = fixture();
+    expect((await f.cli(['workflow', 'run', 'failure'])).code).toBe(1);
+    const predecessor = f.runs()[0]!;
+    const result = await f.cli(['workflow', 'run', workflow, '--supersedes', predecessor.id]);
+    expect(result.code).toBe(workflow === 'failure' ? 1 : 0);
+    const replacement = f.runs().at(-1)!;
+    expect(replacement.working_path).not.toBe(predecessor.working_path);
+    expect(JSON.parse(replacement.metadata).continuation.mode).toBe('supersede');
+    const proof = JSON.parse(replacement.metadata).owned_worktree;
+    expect(proof).toBeDefined();
+    if (workflow === 'failure') {
+      expect(existsSync(replacement.working_path)).toBe(true);
+      const resumed = await f.cli(['workflow', 'resume', replacement.id], { LIFETIME_ALLOW: '1' });
+      expect(resumed.code).toBe(0);
+      expect(JSON.parse(f.runs().at(-1)!.metadata).owned_worktree).toEqual(proof);
+    }
+    expect(f.runs().at(-1)?.status).toBe('completed');
+    expect(existsSync(replacement.working_path)).toBe(false);
+    const env = f.environments().find(row => row.working_path === replacement.working_path)!;
+    expect(env.status).toBe('destroyed');
+    expect(git(f.repo, 'rev-parse', env.branch_name)).toBe(git(f.repo, 'rev-parse', 'dev'));
+    expect(existsSync(predecessor.working_path)).toBe(true);
+    expect(f.runs()[0]?.status).toBe('failed');
+  },
+  30000
+);
+
 test.each(['dirty', 'unpushed'] as const)(
   '%s generated completion retains and reports its listable checkout once',
   async mode => {

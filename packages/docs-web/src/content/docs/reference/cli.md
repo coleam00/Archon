@@ -688,7 +688,7 @@ Otherwise the disposition is
 |---|---|
 | `resumable` | The run failed and can resume; `workflow abandon` attempts release, retaining owner warnings for inspection, or the stale sweep can release eligible checkouts |
 | `cancelled` | The run was cancelled; `workflow abandon` attempts release, retaining checkouts with owner warnings for inspection and retry |
-| `workspace_retained` | The originating platform retains workspaces, or the registration does not establish an original generated CLI branch (named, adopted or historically ambiguous checkout) |
+| `workspace_retained` | The originating platform retains workspaces, or the registration does not establish an original generated run branch (named, adopted or historically ambiguous checkout) |
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
@@ -1572,8 +1572,8 @@ any other as `<n> unpushed commit(s); remove it explicitly with archon complete 
 The scheduled cleanup keeps an environment whose checkout is missing the same way while
 the branch Archon created for it holds such a commit.
 
-A completed CLI run removes only the checkout it created on its generated run branch,
-when clean and every HEAD and branch commit is reachable from remote refs. Publication
+A completed run from a registered platform without workspace retention removes only the
+checkout it created on its generated run branch, when clean and every HEAD and branch commit is reachable from remote refs. Publication
 alone does not retain it. Removal keeps the local branch so the run can still be adopted.
 An explicit `--branch` checkout survives run completion, including a newly created branch
 or a name that resembles a generated branch. Merged/closed cleanup removes item checkouts
@@ -1581,7 +1581,9 @@ and their local branches, retaining remote refs.
 
 Adopted checkouts and historical detached registrations whose generated ownership cannot
 be established remain available in `isolation list`. Inspect their work and use explicit
-cleanup when it is finished. Same-run resume preserves the original creation provenance.
+cleanup when it is finished. A fresh `--supersedes` run releases its own eligible checkout;
+its predecessor link does not imply adoption. Same-run resume preserves the original
+creation provenance.
 The run's `terminal_record.worktree_disposition` records the completion decision (see
 [`workflow get`](#workflow-get)).
 

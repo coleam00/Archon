@@ -733,6 +733,68 @@ describe('completed run worktree release', () => {
     }
   );
 
+  test.each(['web', 'github', 'gitea', 'gitlab', 'discord'])(
+    '%s generated completion follows its registered retention policy',
+    async platform => {
+      setPlatformPolicies([{ id: platform, workspaceRetention: 'age-based' }]);
+      await db.query(
+        'UPDATE remote_agent_isolation_environments SET created_by_platform = $1 WHERE id = $2',
+        [platform, env.id]
+      );
+      expect(await assess()).toEqual({ disposition: 'release' });
+      await releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
+      expect(existsSync(env.working_path)).toBe(false);
+      expect(await status()).toBe('destroyed');
+      expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+    }
+  );
+
+  test.each(['telegram', 'unregistered'])(
+    '%s attribution keeps a generated checkout',
+    async platform => {
+      setPlatformPolicies([{ id: 'telegram', workspaceRetention: 'retain' }]);
+      await db.query(
+        'UPDATE remote_agent_isolation_environments SET created_by_platform = $1 WHERE id = $2',
+        [platform, env.id]
+      );
+      expect(await assess()).toMatchObject({
+        disposition: 'retained',
+        reason: platform === 'telegram' ? 'workspace_retained' : 'check_failed',
+      });
+      await expect(
+        releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+      ).rejects.toThrow();
+      expect(existsSync(env.working_path)).toBe(true);
+      expect(await status()).toBe('active');
+    }
+  );
+
+  test.each(['adopt', 'supersede', undefined] as const)(
+    'a predecessor with mode %s distinguishes adoption from a fresh checkout',
+    async mode => {
+      run.adopted_from_run_id = 'predecessor';
+      run.metadata = { ...run.metadata, continuation: { mode } };
+      const completed = { ...run, status: 'completed' as const };
+      if (mode === 'supersede') {
+        expect(await assess()).toEqual({ disposition: 'release' });
+        await releaseCompletedRunWorktree(completed, store, readers());
+        expect(existsSync(env.working_path)).toBe(false);
+        expect(await status()).toBe('destroyed');
+        expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+      } else {
+        expect(await assess()).toMatchObject({
+          disposition: 'retained',
+          reason: 'workspace_retained',
+        });
+        await expect(releaseCompletedRunWorktree(completed, store, readers())).rejects.toThrow(
+          'workspace_retained'
+        );
+        expect(existsSync(env.working_path)).toBe(true);
+        expect(await status()).toBe('active');
+      }
+    }
+  );
+
   test('a commit on no remote keeps the checkout', async () => {
     await commitInWorktree();
     expect(await assess()).toEqual({
@@ -786,7 +848,7 @@ describe('completed run worktree release', () => {
     'adopted',
     'unknown-adoption',
     'existing-branch',
-    'non-cli',
+    'unattributed',
     'non-task',
     'continuation',
   ] as const)('%s registration cannot authorize generated completion cleanup', async kind => {
@@ -805,7 +867,7 @@ describe('completed run worktree release', () => {
     if (kind === 'adopted') env.metadata.adopted = true;
     if (kind === 'unknown-adoption') delete env.metadata.adopted;
     if (kind === 'existing-branch') env.metadata.worktree_branch_created = false;
-    if (kind === 'non-cli') env.created_by_platform = null;
+    if (kind === 'unattributed') env.created_by_platform = null;
     if (kind === 'non-task') env.workflow_type = 'review';
     if (kind === 'continuation') run.adopted_from_run_id = 'prior-run';
     const observed = { ...store, getById: async () => env };

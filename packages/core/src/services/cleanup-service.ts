@@ -1,10 +1,7 @@
-/**
- * Cleanup service for isolation environments
- * Handles removal triggered by events, schedule, or commands
- */
 import { lstat } from 'node:fs/promises';
 import {
   readOwnedWorktree,
+  readContinuationMode,
   type OwnedWorktree,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -1389,11 +1386,11 @@ async function verifyCompletedOwnership(
   // Slug truncation has fixed points; named-branch identity needs its own exclusion.
   if (
     retainsWorkspace(env.created_by_platform) ||
-    env.created_by_platform !== 'cli' ||
+    env.created_by_platform === null ||
     env.workflow_type !== 'task' ||
     !readWorktreeBranchCreated(env.metadata) ||
     env.metadata.adopted !== false ||
-    run.adopted_from_run_id !== null ||
+    (run.adopted_from_run_id !== null && readContinuationMode(run.metadata) !== 'supersede') ||
     env.workflow_id === env.branch_name ||
     env.branch_name !== generatedTaskBranchName(env.workflow_id)
   ) {
