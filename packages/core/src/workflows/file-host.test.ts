@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { drainResourceStartHost, ResourceStartDrainError } from './resource-start-host';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { afterEach, expect, expectTypeOf, spyOn, test } from 'bun:test';
 import type { z } from 'zod';
@@ -667,5 +669,83 @@ for (const branchFirst of [false, true]) {
     expect(await drain()).toEqual([
       { status: 'admitted', requestId: queued[1]!.run.id, runId: queued[1]!.run.id },
     ]);
+  });
+}
+
+for (const corruption of ['launch', 'json', 'missing'] as const) {
+  test(`host drain contains queued ${corruption} corruption within its resource`, async () => {
+    const root = roots(await mkdtemp(join(tmpdir(), 'host-drain-')));
+    const host = await createFileWorkflowHost(root);
+    const store = host.deps.store;
+    const launch = (resource: string): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        workflow_name: 'test',
+        codebase_id: 'project',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: `/${resource}`, conversationId: 'test', isolation: { kind: 'in-place' } },
+    });
+    const queued: string[] = [];
+    const holders: string[] = [];
+    const queueResource = async (resource: string, count: number): Promise<void> => {
+      for (let index = 0; index < count; index++) {
+        const prepared = launch(resource);
+        const decision = await store.admitResourceStart({
+          resource,
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue',
+          launch: prepared,
+        });
+        if (index === 0) {
+          holders.push(prepared.run.id);
+        } else {
+          expect(decision.status).toBe('queued');
+          queued.push(prepared.run.id);
+        }
+      }
+    };
+    await queueResource('a', 3);
+    await queueResource('z', 2);
+    for (const id of holders) {
+      await store.claimPendingWorkflowRun(id);
+      await store.completeWorkflowRun(id, { duration_ms: 1 });
+    }
+    const damagedId = queued[0]!;
+    const path = join(
+      root,
+      'resource/requests',
+      `${createHash('sha256').update(damagedId).digest('hex')}.json`
+    );
+    if (corruption === 'missing') await fs.unlink(path);
+    else if (corruption === 'json') await writeFile(path, '{');
+    else {
+      const row = JSON.parse(await readFile(path, 'utf8'));
+      row.launch = {};
+      await writeFile(path, JSON.stringify(row));
+    }
+    const before = corruption === 'missing' ? undefined : await readFile(path, 'utf8');
+    const started: string[] = [];
+    const error = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    }).catch((caught: unknown) => caught);
+    expect(started).toEqual([queued[2]!]);
+    expect(error).toBeInstanceOf(ResourceStartDrainError);
+    if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+    expect(error.failures).toMatchObject([{ resource: 'a', error: expect.any(Error) }]);
+    const failure = error.failures[0]?.error;
+    if (!(failure instanceof Error)) throw new Error('expected original drain error');
+    expect(failure.message).toContain("Resource 'a' drain failed");
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect(await store.getWorkflowRun(queued[1]!)).toBeNull();
+    if (before !== undefined) expect(await readFile(path, 'utf8')).toBe(before);
+    else await expect(access(path)).rejects.toThrow();
   });
 }

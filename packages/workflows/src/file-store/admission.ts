@@ -256,7 +256,11 @@ export function createAdmissionTransaction(
         };
       if (!holdsWorkflowPath(run)) return null;
       const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
-      return { kind: 'foreign' as const, run: { ...run, launch }, unknown: false };
+      return {
+        kind: 'foreign' as const,
+        run: { ...run, launch },
+        unknown: knownForeign && !launch && !run.working_path,
+      };
     } catch (error) {
       if (local) throw error;
       return corruptForeignOccupancy(run, knownForeign, error);

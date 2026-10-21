@@ -224,8 +224,15 @@ export async function resourceStartOccupancy(
     working_path: string | null;
     launch: unknown;
     resource_key: string | null;
+    foreign_membership: boolean | number;
   }>(
-    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key FROM (
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key,
+       EXISTS (
+         SELECT 1 FROM remote_agent_resource_slot_holders h
+          WHERE h.holder_kind = 'run' AND h.holder_id = CAST(w.id AS TEXT)
+            AND h.resource_key <> $1
+       ) AS foreign_membership
+       FROM (
          SELECT *, ${activeWorkflowPathHolderCondition()} AS holds_path FROM remote_agent_workflow_runs
        ) w
        LEFT JOIN remote_agent_resource_start_requests q ON q.id = w.id AND q.status = 'admitted'
@@ -258,7 +265,13 @@ export async function resourceStartOccupancy(
     .filter(row => row.resource_key !== resource)
     .map(row => {
       const run = { id: String(row.id), working_path: row.working_path };
-      if (row.launch === null) return run;
+      if (row.launch === null) {
+        if (row.foreign_membership && !row.working_path) {
+          getLog().error({ runId: run.id }, 'db.foreign_launch_missing_checkout_unknown');
+          unknownForeignCheckoutHolder ??= run.id;
+        }
+        return run;
+      }
       try {
         return { ...run, launch: parseLaunch(row.launch) };
       } catch {

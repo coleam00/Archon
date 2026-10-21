@@ -1250,7 +1250,7 @@ for (const corruptLaunch of ['{', '{}']) {
   });
 }
 
-for (const corruptLaunch of ['{', '{}']) {
+for (const corruptLaunch of ['{', '{}', 'missing']) {
   test(`unknown foreign checkout only blocks potentially conflicting starts: ${corruptLaunch}`, async () => {
     const foreign = launch(crypto.randomUUID());
     const local = launch(crypto.randomUUID());
@@ -1269,10 +1269,16 @@ for (const corruptLaunch of ['{', '{}']) {
     await admitResourceStart(input(foreign, 'foreign'));
     for (const prepared of [local, guarded, readOnly, branchless])
       await admitResourceStart(input(prepared));
-    await getDatabase().query(
-      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
-      [foreign.run.id, corruptLaunch]
-    );
+    if (corruptLaunch === 'missing') {
+      await getDatabase().query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+        foreign.run.id,
+      ]);
+    } else {
+      await getDatabase().query(
+        'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+        [foreign.run.id, corruptLaunch]
+      );
+    }
     for (const template of [readOnly, branchless]) {
       const independent = { ...template, run: { ...template.run, id: crypto.randomUUID() } };
       expect(await admitResourceStart(input(independent, independent.run.id))).toMatchObject({

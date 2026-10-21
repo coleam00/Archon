@@ -301,6 +301,7 @@ export interface ResourceStartHost extends WorkflowHost {
 /** One failed start from a drain. `receiptId` is unset for queued work of unknown origin. */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
+  resource?: string;
   error: unknown;
 }
 
@@ -359,18 +360,29 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
-  for (const resource of new Set(queued.map(request => request.resource))) {
-    for (const decision of await host.deps.store.drainResourceStarts({
-      hostId: host.hostId,
-      resource,
-    })) {
+  const drain = async (resource: string): Promise<void> => {
+    let decisions: ResourceStartDisposition[];
+    try {
+      decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
+    } catch (error) {
+      failures.push({
+        resource,
+        error: new Error(
+          `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        ),
+      });
+      return;
+    }
+    for (const decision of decisions) {
       if (decision.status === 'admitted') {
         // A queued request names its receipt in the run metadata written at preparation.
         const request = queued.find(item => item.id === decision.requestId);
         await start(decision.requestId, receiptIdOfLaunch(request?.launch));
       }
     }
-  }
+  };
+  for (const resource of new Set(queued.map(request => request.resource))) await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);

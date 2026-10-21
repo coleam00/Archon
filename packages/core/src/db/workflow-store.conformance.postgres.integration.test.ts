@@ -47,6 +47,47 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('foreign slot membership blocks guarded starts after its request is lost', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store, db } = harness;
+      const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+      const holder = { ...start('queue', 'host', 1), resource: 'foreign' };
+      expect((await store.admitResourceStart(holder)).status).toBe('admitted');
+      await db.query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+        holder.launch.run.id,
+      ]);
+      const guarded = start('queue', 'host', 1);
+      expect(await store.admitResourceStart(guarded)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      expect(
+        await store.admitResourceStart({ ...start('skip', 'host', 1), resource: 'skip' })
+      ).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      const reader = { ...start('queue', 'host', 1), resource: 'reader' };
+      reader.launch.run.metadata.admission_checkout_guard = false;
+      expect((await store.admitResourceStart(reader)).status).toBe('admitted');
+      const privateStart = { ...start('queue', 'host', 1), resource: 'private' };
+      privateStart.launch.execution.isolation = { kind: 'worktree' };
+      expect((await store.admitResourceStart(privateStart)).status).toBe('admitted');
+      expect(
+        await store.drainResourceStarts({ resource: guarded.resource, hostId: 'host' })
+      ).toEqual([]);
+      expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('pending');
+      await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+        holder.launch.run.id,
+      ]);
+      expect(
+        await store.drainResourceStarts({ resource: guarded.resource, hostId: 'host' })
+      ).toMatchObject([{ runId: guarded.launch.run.id }]);
+    } finally {
+      await harness.close();
+    }
+  });
   for (const firstMode of ['admit', 'drain'] as const) {
     for (const secondMode of ['admit', 'drain'] as const) {
       test(`checkout reservations serialize across resources: ${firstMode}/${secondMode}`, async () => {

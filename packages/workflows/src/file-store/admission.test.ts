@@ -404,13 +404,17 @@ async function finishRun(root: string, id: string): Promise<void> {
 async function corruptRequest(
   root: string,
   id: string,
-  corruption: 'launch' | 'json' | 'null' | 'queued' | 'skipped' | 'withdrawn'
+  corruption: 'launch' | 'json' | 'null' | 'queued' | 'skipped' | 'withdrawn' | 'missing'
 ): Promise<void> {
   const path = join(
     root,
     'resource/requests',
     `${createHash('sha256').update(id).digest('hex')}.json`
   );
+  if (corruption === 'missing') {
+    await unlink(path);
+    return;
+  }
   const row = JSON.parse(await readFile(path, 'utf8'));
   const value = corruption === 'launch' ? { ...row, launch: {} } : { ...row, status: corruption };
   await writeFile(
@@ -419,7 +423,7 @@ async function corruptRequest(
   );
 }
 
-for (const corruption of ['launch', 'json'] as const) {
+for (const corruption of ['launch', 'json', 'missing'] as const) {
   for (const status of [
     'pending',
     'expired-pending',
@@ -496,7 +500,7 @@ for (const corruption of ['launch', 'json'] as const) {
   }
 }
 
-test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn'] as const)(
+test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn', 'missing'] as const)(
   'an unknown corrupt foreign checkout (%s) permits independent work but blocks guarded starts',
   async corruption => {
     const { root, store } = await fixture();
@@ -1075,3 +1079,26 @@ test.each(['posix', 'win32'] as const)(
     }
   }
 );
+
+test('an old released holder without admission evidence keeps manual read-only concurrency', async () => {
+  const { root, store, holder, queued, path } = await releasedHolderFixture(
+    'released-before-upgrade',
+    'intact'
+  );
+  await unlink(path);
+  expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject([
+    { runId: queued.launch.run.id },
+  ]);
+  await finishRun(root, queued.launch.run.id);
+  for (const overlap of ['queue', 'skip'] as const) {
+    const start = { ...intent(), overlap, resource: crypto.randomUUID() };
+    expect(await store.admitResourceStart(start)).toMatchObject({
+      status: overlap === 'queue' ? 'queued' : 'skipped',
+      blocker: { kind: 'run', id: holder.launch.run.id },
+    });
+  }
+  const reader = intent();
+  reader.launch.run.metadata.admission_checkout_guard = false;
+  expect(await store.admitResourceStart(reader)).toMatchObject({ status: 'admitted' });
+  expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('paused');
+});

@@ -217,7 +217,7 @@ export interface ResourceSlotOccupancy {
   /** Checkouts requiring local serialization, including holders not provably foreign. */
   heldCheckouts: ReadonlyMap<string, string>;
   foreignHeldCheckouts: ReadonlyMap<string, string>;
-  /** Oldest foreign holder whose corrupt launch and absent path hide its checkout. */
+  /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
   unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
 }
