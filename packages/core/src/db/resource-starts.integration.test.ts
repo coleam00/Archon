@@ -1374,3 +1374,155 @@ for (const corruptLaunch of ['{', '{}', 'missing']) {
     expect(await drain()).toMatchObject([{ runId: guarded.run.id }]);
   });
 }
+
+async function prepareLocalBinding(store: ReturnType<typeof createWorkflowStore>) {
+  const receiptId = crypto.randomUUID();
+  const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+  const prepared = launch(crypto.randomUUID());
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'local-membership',
+      deliveryId: null,
+      contentDigest: 'local',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: '22222222-2222-4222-8222-222222222222',
+        resource: 'local',
+        capacity: 2,
+        overlap: 'queue',
+        launch: {
+          cwd: prepared.execution.cwd,
+          workflowName: 'test',
+          inputs: {},
+          isolation: prepared.execution.isolation,
+        },
+      },
+    ],
+  });
+  expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+  return { ...identity, launch: prepared };
+}
+
+for (const damage of ['missing', 'queued', 'skipped', 'withdrawn'] as const) {
+  test(`local SQL membership refuses a ${damage} request until repair or terminal release`, async () => {
+    const store = createWorkflowStore();
+    const holder = launch(crypto.randomUUID());
+    const waiting = launch(crypto.randomUUID());
+    const resuming = launch(crypto.randomUUID());
+    waiting.execution.cwd = holder.execution.cwd;
+    const input = (prepared: PreparedWorkflowLaunch) => ({
+      resource: 'local',
+      capacity: 2,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: prepared,
+    });
+    await store.admitResourceStart(input(holder));
+    await store.admitResourceStart(input(waiting));
+    await store.admitResourceStart(input(resuming));
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1",
+      [resuming.run.id]
+    );
+    const incomingBinding = await prepareLocalBinding(store);
+    if (damage === 'missing') {
+      await getDatabase().query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+        holder.run.id,
+      ]);
+    } else {
+      await getDatabase().query(
+        'UPDATE remote_agent_resource_start_requests SET status = $2 WHERE id = $1',
+        [holder.run.id, damage]
+      );
+    }
+    for (const workingPath of [holder.execution.cwd, null]) {
+      await getDatabase().query(
+        'UPDATE remote_agent_workflow_runs SET working_path = $2 WHERE id = $1',
+        [holder.run.id, workingPath]
+      );
+      for (const guard of [true, false]) {
+        const incoming = launch(crypto.randomUUID());
+        incoming.execution.cwd = holder.execution.cwd;
+        incoming.run.metadata.admission_checkout_guard = guard;
+        for (const overlap of ['queue', 'skip'] as const)
+          await expect(store.admitResourceStart({ ...input(incoming), overlap })).rejects.toThrow();
+      }
+      await expect(
+        store.drainResourceStarts({ resource: 'local', hostId: 'host' })
+      ).rejects.toThrow();
+      await expect(store.resumeWorkflowRun(resuming.run.id)).rejects.toThrow(
+        'no matching admitted request'
+      );
+      await expect(store.completeStartBindingPreparation(incomingBinding)).rejects.toThrow(
+        'no matching admitted request'
+      );
+    }
+    expect((await store.getWorkflowRun(holder.run.id))?.status).toBe('pending');
+    if (damage === 'queued')
+      await getDatabase().query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+        holder.run.id,
+      ]);
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [holder.run.id]
+    );
+    expect(await store.drainResourceStarts({ resource: 'local', hostId: 'host' })).toMatchObject([
+      { runId: waiting.run.id },
+    ]);
+  });
+}
+
+for (const damagedLaunch of ['{', '{}']) {
+  test(`SQL host drains independent resources after queued launch corruption: ${damagedLaunch}`, async () => {
+    const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+    const { drainResourceStartHost, ResourceStartDrainError } = await import(
+      '../workflows/resource-start-host'
+    );
+    const host = createSqlWorkflowHost();
+    const queued: string[] = [];
+    for (const resource of ['a', 'z']) {
+      const holder = launch(crypto.randomUUID());
+      const waiting = launch(crypto.randomUUID());
+      const input = (prepared: PreparedWorkflowLaunch) => ({
+        resource,
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue' as const,
+        launch: prepared,
+      });
+      await host.deps.store.admitResourceStart(input(holder));
+      await host.deps.store.admitResourceStart(input(waiting));
+      queued.push(waiting.run.id);
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+        [holder.run.id]
+      );
+    }
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+      [queued[0]!, damagedLaunch]
+    );
+    const started: string[] = [];
+    const error = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    }).catch((error: unknown) => error);
+    expect(started).toEqual([queued[1]!]);
+    expect(error).toBeInstanceOf(ResourceStartDrainError);
+    if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+    expect(error.failures[0]?.resource).toBe('a');
+    expect(await host.deps.store.getWorkflowRun(queued[0]!)).toBeNull();
+  });
+}

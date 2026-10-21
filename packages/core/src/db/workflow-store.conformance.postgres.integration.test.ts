@@ -88,6 +88,51 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       await harness.close();
     }
   });
+  test.each(['missing', 'withdrawn'] as const)(
+    'local slot membership refuses a %s request until terminal release',
+    async damage => {
+      const harness = await makeHarness();
+      try {
+        const { store, db } = harness;
+        const { start } = resourceStartFixtures(
+          CONFORMANCE_CODEBASE_ID,
+          CONFORMANCE_CONVERSATION_ID
+        );
+        const holder = start('queue', 'host', 2);
+        await store.admitResourceStart(holder);
+        const waiting = start('queue', 'host', 2);
+        await store.admitResourceStart(waiting);
+        if (damage === 'missing')
+          await db.query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+            holder.launch.run.id,
+          ]);
+        else
+          await db.query(
+            "UPDATE remote_agent_resource_start_requests SET status = 'withdrawn' WHERE id = $1",
+            [holder.launch.run.id]
+          );
+        for (const guard of [false, true]) {
+          const incoming = start('queue', 'host', 2);
+          incoming.launch.run.metadata.admission_checkout_guard = guard;
+          await expect(store.admitResourceStart(incoming)).rejects.toThrow(
+            'no matching admitted request'
+          );
+        }
+        await expect(
+          store.drainResourceStarts({ resource: holder.resource, hostId: 'host' })
+        ).rejects.toThrow('no matching admitted request');
+        expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('pending');
+        await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+          holder.launch.run.id,
+        ]);
+        expect(
+          await store.drainResourceStarts({ resource: holder.resource, hostId: 'host' })
+        ).toMatchObject([{ runId: waiting.launch.run.id }]);
+      } finally {
+        await harness.close();
+      }
+    }
+  );
   for (const firstMode of ['admit', 'drain'] as const) {
     for (const secondMode of ['admit', 'drain'] as const) {
       test(`checkout reservations serialize across resources: ${firstMode}/${secondMode}`, async () => {

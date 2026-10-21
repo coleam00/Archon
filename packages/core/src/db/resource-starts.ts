@@ -9,6 +9,7 @@ import type {
   StartBindingInspection,
   StartReceiptInspection,
   ResourceStartRequestInspection,
+  QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
@@ -446,14 +447,20 @@ export async function getResourceStartRequest(
 
 export async function listQueuedResourceStartsForHost(
   hostId: string
-): Promise<ResourceStartRequestInspection[]> {
+): Promise<QueuedResourceStartInspection[]> {
   const result = await getDatabase().query<Record<string, unknown>>(
     `${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
       ORDER BY r.resource_key, r.queue_position`,
     [hostId]
   );
-  return result.rows.map(inspectRequest);
+  return result.rows.map(row => {
+    try {
+      return inspectRequest(row);
+    } catch (error) {
+      return { id: String(row.id), resource: String(row.resource_key), error };
+    }
+  });
 }
 
 export async function withdrawQueuedResourceStart(

@@ -357,6 +357,10 @@ export function resumeRefusal(
   return ready ? 'waiting' : 'paused';
 }
 
+export type QueuedResourceStartInspection =
+  | ResourceStartRequestInspection
+  | { id: string; resource?: string; error: unknown };
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
@@ -385,7 +389,7 @@ export interface IResourceStartStore {
     limit?: number;
   }): Promise<StartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
-  listQueuedResourceStartsForHost(hostId: string): Promise<ResourceStartRequestInspection[]>;
+  listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;

@@ -613,28 +613,19 @@ test.each([
     else row[field] = field === 'blocker' ? {} : null;
     const damaged = JSON.stringify(row);
     await writeFile(target, damaged);
-    const logs: string[] = [];
-    setLogSink(line => logs.push(line));
-    try {
-      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual([
-        queued.launch.run.id,
+    const listedBefore = await store.listQueuedResourceStartsForHost('host');
+    const damagedEntry = listedBefore.find(row => row.id === corrupt.launch.run.id);
+    expect(damagedEntry).toBeDefined();
+    if (!damagedEntry || !('error' in damagedEntry)) throw new Error('expected listing failure');
+    expect(damagedEntry.error).toBeInstanceOf(Error);
+    await finishRun(root, holder.launch.run.id);
+    const listed = await store.listQueuedResourceStartsForHost('host');
+    const healthy = listed.flatMap(row => ('error' in row ? [] : [row]));
+    expect(healthy.map(row => row.id)).toEqual([queued.launch.run.id]);
+    for (const resource of new Set(healthy.map(row => row.resource))) {
+      expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
+        { status: 'admitted', runId: queued.launch.run.id },
       ]);
-      await finishRun(root, holder.launch.run.id);
-      const listed = await store.listQueuedResourceStartsForHost('host');
-      expect(listed.map(row => row.id)).toEqual([queued.launch.run.id]);
-      for (const resource of new Set(listed.map(row => row.resource))) {
-        expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
-          { status: 'admitted', runId: queued.launch.run.id },
-        ]);
-      }
-      expect(logs.map(line => JSON.parse(line))).toContainEqual(
-        expect.objectContaining({
-          document: path,
-          msg: 'queued_start_document_invalid_listing_omitted',
-        })
-      );
-    } finally {
-      setLogSink(undefined);
     }
     expect(await readFile(target, 'utf8')).toBe(damaged);
     expect(await store.getWorkflowRun(corrupt.launch.run.id)).toBeNull();
@@ -1022,12 +1013,14 @@ for (const corruption of queuedCorruptions) {
       await finishRun(root, holder.launch.run.id);
       const listed = await store.listQueuedResourceStartsForHost('host');
       expect(listed.map(row => row.id)).toEqual([queued.launch.run.id]);
-      for (const resource of new Set(listed.map(row => row.resource))) {
+      for (const resource of new Set(
+        listed.flatMap(row => ('error' in row ? [] : [row])).map(row => row.resource)
+      )) {
         expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
           { status: 'admitted', runId: queued.launch.run.id },
         ]);
       }
-      if (corruption !== 'launch') {
+      if (!['launch', 'missing-status', 'invalid-status'].includes(corruption)) {
         expect(logs.map(line => JSON.parse(line))).toContainEqual(
           expect.objectContaining({
             document: path,
@@ -1073,7 +1066,9 @@ test.each(['posix', 'win32'] as const)(
       );
       const row = JSON.parse(await readFile(target, 'utf8'));
       await writeFile(target, JSON.stringify({ ...row, resource: 'wrong-resource' }));
-      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: queued.launch.run.id, resource: undefined, error: expect.any(Error) },
+      ]);
     } finally {
       paths.mockRestore();
     }
@@ -1102,3 +1097,60 @@ test('an old released holder without admission evidence keeps manual read-only c
   expect(await store.admitResourceStart(reader)).toMatchObject({ status: 'admitted' });
   expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('paused');
 });
+
+test.each([
+  null,
+  {},
+  { ...currentProcessOwner, host: 1 },
+  { ...currentProcessOwner, pid: 0 },
+  { ...currentProcessOwner, pid: -1 },
+  { ...currentProcessOwner, pid: 1.5 },
+  { ...currentProcessOwner, pid: Number.MAX_SAFE_INTEGER + 1 },
+  { ...currentProcessOwner, instance: null },
+])(
+  'foreign membership ignores malformed attempt owner %j for admission, drain and resume',
+  async owner => {
+    const { root, store } = await fixture();
+    const foreign = intent();
+    foreign.resource = 'foreign';
+    foreign.launch.execution.cwd = '/foreign';
+    const holder = intent();
+    const queued = intent();
+    const resuming = intent();
+    resuming.resource = 'resume';
+    resuming.launch.execution.cwd = '/resume';
+    for (const start of [foreign, holder, queued, resuming]) await store.admitResourceStart(start);
+    await finishRun(root, holder.launch.run.id);
+    await store.updateWorkflowRun(resuming.launch.run.id, { status: 'paused' });
+    await store.updateWorkflowRun(foreign.launch.run.id, { status: 'paused' });
+    const path = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update('foreign').digest('hex')}.json`
+    );
+    const slot = JSON.parse(await readFile(path, 'utf8'));
+    slot.holders.push({ kind: 'attempt', id: 'damaged-attempt', owner });
+    const damaged = JSON.stringify(slot);
+    await writeFile(path, damaged);
+    const incoming = intent();
+    incoming.resource = 'incoming';
+    incoming.launch.execution.cwd = '/incoming';
+    expect(await store.admitResourceStart(incoming)).toMatchObject({ status: 'admitted' });
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject(
+      [{ runId: queued.launch.run.id }]
+    );
+    expect(await store.resumeWorkflowRun(resuming.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+    await expect(
+      store.admitResourceStart({ ...intent(), resource: 'foreign' })
+    ).rejects.toBeInstanceOf(ProcessOwnerRecordError);
+    await expect(
+      store.drainResourceStarts({ resource: 'foreign', hostId: 'host' })
+    ).rejects.toBeInstanceOf(ProcessOwnerRecordError);
+    await expect(store.resumeWorkflowRun(foreign.launch.run.id)).rejects.toBeInstanceOf(
+      ProcessOwnerRecordError
+    );
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+  }
+);

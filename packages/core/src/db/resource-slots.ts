@@ -216,7 +216,7 @@ export async function resourceStartOccupancy(
   capacity: number
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
-  const holding = new Set(holders.map(holder => holder.id));
+  const holding = new Set(holders.filter(holder => holder.kind === 'run').map(holder => holder.id));
   const live = await query<{
     id: string;
     status: WorkflowRunStatus;
@@ -237,7 +237,10 @@ export async function resourceStartOccupancy(
        ) w
        LEFT JOIN remote_agent_resource_start_requests q ON q.id = w.id AND q.status = 'admitted'
       WHERE w.status NOT IN (${terminalList})
-        AND (q.resource_key = $1 OR w.holds_path)
+        AND (q.resource_key = $1 OR w.holds_path OR EXISTS (
+          SELECT 1 FROM remote_agent_resource_slot_holders h
+           WHERE h.resource_key = $1 AND h.holder_kind = 'run' AND h.holder_id = CAST(w.id AS TEXT)
+        ))
       ORDER BY w.started_at, w.id`,
     [resource]
   );
@@ -248,21 +251,27 @@ export async function resourceStartOccupancy(
     [resource]
   );
   const liveRuns = live.rows
-    .filter(row => row.resource_key === resource)
-    .map(row => ({
-      id: String(row.id),
-      status: row.status,
-      metadata: parseJsonObject(row.metadata) ?? {},
-      working_path: row.working_path,
-      launch: parseLaunch(row.launch),
-    }));
+    .filter(row => holding.has(String(row.id)) || row.resource_key === resource)
+    .map(row => {
+      if (row.resource_key !== resource)
+        throw new Error(
+          `Resource '${resource}' holder '${row.id}' has no matching admitted request`
+        );
+      return {
+        id: String(row.id),
+        status: row.status,
+        metadata: parseJsonObject(row.metadata) ?? {},
+        working_path: row.working_path,
+        launch: parseLaunch(row.launch),
+      };
+    });
   const reusable = await query<ReusableCheckout>(
     `SELECT codebase_id AS "codebaseId", workflow_id AS branch, working_path AS "workingPath"
        FROM remote_agent_isolation_environments WHERE status = 'active' AND workflow_type = 'task'`
   );
   let unknownForeignCheckoutHolder: string | undefined;
   const foreign = live.rows
-    .filter(row => row.resource_key !== resource)
+    .filter(row => !holding.has(String(row.id)) && row.resource_key !== resource)
     .map(row => {
       const run = { id: String(row.id), working_path: row.working_path };
       if (row.launch === null) {

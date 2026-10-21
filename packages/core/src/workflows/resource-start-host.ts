@@ -1,3 +1,4 @@
+import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -378,15 +379,38 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       if (decision.status === 'admitted') {
         // A queued request names its receipt in the run metadata written at preparation.
         const request = queued.find(item => item.id === decision.requestId);
-        await start(decision.requestId, receiptIdOfLaunch(request?.launch));
+        const launch = request && !('error' in request) ? request.launch : undefined;
+        await start(decision.requestId, receiptIdOfLaunch(launch));
       }
     }
   };
-  for (const resource of new Set(queued.map(request => request.resource))) await drain(resource);
+  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);
   }
+}
+
+function queuedDrainResources(
+  queued: readonly QueuedResourceStartInspection[],
+  failures: ResourceStartDrainFailure[]
+): string[] {
+  const damaged = new Set<string>();
+  for (const request of queued) {
+    if (!('error' in request)) continue;
+    if (request.resource !== undefined) damaged.add(request.resource);
+    failures.push({
+      resource: request.resource,
+      error: new Error(`Queued request '${request.id}' is invalid`, {
+        cause: request.error,
+      }),
+    });
+  }
+  const resources: string[] = [];
+  for (const resource of new Set(queued.map(request => request.resource))) {
+    if (resource !== undefined && !damaged.has(resource)) resources.push(resource);
+  }
+  return resources;
 }
 
 async function worktreeLane(

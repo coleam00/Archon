@@ -38,6 +38,7 @@ import {
   type IResourceStartStore,
   type StartBindingInspection,
   type ResourceStartRequestInspection,
+  type QueuedResourceStartInspection,
 } from '../resource-start-store';
 import { WorkflowNotResumableError } from '../store';
 import {
@@ -218,7 +219,10 @@ export function createAdmissionTransaction(
       try {
         const row = await read(
           path,
-          slotSchema(join(root, path)).pick({ holders: true, admitted: true })
+          z.object({
+            holders: z.array(z.object({ kind: z.string(), id: z.string() })),
+            admitted: z.array(z.string()).default([]),
+          })
         );
         if (
           row?.admitted.includes(id) ||
@@ -500,6 +504,30 @@ export function createFileAdmissionStore(
       return null;
     }
   }
+  async function inspectQueuedRequest(
+    slotPath: string,
+    id: string,
+    resource: unknown,
+    position: number
+  ) {
+    const path = pathFor('requests', id);
+    try {
+      const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
+      return { inspection: await inspect(row), position: row.position };
+    } catch (error) {
+      return {
+        inspection: {
+          id,
+          resource:
+            typeof resource === 'string' && pathFor('slots', resource) === slotPath
+              ? resource
+              : undefined,
+          error: new Error(`Invalid queued request document '${path}'`, { cause: error }),
+        },
+        position,
+      };
+    }
+  }
   async function inspect(row: Request): Promise<ResourceStartRequestInspection> {
     return {
       id: row.id,
@@ -661,25 +689,25 @@ export function createFileAdmissionStore(
       }),
     listQueuedResourceStartsForHost: hostId =>
       query(async () => {
-        const queued: Request[] = [];
+        const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];
         for (const path of await documentPaths(root, 'slots')) {
           const slot = await queueCandidate(path, slotSchema(path).pick({ queue: true }));
           if (!slot) continue;
-          for (const id of slot.queue) {
+          for (const [position, id] of slot.queue.entries()) {
             const envelope = await queueCandidate(
               pathFor('requests', id),
-              requestSchema.pick({ hostId: true, status: true })
+              requestSchema.pick({ hostId: true }).extend({ resource: z.unknown() })
             );
             if (!envelope || envelope.hostId !== hostId) continue;
-            const row = await queueCandidate(
-              pathFor('requests', id),
-              queuedRequestSchema(id, path)
-            );
-            if (row) queued.push(row);
+            queued.push(await inspectQueuedRequest(path, id, envelope.resource, position));
           }
         }
-        queued.sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position);
-        return Promise.all(queued.map(inspect));
+        queued.sort(
+          (a, b) =>
+            compareCodeUnits(a.inspection.resource ?? '', b.inspection.resource ?? '') ||
+            a.position - b.position
+        );
+        return queued.map(row => row.inspection);
       }),
     withdrawQueuedResourceStart: id =>
       write(async tx => {
