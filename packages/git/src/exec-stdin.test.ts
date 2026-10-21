@@ -1,4 +1,3 @@
-// @archon-test-isolated
 import { expect, it, mock } from 'bun:test';
 import { once } from 'node:events';
 import { Writable } from 'node:stream';
