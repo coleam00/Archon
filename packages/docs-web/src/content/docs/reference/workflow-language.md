@@ -1790,7 +1790,11 @@ An included workflow's outcome declaration never becomes the composer's outcome,
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
 The REST run list, detail, by-worker, and dashboard JSON expose nullable `outcome` beside `status`.
 CLI, console, chat, and adapter result surfaces show a non-null authored outcome separately from
-execution status. When `outcome` is null, they retain the normal status-only presentation. A dry run
+execution status. A foreground CLI execution handoff reports only its observed status, omitting
+authored outcome and usage; its zero exit does not prove completion. Use `archon workflow wait <run-id>`
+to await a terminal or gate transition and `archon workflow get <run-id>` to inspect the current result.
+See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When `outcome` is null, result
+surfaces retain the normal status-only presentation. A dry run
 reports the same declaration separately as nullable `authoredOutcome`, derived only from the declared
 return node's structured fixture value. Its existing `outcome` remains the simulation result and
 continues to control CLI exit codes and fixture `expect` checks. Generated placeholder stubs never

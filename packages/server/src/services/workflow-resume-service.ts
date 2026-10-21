@@ -199,7 +199,7 @@ async function admitFromServer(
             !platform ||
             destination?.resultConversationId === undefined ||
             'paused' in result ||
-            'handedOff' in result
+            (result.success && 'handedOff' in result)
           )
             return;
           let message: string;

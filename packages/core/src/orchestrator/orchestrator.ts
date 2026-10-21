@@ -706,7 +706,6 @@ async function dispatchBackgroundWorkflowOwned(
           });
           await closeRunLiveOwner();
           // Surface workflow output to parent conversation as a result card
-          if ('handedOff' in result) return;
           if ('summary' in result && result.summary) {
             try {
               await ctx.platform.sendMessage(ctx.conversationId, result.summary, {

@@ -112,7 +112,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     return store;
   }
 
-  it.each(['approval', 'writeback', 'unresolved'] as const)(
+  it.each(['approval', 'wait', 'writeback', 'unresolved'] as const)(
     '%s cannot be resumed until suspension has finished',
     async kind => {
       const store = await createFileWorkflowStore({ root: join(wbTestDir, 'store') });
@@ -141,21 +141,32 @@ describe('executeDagWorkflow -- container write-back gate', () => {
         });
       }
       const order: string[] = [];
+      const suspendStarted = Promise.withResolvers<void>();
+      const releaseSuspend = Promise.withResolvers<void>();
       const backend = makeWritebackBackend({
         finalize: mock(async () => ({ requiresApproval: true, changeSummary: summary })),
         suspend: mock(async () => {
           order.push('stop');
-          expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
-          await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow();
+          suspendStarted.resolve();
+          await releaseSuspend.promise;
           order.push('stopped');
         }),
       });
+      const resumePublishedPause = async (): Promise<void> => {
+        order.push('published');
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+        expect((await store.resumeWorkflowRun(run.id)).status).toBe('running');
+        order.push('successor');
+      };
       const pause = store.pauseWorkflowRun.bind(store);
       store.pauseWorkflowRun = async (...args) => {
         await pause(...args);
-        order.push('published');
-        expect((await store.resumeWorkflowRun(run.id)).status).toBe('running');
-        order.push('successor');
+        await resumePublishedPause();
+      };
+      const pauseForWait = store.pauseWorkflowRunForWait.bind(store);
+      store.pauseWorkflowRunForWait = async (...args) => {
+        await pauseForWait(...args);
+        await resumePublishedPause();
       };
       const options = dagOptions({
         deps: createMockDeps(store),
@@ -175,13 +186,25 @@ describe('executeDagWorkflow -- container write-back gate', () => {
                     captureResponse: false,
                   },
                 ]
-              : [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+              : kind === 'wait'
+                ? [dagNodeSchema.parse({ id: 'delay', wait: { duration_ms: 60_000 } })]
+                : [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
         },
-        priorCompletedNodes: kind === 'approval' ? undefined : new Map([['a', { output: 'out' }]]),
+        priorCompletedNodes:
+          kind === 'approval' || kind === 'wait' ? undefined : new Map([['a', { output: 'out' }]]),
         execContext: CONTAINER_EXEC,
         containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
       });
-      await executeDagWorkflow(options);
+      const pending = executeDagWorkflow(options);
+      try {
+        await suspendStarted.promise;
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+        await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow();
+        expect(order).toEqual(['stop']);
+      } finally {
+        releaseSuspend.resolve();
+        await pending;
+      }
       expect(order).toEqual(['stop', 'stopped', 'published', 'successor']);
       expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
       expect(backend.applyChanges).not.toHaveBeenCalled();

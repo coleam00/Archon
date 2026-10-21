@@ -70,6 +70,7 @@ export async function executeOwnedRun(
     store: host.deps.store,
     runId: ownedRunId,
     getExecutionClaim: () => ownedExecutionClaim,
+    isExecutionSettled: () => execution.result !== undefined,
     logModule: 'cli.workflow',
     liveOwner: {
       isStopRequested: () => lease.isStopRequested(),

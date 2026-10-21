@@ -15,6 +15,8 @@ export interface OwnedRunTerminationInput {
   runId: string;
   /** The engine supplies this execution's claim; undefined until admission. */
   getExecutionClaim: () => string | null | undefined;
+  /** A result settled by this process retains resource cleanup authority after the status write. */
+  isExecutionSettled?: () => boolean;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
   liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested' | 'registerTerminationPreparation'>;
@@ -60,6 +62,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
+      if (input.isExecutionSettled?.()) return;
       const expectedExecutionClaim = input.getExecutionClaim();
       if (expectedExecutionClaim === undefined) return;
       cleanupAllowed = false;

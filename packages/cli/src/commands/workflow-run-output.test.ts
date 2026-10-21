@@ -10,6 +10,12 @@ import {
   setFailTestFeedReads,
   resetCommittedTestEvents,
 } from '../test-support/workflow-command-harness';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type { WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
@@ -632,7 +638,29 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual(['[workflow] Transcript: /logs/test-run-id.jsonl']);
   });
 
+  const trackSignalRoot = trackTempRoots();
   type ContainerRunEnd = 'paused' | 'settled' | 'unresolved-writeback' | 'lookup-fails';
+
+  async function signalFailureWriter(
+    initialStatus: WorkflowRunStatus | null
+  ): Promise<IWorkflowStore['failWorkflowRun']> {
+    const failureStore = await createFileWorkflowStore({
+      root: trackSignalRoot(await mkdtemp(join(tmpdir(), 'archon-drain-signal-'))),
+    });
+    const storedRun = await failureStore.createWorkflowRun({
+      workflow_name: 'signal',
+      user_message: '',
+    });
+    await failureStore.claimPendingWorkflowRun(storedRun.id);
+    if (initialStatus === 'completed')
+      await failureStore.completeWorkflowRun(storedRun.id, { duration_ms: 0 });
+    else if (initialStatus === 'failed')
+      await failureStore.failWorkflowRun(storedRun.id, 'node failed');
+    else if (initialStatus === 'cancelled') await failureStore.cancelWorkflowRun(storedRun.id);
+    else if (initialStatus !== null)
+      await failureStore.updateWorkflowRun(storedRun.id, { status: initialStatus });
+    return (_id, error, reason) => failureStore.failWorkflowRun(storedRun.id, error, reason);
+  }
 
   /**
    * A container run that receives a signal during its final progress drain, or with
@@ -644,7 +672,8 @@ describe('workflowRunCommand — progress rendering', () => {
     signalAt: 'drain' | 'lookup' = 'drain',
     handoffStatus?: WorkflowRunStatus | null,
     rejection?: 'published' | 'pre-publication',
-    signal: 'SIGINT' | 'SIGTERM' = 'SIGTERM'
+    signal: 'SIGINT' | 'SIGTERM' = 'SIGTERM',
+    settledStatus: 'completed' | 'failed' | 'cancelled' = 'completed'
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -685,29 +714,47 @@ describe('workflowRunCommand — progress rendering', () => {
                 workflowRunId: OWNED_RUN,
               };
         }
+        if (end === 'settled' && settledStatus !== 'completed') {
+          return { success: false, workflowRunId: OWNED_RUN, error: `Workflow ${settledStatus}` };
+        }
         return end === 'paused'
           ? { success: true, workflowRunId: OWNED_RUN, paused: true }
           : { success: true, workflowRunId: OWNED_RUN };
       }
     );
-    const exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    let exited!: () => void;
+    const exitCalled = new Promise<void>(resolve => {
+      exited = resolve;
+    });
+    const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
     mockFolderBackendDestroy.mockClear();
     const signalBefore = process.listeners(signal);
     const host = createTestWorkflowHost();
-    const initialStatus = handoffStatus === undefined ? 'running' : handoffStatus;
+    const initialStatus =
+      handoffStatus !== undefined
+        ? handoffStatus
+        : rejection || end === 'paused'
+          ? 'running'
+          : settledStatus;
     let status: WorkflowRunStatus | null = initialStatus;
     host.deps.store.getWorkflowRunStatus = async () => status;
-    host.deps.store.failWorkflowRun = async () => {
-      status = 'failed';
-      return { failed: true };
-    };
+    const failStoredRun = await signalFailureWriter(initialStatus);
+    const fail = spyOn(host.deps.store, 'failWorkflowRun').mockImplementation(
+      async (_id, error, reason) => {
+        const result = await failStoredRun(_id, error, reason);
+        if (result.failed) status = 'failed';
+        return result;
+      }
+    );
+    fail.mockClear();
     let destroyedAtSignal = -1;
     const signalOnce = async (): Promise<void> => {
       if (!runSettled || destroyedAtSignal !== -1) return;
-      for (const listener of process.listeners(signal)) {
-        if (!signalBefore.includes(listener)) (listener as () => void)();
-      }
-      for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
+      const handlers = process
+        .listeners(signal)
+        .filter(listener => !signalBefore.includes(listener));
+      for (const listener of handlers) (listener as () => void)();
+      if (handlers.length > 0) await exitCalled;
       destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
     };
     const getRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
@@ -747,7 +794,11 @@ describe('workflowRunCommand — progress rendering', () => {
       const execution = workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
       if (rejection) {
         await expect(execution).rejects.toBe(failure);
-      } else if (handoffStatus === 'failed' || handoffStatus === 'cancelled') {
+      } else if (
+        handoffStatus === 'failed' ||
+        handoffStatus === 'cancelled' ||
+        (handoffStatus === undefined && end === 'settled' && settledStatus !== 'completed')
+      ) {
         await expect(execution).rejects.toBeInstanceOf(WorkflowRunFailedError);
       } else {
         await execution;
@@ -761,6 +812,7 @@ describe('workflowRunCommand — progress rendering', () => {
     } finally {
       exitSpy.mockRestore();
     }
+    if (!rejection && handoffStatus === undefined) expect(fail).not.toHaveBeenCalled();
     return destroyedAtSignal;
   }
 
@@ -815,9 +867,16 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(await signalDuringContainerDrain('settled', 'lookup')).toBe(0);
   });
 
-  it('a signal during the final drain still destroys a settled run its container', async () => {
-    expect(await signalDuringContainerDrain('settled')).toBe(1);
-  });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    it.each(['completed', 'failed', 'cancelled'] as const)(
+      `${signal} during final drain destroys the %s execution's container`,
+      async status => {
+        expect(
+          await signalDuringContainerDrain('settled', 'drain', undefined, undefined, signal, status)
+        ).toBe(1);
+      }
+    );
+  }
 
   it('reports a failed final drain without masking the run outcome', async () => {
     setupWorkflowMocks();
