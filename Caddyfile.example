@@ -23,7 +23,7 @@
 	# ── Option A: Form-based auth (HTML login page) ────────────────────────────
 	# Requires: docker compose --profile cloud --profile auth up -d
 	# Setup:    Set AUTH_USERNAME, AUTH_PASSWORD_HASH, COOKIE_SECRET in .env
-	#           See docs/docker.md for hash generation instructions.
+	#           See https://archon.diy/deployment/docker/#form-login-sidecar
 	# To enable: uncomment this block AND comment out the "No auth" handle block below.
 	#
 	# handle /login {

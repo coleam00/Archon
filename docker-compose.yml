@@ -114,7 +114,7 @@ services:
   # Auth service — form-based login for Caddy forward_auth (optional: --profile auth)
   # Use alongside --profile cloud: docker compose --profile cloud --profile auth up -d
   # Requires AUTH_USERNAME, AUTH_PASSWORD_HASH, COOKIE_SECRET in .env.
-  # See docs/docker.md for setup instructions.
+  # Setup: https://archon.diy/deployment/docker/#form-login-sidecar
   # -------------------------------------------------------------------------
   auth-service:
     build: ./auth-service
