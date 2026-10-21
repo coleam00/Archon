@@ -28,7 +28,6 @@ import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
 import {
   DETACHED_LAUNCH_TOKEN_ENV,
   DETACHED_LAUNCH_METADATA_KEY,
-  matchesDetachedLaunch,
   DETACHED_RUN_OWNER_ENV,
 } from '../utils/detached-run-control';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
@@ -331,8 +330,6 @@ export async function recordDetachedChildStartupFailure(
   const { detachedRunId, detachedProcessOwner, launchToken } = request;
   if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
-    const row = await host.deps.store.getWorkflowRun(detachedRunId);
-    if (row?.status !== 'pending' || !matchesDetachedLaunch(row.metadata, launchToken)) return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,

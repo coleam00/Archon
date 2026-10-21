@@ -1659,10 +1659,11 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
-    // Captured inside the run, once the signal handler has settled: the assertion is
-    // that the SIGNAL path never consulted status, which a global "never called" no
-    // longer isolates now that the startup-failure net reads it on the way out.
     let statusReadsAtSignalTime = -1;
+    let failureWritesAtSignalTime = -1;
+    (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      failed: false,
+    });
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       setMockDetachedStopRequested(true);
       const [handler] = addedSigtermListeners(sigtermBefore);
@@ -1670,6 +1671,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       handler();
       await settleCleanup();
       statusReadsAtSignalTime = (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mock
+        .calls.length;
+      failureWritesAtSignalTime = (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mock
         .calls.length;
       return { success: false, workflowRunId: 'test-run-id', error: 'interrupted' };
     });
@@ -1685,7 +1688,12 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       detachedProcessPid: process.pid,
     });
     expect(statusReadsAtSignalTime).toBe(0);
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(failureWritesAtSignalTime).toBe(0);
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      expect.stringContaining('Detached run failed to start'),
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
   });
@@ -1699,13 +1707,6 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       process.env.ARCHON_DETACHED_RUN_OWNER = '1';
       process.env.ARCHON_DETACHED_LAUNCH_TOKEN = 'launch-token';
       const workflowsDb = require('@archon/core/db/workflows');
-      (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('pending');
-      (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        id: 'pending-child',
-        status: 'pending',
-        workflow_name: 'plan',
-        metadata: { cli_detached_launch_token: 'launch-token' },
-      });
       mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error(message));
 
       await expect(
