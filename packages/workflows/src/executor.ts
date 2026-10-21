@@ -705,43 +705,48 @@ export async function executeWorkflow(
     // may throw — so it always pairs with the acquire above this try, on every
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
-    // Defensive backstop: if the workflow run is still 'running' after all
-    // normal and exceptional code paths, flip it to 'failed' to prevent zombie
-    // accumulation. Guards against any future code path that exits without
-    // calling failWorkflowRun (e.g. a generator cleanup that exits without
-    // throwing). Only fires when the process stays alive long enough to run
-    // this finally — see #1561 for the originating zombie-state incident.
-    if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
-      const runId = workflowRun.id;
-      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
-        // A failed lookup leaves status unknown, not missing or finalized. Preserve the
-        // prior result/error rather than guessing a terminal transition from this read.
-        getLog().warn(
-          {
-            workflowRunId: runId,
-            operation: 'getWorkflowRunStatus',
-            err,
-            recovery:
-              'The finalization check could not run. Restore store access and inspect the run ' +
-              'with archon workflow get <run-id>. After checking ownership, use ' +
-              'archon workflow abandon <run-id> only if the run should be stopped or discarded.',
-          },
-          'executor.backstop_status_read_failed'
-        );
-        return null;
-      });
-      if (backstopStatus === 'running') {
-        getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
-        await requireTerminalStatusWrite(
-          deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs', {
-            exitReason: 'not_finalized',
-          }),
-          { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
-        );
-      }
+    if (workflowRun && !terminalStatusWriteFailed) {
+      // A source release that lost to a cancel skips the backstop but still frees scratch.
+      if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
+      await releaseScratchOnExit(deps, workflowRun);
     }
-    // Outside the backstop's guard: a run whose source release lost to a cancel ends here too.
-    if (workflowRun && !terminalStatusWriteFailed) await releaseScratchOnExit(deps, workflowRun);
+  }
+}
+
+/**
+ * Defensive backstop: if the workflow run is still 'running' after all normal and
+ * exceptional code paths, flip it to 'failed' to prevent zombie accumulation. Guards
+ * against any future code path that exits without calling failWorkflowRun (e.g. a
+ * generator cleanup that exits without throwing). Only fires when the process stays
+ * alive long enough to run the executor's finally — see #1561 for the originating
+ * zombie-state incident.
+ */
+async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<void> {
+  const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
+    // A failed lookup leaves status unknown, not missing or finalized. Preserve the
+    // prior result/error rather than guessing a terminal transition from this read.
+    getLog().warn(
+      {
+        workflowRunId: runId,
+        operation: 'getWorkflowRunStatus',
+        err,
+        recovery:
+          'The finalization check could not run. Restore store access and inspect the run ' +
+          'with archon workflow get <run-id>. After checking ownership, use ' +
+          'archon workflow abandon <run-id> only if the run should be stopped or discarded.',
+      },
+      'executor.backstop_status_read_failed'
+    );
+    return null;
+  });
+  if (backstopStatus === 'running') {
+    getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs', {
+        exitReason: 'not_finalized',
+      }),
+      { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
+    );
   }
 }
 
