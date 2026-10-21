@@ -19,6 +19,7 @@ export {
   getRunByIsolationEnvId,
   findWorkflowRunsByIdPrefix,
   getWorkflowRunStatus,
+  WorkflowStatusReadError,
   getActiveWorkflowRun,
   getPausedWorkflowRun,
   STALE_PENDING_AGE_MS,
