@@ -11,7 +11,7 @@ sidebar:
 
 This page prepares a VPS: a user, SSH, a firewall and DNS. The [Docker guide](/deployment/docker/) then installs and runs Archon on it with Docker Compose and Caddy for HTTPS. Using your own proxy instead of Caddy? See [Running Archon behind your own reverse proxy](/deployment/reverse-proxy/).
 
-For the fastest route, skip this page and use the [cloud-init script](/deployment/docker/#cloud-init-fastest-setup), which does all of it when the VPS is created.
+For the fastest route, use the [cloud-init script](/deployment/docker/#cloud-init-fastest-setup) instead. It creates a user, opens the firewall and installs Docker when the VPS first boots. You still create the [DNS record](#point-your-domain-at-the-server).
 
 ## What you need
 
@@ -64,14 +64,7 @@ At your DNS provider, create an A record: name `archon` (or `@` for the root dom
 
 ## Install and run Archon
 
-Follow the Docker guide's [manual server setup](/deployment/docker/#manual-server-setup) from step 1. It installs Docker, clones the repository, sets up `.env` and the `Caddyfile`, and starts the stack. Edit `.env` directly on the server. Don't run `archon setup` there: the wizard writes Archon's own CLI environment files, not the repository `.env` that Docker Compose reads.
-
-The Docker guide also covers:
-
-- [Profiles](/deployment/docker/#profiles): SQLite, the PostgreSQL container, or an external database through `DATABASE_URL`.
-- [AI credentials](/deployment/docker/#ai-credentials-required) for Claude and Codex inside a container.
-- [Basic and form-based authentication](/deployment/docker/#authentication-optional-basic-auth) for a Web UI exposed to the internet.
-- [GitHub webhooks](/deployment/docker/#github-webhooks), [maintenance](/deployment/docker/#maintenance) and [troubleshooting](/deployment/docker/#troubleshooting).
+Follow the Docker guide's [manual server setup](/deployment/docker/#manual-server-setup). It installs Docker, clones the repository, sets up `.env` and the `Caddyfile`, and starts the stack. Before you expose the Web UI, choose a login in [Protect the Web UI](/deployment/docker/#protect-the-web-ui).
 
 Check the deployment from your machine:
 
