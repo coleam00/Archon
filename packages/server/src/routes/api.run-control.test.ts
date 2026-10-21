@@ -964,6 +964,7 @@ describe('authenticated web run-action actor forwarding', () => {
             kind: 'cooperative',
             run: { ...MOCK_RUNNING_RUN, id: run.id },
             cancelled: true,
+            cleanupWarnings: ['Possible untracked background work.'],
           });
         }
         const factorySpy = spyOn(sqlHost, 'createSqlWorkflowOperations').mockReturnValue(
@@ -980,6 +981,8 @@ describe('authenticated web run-action actor forwarding', () => {
             body: JSON.stringify({ comment: 'LGTM', reason: 'Fix tests', decision: 'approve' }),
           });
           expect(response.status).toBe(200);
+          if (action === 'cancel')
+            expect(await response.text()).toContain('Possible untracked background work.');
           expect(operationSpy).toHaveBeenCalledTimes(1);
           expect(operationSpy.mock.calls[0]).toContainEqual(expectedActor);
           expect(mockFindOrCreateUser).toHaveBeenCalledWith(

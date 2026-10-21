@@ -1144,7 +1144,9 @@ who owns the run:
 
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
-  status check.
+  status check. On macOS and Linux, completed host bash or script nodes in this run
+  or its sub-runs produce the same possible-background-work warning described below,
+  in `cleanupWarnings` and the cancellation event, including cooperative sub-run cancellation.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
   contacts that process and stops its owner before recording the run as `cancelled`.
   On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,

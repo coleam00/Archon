@@ -1,6 +1,8 @@
 import type { ChildProcess } from 'node:child_process';
 import { confirmProcessGroupsGone, type ProcessGroupStop } from '@archon/paths/plugin-process';
 
+import { COMPLETED_HOST_COMMAND_WARNING } from './host-command-cleanup';
+
 interface RecordedCommand {
   reaped: boolean;
   child: ChildProcess;
@@ -87,9 +89,7 @@ export class DetachedNodeProcesses {
               "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
             ];
         if (hasExitedCommands) {
-          warnings.push(
-            "Exited host commands may have left untracked background work. No survivor or cleanup is confirmed. Inspect the run's checkout processes with lsof, verify ownership, and stop leftovers before reusing or removing the checkout."
-          );
+          warnings.push(COMPLETED_HOST_COMMAND_WARNING);
         }
         return warnings;
       }),

@@ -1287,31 +1287,45 @@ describe('workflowCancelCommand', () => {
     expect(error).toContain(`Abandon it: archon workflow abandon ${runId}`);
   });
 
-  it("cancels cooperatively a sub-run with no owner of its own whose root's owner answers", async () => {
-    const workflowDb = require('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
-      id: runId,
-      workflow_name: 'implement',
-      status: 'running',
-      parent_run_id: 'root-run',
-    });
-    (workflowDb.getRunAncestry as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: 'root-run', status: 'running', parent_run_id: null },
-    ]);
-    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
-    mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
+  it.each([true, false])(
+    'cooperative sub-run cancellation preserves warnings (json=%s)',
+    async json => {
+      const workflowDb = require('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+        id: runId,
+        workflow_name: 'implement',
+        status: 'running',
+        parent_run_id: 'root-run',
+      });
+      (workflowDb.getRunAncestry as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'root-run', status: 'running', parent_run_id: null },
+      ]);
+      mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+      mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+      const eventDb = await import('@archon/core/db/workflow-events');
+      (eventDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          workflow_run_id: runId,
+          step_name: 'completed',
+          event_type: 'node_completed',
+          data: { type: 'bash' },
+        },
+      ]);
+      await workflowCancelCommand(createTestWorkflowHost(), runId, json);
 
-    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
-    expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
-    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
-      ok: true,
-      status: 'cancelled',
-      processStopped: false,
-    });
-  });
+      expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
+      expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
+      if (json) {
+        expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+          ok: true,
+          status: 'cancelled',
+          processStopped: false,
+          cleanupWarnings: [expect.stringContaining('untracked background work')],
+        });
+      } else expect(consoleSpy.mock.calls.flat().join(' ')).toContain('untracked background work');
+    }
+  );
 });
 
 describe('workflowRejectCommand', () => {

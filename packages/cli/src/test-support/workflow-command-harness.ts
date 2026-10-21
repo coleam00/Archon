@@ -803,6 +803,7 @@ const hostCodebases = await import('@archon/core/db/codebases');
 const hostUsers = await import('@archon/core/db/users');
 const hostConversations = await import('@archon/core/db/conversations');
 const hostMessages = await import('@archon/core/db/messages');
+const operationWorkflowEvents = await import('@archon/core/db/workflow-events');
 const realCreateSqlWorkflowHost = (await import('@archon/core/workflows/sql-host'))
   .createSqlWorkflowHost;
 mock.module('@archon/core/workflows/sql-host', () => ({
@@ -819,6 +820,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
       getUserRole: async () => undefined,
       store: {
         persistWorkflowEvent: mockPersistWorkflowEvent,
+        listWorkflowEvents: operationWorkflowEvents.listWorkflowEvents,
         signalWorkflowWait: (...args) => operationWorkflowDb.signalWorkflowWait(...args),
         deleteWorkflowRun: (...args) => operationWorkflowDb.deleteWorkflowRun(...args),
         getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
@@ -832,10 +834,8 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         labelAttentionWait: (...args) => operationWorkflowDb.labelAttentionWait(...args),
         cancelResumableRunsForConversation: (...args) =>
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
-        deleteWorkflowNodeSessions: (...args) =>
-          operationSessionDb.deleteWorkflowNodeSessions(...args),
-        findWorkflowRunsByIdPrefix: (...args) =>
-          operationWorkflowDb.findWorkflowRunsByIdPrefix(...args),
+        deleteWorkflowNodeSessions: operationSessionDb.deleteWorkflowNodeSessions,
+        findWorkflowRunsByIdPrefix: operationWorkflowDb.findWorkflowRunsByIdPrefix,
         listWorkflowRuns: (...args) => operationWorkflowDb.listDashboardRuns(...args),
       },
       hostStore: {

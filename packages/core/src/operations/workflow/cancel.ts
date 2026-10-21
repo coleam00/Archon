@@ -1,4 +1,7 @@
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
 import type { OperationContext } from './context';
@@ -43,7 +46,7 @@ export class CancelRefusedError extends Error {
  * before the run was recorded `cancelled`.
  */
 export type CancelWorkflowResult =
-  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean }
+  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean; cleanupWarnings?: string[] }
   | ({ kind: 'stopped'; pid: number } & Omit<AbandonWorkflowResult, 'cancelled'>);
 
 /**
@@ -168,6 +171,36 @@ async function cooperativeCancel(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<CancelWorkflowResult> {
-  const { cancelled } = await cancelByOperator(ctx, run.id);
-  return { kind: 'cooperative', run, cancelled };
+  const warnings =
+    process.platform !== 'win32' && (await hasCompletedHostCommand(ctx, run))
+      ? [COMPLETED_HOST_COMMAND_WARNING]
+      : [];
+  const { cancelled } = await cancelByOperator(ctx, run.id, warnings);
+  return {
+    kind: 'cooperative',
+    run,
+    cancelled,
+    ...(cancelled && warnings.length ? { cleanupWarnings: warnings } : {}),
+  };
+}
+
+async function hasCompletedHostCommand(ctx: OperationContext, run: WorkflowRun): Promise<boolean> {
+  if (!isContainerRun(run)) {
+    // Persisted node history also covers a sub-run whose owner is in another process.
+    const events = await ctx.store.listWorkflowEvents(run.id);
+    if (
+      events.some(event => {
+        if (event.event_type !== 'node_completed') return false;
+        const record = readNodeRecordEvent(event);
+        return record?.metadata
+          ? record.metadata.node.kind === 'exec'
+          : record?.data.type === 'bash' || record?.data.type === 'script';
+      })
+    )
+      return true;
+  }
+  for (const child of await ctx.store.findChildRuns(run.id)) {
+    if (await hasCompletedHostCommand(ctx, child)) return true;
+  }
+  return false;
 }

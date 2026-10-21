@@ -9,6 +9,7 @@ import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { findOrCreateUserByPlatformIdentity, setUserRole } from '@archon/core/db/users';
 import { createWorkflowRun, getWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
+import { persistWorkflowEvent } from '@archon/core/db/workflow-events';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -175,6 +176,31 @@ test('starter cancel succeeds; another member is forbidden; admins can act', asy
   expect(
     await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'admin' } })
   ).toMatchObject({ status: 'done', result: { resumed: true } });
+});
+
+test('cooperative cancellation exposes completed-command warnings to chat plugins', async () => {
+  const started = await run();
+  await persistWorkflowEvent({
+    workflow_run_id: started.id,
+    step_name: 'completed',
+    event_type: 'node_completed',
+    data: { type: 'bash' },
+  });
+  const owner = await startRunLiveOwner(started.id);
+  try {
+    expect(
+      await action({ runId: started.id, action: 'cancel', sender: { platformUserId: 'starter' } })
+    ).toMatchObject({
+      status: 'done',
+      result: {
+        kind: 'cooperative',
+        cancelled: true,
+        cleanupWarnings: [expect.stringContaining('untracked background work')],
+      },
+    });
+  } finally {
+    await owner.close();
+  }
 });
 
 test('approve and declared response preserve gate occurrence and resume with host identity', async () => {
