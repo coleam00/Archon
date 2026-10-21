@@ -709,11 +709,15 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(builtFor(43)), subject: { repo: PR.repo, number: 8 } });
     seed(at, { ...item(builtFor(44)), subject: { repo: PR.repo, number: 9 } });
     seed(at, { ...item(builtFor(45)), subject: { repo: PR.repo, number: 10 } });
+    seed(at, { ...item(builtFor(46)), subject: { repo: PR.repo, number: 11 } });
     const own = parkedOwn();
     seed(at, { ...own, facts: { ...own.facts, merge: { ...own.facts.merge, status: 'waiting' } } });
     const picked = run(at, 'facts', {}, { pr: { baseUnreadable: true, merged: [43], closed: [44], unreadable: [45] } });
     const output = ok(picked) as Record<string, unknown> & { settled: MergeSettled[] };
-    expect(output).toMatchObject({ path: 'record', base: null, items: [{ pr: PR, own_pr: true }] });
+    expect(output).toMatchObject({ path: 'record', base: null, items: [
+      { item: { repo: PR.repo, number: 11 }, pr: { repo: PR.repo, number: 46 }, facts: { head_revision: HEAD } },
+      { item: PR, pr: PR, own_pr: true, facts: { head_revision: HEAD } },
+    ] });
     expect(output.settled.map(done => [done.item.number, done.status, done.decision]).sort()).toEqual([
       [7, 'parked', 'parked'], [8, 'merged', 'merged'], [9, 'parked', 'parked'], [10, 'waiting', UNREADABLE],
     ].sort());
@@ -737,10 +741,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(open).toMatchObject({ claim: null, facts: { own_pr: own.facts.own_pr, merge: {
       status: 'waiting', approval: { head: HEAD, at: AT },
     } } });
-    expect(open.facts.merge?.decisions.at(-1)).toMatchObject({
-      decision: 'wait (unclear)', head: HEAD, reason: output.base_error, reran: false,
-    });
-    expect(mergeWaits(open)).toBe(true);
+    for (const number of [11, PR.number]) {
+      const companion = stored(at, number).value!;
+      expect(companion).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+      expect(companion.facts.merge?.decisions.at(-1)).toMatchObject({
+        decision: 'wait (unclear)', head: HEAD, reason: output.base_error, reran: false,
+      });
+      expect(mergeWaits(companion)).toBe(true);
+    }
     if (loseClaim) {
       expect(stored(at).value).toEqual(competing);
       expect(recorded.stderr).toContain('work/7 is no longer claimed by this run');
