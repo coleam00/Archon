@@ -351,7 +351,7 @@ test.each(['execContext', 'container', 'both'] as const)(
   'preparation replaces container isolation as a unit (%s)',
   async field => {
     await fixture(async f => {
-      const candidate = await f.paused();
+      const candidate = await f.paused(field === 'both' ? 'approved' : undefined);
       const events = await f.store.listWorkflowEvents(candidate.id);
       const container = {
         envId: f.envId,
@@ -364,6 +364,11 @@ test.each(['execContext', 'container', 'both'] as const)(
           discardChanges: f.discard,
         },
       };
+      const callerApply = mock(async () => ({
+        filesApplied: 0,
+        filesDeleted: 0,
+        warnings: [],
+      }));
       const pending = f.host.engine.resume({
         platform: new CLIAdapter(),
         conversationId: 'resume-proof',
@@ -376,7 +381,10 @@ test.each(['execContext', 'container', 'both'] as const)(
         }),
         options: {
           execContext: { kind: 'container', containerId: 'old-container' },
-          container,
+          container: {
+            ...container,
+            backend: { ...container.backend, applyChanges: callerApply },
+          },
         },
         prepareExecution: async () => ({
           cwd: f.cwd,
@@ -392,7 +400,12 @@ test.each(['execContext', 'container', 'both'] as const)(
         const admission = await pending;
         if (!admission.accepted) throw new Error('Expected admission');
         expect(await admission.settled).toMatchObject({ success: true });
-        expect(f.execute).toHaveBeenCalledTimes(1);
+        expect(f.execute).not.toHaveBeenCalled();
+        expect(f.apply).toHaveBeenCalledTimes(1);
+        expect(f.apply).toHaveBeenCalledWith(f.envId);
+        expect((await f.store.getWorkflowRun(candidate.id))?.metadata.writeback_outcome).toBe(
+          'applied'
+        );
       } else {
         await expect(
           pending.then(async admission => {
@@ -407,8 +420,9 @@ test.each(['execContext', 'container', 'both'] as const)(
         expect(await f.store.getWorkflowRun(candidate.id)).toEqual(candidate);
         expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
         expect(f.execute).not.toHaveBeenCalled();
+        expect(f.apply).not.toHaveBeenCalled();
       }
-      expect(f.apply).not.toHaveBeenCalled();
+      expect(callerApply).not.toHaveBeenCalled();
       expect(f.discard).not.toHaveBeenCalled();
       expect(f.suspend).not.toHaveBeenCalled();
     });
