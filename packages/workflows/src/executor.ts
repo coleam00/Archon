@@ -65,15 +65,10 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import {
-  deadlineWaitCursor,
-  executionClaim,
-  type PersistedNodeOutput,
-  type PriorFailedNode,
-} from './store';
+import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
-import { releaseRunScratch } from './run-scratch';
+import { enterRunExecution, releaseRunScratch } from './run-scratch';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
 
@@ -364,6 +359,7 @@ export async function executeWorkflow(
   // best-effort semantics). Source establishment is inside the paired window;
   // its stopped results also release through this try's finally.
   keepAwake.acquire();
+  const leaveRunExecution = enterRunExecution(workflowRun.id);
   // Set by every path that observes a rejected terminal status write — one arriving
   // from the DAG or a sub-run (the catch below), and the catch's own recovery write.
   // The finally-block backstop reads it: a second write over a channel that just
@@ -705,6 +701,7 @@ export async function executeWorkflow(
     // may throw — so it always pairs with the acquire above this try, on every
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
+    leaveRunExecution();
     if (workflowRun && !terminalStatusWriteFailed) {
       // A source release that lost to a cancel skips the backstop but still frees scratch.
       if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
@@ -751,20 +748,16 @@ async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<vo
 }
 
 /**
- * The executor owns the scratch of every run it ends or sees ended while executing: a
- * terminal write it did not make (a cooperative cancel, a fan-out cancel) commits while
- * its nodes may still write, so the store leaves scratch alone. They have stopped now.
- * A run released and resumed elsewhere carries a new claim, and its new executor owns it.
+ * The executor releases the scratch of every run it ends or sees ended while executing:
+ * a terminal write it did not make (a cooperative cancel, a fan-out cancel) commits while
+ * its nodes may still write. They have stopped now. A run released and resumed by another
+ * executor names that executor as its owner, so `releaseRunScratch` keeps its scratch
+ * while that executor may still run.
  */
 async function releaseScratchOnExit(deps: WorkflowDeps, executed: WorkflowRun): Promise<void> {
   const run = await deps.store.getWorkflowRun(executed.id).catch((err: unknown) => {
     getLog().warn({ workflowRunId: executed.id, err }, 'executor.exit_scratch_lookup_failed');
     return null;
   });
-  if (
-    run &&
-    isTerminalRunStatus(run.status) &&
-    executionClaim(run.metadata) === executionClaim(executed.metadata)
-  )
-    await releaseRunScratch(run);
+  if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
 }

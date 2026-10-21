@@ -11,7 +11,6 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import type { IIsolationStore } from '@archon/isolation';
-import { startRunLiveOwner } from '../../services/run-live-owner';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -571,17 +570,16 @@ describe('abandonWorkflow', () => {
     });
   });
 
-  // A top-level run's owner on this host that no longer answers is gone. One on another
-  // host, or the root process a sub-run executes in, may still be writing its scratch.
+  // Only an owner process on this host that is gone, or this process once it no longer
+  // executes the run, proves nothing of the run can still write its scratch.
   test.each([
-    ['a top-level run on this host', hostname(), null, false],
-    ['a top-level run on another host', 'other-host', null, true],
-    ['a sub-run on this host', hostname(), 'parent-run', true],
-  ] as const)('a silent owner of %s keeps its scratch: %p', async (_case, host, parent, kept) => {
+    ['this process, not executing it', hostname(), process.pid, false],
+    ['a live process', hostname(), process.ppid, true],
+    ['a process on another host', 'other-host', process.pid, true],
+  ] as const)('a silent owner that is %s keeps its scratch: %p', async (_case, host, pid, kept) => {
     const { run, checkout } = makeRunWithScratch(scratchRoot(), {
       status: 'running',
-      parent_run_id: parent,
-      metadata: { execution_owner: { host, pid: 4242, uid: process.getuid?.() } },
+      metadata: { execution_owner: { host, pid, uid: process.getuid?.() } },
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
@@ -731,26 +729,22 @@ describe('abandonResumableRunsForConversation', () => {
     expect(mockFindChildRuns).not.toHaveBeenCalled();
   });
 
-  // A paused run may still be executing a gate's sibling nodes; an owner that answers
-  // removes its scratch when its executor exits.
+  // A paused run may still be executing a gate's sibling nodes; its executor removes its
+  // scratch when it exits.
   test.each([
-    [false, false],
-    [true, true],
-  ] as const)(
-    'a reset run whose owner answers (%p) keeps its scratch: %p',
-    async (answering, kept) => {
-      const { run, checkout } = makeRunWithScratch(scratchRoot(), { id: `reset-${randomUUID()}` });
-      mockCancelResumableRunsForConversation.mockResolvedValueOnce([run]);
-      const owner = answering ? await startRunLiveOwner(run.id) : undefined;
-      try {
-        await abandonResumableRunsForConversation('conv-1', operator);
-      } finally {
-        await owner?.close();
-      }
+    ['this process, not executing it', process.pid, false],
+    ['a live process', process.ppid, true],
+  ] as const)('a reset run whose owner is %s keeps its scratch: %p', async (_case, pid, kept) => {
+    const { run, checkout } = makeRunWithScratch(scratchRoot(), {
+      id: `reset-${randomUUID()}`,
+      metadata: { execution_owner: { host: hostname(), pid, uid: process.getuid?.() } },
+    });
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([run]);
 
-      expect(existsSync(checkout)).toBe(kept);
-    }
-  );
+    await abandonResumableRunsForConversation('conv-1', operator);
+
+    expect(existsSync(checkout)).toBe(kept);
+  });
 
   test('reclaims every cancelled container run', async () => {
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([

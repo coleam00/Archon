@@ -22,7 +22,6 @@ import {
   workflowRunOriginSchema,
   validateWorkflowWaitMetadata,
   type WorkflowRun,
-  type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
@@ -34,7 +33,7 @@ import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normal
 import { getWorkflowRunStatus } from './workflow-run-reads';
 import { getLog } from './workflow-run-shared';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
-import { afterRunTerminalCommit } from './workflow-terminal-telemetry';
+import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -261,7 +260,7 @@ export async function cancelResumableRunsForConversation(
     getLog().error({ err, conversationId }, 'db.workflow_run_cancel_resumable_for_conv_failed');
     throw new Error(`Failed to cancel resumable runs for conversation: ${err.message}`);
   }
-  for (const run of cancelledRuns) await afterRunTerminalCommit(run.id, run.status);
+  for (const run of cancelledRuns) await reportRunTerminal(run.id);
   return cancelledRuns;
 }
 
@@ -306,7 +305,7 @@ export async function completeWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }
-  await afterRunTerminalCommit(id, 'running');
+  await reportRunTerminal(id);
 }
 
 /**
@@ -386,21 +385,8 @@ export async function failWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
     throw new Error(`Workflow run not found or not in pending/running state (id: ${id})`);
   }
-  // Pending or running: either way the run's executor, not this write, owns its scratch.
-  await afterRunTerminalCommit(id, 'running');
+  await reportRunTerminal(id);
   return { failed: true };
-}
-
-/** `id`'s status, locked for the rest of the transaction so its CAS sees the same row. */
-async function lockedRunStatus(
-  query: TransactionQuery,
-  id: string
-): Promise<WorkflowRunStatus | undefined> {
-  const result = await query<{ status: WorkflowRunStatus }>(
-    `SELECT status FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
-    [id]
-  );
-  return result.rows[0]?.status;
 }
 
 export async function cancelWorkflowRun(
@@ -408,10 +394,9 @@ export async function cancelWorkflowRun(
   event?: WorkflowCancellationEventDetails
 ): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
-  let result: { rowCount: number; priorStatus: WorkflowRunStatus | undefined };
+  let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
-      const priorStatus = await lockedRunStatus(query, id);
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled', completed_at = ${dialect.now()}
@@ -427,23 +412,23 @@ export async function cancelWorkflowRun(
           data,
         });
       }
-      return { rowCount: update.rowCount ?? 0, priorStatus };
+      return update;
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_cancel_failed');
     throw new Error(`Failed to cancel workflow run: ${err.message}`);
   }
-  const { rowCount, priorStatus } = result;
-  if (rowCount === 0 || !priorStatus) {
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (!cancelled) {
     // Idempotent no-op: the run was already terminal. Returned so callers can
     // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
     // Same info level as the resume CAS-miss signal for consistency (S2).
     getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
-    return { cancelled: false };
+  } else {
+    await reportRunTerminal(id);
   }
-  await afterRunTerminalCommit(id, priorStatus);
-  return { cancelled: true };
+  return { cancelled };
 }
 
 export async function cancelFanOutRun(
@@ -451,10 +436,9 @@ export async function cancelFanOutRun(
   reason: FanOutCancelReason
 ): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
-  let result: { rowCount: number; priorStatus: WorkflowRunStatus | undefined };
+  let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
-      const priorStatus = await lockedRunStatus(query, id);
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
@@ -470,20 +454,20 @@ export async function cancelFanOutRun(
           data: { reason, cancel_reason: 'fan_out' },
         });
       }
-      return { rowCount: update.rowCount ?? 0, priorStatus };
+      return update;
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, workflowRunId: id, reason }, 'db.workflow_run_fan_out_cancel_failed');
     throw new Error(`Failed to cancel fan-out run: ${err.message}`);
   }
-  const { rowCount, priorStatus } = result;
-  if (rowCount === 0 || !priorStatus) {
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (!cancelled) {
     getLog().info({ workflowRunId: id, reason }, 'db.workflow_run_fan_out_cancel_noop');
-    return { cancelled: false };
+  } else {
+    await reportRunTerminal(id);
   }
-  await afterRunTerminalCommit(id, priorStatus);
-  return { cancelled: true };
+  return { cancelled };
 }
 
 /** Release a running run whose source this host could not read (see `IWorkflowStore`). */

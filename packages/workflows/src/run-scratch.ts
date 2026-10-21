@@ -1,42 +1,38 @@
 /**
  * Remove a terminal run's scratch directory (`$ARTIFACTS_DIR/.archon/scratch`).
  *
- * Scratch is removed only where nothing of the run can still write into it:
- * - The executor removes it when it exits and the run is terminal. Its nodes have stopped
- *   by then, including after a cancel it only observed at a status check.
- * - A store removes it after a terminal write that ended a failed run
- *   (`releaseScratchAfterTerminalWrite`): the process executing the run wrote that failure on its way out.
- *   Any other terminal write leaves scratch alone. A cooperative cancel, `halt`, a
- *   cancelling gate or a fan-out cancel commits while the run's nodes may still be
- *   writing, and so does a write that ends a paused run: a gate pauses its run while
- *   sibling nodes in the same layer still execute.
- * - Cancel and abandon remove it themselves once they have stopped the run's owner.
- *   Abandon, a conversation reset and a cancelling gate reject remove a cancelled run's
- *   scratch when no owner answers for it; an owner that answers is an executor that
- *   removes scratch as it exits.
+ * Scratch is removed only once the run is terminal and nothing of it can still write
+ * into it. `releaseRunScratch` proves the second half itself: the run's recorded
+ * execution owner must be this process, no longer executing the run, or a process on
+ * this host that no longer exists. A run can be terminal while its executor still runs
+ * nodes: a cooperative cancel, `halt` or a fan-out cancel commits while they write, a
+ * gate pauses its run while sibling nodes in the same layer still execute, and a CLI
+ * stopped by a signal records `failed` before it ends its node trees.
+ * - The executor releases scratch when it exits and the run is terminal; its nodes have
+ *   stopped by then.
+ * - Cancel, abandon, a conversation reset and a cancelling gate reject release the
+ *   scratch of the runs they cancelled. Where the owner proof fails, scratch is kept: an
+ *   owner on another host, a recorded owner process still alive, or an output holder a
+ *   stop left running.
  * - A container run is skipped by all of these: its container mounts the artifacts
  *   directory and lives past the terminal write. The container backend calls
- *   `removeRunScratch` once the container is removed, so abandon, a conversation reset and
- *   a cancelling gate reject with no owner answering reclaim a paused container run's
- *   container.
+ *   `removeRunScratch` once the container is removed, so a gate reject that proves the
+ *   owner gone reclaims the container.
  *
  * Only the scratch child is removed; the rest of the artifacts directory is the
  * workflow's evidence and is never inspected.
  */
 
+import { hostname } from 'node:os';
 import { rm } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
+import { isPidProvablyGone } from '@archon/paths/process-owner';
 import {
   getRunArtifactsDirForRoot,
   getRunScratchDir,
   resolveRunStorageRoot,
 } from '@archon/paths/archon-paths';
-import {
-  isContainerRun,
-  isTerminalRunStatus,
-  type WorkflowRun,
-  type WorkflowRunStatus,
-} from './schemas/workflow-run';
+import { isContainerRun, readExecutionOwner, type WorkflowRun } from './schemas/workflow-run';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -46,28 +42,50 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type ScratchRun = Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>;
 
+/** Executions of each run in progress in this process; a run can re-enter itself. */
+const executingHere = new Map<string, number>();
+
 /**
- * A store's duty after a terminal write it won: remove scratch when the write moved `run`
- * from `failed`, the one status no executor can still be writing under, into another
- * terminal one. A terminal event appended without that status change ends nothing.
- * Never throws.
+ * Count `runId` as executing in this process until the returned function is called. The
+ * executor holds it while the run's nodes can run, so a release in the same process can
+ * tell an executor that is still running from one that has exited.
  */
-export async function releaseScratchAfterTerminalWrite(
-  run: ScratchRun & Pick<WorkflowRun, 'status'>,
-  priorStatus: WorkflowRunStatus
-): Promise<void> {
-  if (!isTerminalRunStatus(run.status) || run.status === priorStatus) return;
-  if (priorStatus === 'failed') await releaseRunScratch(run);
+export function enterRunExecution(runId: string): () => void {
+  executingHere.set(runId, (executingHere.get(runId) ?? 0) + 1);
+  return () => {
+    const count = (executingHere.get(runId) ?? 1) - 1;
+    if (count > 0) executingHere.set(runId, count);
+    else executingHere.delete(runId);
+  };
 }
 
 /**
- * Remove a terminal run's scratch. The caller guarantees nothing of the run can still
- * write into it. Never throws: the status write is authoritative, and a failed removal
- * is only logged.
+ * True only when no executor of `run` can still be running: its recorded execution owner
+ * is this process and it is not executing the run, or a process on this host that no
+ * longer exists. Every executor stamps the runs it executes, a sub-run or a parent
+ * resumed in its child's process included, so the record names the process that last
+ * ran the run's nodes. A reused pid reads as alive and keeps scratch.
+ */
+export function noExecutorCanWrite(run: Pick<WorkflowRun, 'id' | 'metadata'>): boolean {
+  const owner = readExecutionOwner(run.metadata);
+  if (owner?.host !== hostname()) return false;
+  if (owner.pid === process.pid) return !executingHere.has(run.id);
+  return isPidProvablyGone(owner.pid);
+}
+
+/**
+ * Remove a terminal run's scratch once no executor can still write it. The caller
+ * guarantees the run is terminal and that nothing it left running outside the executor,
+ * such as an output holder a stop could not end, still writes. Never throws: the status
+ * write is authoritative, and a failed removal is only logged.
  */
 export async function releaseRunScratch(run: ScratchRun): Promise<void> {
   if (isContainerRun(run)) {
     getLog().debug({ workflowRunId: run.id }, 'run_scratch.left_to_container_teardown');
+    return;
+  }
+  if (!noExecutorCanWrite(run)) {
+    getLog().debug({ workflowRunId: run.id }, 'run_scratch.kept_for_live_owner');
     return;
   }
   // A row with no trusted output_root (created before the column existed, or on the

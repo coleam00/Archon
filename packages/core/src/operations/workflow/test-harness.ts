@@ -206,8 +206,8 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
 }
 
 /**
- * A paused run whose recorded owner ran on this host as this user, with a scratch
- * checkout on disk under `outputRoot`.
+ * A paused run whose recorded owner is this process, which is not executing it, with a
+ * scratch checkout on disk under `outputRoot`.
  */
 export function makeRunWithScratch(
   outputRoot: string,
@@ -218,7 +218,7 @@ export function makeRunWithScratch(
     ...overrides,
     metadata: {
       ...makePausedRun().metadata,
-      execution_owner: { host: hostname(), pid: 4242, uid: process.getuid?.() },
+      execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
       ...overrides.metadata,
     },
   });

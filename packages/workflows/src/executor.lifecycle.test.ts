@@ -16,13 +16,16 @@ import {
 } from './executor/test-utils';
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { existsSync, mkdirSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { NodeEventWriteError } from './node-event-write';
 import { hydrateResumableRun } from './run-resume';
+import { noExecutorCanWrite } from './run-scratch';
 import type { WorkflowRunNodeSession } from './schemas';
-import { type DagResumeSnapshot, EXECUTION_CLAIM_METADATA_KEY, type IWorkflowStore } from './store';
+import type { DagResumeSnapshot, IWorkflowStore } from './store';
+import { EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -446,21 +449,25 @@ describe('scratch on exit', () => {
   // A cooperative cancel commits while nodes still run; what they write after it is
   // removed once the executor has stopped them.
   it.each([
-    ['cancelled', false, undefined, undefined],
-    ['paused', true, undefined, undefined],
+    ['cancelled', false, undefined, process.pid],
+    ['paused', true, undefined, process.pid],
     // The layer's source release lost to that cancel, so the executor stopped executing.
-    ['cancelled', false, false, undefined],
+    ['cancelled', false, false, process.pid],
     // Released, then resumed and cancelled by another executor whose nodes may still write.
-    ['cancelled', true, true, 'claim-of-next-executor'],
+    ['cancelled', true, true, process.ppid],
   ] as const)(
     'a run that exits %s keeps its scratch: %p (source released: %p)',
-    async (status, kept, released, claim) => {
+    async (status, kept, released, ownerPid) => {
       if (released !== undefined)
         mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released });
       // Under the test's mocked ARCHON_HOME, so the run's output_root is trusted.
       const root = trackTempRoot(join(WS, '_cwd', `exit-scratch-${crypto.randomUUID()}`));
       const run = makeRun({ status, output_root: root });
-      if (claim) run.metadata = { ...run.metadata, [EXECUTION_CLAIM_METADATA_KEY]: claim };
+      // Admission stamps this process; a later executor restamps itself.
+      run.metadata = {
+        ...run.metadata,
+        [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: ownerPid },
+      };
       const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
       mkdirSync(join(checkout, '.git'), { recursive: true });
       const store = makeStore({
@@ -473,6 +480,26 @@ describe('scratch on exit', () => {
       expect(existsSync(checkout)).toBe(kept);
     }
   );
+
+  // A parent resumed in its child's process publishes no owner endpoint; a release in
+  // this process must still see it executing.
+  it('holds its run as executing in this process until it exits', async () => {
+    const run = makeRun({ status: 'cancelled' });
+    run.metadata = {
+      ...run.metadata,
+      [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid },
+    };
+    let duringExecution: boolean | undefined;
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      duringExecution = noExecutorCanWrite(run);
+      return undefined;
+    });
+
+    await startWorkflow({ store: makeStore({ getWorkflowRun: mock(async () => run) }) });
+
+    expect(duringExecution).toBe(false);
+    expect(noExecutorCanWrite(run)).toBe(true);
+  });
 });
 
 // Terminal telemetry is reported by the run store when a terminal write commits; the

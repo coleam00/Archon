@@ -22,7 +22,7 @@ import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
-import { afterRunTerminalCommit } from './workflow-terminal-telemetry';
+import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 /**
  * SQL predicate matching a run whose approval gate is still OPEN: the row is
@@ -201,7 +201,7 @@ export async function resolveAndCancelApprovalGate(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
     throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
   }
-  if (outcome.resolved) await afterRunTerminalCommit(id, 'paused');
+  if (outcome.resolved) await reportRunTerminal(id);
   return outcome;
 }
 

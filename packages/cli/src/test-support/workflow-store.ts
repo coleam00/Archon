@@ -1,7 +1,6 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
-import { releaseScratchAfterTerminalWrite } from '@archon/workflows/run-scratch';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isPathInside } from '@archon/paths';
@@ -149,19 +148,6 @@ export function createInMemoryWorkflowStore(
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
-  const afterTerminalWrites = async (
-    priorRuns: Map<string, WorkflowRun>,
-    priorIds: Set<string>
-  ): Promise<void> => {
-    for (const event of events) {
-      if (priorIds.has(event.id)) continue;
-      if (!TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)) continue;
-      const id = event.workflow_run_id;
-      const [run, prior] = [runs.get(id), priorRuns.get(id)];
-      if (run && prior) await releaseScratchAfterTerminalWrite(run, prior.status);
-      onTerminal(id);
-    }
-  };
   // Unqueued: admission calls it from inside its own queued operation.
   const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
     const nextRuns = structuredClone(runs);
@@ -179,10 +165,14 @@ export function createInMemoryWorkflowStore(
       if (!priorIds.has(event.id))
         feed.push({ cursor: cursor(++eventOrder), event: structuredClone(event) });
     }
-    const priorRuns = runs;
     runs = nextRuns;
     events = nextEvents;
-    await afterTerminalWrites(priorRuns, priorIds);
+    for (const event of nextEvents)
+      if (
+        !priorIds.has(event.id) &&
+        TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
+      )
+        onTerminal(event.workflow_run_id);
     return result;
   };
   let queue: Promise<void> = Promise.resolve();

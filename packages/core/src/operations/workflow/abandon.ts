@@ -10,7 +10,6 @@ import {
   findParentBlockedOn,
   MAX_CASCADE_RUNS,
   reclaimCancelledRunContainer,
-  noOwnerCanWrite,
   stopLiveOwner,
   type AbandonAttemptResult,
   type AbandonOwnerOutcome,
@@ -90,7 +89,9 @@ export async function abandonWorkflow(
     owner.kind === 'stopped' ? owner.cleanupWarnings : undefined
   );
   const { warnings, releasedWorktrees } = await releaseAbandonedWorktrees(ctx, run, result, owner);
-  if (result.cancelled && runWritersStopped(run, owner)) await releaseRunScratch(run);
+  // An output holder the stop left running may still write scratch.
+  if (result.cancelled && !(owner.kind === 'stopped' && owner.cleanupWarnings?.length))
+    await releaseRunScratch(run);
   return {
     run,
     cancelled: result.cancelled,
@@ -260,20 +261,6 @@ async function persistCleanupWarnings(
   }
 }
 
-/**
- * Whether nothing of `run` can still write once abandon or cancel handled its owner: the
- * owner was stopped and left no output holder running, or nothing answers for a top-level
- * run whose recorded owner ran on this host as this user. A sub-run's silence proves
- * nothing: it executes in its root run's process, which may still be running it.
- */
-export function runWritersStopped(run: WorkflowRun, owner: AbandonOwnerOutcome): boolean {
-  if (owner.kind === 'stopped') return !owner.cleanupWarnings?.length;
-  return (
-    !run.parent_run_id &&
-    unreachableOwnerReason(run, readExecutionOwner(run.metadata), run, owner) === undefined
-  );
-}
-
 /** Why abandon cannot account for `row`'s execution owner from here, or undefined when it can. */
 function unreachableOwnerReason(
   row: WorkflowRun,
@@ -353,7 +340,7 @@ export async function abandonResumableRunsForConversation(
       const release = await releaseRunWorktree(ctx, run);
       cleanupWarnings.push(...release.warnings);
       if (release.released) releasedWorktrees.push(release.released);
-      if (await noOwnerCanWrite(ctx, run)) await releaseRunScratch(run);
+      await releaseRunScratch(run);
     }
     const blocked = await findParentBlockedOn(ctx, run);
     if (blockedParentRunId === null) blockedParentRunId = blocked;

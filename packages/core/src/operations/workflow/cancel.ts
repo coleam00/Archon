@@ -1,13 +1,11 @@
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
-import { runWritersStopped } from './abandon';
 import type { OperationContext } from './context';
 import {
   cancelByOperator,
   describeAbandonOwner,
   recordAbandoned,
-  rootRunIdOf,
   stopLiveOwner,
   type AbandonOwnerOutcome,
   type AbandonWorkflowResult,
@@ -129,7 +127,8 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
-  if (runWritersStopped(run, owner)) await releaseRunScratch(run);
+  // An output holder the stop left running may still write scratch.
+  if (!owner.cleanupWarnings?.length) await releaseRunScratch(run);
   return { kind: 'stopped', pid: owner.pid, ...recorded };
 }
 
@@ -158,6 +157,11 @@ async function cancelWithoutOwner(
         'If its process is gone, abandon the run to release it.',
     ].join('\n')
   );
+}
+
+/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
+async function rootRunIdOf(ctx: OperationContext, runId: string): Promise<string | undefined> {
+  return (await ctx.store.getRunAncestry(runId)).at(-1)?.id;
 }
 
 async function cooperativeCancel(

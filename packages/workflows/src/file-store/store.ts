@@ -14,7 +14,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowRun, WorkflowRunStatus } from '../schemas/workflow-run';
+import type { WorkflowRun } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -23,7 +23,6 @@ import {
 import { workflowRunNodeSessionSchema } from '../schemas/workflow-run-node-session';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { reportRunTerminalTelemetry } from '../run-terminal-telemetry';
-import { releaseScratchAfterTerminalWrite } from '../run-scratch';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import {
   createTransactionView,
@@ -99,11 +98,7 @@ export async function createFileWorkflowStore(
     ) => Promise<T>,
     { events: loadEvents = true }: { events?: boolean } = {}
   ): Promise<T> {
-    const reports: {
-      run: WorkflowRun;
-      priorStatus: WorkflowRunStatus | undefined;
-      events: WorkflowEventRow[];
-    }[] = [];
+    const reports: { run: WorkflowRun; events: WorkflowEventRow[] }[] = [];
     const result = await commit(root, ids, async runs => {
       const before = structuredClone(runs);
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
@@ -125,7 +120,6 @@ export async function createFileWorkflowStore(
         if (added.some(event => TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)))
           reports.push({
             run: structuredClone(run),
-            priorStatus: before.get(id)?.status,
             events: structuredClone(runEvents),
           });
       }
@@ -143,8 +137,6 @@ export async function createFileWorkflowStore(
       };
     });
     for (const report of reports) {
-      if (report.priorStatus)
-        await releaseScratchAfterTerminalWrite(report.run, report.priorStatus);
       try {
         const usage = await foldDagResumeSnapshot(report.events, report.run.id);
         reportRunTerminalTelemetry(report.run, report.events, usage);
