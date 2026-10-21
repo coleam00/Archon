@@ -911,7 +911,7 @@ test.each(
 );
 
 test('a paused manual holder permits a foreign reader beside an old released slot', async () => {
-  const { root, store, slotPath, wait } = await releasedHolderFixture(
+  const { store, slotPath, wait } = await releasedHolderFixture(
     'released-before-upgrade',
     'intact'
   );
