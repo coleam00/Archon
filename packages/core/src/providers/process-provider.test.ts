@@ -635,19 +635,18 @@ test('provider lifecycle events reach the host log as closed values', async () =
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   const error = spyOn(providerLog, 'error').mockImplementation(() => {});
   try {
-    await collect(
-      provider('logs-untrusted', 'warn').sendQuery('process_ignored_sigterm', tmpdir())
-    );
+    await collect(provider('logs-untrusted', 'warn').sendQuery('process_still_exiting', tmpdir()));
     await collect(provider('logs-untrusted', 'error').sendQuery('process_abnormal_exit', tmpdir()));
     expect(warn.mock.calls).toEqual([
-      [{ lifecycle: 'process_ignored_sigterm' }, 'provider.plugin.log'],
+      [{ lifecycle: 'process_still_exiting', waitedMs: 60_000 }, 'provider.plugin.log'],
     ]);
     expect(error.mock.calls).toEqual([
-      [{ lifecycle: 'process_abnormal_exit' }, 'provider.plugin.log'],
+      [{ lifecycle: 'process_abnormal_exit', waitedMs: 60_000 }, 'provider.plugin.log'],
     ]);
     const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
     expect(logged).not.toContain('credential-secret');
     expect(logged).not.toContain('provider.forged');
+    expect(logged).not.toContain('forgedCount');
   } finally {
     warn.mockRestore();
     error.mockRestore();

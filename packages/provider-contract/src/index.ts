@@ -10,7 +10,11 @@ export {
   type ProviderFailure,
   type ProviderFailureClass,
 } from './failure';
-export { providerLifecycleEventSchema, type ProviderLifecycleEvent } from './lifecycle';
+export {
+  providerLifecycleEventSchema,
+  providerLifecycleWaitedMsSchema,
+  type ProviderLifecycleEvent,
+} from './lifecycle';
 export {
   credentialSourceSchema,
   credentialStatusSchema,

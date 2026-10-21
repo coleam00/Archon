@@ -234,6 +234,8 @@ await serveProvider(
                 msg: 'credential-secret private message',
                 bindings: {
                   ...(prompt ? { failureClass: prompt, lifecycle: prompt } : {}),
+                  waitedMs: 60_000,
+                  forgedCount: 7,
                   module: 'provider.forged',
                 },
               },

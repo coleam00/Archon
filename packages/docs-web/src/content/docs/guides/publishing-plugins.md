@@ -100,8 +100,9 @@ sink with `{ level, msg, bindings }` to send metadata through `_archon/log`.
 The host logs `provider.plugin.log` at the supplied severity through `provider.<id>`,
 using its own descriptor id. Set `bindings.failureClass` to one of the contract's failure
 classes, or `bindings.lifecycle` to one of its lifecycle events
-(`providerLifecycleEventSchema`), on any record the operator should see. The host forwards
-those values and nothing else, and drops a record with neither. `msg`, plugin module identity, and all
+(`providerLifecycleEventSchema`), on any record the operator should see. With a lifecycle
+event, a non-negative integer `bindings.waitedMs` is forwarded too. The host forwards
+those values and nothing else, and drops a record with neither enum value. `msg`, plugin module identity, and all
 other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before
 it writes. Stderr remains withheld.

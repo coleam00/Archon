@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message)` after its turn finished because Codex took more than a few seconds to exit. With many Codex nodes ending together, Codex processes often outlast the three seconds before SIGTERM and then exit cleanly; the node now waits up to 30 seconds after SIGTERM for that clean exit before it treats the process as not ended. (#4928)
+- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message)` after its turn finished because Codex took more than a few seconds to exit. With many Codex nodes ending together, Codex processes often outlast the three seconds before SIGTERM and then exit cleanly; the node now waits after SIGTERM for as long as Codex takes to exit, logging `codex.app_server_still_exiting` every 30 seconds, instead of failing at a fixed deadline. Cancelling the run still ends the wait. (#4928)
 
 ## [0.12.1] - 2026-10-17
 

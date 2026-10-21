@@ -60,12 +60,12 @@ export type ConnectionEnd =
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
 
 /**
- * How long a SIGTERMed app-server gets to exit. A Codex already shutting down does not
- * exit sooner for the signal: on a loaded machine, concurrent Codex processes were seen
- * taking over six seconds and then exiting 0. Only a Codex that ignores SIGTERM waits
- * this long, and its caller then reports the process as not ended.
+ * How often a SIGTERMed app-server that has not exited yet is reported. There is no
+ * deadline: a Codex shutting down on a loaded machine was seen taking several seconds
+ * longer each time load rose, then exiting 0, and a deadline turned that slow cleanup
+ * into a failed node. Cancelling the run stops the provider plugin, which ends the wait.
  */
-const TERM_EXIT_GRACE_MS = 30_000;
+const TERM_EXIT_WARN_MS = 30_000;
 
 /** How much raw stderr a connection buffers, and how much of it becomes evidence. */
 const STDERR_BUFFER_CHARS = 8000;
@@ -269,21 +269,24 @@ export class AppServerConnection {
 
   /**
    * Ends the process: close stdin, which makes app-server exit, then SIGTERM if it has not
-   * exited within `graceMs`. Never SIGKILL: SIGTERM lets Codex stop the commands it
-   * started, while SIGKILL orphans them.
+   * exited within `graceMs`, then wait for the exit however long it takes. Never SIGKILL:
+   * SIGTERM lets Codex stop the commands it started, while SIGKILL orphans them.
    */
-  async shutdown(graceMs: number): Promise<ConnectionEnd | undefined> {
+  async shutdown(graceMs: number, warnMs = TERM_EXIT_WARN_MS): Promise<ConnectionEnd | undefined> {
     if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
     if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
-    if (!(await this.exitsWithin(TERM_EXIT_GRACE_MS))) {
+    let waitedMs = 0;
+    while (!(await this.exitsWithin(warnMs))) {
+      waitedMs += warnMs;
       getLog().warn(
         {
           pid: this.child.pid,
-          lifecycle: 'process_ignored_sigterm' satisfies ProviderLifecycleEvent,
+          waitedMs,
+          lifecycle: 'process_still_exiting' satisfies ProviderLifecycleEvent,
         },
-        'codex.app_server_ignored_sigterm'
+        'codex.app_server_still_exiting'
       );
     }
     return this.endedWith;

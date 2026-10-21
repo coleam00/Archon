@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, spyOn } from 'bun:test';
+import { describe, test, expect, mock } from 'bun:test';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
@@ -320,20 +320,17 @@ describe('AppServerConnection', () => {
     expect(signals).toEqual(['SIGTERM']);
   });
 
-  test('a process that ignores SIGTERM is logged as a lifecycle event', async () => {
-    const ignores = rawChild();
-    // Collapse the 30s post-SIGTERM grace so the test does not wait it out.
-    const realSetTimeout = globalThis.setTimeout;
-    const timeouts = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) =>
-      realSetTimeout(fn, 0)) as unknown as typeof setTimeout);
-    try {
-      await AppServerConnection.start(BINARY, [], {}, ignores.spawner).shutdown(20);
-    } finally {
-      timeouts.mockRestore();
-    }
+  test('shutdown has no deadline after SIGTERM: a Codex still exiting is awaited until it exits', async () => {
+    // A Codex on a loaded machine keeps exiting long after SIGTERM, then exits 0. Waiting
+    // through several warning intervals must still return that clean exit.
+    const slow = rawChild(child => {
+      setTimeout(() => child.emit('close', 0, null), 120);
+    });
+    const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(5, 20);
+    expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle: 'process_ignored_sigterm' }),
-      'codex.app_server_ignored_sigterm'
+      expect.objectContaining({ lifecycle: 'process_still_exiting', waitedMs: 40 }),
+      'codex.app_server_still_exiting'
     );
   });
 });
