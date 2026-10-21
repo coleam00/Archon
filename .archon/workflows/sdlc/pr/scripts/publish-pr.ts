@@ -187,7 +187,7 @@ function recordPublishedPr(claimPath: string, pr: PrRecord): void {
   }
 }
 
-function publish(): PrRecord {
+function publish(hasDescription: boolean): PrRecord {
   const source = forgeSource();
   const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
@@ -220,7 +220,7 @@ function publish(): PrRecord {
     // The run continues a named pull request: its draft state belongs to its author,
     // and its description changes only by the section publish() applies when allowed.
     const pr = awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    if (hasDescription) recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
     return pr;
   }
 
@@ -231,7 +231,7 @@ function publish(): PrRecord {
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
     const pr = awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    if (hasDescription) recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
     return pr;
   }
 
@@ -292,7 +292,7 @@ function publish(): PrRecord {
 // Validate the artifact before pushing; check composition against the live body before editing.
 async function publishWithDescription(): Promise<PrRecord> {
   const section = await preparedSection(artifactsDir());
-  const pr = publish();
+  const pr = publish(section !== undefined);
   // The edit does not move the head, so the head-verified record stays the output.
   if (section !== undefined) await applyDescription(pr, section, forgeSource());
   return pr;

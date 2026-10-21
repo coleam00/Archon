@@ -79,6 +79,23 @@ function publishPr(
 }
 
 describe('publish-pr opens the pull request at most once', () => {
+  it.each(['gh', 'forge'] as const)('continues without a publication record when no description is prepared through %s', source => {
+    for (const existing of [42, null]) {
+      const result = publishPr({
+        source,
+        target: { existing },
+        prepareBody: false,
+        forgeAt: head => ({ kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }) }),
+        preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
+      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+      expect(result.bodies).toEqual([]);
+      expect(existsSync(join(result.artifacts, 'pr-create-verified.json'))).toBe(false);
+    }
+  });
+
   it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
       nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];

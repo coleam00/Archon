@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import {
   invokeForge,
   parsePrRecord,
+  qualifiedRepo,
   record,
   sameRepo,
   type ForgeSource,
@@ -42,13 +43,9 @@ export function decodePrPublicationRecord(value: unknown):
   | { readonly state: 'verified'; readonly pr: PrRecord } {
   const row = record(value);
   if (row && 'pr' in row) return { state: 'verified', pr: parsePrRecord(row.pr) };
-  const repo = record(row?.repo);
-  const headRepo = record(row?.headRepo);
   if (
-    typeof repo?.host !== 'string' || repo.host.trim() === '' ||
-    typeof repo.path !== 'string' || repo.path.trim() === '' ||
-    typeof headRepo?.host !== 'string' || headRepo.host.trim() === '' ||
-    typeof headRepo.path !== 'string' || headRepo.path.trim() === '' ||
+    !qualifiedRepo(row?.repo) ||
+    !qualifiedRepo(row?.headRepo) ||
     typeof row?.head !== 'string' || row.head === ''
   ) throw new Error('invalid PR publication record');
   return { state: 'started' };
