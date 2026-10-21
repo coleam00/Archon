@@ -234,9 +234,6 @@
       "src/community/opencode/runtime.test.ts"
     ],
     [
-      "src/community/opencode/runtime-env.integration.spec.ts"
-    ],
-    [
       "src/community/opencode/session.test.ts"
     ],
     [

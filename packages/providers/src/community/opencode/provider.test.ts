@@ -132,7 +132,7 @@ mock.module('@opencode-ai/sdk', () => ({
   createOpencodeClient: mockCreateOpencodeClient,
 }));
 
-import { OpencodeProvider } from './provider';
+import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
 import { normalizeTokens } from './tokens';
 
 describe('normalizeTokens', () => {
@@ -225,6 +225,7 @@ describe('OpencodeProvider', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+    resetEmbeddedRuntime();
   });
 
   afterEach(async () => {
@@ -1415,38 +1416,6 @@ describe('OpencodeProvider', () => {
       path: { id: 'session-1' },
       query: { directory: '/tmp' },
     });
-  });
-
-  test('concurrent requests get separate runtime environments without leaking to the host', async () => {
-    const original = process.env.ARCHON_WORKFLOW_CODEBASE_ID;
-    const seen: Array<string | undefined> = [];
-    mockCreateOpencode.mockImplementation(async () => {
-      seen.push(process.env.ARCHON_WORKFLOW_CODEBASE_ID);
-      return makeRuntime();
-    });
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-    try {
-      await Promise.all(
-        ['project-a', 'project-b'].map(scope =>
-          consume(
-            new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
-              assistantConfig: TEST_MODEL,
-              env: { ARCHON_WORKFLOW_CODEBASE_ID: scope },
-            })
-          )
-        )
-      );
-      expect(seen.sort()).toEqual(['project-a', 'project-b']);
-      expect(process.env.ARCHON_WORKFLOW_CODEBASE_ID).toBe(original);
-    } finally {
-      mockCreateOpencode.mockImplementation(async () => {
-        const startupError = startupErrors.shift();
-        if (startupError) throw startupError;
-        const runtime = runtimeQueue.shift() ?? makeRuntime();
-        createdRuntimes.push(runtime);
-        return runtime;
-      });
-    }
   });
 
   test('cleanup closes the embedded runtime after completion', async () => {

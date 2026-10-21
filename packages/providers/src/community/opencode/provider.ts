@@ -29,6 +29,7 @@ import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 
 export { parseModelRef } from './config';
+export { resetEmbeddedRuntime } from './runtime';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -119,7 +120,7 @@ export class OpencodeProvider implements IAgentProvider {
       throw new Error('OpenCode query aborted');
     }
 
-    const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal, requestOptions?.env);
+    const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
     const client = embedded.client;
 
     try {

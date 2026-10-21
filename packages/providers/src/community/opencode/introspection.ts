@@ -67,7 +67,7 @@ interface ProviderIntrospectionClient {
 
 /**
  * Introspect OpenCode's provider catalog + auth state via the embedded server.
- * Starts a dedicated runtime and closes it when done. Throws on
+ * Starts the runtime if needed and releases the reference when done. Throws on
  * runtime/introspection failure — callers map it to a 503, never a silent [].
  */
 export async function introspectOpencodeCredentials(

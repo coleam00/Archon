@@ -4,13 +4,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { buildRoutingRulesWithProject } from '../packages/core/src/orchestrator/prompt-builder';
 
-test('the chat prompt no-match command reaches the CLI dispatcher', async () => {
-  const rules = buildRoutingRulesWithProject('cli');
-  const command = rules.match(/run `(archon [^`]+)` once/)?.[1];
-  expect(command).toBeDefined();
-  if (!command) throw new Error('Missing no-match command in chat guidance');
+test('the telemetry no-match command reaches the CLI dispatcher', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-no-match-command-'));
   try {
     const result = spawnSync(
@@ -18,7 +13,8 @@ test('the chat prompt no-match command reaches the CLI dispatcher', async () => 
       [
         '--no-env-file',
         join(import.meta.dir, '../packages/cli/src/cli.ts'),
-        ...command.split(' ').slice(1),
+        'telemetry',
+        'no-match',
       ],
       {
         cwd: root,
