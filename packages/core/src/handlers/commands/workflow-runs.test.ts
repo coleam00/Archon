@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, test, expect, beforeEach, afterAll, mock } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
