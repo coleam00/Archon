@@ -2,6 +2,8 @@
 # implement changes no code and records it, the pr step prepares and publishes it to
 # the pull request the caller named, and the review passes in the same round, so the
 # rounds end delivered after one round. round and outcome run for real.
+# scripts/sdlc-forge-delivery.test.ts also runs this composition with the real
+# publisher and a fake GitHub API, and checks the body at the review boundary.
 forge: { source: forge }
 implement__implement:
   done: true
@@ -45,6 +47,4 @@ fixture:
   inputs:
     pull_request: "42"
   reached: [pr__publish, review__synthesize, ci, round, update-pr-body, outcome]
-  resolved-text-contains:
-    pr__prepare: "Description section: **true**"
 exec-code: true

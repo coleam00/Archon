@@ -22,6 +22,12 @@ import {
   type ScriptRun,
 } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fixtures/sdlc-fake-github';
+import { providerRegistry } from '@archon/providers';
+import { discoverWorkflows } from '../packages/workflows/src/workflow-discovery';
+import { dryRunWorkflow } from '../packages/workflows/src/dry-run';
+import { parseFixtureFile } from '../packages/workflows/src/fixture-runner';
+import { resolveWorkflow, resolvedBodyNodes } from '../packages/workflows/src/graph-plan';
+import { DESCRIPTION_SECTION } from '../.archon/workflows/sdlc/.shared/pr';
 import { closeComments, type Closure, planClose } from '../.archon/workflows/sdlc/.shared/close';
 
 const { runPackScript } = packScriptRunner();
@@ -216,6 +222,140 @@ describe('the forge source delivers through plugin operations', () => {
     ]);
   }, 120_000);
 });
+
+// Agent outputs are fixture data; publication and the review read use the real
+// composed bindings and publisher, CLI, and GitHub adapter against the fake API.
+it('a description-only round publishes prepared content before review and finishes in one round', async () => {
+  const catalog = await discoverWorkflows(REPO_ROOT, {
+    providers: providerRegistry,
+    loadDefaults: false,
+  });
+  const entry = catalog.workflows.find(row => row.workflow.name === 'archon-deliver-block');
+  if (!entry) throw new Error(JSON.stringify(catalog.errors));
+  const fixturePath = join(
+    REPO_ROOT,
+    '.archon/workflows/sdlc/deliver/fixtures/description-only.stubs.yaml'
+  );
+  const fixture = parseFixtureFile(readFileSync(fixturePath, 'utf8'), fixturePath);
+  const evidence = '| case | ms |\n| real publisher | 12 |';
+  const authored = 'Written by the author.  \n\n';
+
+  for (const loseBinding of [false, true]) {
+    const host = forgeHost();
+    const initial = runPackScript('pr/scripts/publish-pr', {
+      cwd: CHECKOUT,
+      source: 'forge',
+      forge: { kind: 'command', argv: host.argv },
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: 'feature',
+        INPUTS_BASE: 'dev',
+        INPUTS_EXISTING: '',
+        INPUTS_PULL_REQUEST: '',
+        INPUTS_TITLE: 'Description-only fixture',
+        INPUTS_DRAFT: 'true',
+        INPUTS_DESCRIPTION: '',
+        INPUTS_PUBLISH_DESCRIPTION: 'false',
+        WORKFLOW_ID: 'run',
+        INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }),
+      },
+      artifacts: { 'pr-body.md': authored },
+    });
+    expect({ code: initial.code, stderr: initial.stderr }).toMatchObject({ code: 0 });
+    const preparedStub = fixture.stubs.pr__prepare;
+    if (typeof preparedStub !== 'object' || preparedStub === null || Array.isArray(preparedStub))
+      throw new Error('description-only fixture has no prepared PR intent');
+    const prepared = {
+      ...preparedStub,
+      repo: PR.repo,
+      head_repo: PR.repo,
+      head: 'feature',
+      description: { type: 'archon_artifact', run_id: 'dry-run', path: 'pr-description.md' },
+    };
+    const stubs = { ...fixture.stubs };
+    for (const id of ['pr__prepare', 'pr__publish', 'review__scope']) delete stubs[id];
+    const workflow = resolveWorkflow({
+      ...entry.workflow,
+      nodes: entry.workflow.nodes.map(node =>
+        node.kind !== 'loop_group'
+          ? node
+          : {
+              ...node,
+              loop_group: {
+                ...node.loop_group,
+                nodes: resolvedBodyNodes(node.loop_group).map(body => {
+                  if (body.id === 'pr__prepare')
+                    return {
+                      ...body,
+                      kind: 'exec' as const,
+                      runtime: 'bun' as const,
+                      script: `import {writeFileSync} from 'node:fs';
+writeFileSync(process.env.ARTIFACTS_DIR + '/pr-description.md', ${JSON.stringify(evidence)});
+console.log(${JSON.stringify(JSON.stringify(prepared))});`,
+                    };
+                  if (body.id === 'pr__publish' && body.kind === 'exec')
+                    return {
+                      ...body,
+                      with: loseBinding ? { ...body.with, description: null } : body.with,
+                      script: `process.env.ARCHON_SDLC_FORGE = 'forge';
+process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify(host.argv))};
+await import(${JSON.stringify(join(REPO_ROOT, '.archon/workflows/sdlc/pr/scripts/publish-pr.ts'))});`,
+                    };
+                  if (body.id === 'review__scope')
+                    return {
+                      ...body,
+                      kind: 'exec' as const,
+                      runtime: 'bun' as const,
+                      script: `import {readFileSync} from 'node:fs';
+const state = JSON.parse(readFileSync(${JSON.stringify(host.statePath)}, 'utf8'));
+const pr = state.pulls[0];
+if (pr.head.sha !== ${JSON.stringify(HEAD_SHA)} || pr.body !== ${JSON.stringify(`${authored}${DESCRIPTION_SECTION.start}
+${evidence}
+${DESCRIPTION_SECTION.end}
+`)}) throw new Error('review did not see prepared description at the published head');
+console.log(${JSON.stringify(JSON.stringify(fixture.stubs.review__scope))});`,
+                    };
+                  return body;
+                }),
+              },
+            }
+      ),
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      cwd: REPO_ROOT,
+      execWorkspace: CHECKOUT,
+      userMessage: '',
+      stubs,
+      execCode: true,
+      inputs: fixture.declaration.inputs,
+    });
+    if (loseBinding) {
+      expect(
+        result.trace.find(row => row.nodeId === 'review__scope' && row.state === 'failed')?.reason
+      ).toContain('review did not see prepared description');
+    } else {
+      expect({
+        outcome: result.outcome,
+        failures: result.trace.filter(row => row.state === 'failed'),
+      }).toEqual({ outcome: 'completed', failures: [] });
+      const rounds = result.trace.filter(
+        row => row.nodeId === 'round' && row.state === 'completed'
+      );
+      expect(rounds).toHaveLength(1);
+      expect(JSON.parse(rounds[0].output ?? '{}')).toMatchObject({
+        done: true,
+        ready: true,
+        reason: 'delivered',
+      });
+      const state = JSON.parse(readFileSync(host.statePath, 'utf8')) as FakeGitHubState;
+      expect(
+        state.calls.filter(call => call.startsWith('PATCH ') && call.endsWith('/pulls/42'))
+      ).toHaveLength(1);
+    }
+  }
+}, 120_000);
 
 // Real CLI and plugin processes, like the delivery test above: several seconds on a
 // loaded machine, past the default five.
