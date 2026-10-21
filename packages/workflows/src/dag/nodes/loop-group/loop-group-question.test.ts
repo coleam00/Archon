@@ -237,7 +237,7 @@ test('keeps prior-iteration question references without replaying body work', as
       ([id, , completion]) => waitCompletionEvents(id, completion).node
     );
     history.push(
-      ...[...persistedEvents(store), ...completedWaits].map((event, index) => ({
+      ...[...completedWaits, ...persistedEvents(store)].map((event, index) => ({
         ...event,
         step_name: event.step_name ?? null,
         data: event.data ?? {},
@@ -246,6 +246,10 @@ test('keeps prior-iteration question references without replaying body work', as
         created_at: new Date().toISOString(),
       }))
     );
+    if (store.getState().status === 'paused') {
+      const snapshot = await foldDagResumeSnapshot(history, 'prior');
+      expect(snapshot.completedNodeOutputs.has('grp.ask')).toBe(false);
+    }
     return store;
   };
   const first = await execute();

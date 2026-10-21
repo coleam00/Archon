@@ -1959,7 +1959,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         ([id, , completion]) => waitCompletionEvents(id, completion).node
       );
       history.push(
-        ...[...persistedEvents(store), ...completedWaits].map((event, index) => ({
+        ...[...completedWaits, ...persistedEvents(store)].map((event, index) => ({
           ...event,
           step_name: event.step_name ?? null,
           data: event.data ?? {},
@@ -1978,9 +1978,9 @@ describe('executeDagWorkflow -- addressable session resume', () => {
             ],
           ])
       );
-      store.getDagResumeSnapshot.mockResolvedValue(
-        await foldDagResumeSnapshot(history, 'addressable-run')
-      );
+      const snapshot = await foldDagResumeSnapshot(history, 'addressable-run');
+      expect(snapshot.completedNodeOutputs.has('group.pause')).toBe(false);
+      store.getDagResumeSnapshot.mockResolvedValue(snapshot);
       await executeDagWorkflow(
         dagOptions({
           deps: createMockDeps(store),
