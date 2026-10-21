@@ -19,6 +19,9 @@ description: |
   stage's outcome. A workflow that composes a stage includes the `-block` instead and
   owns what follows its ending, so it never raises a second item.
 
+worktree:
+  enabled: false
+
 inputs:
   stage:
     required: true

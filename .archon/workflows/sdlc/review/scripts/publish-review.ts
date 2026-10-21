@@ -8,8 +8,8 @@
  * what makes a review true.
  *
  * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. The head is checked before the scope agent's declaration, so a
+ * (review-round): the pull request's remote head must still be it. A checkout
+ * review also requires the checkout to remain at that commit. The head is checked before the scope agent's declaration, so a
  * correction that was never pushed is named as that rather than as a scope
  * mismatch. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit and the certified
@@ -24,6 +24,7 @@
  *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
+ * - INPUTS_SOURCE: revision for a pinned PR, checkout for a composed or working diff review.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
  *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
  *   node forwards.
@@ -36,23 +37,12 @@ import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import {
   forgeSource,
   parseQualifiedPr,
-  record,
   sameRepo,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
-
-/** The pull request delivery recorded, when the scope is that JSON record. */
-function recordedPr(scope: string): QualifiedPr | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(scope);
-  } catch {
-    return undefined; // a PR URL, a branch name, or empty
-  }
-  return record(parsed) ? parseQualifiedPr(scope) : undefined;
-}
+import { recordedReviewPr } from '../../.shared/review-scope.ts';
 
 /** The pull request the scope agent declared, or undefined for a working diff. */
 function declaredPr(value: string): QualifiedPr | undefined {
@@ -79,16 +69,19 @@ try {
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
     contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
-  const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
+  const recorded = recordedReviewPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
   const pr = recorded ?? declared;
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
   const report = readFileSync(reportPath, 'utf8');
   if (report.trim() === '') throw new Error('the review report is empty');
-  const checkout = nodeStartCommit();
-  if (checkout !== head) {
-    throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
+  const sourceMode = text(process.env.INPUTS_SOURCE);
+  if (sourceMode !== 'revision' && sourceMode !== 'checkout') throw new Error('unknown review source mode');
+  if (sourceMode === 'revision' && !pr) throw new Error('a revision review requires a pull request');
+  if (sourceMode === 'checkout') {
+    const checkout = nodeStartCommit();
+    if (checkout !== head) throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
   if (pr) {
     const remote = viewPr(pr, source).pr.head_revision;

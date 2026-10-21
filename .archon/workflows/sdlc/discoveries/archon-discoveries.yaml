@@ -17,6 +17,9 @@ description: |
   NOT for: delivering the filed work (intake triages each filed issue), or reading
   one run's discoveries (its terminal report lists them).
 
+worktree:
+  enabled: false
+
 inputs:
   repo_host:
     description: The forge host of the repository the runs worked on, such as github.com.

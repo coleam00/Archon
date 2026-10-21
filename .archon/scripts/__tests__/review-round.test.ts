@@ -7,12 +7,12 @@
  */
 import { FULL_REVIEW_RISKS } from '../../workflows/sdlc/.shared/review-policy';
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from './temp-roots';
-import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+import { packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -71,6 +71,8 @@ function round(
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
       INPUTS_LIGHT: extra.light ? 'true' : 'false',
       INPUTS_PART: extra.part ?? '',
+      INPUTS_PR: 'null',
+      INPUTS_SCOPE: '',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
@@ -89,6 +91,8 @@ describe('review-round', () => {
     const run = round(cwd, newer);
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
+      source: 'checkout',
+      base: '',
       continuation: false,
       light: false,
       head: newer,
@@ -108,6 +112,8 @@ describe('review-round', () => {
     const run = round(cwd, newer, older, { part: JSON.stringify(part) });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
+      source: 'checkout',
+      base: '',
       continuation: true,
       light: false,
       head: newer,
@@ -153,6 +159,8 @@ describe('review-round', () => {
     const run = runPackScript('review/scripts/review-round', {
       cwd,
       inputs: {
+        INPUTS_PR: 'null',
+        INPUTS_SCOPE: '',
         INPUTS_PRIOR_REPORT: '{ARTIFACTS}/review/report.md',
         ARCHON_NODE_EXECUTION: JSON.stringify({
           attempt: { checkoutStart: { kind: 'git', commit: newer } },
@@ -162,5 +170,91 @@ describe('review-round', () => {
     });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('records no reviewed commit');
+  });
+});
+
+describe('standalone PR revision review', () => {
+  function repository(fork = false): { cwd: string; older: string; newer: string; builder: string } {
+    const { cwd, older, newer } = history();
+    const remote = join(cwd, 'remote.git');
+    git(cwd, 'clone', '--bare', '-q', '.', remote);
+    git(cwd, '--git-dir', remote, 'branch', 'base', older);
+    git(cwd, '--git-dir', remote, 'branch', 'topic', newer);
+    git(cwd, 'remote', 'add', 'canonical', 'https://ghe.example.com/example/repo.git');
+    git(cwd, 'config', `url.${remote}.insteadOf`, 'https://ghe.example.com/example/repo.git');
+    if (fork) git(cwd, 'config', '--add', `url.${remote}.insteadOf`, 'https://ghe.example.com/contributor/repo.git');
+    git(cwd, 'checkout', '--detach', older);
+    const builder = join(cwd, 'builder');
+    git(cwd, 'worktree', 'add', '-b', 'builder', builder, newer);
+    writeFileSync(join(cwd, 'file.txt'), 'reader local edit');
+    writeFileSync(join(builder, 'file.txt'), 'builder local edit');
+    return { cwd, older, newer, builder };
+  }
+
+  function pinned(cwd: string, checkout: string, head: string, fork = false, cursor?: string): ScriptRun {
+    return runPackScript('review/scripts/review-round', {
+      cwd, source: 'gh',
+      gh: { pr: { headRefName: 'topic', headRefOid: head, baseRefName: 'base',
+        ...(fork ? { headRepositoryOwner: { login: 'contributor' } } : {}) } },
+      inputs: {
+        INPUTS_PR: JSON.stringify(PR), INPUTS_SCOPE: String(PR.number),
+        INPUTS_PRIOR_REPORT: cursor ? '{ARTIFACTS}/review/report.md' : '',
+        INPUTS_PART: '', INPUTS_LIGHT: 'false',
+        ARCHON_NODE_EXECUTION: JSON.stringify(execution(checkout)),
+      },
+      artifacts: { 'review/scope.md': 'Accepted contract',
+        ...(cursor ? { 'review/report.md': 'Previous report', 'review/reviewed-head': cursor } : {}) },
+    });
+  }
+
+  it.each([false, true])('pins a fresh PR head and leaves readers and builder untouched (fork: %s)', fork => {
+    const { cwd, older, newer, builder } = repository(fork);
+    const before = git(cwd, 'worktree', 'list', '--porcelain');
+    const first = pinned(cwd, older, newer, fork);
+    expect(first.code).toBe(0);
+    const facts = JSON.parse(first.stdout);
+    expect(facts).toMatchObject({ source: 'revision', head: newer, base: older });
+    expect(readFileSync(join(first.artifacts, 'review/scope.md'), 'utf8')).toContain(`git show ${newer}:<path>`);
+    expect(git(cwd, 'show', `${facts.head}:file.txt`)).toBe('newer');
+    expect(git(cwd, 'worktree', 'list', '--porcelain')).toBe(before);
+    expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('reader local edit');
+    expect(readFileSync(join(builder, 'file.txt'), 'utf8')).toBe('builder local edit');
+
+    git(builder, 'add', 'file.txt');
+    git(builder, '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'next');
+    const next = git(builder, 'rev-parse', 'HEAD');
+    git(builder, 'push', 'canonical', 'HEAD:topic');
+    writeFileSync(join(builder, 'file.txt'), 'unfinished next round');
+    const second = pinned(cwd, older, next, fork, newer);
+    expect(second.code).toBe(0);
+    expect(JSON.parse(second.stdout)).toMatchObject({ source: 'revision', continuation: true, head: next, cursor: newer });
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(older);
+    expect(git(builder, 'rev-parse', 'HEAD')).toBe(next);
+    expect(readFileSync(join(builder, 'file.txt'), 'utf8')).toBe('unfinished next round');
+    expect(readFileSync(join(first.artifacts, 'review/scope.md'), 'utf8')).toContain(newer);
+  });
+
+  it('keeps the engine-observed build checkout for a composed delivery', () => {
+    const { cwd, newer } = history();
+    const result = runPackScript('review/scripts/review-round', {
+      cwd, source: 'gh',
+      inputs: {
+        INPUTS_PR: JSON.stringify(PR), INPUTS_SCOPE: JSON.stringify(PR),
+        INPUTS_PRIOR_REPORT: '', INPUTS_LIGHT: 'false', INPUTS_PART: '',
+        ARCHON_NODE_EXECUTION: JSON.stringify(execution(newer)),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ source: 'checkout', head: newer });
+    expect(result.gh).toEqual([]);
+  });
+
+  it('refuses a PR whose fetched branch no longer matches the selected head', () => {
+    const { cwd, older, builder } = repository();
+    const result = pinned(cwd, older, older);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('PR head changed while fetching');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(older);
+    expect(readFileSync(join(builder, 'file.txt'), 'utf8')).toBe('builder local edit');
   });
 });

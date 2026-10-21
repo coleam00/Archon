@@ -507,6 +507,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
       INPUTS_PR: JSON.stringify(PR),
       INPUTS_REPORT: '{ARTIFACTS}/review/report.md',
       INPUTS_HEAD: REVIEWED,
+      INPUTS_SOURCE: 'checkout',
       ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
       INPUTS_READY: 'true',
       INPUTS_ACTION: 'none',
@@ -737,6 +738,23 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('the commits under review were not pushed');
     expect(result.stderr).not.toContain('delivery recorded');
+  });
+
+  it('publishes a pinned PR revision while the shared checkout is elsewhere', () => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_SOURCE: 'revision', ARCHON_NODE_EXECUTION: atCommit('another-run') },
+    });
+    expect(result.code).toBe(0);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('refuses a pinned revision after the PR moves, without writing a comment', () => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_SOURCE: 'revision', INPUTS_HEAD: STALE },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`is at ${REVIEWED}`);
+    expect(result.comments).toHaveLength(0);
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

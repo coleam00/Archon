@@ -12,9 +12,7 @@ $INPUTS.scope
 
 $INPUTS.prior_report
 
-**Commit under review**: read the checkout's HEAD with `git rev-parse HEAD`. Every diff you record ends at that full SHA, never a branch name or a revision read from a pull-request record. The mode node validates continuation ancestry after this node accepts the PR head; publication refuses when the checkout or the pull request's remote head differs from the reviewed commit.
-
-**Previous round's reviewed commit** (only after the head matches): read `reviewed-head` beside the supplied prior report. This is the cursor this round's delta starts from, not a SHA inferred from the report's prose.
+**Source selection**: a standalone PR review reads pinned Git objects; it never checks out the PR or changes an existing worktree. After this node resolves the PR, mode reads its fresh head and base, fetches them into private refs, and appends exact source and diff commands to this scope file. Downstream reviewers use that pinned section. A working-diff review and a composed delivery review use the actual checkout.
 
 **Accepted work order** (may be empty for a standalone review):
 
@@ -30,11 +28,11 @@ $ARGUMENTS
 
 ## Resolve the target
 
-- When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record names the pull request and its base, so read nothing from a forge to establish them. It does not name the commit: its `head_revision` was captured when the pull request opened and is stale after any later push, so ignore it. The review object is the diff of the commit under review against that base. Fetch the base first, from the remote whose URL is the record's `repo` (`git remote -v`; it need not be named `origin`), and diff against the fetched ref (`git diff <that remote>/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
-- A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. The PR's head must be the commit under review; when it is not, stop and say so rather than reviewing either one. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
-- Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
+- When the requested scope is a recorded pull request (delivery's JSON record with `repo` and `number`), review exactly that PR in the current build checkout. Ignore a stored `head_revision`; read its current head from the selected forge. Compare that with `git rev-parse HEAD`. If they differ, set `head_matches: false`, write the mismatch and an instruction to push or reconcile the build checkout in scope.md, declare the qualified PR and report pointer, and stop. Never advance or reset the checkout yourself. When they match, fetch its base from the remote whose URL names the PR's repository and describe the checkout diff against that base.
+- A PR number, URL, or branch: resolve the qualified PR with `gh pr view` (title, body, base, head, state). Do not compare it with checkout HEAD. Set `head_matches: true`; mode fetches and pins the fresh source after this node. Record the requested PR and contract here; leave the changed-file list and diff commands to mode's pinned section. Do not use `gh pr diff` as an unpinned source.
+- Empty scope: first check whether the current branch has an open PR (`gh pr view`). If it does, select it as a standalone PR review above. Otherwise review the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch. Set `head_matches: true`, record the checkout HEAD, base, changed files and exact working-diff commands.
 
-For every PR target (including a recorded PR or one found from empty scope), read its current head commit and head ref from the forge and compare that commit with the commit under review. Set `head_matches` to `true` for a matching head or a working-diff target. On a mismatch, set it to `false`, write only the mismatch explanation and the exact rerun command in `$ARTIFACTS_DIR/review/scope.md` (`archon workflow run archon-review --input scope=<PR URL> --branch <PR head ref>`, with actual values, shell-quoted and preserving this run's other supplied inputs). For a same-repository PR, first instruct the caller to locate any existing worktree for that head ref (`git worktree list`), check it for local changes, and, only when clean, advance it with `git -C <worktree path> pull --ff-only <base repository clone URL> <PR head ref>` using actual, shell-quoted values; verify its HEAD equals the current PR head SHA before rerunning, and stop to reconcile local changes, divergence or an ahead checkout rather than discarding commits or edits. `--branch` reuses a healthy worktree without advancing it. For a fork PR, include the prerequisite `git fetch <head repository clone URL> <head ref>`, then give the rerun with `--branch <fresh review branch> --from <current PR head SHA>` instead; choose a review branch absent locally, on the configured remote and from existing worktrees, so the fetched fork commit is the start point rather than the base. These are instructions for the caller; do not fetch or check out the fork yourself. Then declare `pr`, `head_matches` and `report` below and stop; do not resolve the contract or prepare a diff.
+For a PR review, uncommitted and untracked local files are outside the review source. Never use `--branch`, checkout, reset, pull, or merge to prepare a standalone review. Concurrent reviews and the builder may share this repository. Use scratch checkouts at the pinned head when an experiment needs files on disk.
 
 ## Resolve the accepted contract
 
@@ -50,21 +48,14 @@ An explicit narrowing in the operator's trigger is an accepted boundary. The par
 
 ## Light mode (a prior report exists)
 
-When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. This round's diff is **only the delta**, and only this change's part of it: code that arrived through a merge of the base branch is not this change. Fetch the base as above, rebuild the cursor's change on the base the commit under review now sits on, and diff the commit under review against that tree:
-
-```
-tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <commit under review>)" <cursor> | head -1)
-git diff "$tree" <commit under review>
-```
-
-With no base merge between the two commits, the tree is the cursor's own and this is `git diff <cursor>..<commit under review>`. After a conflicting merge `merge-tree` exits non-zero, the first line is still the tree, and the delta shows how this change resolved the conflict, which is this change's work. Record the tree and both commands in scope.md. For a working-diff target, use the base you resolved in place of `<remote>/<base>`, and include any uncommitted changes. The prior report remains the sole owner of earlier findings and review coverage; do not copy or rebuild them in scope.md. The accepted contract is not among them: resolve it from its source as above, never by copying the prior report's contract section.
+When a prior-report path is supplied, read it in full. The cursor is `reviewed-head` beside that report, never a SHA extracted from prose. For a standalone PR, mode verifies ancestry and records the correction diff with base merges excluded. For a composed or working-diff review, record that delta yourself using the checkout HEAD and the fetched base: `git merge-tree --write-tree <merge-base of base and head> <cursor>`, then `git diff <result tree> <head>`. A conflicting merge still returns a tree on its first line; the diff includes this change's conflict resolution. Include local changes only in working-diff mode. Do not duplicate earlier findings; the prior report owns them. Resolve the accepted contract from its source again.
 
 ## Write the scope file
 
 Write `$ARTIFACTS_DIR/review/scope.md` containing the following:
 
 1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries, each naming its source — the operator's originating contract, or the derived document that inferred it — and any recorded narrowing, the authorized delivery slice, deferred items and their explicit authorization and later owner. When a part assignment is given, record the delivered part, each contract item's owning part or parts, the deferred items, and any assignment item that matches no contract item.
-2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review**: the commit under review, in full.
+2. **Target** — PR reference or "working diff", base branch, and the source mode. Standalone PR source details are appended by mode; checkout reviews name the full checkout HEAD.
 3. **Mode** — full review, or light (delta since `<cursor>`).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
 5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`).
@@ -72,8 +63,8 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing the following:
 
 ## Verify before finishing
 
-Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
+Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, identifies the qualified PR or working diff, and uses the source mode above. For checkout reviews, verify the diff commands. For standalone PRs, mode appends and verifies the source revisions after you finish. Then declare:
 
-- `head_matches`: the head comparison above.
+- `head_matches`: true for standalone PRs and working diffs, or the composed checkout comparison above.
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/scope.md"}`. The engine refuses this node if that file is missing or empty, so write it before you declare.

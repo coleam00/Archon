@@ -170,19 +170,19 @@ Reviews a change through specialist lenses and produces one evidence-based verdi
 **When to use it**: A PR or your working diff needs judging. It never edits code. On a PR it posts or edits its review comment, and on a draft PR your `ready` answer marks the PR ready for review.
 
 ```bash
-archon workflow run archon-review --input scope=87 --branch fix/login-redirect
+archon workflow run archon-review --input scope=87
 ```
 
-Replace `fix/login-redirect` with the PR's head branch for a same-repository PR. `--branch` reuses an existing healthy worktree without advancing it. Before rerunning, locate it with `git worktree list` and check for local changes. Only when clean, run `git -C <worktree-path> pull --ff-only <base-clone-url> <PR-head-ref>` with the PR's actual values. Verify its HEAD equals the current PR head SHA before rerunning. Stop on local changes, divergence or an ahead checkout and reconcile them before retrying. For a fork PR, fetch its head into the launch repository first, then start a fresh review branch at that commit:
+Standalone PR review creates no engine worktree. It resolves the PR's current head
+and base, fetches them into private refs, and reads files and diffs at those pinned
+commits. This works for same-repository and fork PRs without changing an existing
+checkout, even when that checkout is behind or contains unfinished edits. A PR
+that moves before publication is refused; rerun review to select its new head.
+Experiments use scratch checkouts at the reviewed commit and are removed afterward.
+A working-diff review retains your local diff. Inside delivery, review uses the
+build checkout and still requires that checkout to match the PR head.
 
-```bash
-git fetch <fork-clone-url> <PR-head-ref>
-archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-branch> --from <PR-head-SHA>
-```
-
-Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
-
-**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
+**What it produces**: A synthesized review report about the selected source revision or working diff. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
 
 #### `archon-validate`
 

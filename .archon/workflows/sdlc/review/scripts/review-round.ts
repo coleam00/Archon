@@ -1,44 +1,48 @@
-/**
- * Fix what this review round reviews: the mode, the commit, and the cursor.
- *
- * The reviewed commit is the checkout's HEAD when the round starts, as the engine
- * observed it. Nothing an agent reads chooses it: a recorded pull request's
- * `head_revision` is captured when the PR opens and goes stale with every later
- * push, so a round that trusted it would review an older commit than the one the
- * PR carries. publish-review checks the same commit against the checkout and the
- * PR's remote head before the verdict goes public, then records it beside the
- * report as the next round's cursor.
- *
- * A continuation round's cursor is that recorded commit. The head must descend
- * from it: a head that is the cursor's ancestor, or off its history, would make
- * the delta run backwards or cover commits the previous round never read, so the
- * round refuses instead.
- *
- * A first round's lenses are the route agent's call. A continuation reruns the
- * general code lens on the delta; the route agent adds every lens whose finding the
- * previous report leaves open or whose area the delta touches. A light
- * continuation, which follows a correction for CI rather than for review, runs
- * the code lens alone and does not route.
- *
- * The prior report is a declared input an outside caller can fill with a path
- * from an earlier run, so its existence is checked here too: a continuation that
- * cannot read the report it continues from would review nothing and say it
- * reviewed everything.
- *
- * The part assignment passes through unchanged: the node's `output_format` owns
- * its shape, so the engine refuses a malformed one before lenses or synthesis read it.
- *
- * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
- * - INPUTS_LIGHT: "true" when this continuation follows a CI correction.
- * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
- */
-
-import { existsSync, readFileSync, statSync } from 'node:fs';
+/** Pin a review to source objects without moving the checkout shared with other runs. */
+import { existsSync, readFileSync, statSync, appendFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { FULL_REVIEW_RISKS, type ReviewLens } from '../../.shared/review-policy.ts';
-import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import { forgeSource, parseQualifiedPr } from '../../.shared/forge.ts';
+import { viewPr } from '../../.shared/pr.ts';
+import { findRemote, remoteFor } from '../../.shared/remote.ts';
+import { gitOrThrow } from '../../.shared/git.ts';
+import { recordedReviewPr } from '../../.shared/review-scope.ts';
+
+function revision(): { source: 'revision' | 'checkout'; head: string; base: string } {
+  const target = nullableJson(process.env.INPUTS_PR);
+  // A composed delivery supplies a recorded PR and reviews its actual build checkout.
+  if (target === null || recordedReviewPr(trimmed(process.env.INPUTS_SCOPE))) {
+    return { source: 'checkout', head: nodeStartCommit(), base: '' };
+  }
+  const pr = viewPr(parseQualifiedPr(JSON.stringify(target)), forgeSource()).pr;
+  if (pr.head_revision === null || pr.head_repo === null) throw new Error('the PR has no resolvable head');
+  const prefix = `refs/archon/review/${randomUUID()}`;
+  const baseRef = `${prefix}/base`;
+  const headRef = `${prefix}/head`;
+  gitOrThrow('fetch', '--no-tags', '--no-write-fetch-head', remoteFor(pr.repo), `+refs/heads/${pr.base}:${baseRef}`);
+  const headRemote = findRemote(pr.head_repo) ?? `https://${pr.head_repo.host}/${pr.head_repo.path}.git`;
+  gitOrThrow('fetch', '--no-tags', '--no-write-fetch-head', headRemote, `+refs/heads/${pr.head}:${headRef}`);
+  const head = gitOrThrow('rev-parse', '--verify', `${headRef}^{commit}`);
+  if (head !== pr.head_revision) throw new Error(`PR head changed while fetching: expected ${pr.head_revision}, fetched ${head}; rerun review`);
+  return { source: 'revision', head, base: gitOrThrow('rev-parse', '--verify', `${baseRef}^{commit}`) };
+}
+
+function recordRevision(facts: ReturnType<typeof revision>, cursor: string): void {
+  if (facts.source !== 'revision') return;
+  const { head, base } = facts;
+  let from = gitOrThrow('merge-base', base, head);
+  if (cursor !== '') {
+    const merged = Bun.spawnSync(['git', 'merge-tree', '--write-tree', from, cursor]);
+    if (merged.exitCode !== 0 && merged.exitCode !== 1) throw new Error(`cannot compute correction delta: ${merged.stderr.toString()}`);
+    from = merged.stdout.toString().split('\n')[0];
+    gitOrThrow('rev-parse', '--verify', `${from}^{tree}`);
+  }
+  appendFileSync(join(artifactsDir(), 'review/scope.md'),
+    `\n## Pinned source\n\nHead: ${head}\nBase: ${base}\nDiff: git diff ${from} ${head}\n\nRead files with git show ${head}:<path> and search with git grep <pattern> ${head} -- <path>. The shared checkout is not the review source.\n\nChanged files:\n\n${gitOrThrow('diff', '--stat', from, head)}\n`);
+}
 
 /**
  * The bound part assignment. The refusal drops the parser's message, which quotes
@@ -82,12 +86,14 @@ function descends(head: string, cursor: string): boolean {
 try {
   const part = partAssignment(process.env.INPUTS_PART);
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
-  const head = nodeStartCommit();
+  const facts = revision();
+  const { head } = facts;
   // The engine's identity for this node, which synthesis uses to count only this
   // round's lens artifacts.
   const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
+    recordRevision(facts, '');
+    emit({ ...facts, continuation: false, light: false, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -99,11 +105,12 @@ try {
     const cursor = readFileSync(recorded, 'utf8').trim();
     if (!descends(head, cursor)) {
       throw new Error(
-        `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
+        `the review head is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
     const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
-    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, code: true, part });
+    recordRevision(facts, cursor);
+    emit({ ...facts, continuation: true, light, cursor, risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, code: true, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

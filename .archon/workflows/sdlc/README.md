@@ -118,10 +118,12 @@ pull request changes or makes reachable. Delivery reads, answers and resolves re
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
 `pr.thread.reply` and `pr.thread.resolve`.
 
-The switch does not cover standalone `archon-review`: given a pull-request number,
-URL or branch, or run on a branch with an open pull request, it reads that pull
-request with `gh pr view` and `gh pr diff`. Inside delivery it reviews the recorded
-pull request and reads nothing from the forge.
+Standalone `archon-review` still resolves a pull-request number, URL or branch,
+or the current branch's open pull request, with `gh pr view`. The mode script then reads its fresh head through the
+selected forge source and fetches head and base into private refs. Reviewers read
+files and diffs at those pinned commits; they never advance a shared checkout.
+Publication refuses if the PR moves before the comment write. Working-diff reviews
+keep their local diff, and delivery reviews its actual build checkout and recorded PR.
 
 The source is never picked from what happens to be installed. When the selected
 source cannot answer (no host command, no plugin for the host, no credential, a
@@ -807,11 +809,21 @@ back:
 }
 ```
 
+## Read-only checkouts
+
+Intake, triage, plan, discoveries, attention, merge queue, investigation and standalone
+review declare `worktree.enabled: false`. They run in place without creating an engine
+checkout. A standalone PR review reads its selected Git revisions even when the local
+checkout is behind or contains a builder's unfinished edits. Experiments use scratch
+checkouts at the reviewed commit and the review workflow removes those scratch trees.
+Composed delivery review still reads the build's checkout. Build rounds own the named
+PR-branch checkout described above and reuse it between rounds.
+
 ## Worktree cleanup
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
-removes each worktree whose pull request merged, with its local branch. Remote
+removes each worktree whose pull request merged or closed, with its local branch. Remote
 branches are retained with a warning: after registration retirement, a Git commit
 ID cannot prove whether the branch belongs to a replacement registration. Force
 does not bypass this refusal. For manual cleanup, follow the
@@ -821,8 +833,8 @@ On GitHub, enable **Automatically delete head branches** in repository settings 
 GitHub remove merged pull requests' branches automatically.
 
 A worktree with uncommitted changes, a run
-that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
-it also removes worktrees whose pull request was closed without merging. It runs in place
+that can still claim it, or a commit its pull request did not carry stays and is reported. Set `include_closed: "false"`
+to keep worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 
 A worktree that never opened a pull request is not its concern. A completed run removes
@@ -848,7 +860,7 @@ pass every few hours:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-worktree-cleanup",
-      "inputs": { "include_closed": "false" },
+      "inputs": { "include_closed": "true" },
       "isolation": { "kind": "default" }
     }
   },

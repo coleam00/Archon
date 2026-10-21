@@ -14,6 +14,9 @@ description: |
   the SDLC pack README, "Intake").
   NOT for: triaging one item by hand (archon-triage), or delivering work.
 
+worktree:
+  enabled: false
+
 inputs:
   repo_host:
     description: The forge host of the issue's repository (binding field repository.host).

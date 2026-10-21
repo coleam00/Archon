@@ -1,4 +1,4 @@
-# A mismatched PR head stops before route, every lens, synthesis and publish.
+# A composed build with a mismatched PR head stops before route, every lens, synthesis and publish.
 # Those nodes have no stubs, so reaching any of them fails the fixture.
 policy: { defaults: "fixture-policy-defaults" }
 review-dir: ""
@@ -9,7 +9,7 @@ scope:
 result:
   ready: false
   action: ask
-  findings_summary: "Checkout HEAD differs from PR head. Rerun: archon workflow run archon-review --input scope=https://github.com/example/repo/pull/1 --branch feature"
+  findings_summary: "Build checkout HEAD differs from PR head. Push or reconcile the build checkout, then resume delivery."
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
   discoveries: []
   contract_left: ["PR head mismatch prevented contract review."]

@@ -14,6 +14,9 @@ description: |
   this ready to build".
   NOT for: performing the investigation, writing the plan, or delivering work.
 
+worktree:
+  enabled: false
+
 inputs:
   target:
     default: ""

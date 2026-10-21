@@ -1,7 +1,7 @@
 # Dry-run fixture: a selected lens fails (its stub is deliberately missing). The
 # barrier still settles, synthesis is told to require a completed artifact for every
 # selected lens, and it reports the gap as not ready.
-mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
+mode: '{"source":"checkout","base":"","continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: lifecycle ownership changed" }
 review-dir: ""
 scope:

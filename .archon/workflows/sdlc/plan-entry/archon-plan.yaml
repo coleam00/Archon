@@ -13,6 +13,9 @@ description: |
   feature", "turn this investigation into a plan", "how should we build this".
   NOT for: root-causing a bug (investigate), or building the plan (implement).
 
+worktree:
+  enabled: false
+
 inputs:
   work:
     default: ""

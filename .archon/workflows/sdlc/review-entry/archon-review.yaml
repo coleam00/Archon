@@ -13,6 +13,9 @@ description: |
   NOT for: fixing findings (implement), running the project's checks (validate),
   or writing code.
 
+worktree:
+  enabled: false
+
 inputs:
   scope:
     default: ""

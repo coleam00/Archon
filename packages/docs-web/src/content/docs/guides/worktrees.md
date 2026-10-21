@@ -23,6 +23,12 @@ A worktree separates checkouts. It is not an execution or security sandbox: comm
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
+The SDLC pack's intake, triage, plan, investigation, review, discoveries, attention
+and merge queue workflows declare no worktree. Standalone PR review reads pinned
+Git objects without moving your checkout. Build pickup also runs in place, then
+launches the build round with `--branch` on the item's PR branch; later rounds reuse
+that checkout.
+
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
 
 A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/reference/workflow-language/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.

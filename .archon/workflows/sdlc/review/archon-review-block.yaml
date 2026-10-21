@@ -17,18 +17,18 @@ description: |
   declined (`light` runs the general code reviewer alone, for a CI fix); one
   continuation reviewer carries the prior findings forward.
 
-  When the checkout matches the PR head, the final synthesized report is posted
-  to it as one canonical comment, edited in place on re-review. A head mismatch
-  stops before review and returns the exact rerun command. For a same-repository
-  PR, advance any clean existing worktree to its head, then use its head branch.
-  For a fork PR, fetch its head first, then use a fresh review branch with
-  `--from <PR head SHA>`.
+  Standalone PR review pins fresh head and base objects without moving a shared
+  checkout. Composed delivery reviews its actual build checkout. Publication
+  refuses a PR whose head moved after the review selected its source.
 
   The graph of archon-review, as a building block for a workflow that composes the
   stage and owns what follows its ending. It never pauses for a person: run
   archon-review, which adds that pause, by hand.
 
 model: ['@reviewer', medium]
+
+worktree:
+  enabled: false
 
 inputs:
   scope:
@@ -83,16 +83,8 @@ nodes:
         defaults: { type: string }
       required: [defaults]
 
-  # After scope accepts the checkout, fixes what this round reviews: whether it
-  # continues a previous round, the commit under review (the checkout's HEAD as
-  # the engine observed it), and, on a continuation, the previous round's
-  # reviewed commit, which the head must descend from. A caller's pull-request
-  # record names the PR, never the commit: its head revision goes stale with
-  # every push after the PR opens. publish refuses a report about any other
-  # commit. The node also turns the input into the routable fact the lenses gate
-  # on: an include's inputs are substituted as text at load time and cannot be
-  # compared in a `when:`. For the same reason it carries the part assignment, so
-  # synthesis reads a value certified against its schema, not raw text.
+  # Pin standalone source after the agent resolves a qualified PR. Composed
+  # delivery and working-diff reviews keep their engine-observed checkout.
   - id: mode
     script: review-round
     runtime: bun
@@ -102,12 +94,16 @@ nodes:
       prior_report: "$INPUTS.prior_report"
       light: "$INPUTS.light"
       part: "$INPUTS.part"
+      pr: "$scope.output.pr"
+      scope: "$INPUTS.scope"
     output_format:
       type: object
       properties:
         continuation: { type: boolean }
         # A continuation after a CI correction: the code lens alone, and no routing.
         light: { type: boolean }
+        source: { type: string, enum: [revision, checkout] }
+        base: { type: string }
         head: { type: string, minLength: 1 }
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
@@ -140,7 +136,7 @@ nodes:
                   items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
                 required: [part, items]
           required: [delivers, parts]
-      required: [continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
+      required: [source, base, continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
 
   # Every review node writes under review/, and a fresh run's artifacts directory
   # has none. Agents told to create it have skipped that step, so the declared
@@ -355,6 +351,7 @@ nodes:
       pr: "$scope.output.pr"
       report: "$ARTIFACTS_DIR/review/report.md"
       head: "$mode.output.head"
+      source: "$mode.output.source"
       ready: "$synthesize.output.ready"
       action: "$synthesize.output.action"
       summary: "$synthesize.output.findings_summary"

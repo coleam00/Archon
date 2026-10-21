@@ -1,12 +1,13 @@
 # Pick the review lenses
 
+Source mode: `$mode.output.source`. Reviewed head: `$mode.output.head`. Pinned base: `$mode.output.base` (empty for checkout mode). Read `$ARTIFACTS_DIR/review/scope.md`, including its final Pinned source section. In revision mode, read files with `git show $mode.output.head:<path>`, search with `git grep <pattern> $mode.output.head -- <path>`, and use the recorded diff commands. The shared checkout's files and HEAD may belong to another run. Experiments use a scratch checkout at `$mode.output.head`; never move or edit the shared checkout. In checkout mode, retain the scope's working-diff or composed-build semantics.
+
 Decide which reviewers this round runs. This is a quick decision: read only what is
 named here, run nothing (no tests, builds or checks), and do not modify any file. No
 one watches this run; your structured answer is all the next nodes read.
 
-- The diff summary against the change's base: `git diff --stat` and the hunks you
-  need. The requested scope (empty means the current branch's pull request or the
-  working diff): $INPUTS.scope
+- The diff summary and hunks named by the scope file. In revision mode, use its
+  pinned range for `git diff --stat`, never the shared checkout's working diff.
 - The work order (may be empty for a standalone review): $INPUTS.work_order. When it
   names a file such as `$ARTIFACTS_DIR/plan.md`, read that file's summary and steps,
   not the whole repository.
@@ -14,10 +15,7 @@ one watches this run; your structured answer is all the next nodes read.
   round), and the commit under review, `$mode.output.head`. When the reviewed commit
   is not empty, this round continues an earlier review: judge only that correction
   delta and the hunks you need. The delta leaves out code a merge of the base
-  brought in. Take the base from the requested scope's record, or the current
-  branch's pull request, and read the delta with
-  `tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <head>)" <reviewed> | head -1)`
-  then `git diff --stat "$tree" <head>`.
+  brought in. Use the exact correction-diff commands in the scope file.
 - On a continuation, the code lens reviews the delta whatever you answer. Select
   another lens when the previous report leaves a finding it raised open:
   `findings.json` beside the previous report ($INPUTS.prior_report) lists each

@@ -19,6 +19,9 @@ description: |
 
 requires: [github]
 
+worktree:
+  enabled: false
+
 inputs:
   repo_host:
     description: The forge host of the repository whose pull requests the queue merges.

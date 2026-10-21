@@ -12,6 +12,9 @@ description: |
 
 model: ['@planner', large]
 
+worktree:
+  enabled: false
+
 inputs:
   work:
     default: ""

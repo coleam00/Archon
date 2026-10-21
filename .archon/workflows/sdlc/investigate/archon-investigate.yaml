@@ -12,6 +12,9 @@ description: |
 
 model: ['@investigator', medium]
 
+worktree:
+  enabled: false
+
 inputs:
   target:
     default: ""
