@@ -400,6 +400,9 @@ describe('WorktreeProvider against real git', () => {
           updateStatus: async () => {
             throw new Error('refused adoption must not change status');
           },
+          withWorktreeRegistration: async () => {
+            throw new Error('Unexpected worktree removal');
+          },
           markWorktreeDestroyed: async () => {
             throw new Error('refused adoption must not retire a row');
           },

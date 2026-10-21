@@ -639,16 +639,15 @@ export class IsolationResolver {
       );
       return;
     }
-    // As with failed-insert rollback, adoption after this final read and before
-    // removal remains possible; no cross-provider ownership claim is held.
-    const removed = await removeCreatedWorktree(this.provider, env.working_path, {
-      canonicalRepoPath: method.canonicalRepoPath,
-      creationId: method.creationId,
-      ...(method.branchCreated ? { branchName: toBranchName(env.branch_name) } : {}),
-    });
-    if (!removed) return;
     try {
-      await this.store.markWorktreeDestroyed(env);
+      await this.store.withWorktreeRegistration(env, async markDestroyed => {
+        const removed = await removeCreatedWorktree(this.provider, env.working_path, {
+          canonicalRepoPath: method.canonicalRepoPath,
+          creationId: method.creationId,
+          ...(method.branchCreated ? { branchName: toBranchName(env.branch_name) } : {}),
+        });
+        if (removed) await markDestroyed();
+      });
     } catch (error) {
       getLog().error(
         { err: error instanceof Error ? error : new Error(String(error)), isolationEnvId: env.id },

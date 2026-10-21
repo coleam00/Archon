@@ -260,28 +260,29 @@ nodes:
 
 ### Bash and script node timeouts
 
-When a `bash:` or `script:` node on the host reaches its `timeout`, Archon signals the node's
-whole process tree before it reports the timeout, so the real work behind a wrapper such as
-`bun run` or `uv run` stops too. On Windows it runs `taskkill /T /F` on the node's process.
-On macOS and Linux `archon serve` and a foreground `workflow run`, `workflow resume` or
-`trigger execute` start the node in its own process group and send `SIGTERM` to that group. A
-node of a detached run shares its owner's process group, so on macOS and Linux its timeout
-still ends only the node's own process, and work it started in the background keeps running.
+When a host `bash:` or `script:` node reaches its `timeout`, Archon signals the node's
+process tree, including work behind a wrapper such as `bun run` or `uv run`.
+On Windows it runs `taskkill /T /F` on the node's process. On macOS and Linux, foreground
+CLI commands and `archon serve` start each node in its own process group and send that
+group `SIGTERM`. Detached CLI runs now use separate node groups too.
 `until_bash` checks end only their own process. A container node's timeout ends only the
 local `docker exec` client, so the command inside the container may keep running.
 
-Archon does not confirm that the tree is gone, so some work outlives a reported timeout:
+For a detached POSIX node, Archon signals the group only while its leader is unreaped,
+then inspects the process table to confirm the group is gone before reporting an ordinary
+timeout. It never sends a delayed group signal after the leader exits. If members remain,
+inspection fails, or termination fails, the node fails with a cleanup error instead of
+taking `on_timeout: skip`. If the leader ignores `SIGTERM`, Archon can kill that unreaped
+leader by exact PID; it does not escalate the group after reaping.
 
-- On macOS and Linux, a process that ignores or handles `SIGTERM` without exiting. Archon
-  sends no `SIGKILL` after it. When that process is the node's own process, the node does
-  not report the timeout until the process exits.
-- On macOS and Linux, a process that left the node's group, for example with `setsid`.
-- On every OS, background work still running when the node's own process had already exited
-  before the deadline. Archon does not signal a tree whose root has exited.
+Foreground and serve timeouts do not confirm group disappearance or send a later group
+`SIGKILL`. A process that handles or ignores `SIGTERM` can outlive their reported timeout;
+when that process is the node's own process, timeout reporting waits for its exit.
+A process that deliberately leaves the node's group, for example with `setsid`, escapes
+group cleanup. Background jobs left by an already-completed node are outside this cleanup.
 
-If the tree cannot be ended, Archon kills the node's own process (`SIGKILL` on macOS and
-Linux) and the node fails with the termination error instead of timing out. It does not take
-`on_timeout: skip`, and dependents follow their `trigger_rule` as for any failed node.
+If a tree cannot be ended, the node fails with the termination error instead of timing
+out. Dependents follow their `trigger_rule` as for any failed node.
 
 Cancelling a run that `archon serve` executes ends the process tree of each of that run's
 running host `bash:` and `script:` nodes and `until_bash` checks within about a second
@@ -289,9 +290,17 @@ running host `bash:` and `script:` nodes and `until_bash` checks within about a 
 records the node failed as cancelled. Other runs' processes are not touched. A process that
 left the node's group with `setsid` escapes. On Windows, background work whose node process
 already exited is not reached. A container node's command is not reached.
-Cancelling a detached run ends its owner's process group on macOS and Linux, nodes included.
-On Windows it ends the owner's Job Object, which also holds node processes whose parent
-already exited.
+On macOS and Linux, detached cancellation first stops unfinished node groups whose leaders
+are still unreaped, then stops the owner group and confirms those groups are gone.
+Archon never signals a group whose leader was already reaped. If a node's output pipes
+remain held after safe group signals, cancellation still ends the run and warns in the
+cancel result and run event that some process outside the run's process group holds the
+output and was not signalled. Archon does not identify that holder. Use `lsof` on the run's
+checkout to find it before reusing or removing the checkout.
+Background jobs of already-completed nodes are excluded. Detached POSIX commands rely on
+explicit cancellation; abrupt owner death does not run their group cleanup.
+On Windows, cancellation ends the
+owner's Job Object, which also holds node processes whose parent already exited.
 
 ### Addressable session ancestry
 
@@ -1143,7 +1152,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 - **Web UI**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it after verifying the owner is gone.
 - **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
-- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to terminate the exact run's host process tree before marking it `cancelled`.
+- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to stop the exact run's owner before marking it `cancelled`; see the reaped-leader exception under [Bash and script node timeouts](#bash-and-script-node-timeouts).
 
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 
@@ -2264,7 +2273,8 @@ sub-pipeline.**
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running
   host `bash:` or `script:` node of a run that `archon serve` executes is ended as described
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
-  detached run ends its owner's process group (macOS and Linux) or Job Object (Windows).
+  detached run stops its live node groups and owner group (macOS and Linux) or Job Object
+  (Windows), with the output-holder warnings described above.
 - **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its

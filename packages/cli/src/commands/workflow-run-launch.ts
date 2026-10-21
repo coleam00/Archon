@@ -1,3 +1,4 @@
+import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
@@ -9,7 +10,6 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { adoptRegisteredWorktree } from '@archon/core/operations/workflow-adoption';
-import { startRunLiveOwner, type RunLiveOwner } from '@archon/core/services/run-live-owner';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -20,10 +20,6 @@ import {
   createRegisteredWorktree,
   type RegisteredWorktree,
 } from '@archon/core/workflows/registered-worktree';
-import {
-  requireTerminalStatusWrite,
-  TerminalStatusWriteError,
-} from '@archon/workflows/terminal-status-write';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
@@ -511,51 +507,6 @@ function assertLaunchTargetsFolderRules(
     admission.pinnedEnabled,
     admission.workflow.name
   );
-}
-
-/**
- * The run's live-owner lease and the setup run this launch created. Worktree setup or
- * execution starts the lease, whichever comes first; it closes once.
- */
-export class OwnedRunLease {
-  private liveOwner: RunLiveOwner | undefined;
-  private closing: Promise<void> | undefined;
-  private readonly detachedProcessOwner: boolean;
-  /** The row worktree setup created; failed as `launch_failed` if execution never takes it. */
-  setupRun: WorkflowRun | undefined;
-  executionSubmitted = false;
-
-  constructor(detachedProcessOwner: boolean) {
-    this.detachedProcessOwner = detachedProcessOwner;
-  }
-
-  async start(runId: string): Promise<void> {
-    this.liveOwner ??= await startRunLiveOwner(runId, {
-      ...(this.detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
-    });
-  }
-
-  isStopRequested(): boolean {
-    return this.liveOwner?.isStopRequested() ?? false;
-  }
-
-  close(): Promise<void> {
-    if (!this.liveOwner) return Promise.resolve();
-    this.closing ??= this.liveOwner.close();
-    return this.closing;
-  }
-
-  /** A setup run nothing executed would otherwise stay `pending` forever. */
-  async failUnsubmittedSetupRun(host: WorkflowHost, error: unknown): Promise<void> {
-    const setupRun = this.setupRun;
-    if (!setupRun || this.executionSubmitted || error instanceof TerminalStatusWriteError) return;
-    await requireTerminalStatusWrite(
-      host.deps.store.failWorkflowRun(setupRun.id, (error as Error).message, {
-        exitReason: 'launch_failed',
-      }),
-      { workflowRunId: setupRun.id, site: 'cli.worktree_setup_failed' }
-    );
-  }
 }
 
 /** Provision the workspace the run executes in: folder seam, worktree, or the checkout itself. */

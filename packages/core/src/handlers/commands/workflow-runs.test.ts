@@ -312,15 +312,32 @@ describe('CommandHandler', () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockGetWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockRequestDetachedRunStop.mockImplementationOnce(() =>
-          Promise.resolve({ pid: 4242, stop: () => Promise.resolve(), release: () => undefined })
+          Promise.resolve({
+            pid: 4242,
+            stop: () =>
+              Promise.resolve({
+                warnings: [
+                  'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+                ],
+              }),
+            release: () => undefined,
+          })
         );
 
         const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
+        expect(result.message).toContain(
+          'Some process still holds node output; it was not signalled. Use lsof on the checkout.'
+        );
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached', {
           cancel_reason: 'operator',
+          reason:
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          warnings: [
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          ],
         });
       });
 

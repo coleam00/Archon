@@ -1,7 +1,8 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { sameWorktreeRegistration } from '@archon/isolation/types';
+import type { IsolationEnvironmentRow } from '@archon/isolation/types';
+import { getCodebase } from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -32,6 +33,7 @@ import {
 import {
   listEnvironments,
   cleanupMergedEnvironments,
+  type MergedCleanupResult,
 } from '@archon/core/operations/isolation-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -105,7 +107,7 @@ export async function isolationListCommand(): Promise<void> {
  * criteria). Kept here because the display-heavy flow doesn't map cleanly to
  * the operations layer's batch-oriented API.
  */
-export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
+export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
   // Reconcile ghosts via the operations layer
   const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
@@ -166,23 +168,27 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         continue;
       }
 
-      const result = await provider.destroy(env.working_path, {
-        // A stale environment's branch is deleted only when the environment created it;
-        // an existing branch it checked out may hold commits that exist nowhere else.
-        branchName:
-          env.branch_name && readWorktreeBranchCreated(env.metadata)
-            ? toBranchName(env.branch_name)
-            : undefined,
-        canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
-        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-      });
+      const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
+        const result = await provider.destroy(env.working_path, {
+          // A stale environment's branch is deleted only when the environment created it;
+          // an existing branch it checked out may hold commits that exist nowhere else.
+          branchName:
+            env.branch_name && readWorktreeBranchCreated(env.metadata)
+              ? toBranchName(env.branch_name)
+              : undefined,
+          canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+          creationId: readWorktreeCreationId(env.metadata) ?? undefined,
+        });
 
-      if (!result.worktreeRemoved || !result.directoryClean) {
-        throw new Error(
-          `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
-        );
-      }
-      await isolationDb.markWorktreeDestroyed(env);
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          throw new Error(
+            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+          );
+        }
+        await markDestroyed();
+        return result;
+      });
+      for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
       console.log(
         lock.kind === 'released'
           ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
@@ -223,26 +229,49 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         `${String(containerReport.errors.length)} failed`
     );
   }
+  return failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
+}
+
+function printMergedCleanupResult(result: MergedCleanupResult): void {
+  console.log(`  Base: ${result.baseRef}`);
+
+  for (const branch of result.removed) {
+    console.log(`  Cleaned: ${branch}`);
+  }
+  for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+    console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
+  }
+  for (const { branchName, message } of result.warnings) {
+    console.log(`  Warning: ${branchName}: ${message}`);
+  }
+  for (const skip of result.skipped) {
+    console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
+  }
+
+  for (const failure of result.errors) {
+    console.error(`  Failed: ${failure.branchName} (${failure.error})`);
+  }
 }
 
 /**
  * Cleanup merged isolation environments (branches merged into each repo's base branch)
- * Also deletes remote branches for merged environments
+ * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
-): Promise<void> {
+): Promise<0 | 1> {
   console.log('Finding environments with branches merged into their base branch...');
 
   const { codebases } = await listEnvironments();
 
   if (codebases.length === 0) {
     console.log('No codebases with active environments found.');
-    return;
+    return 0;
   }
 
   let totalCleaned = 0;
   let totalSkipped = 0;
+  let totalFailed = 0;
 
   for (const codebase of codebases) {
     try {
@@ -254,37 +283,25 @@ export async function isolationCleanupMergedCommand(
         options
       );
 
-      // The base ref comes back from the sweep that compared against it, so the
-      // operator sees the repo's configured base branch rather than an assumed one.
-      console.log(`  Base: ${result.baseRef}`);
-
-      for (const branch of result.removed) {
-        console.log(`  Cleaned: ${branch}`);
-      }
-      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
-        console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
-      }
-      for (const skip of result.skipped) {
-        console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
-      }
-
+      printMergedCleanupResult(result);
+      totalFailed += result.errors.length;
       totalCleaned += result.removed.length;
       totalSkipped += result.skipped.length;
     } catch (error) {
       const err = error as Error;
       getLog().warn({ err, codebaseId: codebase.codebaseId }, 'merged_cleanup_failed');
       console.error(`  Error processing codebase: ${err.message}`);
+      totalFailed++;
     }
   }
 
   console.log(
-    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped`
+    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped, ${String(totalFailed)} failed`
   );
+  return totalFailed > 0 ? 1 : 0;
 }
 
-type CompletionEnvironment = NonNullable<
-  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
->;
+type CompletionEnvironment = IsolationEnvironmentRow & { codebase_default_cwd: string };
 type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
 type CompletionOutcome = 'completed' | 'failed' | 'notFound';
 
@@ -335,10 +352,8 @@ async function checkCompletionPullRequests(
       blockers.push(`open PR #${pr.number} — "${pr.title}"`);
     }
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
-    const reason = isNotInstalled ? 'gh CLI not available' : `gh error: ${err.message}`;
-    console.warn(`  Warning: ${reason} — skipping open PR check`);
+    const err = error as Error;
+    console.warn(`  Warning: gh error: ${err.message} — skipping open PR check`);
     getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
   }
 }
@@ -550,24 +565,17 @@ async function resolveCompletionEnvironment(branch: string): Promise<CompletionE
   if (selected && selected.provider !== 'worktree') {
     throw new CompletionRefusal('not a worktree environment');
   }
-  const env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
-  // Hydration adds codebase fields; legacy registration identity compares the whole row.
-  const observed = selected && {
-    ...selected,
-    codebase_default_cwd: env?.codebase_default_cwd,
-    codebase_name: env?.codebase_name,
-  };
-  if (env && observed && !sameWorktreeRegistration(env, observed)) {
-    throw new CompletionRefusal('environment changed during lookup; refusing ambiguous deletion');
-  }
-  return env;
+  if (!selected) return null;
+  const codebase = await getCodebase(selected.codebase_id);
+  if (!codebase) throw new CompletionRefusal('environment codebase not found');
+  return { ...selected, codebase_default_cwd: codebase.default_cwd };
 }
 
 async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
+  let env: CompletionEnvironment | null;
   try {
     env = await resolveCompletionEnvironment(branch);
   } catch (error) {
@@ -599,7 +607,7 @@ async function completeBranch(
   }
 
   try {
-    const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
+    const result: RemoveEnvironmentResult = await removeEnvironment(env, {
       force: options.force,
       deleteRemoteBranch: options.deleteRemote ?? true,
     });
@@ -613,7 +621,7 @@ async function completeBranch(
 }
 
 /**
- * Complete branch lifecycle — remove worktree, local branch, remote branch, mark DB as destroyed
+ * Complete branch lifecycle: remove worktree and local branch, then retire the registration
  */
 export async function isolationCompleteCommand(
   branchNames: string[],

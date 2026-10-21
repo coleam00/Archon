@@ -14,7 +14,6 @@ import {
   assertCapturedFilesPresent,
   isSourceReadFailure,
 } from '../../../workflow-source';
-import type { IWorkflowPlatform } from '../../../deps';
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
@@ -32,51 +31,6 @@ import {
   assertExecArtifactPointers,
   recordExecTimeoutSkip,
 } from './exec-output';
-
-/**
- * User-controlled workflow variables that {@link executeScriptNode} delivers via
- * subprocess env vars instead of splicing into the script source. Matches the
- * literal `$VAR` form only (word-boundary lookahead) so `$LOOP_PREV.<id>.output`
- * refs and `process.env.ARGUMENTS`-style accessors never false-positive (#2115).
- */
-const SCRIPT_USER_VAR_PATTERN =
-  /\$(?:USER_MESSAGE|ARGUMENTS|LOOP_USER_INPUT|LOOP_PREV_OUTPUT|REJECTION_REASON|CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])/g;
-
-/**
- * Migration aid (#2115): script bodies used to raw-splice user-controlled text
- * ($ARGUMENTS/$CONTEXT family/…) directly into TS/Python source — an injection
- * channel. Those refs are now delivered as env vars and no longer substituted, so
- * a literal `$VAR` left in the body silently stops resolving. Warn the author (log
- * + one concise platform line) with the language-appropriate accessor for one
- * release before the refs are removed. `script` is the author's raw template, so a
- * substituted `$nodeId.output` value can't false-positive.
- */
-async function warnOnLiteralUserVars(
-  node: ExecNode,
-  script: string,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  nodeContext: SendMessageContext
-): Promise<void> {
-  const matches = script.match(SCRIPT_USER_VAR_PATTERN);
-  if (!matches) return;
-  const unique = [...new Set(matches)];
-  const accessor = unique
-    .map(v => (node.runtime === 'uv' ? `os.environ['${v.slice(1)}']` : `process.env.${v.slice(1)}`))
-    .join(', ');
-  getLog().warn(
-    { nodeId: node.id, runtime: node.runtime, vars: unique },
-    'script_node_literal_user_var'
-  );
-  await safeSendMessage(
-    platform,
-    conversationId,
-    `Script node '${node.id}': ${unique.join(', ')} ${unique.length > 1 ? 'are' : 'is'} no longer ` +
-      'substituted into script source (security hardening, #2115). ' +
-      `Read from the environment instead: ${accessor}.`,
-    nodeContext
-  );
-}
 
 /**
  * Execute a script (TypeScript via bun or Python via uv) DAG node.
@@ -166,10 +120,6 @@ export async function executeScriptNode(
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
 
   await recordNodeState({ store: deps.store, logDir }, execution);
-
-  // One-release migration warn for any literal user-controlled var ref that no
-  // longer substitutes now that delivery moved to env vars (#2115).
-  await warnOnLiteralUserVars(node, node.script, platform, conversationId, nodeContext);
 
   // Archon-managed env only — runSubprocess adds the host env for host runs and
   // delivers ONLY this bag into the container (host process.env never crosses).

@@ -1,3 +1,4 @@
+import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
@@ -13,7 +14,7 @@ import {
   warnPreservedContainer,
 } from './workflow-isolation';
 import type { PendingWaitContinuation } from './workflow-wait-continuation';
-import type { ForegroundLaunch, OwnedRunLease, RunWorkspace } from './workflow-run-launch';
+import type { ForegroundLaunch, RunWorkspace } from './workflow-run-launch';
 
 type RunResult = Awaited<ReturnType<IWorkflowEngine['submit']>>;
 type CommonRunOptions = Parameters<IWorkflowEngine['resume']>[0]['options'];
@@ -67,8 +68,9 @@ export async function executeOwnedRun(
     liveOwner: {
       isStopRequested: () => lease.isStopRequested(),
       close: () => lease.close(),
+      registerTerminationPreparation: prepare => lease.registerTerminationPreparation(prepare),
     },
-    endNodeProcessTrees: !request.detachedProcessOwner,
+    detachedProcessOwner: request.detachedProcessOwner,
     teardown: signal => teardownOnSignal(launch, execution, signal),
   });
 

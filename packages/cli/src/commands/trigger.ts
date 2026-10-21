@@ -310,7 +310,7 @@ async function triggerExecute(
         store: deps.store,
         ...owned,
         logModule: 'cli.trigger',
-        endNodeProcessTrees: !detachedProcessOwner,
+        detachedProcessOwner,
       }),
     ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
   });

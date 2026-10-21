@@ -793,9 +793,17 @@ back:
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
-removes each worktree whose pull request merged, with the branch Archon created and its
-remote branch. A worktree with uncommitted changes, a run that can still claim it, or a
-commit its pull request did not carry stays and is reported. With `include_closed: "true"`
+removes each worktree whose pull request merged, with its local branch. Remote
+branches are retained with a warning: after registration retirement, a Git commit
+ID cannot prove whether the branch belongs to a replacement registration. Force
+does not bypass this refusal. For manual cleanup, follow the
+[remote branch recovery procedure](https://archon.diy/reference/cli/#recovering-remote-branch-cleanup)
+in the CLI reference. It covers destination inspection, ownership verification and leased deletion.
+On GitHub, enable **Automatically delete head branches** in repository settings to have
+GitHub remove merged pull requests' branches automatically.
+
+A worktree with uncommitted changes, a run
+that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 

@@ -126,6 +126,9 @@
       "src/commands/isolation.test.ts"
     ],
     [
+      "src/commands/isolation-completion-registration.test.ts"
+    ],
+    [
       "src/commands/chat.test.ts"
     ],
     [
@@ -172,6 +175,12 @@
     ],
     [
       "src/utils/owned-run-termination.test.ts"
+    ],
+    [
+      "src/utils/owned-run-lease.test.ts"
+    ],
+    [
+      "src/utils/detached-node-cli.integration.spec.ts"
     ],
     [
       "src/telemetry-exit.integration.spec.ts"
