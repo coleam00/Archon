@@ -145,7 +145,7 @@ pack through pull requests that deliver an accepted issue.
 The `Publish` workflow checks provenance and SBOM attestations on the pushed image
 digest. Keep `provenance: mode=max` and `sbom: true` enabled.
 Build arguments are published in the attestation; secrets must use `secrets:`, whose values are excluded.
-See [Verifying image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verifying-image-attestations)
+See [Verify image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verify-image-attestations)
 for the consumer inspection commands.
 
 ### Commit messages

@@ -191,7 +191,7 @@ Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env
 - API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.
 
 **Docker deployments:**
-- `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
+- `CLAUDE_USE_GLOBAL_AUTH=true` only satisfies the server's startup check. A fresh container has no `claude /login` session, so set `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY`.
 - For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#caddy-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
 
 ## Who can act on a run

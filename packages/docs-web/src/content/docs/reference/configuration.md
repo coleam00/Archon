@@ -528,13 +528,13 @@ Environment variables override all other configuration. They are organized by ca
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `CLAUDE_USE_GLOBAL_AUTH` | Use global auth from `claude /login` (`true`/`false`) | Auto-detect |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token (alternative to global auth) | -- |
-| `CLAUDE_API_KEY` | Explicit API key (alternative to global auth) | -- |
+| `CLAUDE_USE_GLOBAL_AUTH` | Startup-check marker: `true` tells the server you rely on a `claude /login` session. Claude Code never reads it. | Set to `true` by the CLI, and by the server unless `TOKEN_ENCRYPTION_KEY` is set, when no token or key is set |
+| `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token from `claude setup-token` | -- |
+| `CLAUDE_API_KEY` | Anthropic API key. Passed to Claude Code as `ANTHROPIC_API_KEY` when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is set | -- |
 | `TITLE_GENERATION_MODEL` | Lightweight model for generating conversation titles | SDK default |
 | `ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS` | Timeout (ms) before Claude subprocess is considered hung (throws with diagnostic log) | `60000` |
 
-When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit tokens if present, otherwise falls back to global auth.
+Claude Code uses a token or key from its environment when one is set, and its own `claude /login` session otherwise, whatever `CLAUDE_USE_GLOBAL_AUTH` says. A fresh Docker container has no login session, so set a token or key there.
 
 ### AI Providers -- Codex
 
