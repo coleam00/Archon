@@ -289,6 +289,52 @@ test.each(['restart', 'credentials'] as const)(
 );
 
 test.each(['restart', 'credentials'] as const)(
+  '%s setup failure before the first node permits source-release retry',
+  async failure => {
+    await fixture(async f => {
+      const run = await f.store.createWorkflowRun({
+        workflow_name: 'resume',
+        user_message: '',
+        metadata: { isolation: 'container', isolation_env_id: f.envId },
+      });
+      const claimed = await f.store.claimPendingWorkflowRun(run.id, f.cwd);
+      if (!claimed) throw new Error('Failed to claim source-release fixture');
+      await f.store.releaseRunForUnreadableSource(run.id, {
+        claimId: executionClaim(claimed.metadata),
+        nodeId: 'first',
+        error: 'source unavailable',
+        retryAt: new Date().toISOString(),
+      });
+      const candidate = await f.store.getWorkflowRun(run.id);
+      if (!candidate) throw new Error('Missing source-released run');
+      if (failure === 'restart') f.resume.mockRejectedValueOnce(new Error('setup refused'));
+      else {
+        f.auth.mockImplementation(async (...args) => {
+          if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
+            throw new Error('setup refused');
+        });
+      }
+      await expect(f.command(candidate)).rejects.toThrow('setup refused');
+      const failed = await f.store.getWorkflowRun(run.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.metadata).not.toHaveProperty('source_release');
+      expect(failed?.metadata).not.toHaveProperty('pause_cause');
+      expect(f.execute).not.toHaveBeenCalled();
+      expect(f.destroy).not.toHaveBeenCalled();
+      expect(f.suspend).not.toHaveBeenCalled();
+      expect(f.overlay.contents).toBe('unapplied edits');
+      expect((await f.store.listWorkflowEvents(run.id)).at(-1)?.event_type).toBe('workflow_failed');
+      f.auth.mockResolvedValue();
+      if (!failed) throw new Error('Missing failed run');
+      await f.command(failed);
+      expect(f.resume).toHaveBeenCalledTimes(2);
+      expect(f.execute).toHaveBeenCalledTimes(2);
+      expect((await f.store.getWorkflowRun(run.id))?.status).toBe('completed');
+    });
+  }
+);
+
+test.each(['restart', 'credentials'] as const)(
   '%s setup failure allows failed nodes to execute on ordinary resume',
   async failure => {
     await fixture(async f => {
