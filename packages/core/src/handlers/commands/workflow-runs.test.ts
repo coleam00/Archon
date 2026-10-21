@@ -122,6 +122,8 @@ describe('CommandHandler', () => {
       if (command === '/workflow cancel') {
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith(selected.id, {
           cancel_reason: 'operator',
+          warnings: [expect.stringContaining('untracked background work')],
+          reason: expect.stringContaining('untracked background work'),
         });
       } else {
         expect(result.message).toContain('Cancel: `/workflow cancel`');
@@ -279,6 +281,8 @@ describe('CommandHandler', () => {
           expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
           expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id, {
             cancel_reason: 'operator',
+            warnings: [expect.stringContaining('untracked background work')],
+            reason: expect.stringContaining('untracked background work'),
           });
           expect(mockGetActiveWorkflowRun).not.toHaveBeenCalled();
         } finally {
