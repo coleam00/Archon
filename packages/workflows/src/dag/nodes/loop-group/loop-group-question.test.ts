@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { createEscalationStore } from '../../pause-test-utils';
+import { createEscalationStore, seedPreviousLoopGroupPass } from '../../pause-test-utils';
 import {
   createMockDeps,
   dagOptions,
@@ -12,13 +12,15 @@ import {
   makeWorkflowRun,
   persistedEvents,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import {
   workflowDefinitionSchema,
   workflowWaitContextSchema,
   type WorkflowWaitContext,
 } from '../../../schemas';
-import type { PersistedNodeOutput } from '../../../store';
+import type { WorkflowEventRow } from '../../../schemas/workflow-event';
+import { waitCompletionEvents, type PersistedNodeOutput } from '../../../store';
 
 let cwd: string;
 beforeEach(async () => {
@@ -216,8 +218,11 @@ test('keeps prior-iteration question references without replaying body work', as
       ],
     })
   );
+  const history: WorkflowEventRow[] = [];
   const execute = async (wait?: WorkflowWaitContext, output?: string) => {
     const store = createEscalationStore('prior');
+    store.listEventsForRuns.mockResolvedValue(new Map([['prior', history]]));
+    store.getDagResumeSnapshot.mockResolvedValue(await foldDagResumeSnapshot(history, 'prior'));
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
@@ -228,6 +233,19 @@ test('keeps prior-iteration question references without replaying body work', as
       })
     );
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    const completedWaits = store.clearWorkflowWaitContext.mock.calls.map(
+      ([id, , completion]) => waitCompletionEvents(id, completion).node
+    );
+    history.push(
+      ...[...persistedEvents(store), ...completedWaits].map((event, index) => ({
+        ...event,
+        step_name: event.step_name ?? null,
+        data: event.data ?? {},
+        id: String(history.length + index),
+        step_index: null,
+        created_at: new Date().toISOString(),
+      }))
+    );
     return store;
   };
   const first = await execute();
@@ -273,6 +291,16 @@ for (const reference of [undefined, '$LOOP_PREV.work.output', '$LOOP_USER_INPUT'
       })
     );
     const store = createEscalationStore('legacy');
+    seedPreviousLoopGroupPass(
+      store,
+      'legacy',
+      'grp',
+      1,
+      new Map([
+        ['grp.work', { output: 'work' }],
+        ['grp.ask', { output: '{"text":"again"}' }],
+      ])
+    );
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),

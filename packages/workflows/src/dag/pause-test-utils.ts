@@ -1,4 +1,8 @@
 import { mock } from 'bun:test';
+import { newNodeInvocation, startNodeExecution, finishNodeExecution } from '../node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
+import { dagNodeSchema } from '../schemas';
+import type { PersistedNodeOutput } from '../store';
 import type { WorkflowWaitContext, WorkflowRunStatus } from '../schemas';
 import { WorkflowRunPauseConflictError, type IWorkflowStore } from '../store';
 import { createMockStore, mockWorkflowRun, type MockWorkflowStore } from './test-utils';
@@ -43,4 +47,38 @@ export function createEscalationStore(
     ),
     getState: () => ({ status, metadata }),
   };
+}
+
+export function seedPreviousLoopGroupPass(
+  store: MockWorkflowStore,
+  runId: string,
+  groupId: string,
+  iteration: number,
+  outputs: ReadonlyMap<string, PersistedNodeOutput>
+): void {
+  const rows = [...outputs].map(([path, output]) => {
+    const parsed = dagNodeSchema.parse({ id: path.split('.').pop(), bash: 'true' });
+    if (parsed.kind !== 'exec') throw new Error('Expected exec');
+    const record = startNodeExecution({
+      runId,
+      path,
+      node: parsed,
+      invocation: newNodeInvocation([{ groupId, iteration }]),
+    });
+    return {
+      ...serializeNodeStateRecord(
+        finishNodeExecution(
+          record,
+          { status: 'completed' },
+          {
+            output: { text: output.output },
+          }
+        )
+      ),
+      id: record.attempt.id,
+      step_index: null,
+      created_at: record.timing.startedAt,
+    };
+  });
+  store.listEventsForRuns.mockResolvedValue(new Map([[runId, rows]]));
 }
