@@ -140,6 +140,9 @@ function createMockStore(): IWorkflowStore {
     deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
+    withPausedExecution: mock<IWorkflowStore['withPausedExecution']>(() => {
+      throw new Error('Unexpected withPausedExecution');
+    }),
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(() => {
       throw new Error('Unexpected releaseRunForUnreadableSource');
     }),

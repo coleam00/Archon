@@ -973,6 +973,18 @@ export interface IWorkflowStore
     event?: GatePauseEventInput
   ): Promise<void>;
   /**
+   * Under the same exclusion as resume, run action only for a paused row with the
+   * expected execution claim. Missing/nonmatching rows return executed: false.
+   * Does not mutate the run, events or resource slots. The action must be repeatable,
+   * must not access stores, and must not publish events (transactions may replay it).
+   */
+  withPausedExecution(
+    id: string,
+    expectedExecutionClaim: string | null,
+    action: () => Promise<void>
+  ): Promise<{ executed: boolean }>;
+
+  /**
    * Claim-checked release from running to paused for unreadable source; status/claim losers write nothing.
    * Atomically writes source_release (store-minted releaseId/releasedAt), continuation_retry_at, and source_released.
    * beforePublish runs under exclusion against resume; rejection aborts the transition.

@@ -183,6 +183,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     resetStartBindingPreparation: mock(unexpected('resetStartBindingPreparation')),
     listDueWorkflowContinuations: mock(unexpected('listDueWorkflowContinuations')),
     deferWorkflowContinuation: mock(unexpected('deferWorkflowContinuation')),
+    withPausedExecution: mock(unexpected('withPausedExecution')),
     releaseRunForUnreadableSource: mock(unexpected('releaseRunForUnreadableSource')),
     releasePausedRunSlot: mock(async () => ({ released: false })),
     answerAttentionWait: mock(unexpected('answerAttentionWait')),

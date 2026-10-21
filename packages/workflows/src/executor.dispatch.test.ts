@@ -525,3 +525,36 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     expect(logged('workflow.dispatch_not_recorded_resolving_live')).toHaveLength(1);
   });
 });
+
+it('a same-owner container pause retains its deadline cursor and container slot', async () => {
+  const wait = {
+    owner: 'node' as const,
+    kind: 'time' as const,
+    nodeId: 'wait',
+    pauseId: 'p1',
+    waitingSince: '2026-01-01T00:00:00.000Z',
+    resumeAt: '2026-01-02T00:00:00.000Z',
+  };
+  const run = makeRun({ metadata: { isolation: 'container', isolation_env_id: 'env' } });
+  const paused = { ...run, status: 'paused' as const, metadata: { ...run.metadata, wait } };
+  const releasePausedRunSlot = mock(async () => ({ released: true }));
+  const store = makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot });
+  mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'container_pause' });
+  const result = await startWorkflow({
+    store,
+    options: {
+      ...resumeOf(run),
+      execContext: { kind: 'container', containerId: 'cid' },
+      container: { envId: 'env', writeBack: 'approve', backend: containerBackend() },
+    },
+  });
+  const cursor = { kind: 'wait' as const, nodeId: 'wait', pauseId: 'p1', resumeAt: wait.resumeAt };
+  expect(result).toEqual({
+    success: true,
+    paused: true,
+    workflowRunId: run.id,
+    waitCursor: cursor,
+  });
+  expect(releasePausedRunSlot).not.toHaveBeenCalled();
+  expect(store.failWorkflowRun).not.toHaveBeenCalled();
+});

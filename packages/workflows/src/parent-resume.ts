@@ -314,3 +314,44 @@ export async function releaseContinuablePauseSlot(
     );
   }
 }
+
+export async function maybeContinueReleasedFanOut(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  run: WorkflowRun,
+  resolveChildIsolation?: ChildIsolationResolver
+): Promise<WorkflowExecutionResult | undefined> {
+  const notifyStuck = async (reason: string): Promise<void> => {
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⚠️ Run \`${run.id.slice(0, 8)}\`'s sub-runs finished, but it couldn't ` +
+        `continue (${reason}). Resume it manually: ` +
+        `\`${spellWorkflowCommand(platform, `resume ${run.id}`)}\``
+    );
+  };
+  let released = false;
+  try {
+    released =
+      isApprovalContext(run.metadata.approval) &&
+      run.metadata.approval.type === 'fan_out' &&
+      (await isFanOutParentReleased(deps, run));
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, workflowRunId: run.id },
+      'workflow.parent_resume_children_lookup_failed'
+    );
+    await notifyStuck('its sub-runs could not be looked up');
+  }
+  if (!released) return undefined;
+  return continueBlockedRun(
+    deps,
+    platform,
+    conversationId,
+    run,
+    notifyStuck,
+    {},
+    resolveChildIsolation
+  );
+}

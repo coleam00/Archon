@@ -81,24 +81,55 @@ export async function suspendContainerForPause(
   conversationId: string,
   containerCtx: ContainerRunContext,
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
-  runId: string
+  runId: string,
+  expectedExecutionClaim: string | null
 ): Promise<void> {
-  let outcome: ContainerSuspendOutcome;
+  let suspend: (() => Promise<void>) | undefined;
+  let outcome: ContainerSuspendOutcome | undefined;
   try {
-    await containerCtx.backend.suspend(containerCtx.envId);
-    outcome = { stopped: true };
+    suspend = await containerCtx.backend.prepareSuspend(
+      containerCtx.envId,
+      execContext.containerId
+    );
   } catch (error) {
     outcome = { stopped: false, error };
   }
-  await reportContainerSuspension(
-    deps,
-    platform,
-    conversationId,
-    containerCtx,
-    execContext,
-    runId,
-    outcome
-  );
+  let executed: boolean;
+  try {
+    const result = await deps.store.withPausedExecution(runId, expectedExecutionClaim, async () => {
+      if (!suspend) return;
+      try {
+        await suspend();
+        outcome = { stopped: true };
+      } catch (error) {
+        outcome = { stopped: false, error };
+      }
+    });
+    executed = result.executed;
+  } catch (error) {
+    getLog().error(
+      { err: error, runId, envId: containerCtx.envId },
+      'dag.container_pause_cleanup_unconfirmed'
+    );
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Run paused, but container cleanup could not be confirmed: ${error instanceof Error ? error.message : String(error)}.`,
+      { workflowId: runId }
+    );
+    return;
+  }
+  if (executed && outcome) {
+    await reportContainerSuspension(
+      deps,
+      platform,
+      conversationId,
+      containerCtx,
+      execContext,
+      runId,
+      outcome
+    );
+  }
 }
 
 export type ContainerSuspendOutcome = { stopped: true } | { stopped: false; error: unknown };
@@ -198,7 +229,7 @@ function renderWriteBackSummary(summary: OverlayChangeSummary): string {
  * The engine-level container write-back gate (Phase C). Runs after the last node
  * succeeds, and again on each resume (the DAG re-runs with every node skipped and
  * lands here). Returns:
- *  - `paused`    — pending an approval decision; the container was suspended.
+ *  - `paused`    — pending an approval decision; suspension is best-effort and ownership-guarded.
  *  - `applied`   — the overlay diff landed on the live root (auto policy, or
  *                  resume-after-approve). Fall through to complete the run.
  *  - `discarded` — the overlay was discarded (resume-after-reject). Complete.
@@ -210,7 +241,8 @@ export async function runContainerWriteBackGate(
   conversationId: string,
   runId: string,
   containerCtx: ContainerRunContext,
-  execContext: Extract<ExecutionContext, { kind: 'container' }>
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  expectedExecutionClaim: string | null
 ): Promise<'paused' | 'applied' | 'discarded' | 'skipped'> {
   const run = await deps.store.getWorkflowRun(runId);
   const meta = run?.metadata ?? {};
@@ -329,6 +361,7 @@ export async function runContainerWriteBackGate(
       runId,
       containerCtx,
       execContext,
+      expectedExecutionClaim,
       summary
     );
     return 'paused';
@@ -382,6 +415,7 @@ export async function runContainerWriteBackGate(
     runId,
     containerCtx,
     execContext,
+    expectedExecutionClaim,
     summary
   );
   return 'paused';
@@ -400,6 +434,7 @@ async function raiseWriteBackGate(
   runId: string,
   containerCtx: ContainerRunContext,
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  expectedExecutionClaim: string | null,
   summary: OverlayChangeSummary | undefined
 ): Promise<void> {
   const message = summary
@@ -438,7 +473,15 @@ async function raiseWriteBackGate(
     runId,
     phase: 'writeback_requested',
   });
-  await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
+  await suspendContainerForPause(
+    deps,
+    platform,
+    conversationId,
+    containerCtx,
+    execContext,
+    runId,
+    expectedExecutionClaim
+  );
   // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
   if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
   await sendPauseNotice(

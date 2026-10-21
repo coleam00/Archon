@@ -92,7 +92,9 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
  */
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
-): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
+): Promise<
+  string | undefined | { kind: 'source_release'; released: boolean } | { kind: 'container_pause' }
+> {
   const {
     deps,
     platform,
@@ -531,9 +533,10 @@ export async function executeDagWorkflow(
         conversationId,
         containerCtx,
         execContext,
-        workflowRun.id
+        workflowRun.id,
+        executionClaim(workflowRun.metadata)
       );
-      return;
+      return { kind: 'container_pause' };
     }
   }
 

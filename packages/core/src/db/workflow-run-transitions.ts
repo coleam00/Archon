@@ -5,6 +5,7 @@
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
+  executionClaim,
   sourceReleaseMetadata,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
@@ -24,14 +25,14 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
-import { getDatabase, getDialect } from './connection';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
 import type { TransactionQuery } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
-import { getLog } from './workflow-run-shared';
+import { getLog, normalizeMetadata } from './workflow-run-shared';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
@@ -502,3 +503,27 @@ export async function releaseRunForUnreadableSource(
     throw new Error(`Failed to release workflow run for unreadable source: ${err.message}`);
   }
 }
+
+export const withPausedExecution: IWorkflowStore['withPausedExecution'] = async (
+  id,
+  expectedExecutionClaim,
+  action
+) =>
+  getDatabase().withTransaction(async query => {
+    if (getDatabaseType() === 'sqlite') {
+      await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+    }
+    const result = await query<{ status: string; metadata: unknown }>(
+      `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
+      [id]
+    );
+    const run = result.rows[0];
+    if (
+      !run ||
+      run.status !== 'paused' ||
+      executionClaim(normalizeMetadata(run.metadata)) !== expectedExecutionClaim
+    )
+      return { executed: false };
+    await action();
+    return { executed: true };
+  });

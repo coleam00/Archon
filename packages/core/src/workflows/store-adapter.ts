@@ -177,6 +177,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listDueWorkflowContinuations: (now, limit = 25) =>
       workflowDb.listDueWorkflowContinuations(now, limit),
     deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,
+    withPausedExecution: workflowDb.withPausedExecution,
     releaseRunForUnreadableSource: workflowDb.releaseRunForUnreadableSource,
     answerAttentionWait: workflowDb.answerAttentionWait,
     labelAttentionWait: workflowDb.labelAttentionWait,

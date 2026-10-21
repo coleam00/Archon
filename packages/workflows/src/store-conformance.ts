@@ -1,4 +1,5 @@
 export { resourceStartFixtures } from './resource-start-conformance';
+import { describePausedExecutionConformance } from './store-conformance/paused-execution';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
   describeForeignCheckoutAdmission,
@@ -1437,6 +1438,7 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, run.id)).toContain('source_released');
     });
     describeSourceReleaseConformance(() => store);
+    describePausedExecutionConformance(() => store);
     test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
       const run = await running(store);
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(

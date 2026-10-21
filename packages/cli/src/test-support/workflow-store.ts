@@ -276,6 +276,8 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
+    withPausedExecution: (id, claim, action) =>
+      write(view => view.withPausedExecution(id, claim, action)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>

@@ -765,6 +765,17 @@ export function createTransactionView(
       record({ workflow_run_id: id, event_type: 'workflow_resumed' });
       return structuredClone(run);
     },
+    withPausedExecution: async (id, expectedExecutionClaim, action) => {
+      const run = runs.get(id);
+      if (
+        !run ||
+        run.status !== 'paused' ||
+        executionClaim(run.metadata) !== expectedExecutionClaim
+      )
+        return { executed: false };
+      await action();
+      return { executed: true };
+    },
     releaseRunForUnreadableSource: async (id, release, beforePublish) => {
       const run = row(id);
       if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)

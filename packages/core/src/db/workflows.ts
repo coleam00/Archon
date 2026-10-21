@@ -73,6 +73,7 @@ export {
   cancelWorkflowRun,
   cancelFanOutRun,
   cancelResumableRunsForConversation,
+  withPausedExecution,
   releaseRunForUnreadableSource,
   type WorkflowRunInsert,
 } from './workflow-run-transitions';

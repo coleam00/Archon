@@ -31,9 +31,11 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   afterEach(() => removeTempTree(wbTestDir));
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
+    const stop = mock(async () => undefined);
     return {
+      stop,
       suspend: mock(async () => undefined),
-      prepareSuspend: mock(async () => mock(async () => undefined)),
+      prepareSuspend: mock(async () => stop),
       finalize: mock(async () => ({ requiresApproval: false as boolean })),
       applyChanges: mock(async () => ({
         filesApplied: 0,
@@ -143,7 +145,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(backend.finalize).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
-    expect(backend.suspend).not.toHaveBeenCalled();
+    expect(backend.prepareSuspend).not.toHaveBeenCalled();
   });
 
   it('non-empty diff + approve policy → pauses (writeback) + suspends, does NOT complete', async () => {
@@ -179,7 +181,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     });
     const writes = (store.createWorkflowEvent as MockWorkflowEventCollector).mock.calls;
     expect(writes.filter(([event]) => event.event_type === 'writeback_requested')).toHaveLength(1);
-    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.stop).toHaveBeenCalledTimes(1);
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -217,7 +219,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     // failClosed: true (dag-executor.ts raiseWriteBackGate) means this rejects
     // straight through instead of being treated as a legitimate external
     // transition, so the container teardown path preserves the overlay for retry.
-    // backend.suspend never firing proves the entire downstream sequence
+    // No suspension preparation proves the entire downstream sequence
     // (suspend, then the user message) never runs — both are strictly sequential
     // awaits after the pause call, with nothing to catch a throw in between.
     const backend = makeWritebackBackend({
@@ -245,7 +247,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(
       /not found or not in running state/
     );
-    expect(backend.suspend).not.toHaveBeenCalled();
+    expect(backend.prepareSuspend).not.toHaveBeenCalled();
   });
 
   it('non-empty diff + auto policy → applies without pausing, then completes', async () => {
@@ -556,20 +558,21 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     const store = await runGate({ backend, status: 'paused' });
     // A node paused the run → suspend fires right after the layer walk; the gate
     // + completion are never reached.
-    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.stop).toHaveBeenCalledTimes(1);
     expect(backend.finalize).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('a docker-stop failure during suspend does NOT flip the paused run to failed', async () => {
+  it('a suspension preparation failure does NOT flip the paused run to failed', async () => {
     const backend = makeWritebackBackend({
-      suspend: mock(async () => {
+      prepareSuspend: mock(async () => {
         throw new Error('Cannot connect to the Docker daemon');
       }),
     });
     // status 'paused' → the mid-DAG suspend path runs; a suspend throw is best-effort.
     const store = await runGate({ backend, status: 'paused' });
-    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
+    expect(backend.stop).not.toHaveBeenCalled();
     // The run stays paused — suspend failure must not mark it failed or complete it.
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();

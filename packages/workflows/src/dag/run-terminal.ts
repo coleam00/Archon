@@ -2,6 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the evidence and write-back gates, and the completion write.
  */
+import { executionClaim } from '../store';
 import { existsSync } from 'fs';
 import { join as joinPath } from 'path';
 import type { WorkflowDeps } from '../deps';
@@ -69,7 +70,9 @@ interface TerminalOutput {
  * it. Returns the run's terminal output, the summary for the parent conversation and the
  * `workflow:` re-entry path.
  */
-export async function finishRun(ctx: RunTerminalContext): Promise<string | undefined> {
+export async function finishRun(
+  ctx: RunTerminalContext
+): Promise<string | undefined | { kind: 'container_pause' }> {
   const { deps, workflow, workflowRun, nodeOutputs } = ctx;
   const nodeCounts = countNodeStates(nodeOutputs, workflow.nodes.length);
   const anyCompleted = nodeCounts.completed > 0;
@@ -101,7 +104,7 @@ export async function finishRun(ctx: RunTerminalContext): Promise<string | undef
   // (empty diff). On a RESUME after the decision, the DAG re-ran with every node
   // skipped and lands here again with `pending_writeback` set — it applies or
   // discards and falls through to completion. `paused` short-circuits (the gate
-  // suspended the container); any other outcome falls through to completeWorkflowRun.
+  // attempted suspension); any other outcome falls through to completeWorkflowRun.
   if (ctx.execContext.kind === 'container' && ctx.containerCtx) {
     const gate = await runContainerWriteBackGate(
       deps,
@@ -109,9 +112,10 @@ export async function finishRun(ctx: RunTerminalContext): Promise<string | undef
       ctx.conversationId,
       workflowRun.id,
       ctx.containerCtx,
-      ctx.execContext
+      ctx.execContext,
+      executionClaim(workflowRun.metadata)
     );
-    if (gate === 'paused') return;
+    if (gate === 'paused') return { kind: 'container_pause' };
   }
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
