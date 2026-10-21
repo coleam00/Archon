@@ -1,3 +1,4 @@
+import { findProjectRunsByReference } from '../workflows/run-id';
 import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
@@ -702,7 +703,7 @@ async function signalGateResolved(
  * or ambiguous prefix.
  */
 async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<WorkflowRun | string> {
-  const matches = await ctx.operations.findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
+  const matches = await findProjectRunsByReference(ctx.operations, runId, ctx.codebaseId);
   if (matches.length > 1) {
     return `manage_run: id '${runId}' matches more than one run — use more characters or the full id.`;
   }

@@ -1,3 +1,4 @@
+import { findProjectRunsByReference } from '../../workflows/run-id';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
@@ -50,7 +51,7 @@ export async function createResumeRequest(
  */
 export async function resolveChatRunId(arg: string, conversation: Conversation): Promise<string> {
   if (!conversation.codebase_id) return arg;
-  const matches = await workflowDb.findWorkflowRunsByIdPrefix(arg, conversation.codebase_id);
+  const matches = await findProjectRunsByReference(workflowDb, arg, conversation.codebase_id);
   if (matches.length > 1) {
     throw new Error(
       `Run id '${arg}' matches more than one run in this project. Use more characters or the full id.`

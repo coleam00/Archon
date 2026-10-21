@@ -2,6 +2,7 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
+import { findProjectRunsByReference } from '@archon/core/workflows/run-id';
 import { readChatProjectScope } from '../workflow-scope';
 
 import type { Conversation } from '@archon/core/schemas/conversation';
@@ -344,7 +345,7 @@ export async function resolveRunIdArg(
     }
     return runId;
   }
-  const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, resolvedCodebaseId);
+  const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');
     throw new Error(
@@ -367,12 +368,7 @@ async function resolveProjectScopedRunId(
 ): Promise<string> {
   if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
   const fullId = FULL_RUN_ID_RE.test(runId);
-  let matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
-  if (matches.length === 0 && fullId && !runId.includes('-')) {
-    const id = runId.toLowerCase();
-    const dashedId = `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
-    matches = await host.deps.store.findWorkflowRunsByIdPrefix(dashedId, codebaseId);
-  }
+  const matches = await findProjectRunsByReference(host.deps.store, runId, codebaseId);
   if (
     matches.length !== 1 ||
     (fullId &&

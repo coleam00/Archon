@@ -4,6 +4,7 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import { handleCommand } from '../command-handler';
+import { resolveChatRunId } from './workflow-runs';
 import { startRunLiveOwner } from '../../services/run-live-owner';
 import {
   operator,
@@ -35,6 +36,16 @@ describe('CommandHandler', () => {
   // Clean up spies after all tests in this file to prevent contamination
   afterAll(() => {
     restoreSpies();
+  });
+
+  test('resolves an undashed full UUID within the conversation project', async () => {
+    const id = 'abcdef00-1111-2222-3333-444455556666';
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([makeWorkflowRun({ id })]);
+    expect(
+      await resolveChatRunId(id.replaceAll('-', ''), makeConversation({ codebase_id: 'cb-1' }))
+    ).toBe(id);
+    expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
   });
 
   describe('handleCommand', () => {
