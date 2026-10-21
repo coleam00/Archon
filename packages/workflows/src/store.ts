@@ -459,6 +459,13 @@ export function waitContinuedEvent(
   };
 }
 
+export class WorkflowRunExecutionClaimLostError extends Error {
+  constructor(id: string) {
+    super(`Workflow run execution claim lost (id: ${id})`);
+    this.name = 'WorkflowRunExecutionClaimLostError';
+  }
+}
+
 export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
 
 /** The initial execution has no token; resumes mint one so old executors cannot release a later claim. */
@@ -913,6 +920,9 @@ export interface IWorkflowStore
    * creates the row in the launching process — so `Started` means a queryable
    * run — and forks before any worktree exists, so the child fills the path in
    * once it has one. Every other caller supplies it at creation.
+   *
+   * An expected execution claim is compared atomically with the write. Null denotes
+   * the initial claim; a mismatch or missing row throws WorkflowRunExecutionClaimLostError.
    */
   updateWorkflowRun(
     id: string,
@@ -920,7 +930,8 @@ export interface IWorkflowStore
       status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
       outcome?: WorkflowRunOutcome;
       working_path?: string;
-    }
+    },
+    expectedExecutionClaim?: string | null
   ): Promise<void>;
   /** Atomically merge metadata only while running; false means nothing was written. */
   updateWorkflowRunMetadataIfRunning(

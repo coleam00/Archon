@@ -200,7 +200,8 @@ export async function createFileWorkflowStore(
           return null;
         return view.claimPendingWorkflowRun(id, path);
       }),
-    updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRun: (id, updates, claim) =>
+      write([id], view => view.updateWorkflowRun(id, updates, claim)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),

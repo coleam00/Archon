@@ -8,7 +8,6 @@
  * (`dag/run-terminal`).
  */
 
-import { NodeEventWriteError } from './node-event-write';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -16,7 +15,7 @@ import { sourceReleaseNotice } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
-import { CONTINUATION_RETRY_MS, executionClaim } from './store';
+import { CONTINUATION_RETRY_MS, executionClaim, WorkflowRunExecutionClaimLostError } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
@@ -183,8 +182,11 @@ export async function executeDagWorkflow(
   // A same-value write is skipped, but a genuine re-execution may replace the
   // prior verdict.
   let pauseError: string | undefined;
+  let claimLost = false;
+  const segmentClaim = executionClaim(workflowRun.metadata);
   let persistedOutcome: WorkflowRunOutcome | null = workflowRun.outcome;
   const persistAuthoredOutcome = async (): Promise<void> => {
+    if (claimLost) return;
     const field = workflow.outcome_field;
     const returns = workflow.returns;
     if (field === undefined || returns === undefined) return;
@@ -205,8 +207,12 @@ export async function executeDagWorkflow(
     const outcome: WorkflowRunOutcome = resolution.value ? 'succeeded' : 'failed';
     if (outcome === persistedOutcome) return;
     try {
-      await deps.store.updateWorkflowRun(workflowRun.id, { outcome });
+      await deps.store.updateWorkflowRun(workflowRun.id, { outcome }, segmentClaim);
     } catch (error) {
+      if (error instanceof WorkflowRunExecutionClaimLostError) {
+        claimLost = true;
+        return;
+      }
       pauseError = error instanceof Error ? error.message : String(error);
       throw error;
     }
@@ -330,6 +336,7 @@ export async function executeDagWorkflow(
    * fold of the run's node events, the figure resume and terminal telemetry read.
    */
   const persistRunUsage = async (): Promise<void> => {
+    if (claimLost) return;
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
     const usage = {
@@ -362,8 +369,12 @@ export async function executeDagWorkflow(
     };
     if (Object.keys(usage).length === 0) return;
     await deps.store
-      .updateWorkflowRun(workflowRun.id, { metadata: usage })
+      .updateWorkflowRun(workflowRun.id, { metadata: usage }, segmentClaim)
       .catch((dbErr: Error) => {
+        if (dbErr instanceof WorkflowRunExecutionClaimLostError) {
+          claimLost = true;
+          return;
+        }
         getLog().error(
           { err: dbErr, workflowRunId: workflowRun.id },
           'dag.run_usage_persist_failed'
@@ -380,7 +391,10 @@ export async function executeDagWorkflow(
     ledger: RunBudgetLedger,
     refusal: RunBudgetRefusal
   ): Promise<void> => {
-    if (await skipIfStatusChanged(deps, workflowRun, 'dag.run_budget_refusal_status_changed'))
+    if (
+      claimLost ||
+      (await skipIfStatusChanged(deps, workflowRun, 'dag.run_budget_refusal_status_changed'))
+    )
       return;
     const failMsg = describeRunBudgetRefusal(refusal, workflow.name);
     getLog().error({ workflowRunId: workflowRun.id, refusal }, 'dag.run_budget_refused');
@@ -563,29 +577,29 @@ export async function executeDagWorkflow(
         'dag.authored_outcome_persist_failed_during_unwind'
       );
     }
-    if (error instanceof NodeEventWriteError) pauseError = error.message;
+    pauseError = error instanceof Error ? error.message : String(error);
     layerStop = 'paused';
   }
 
   // Layers have drained all node work before stopping Docker, which would kill live execs.
   // Preserve an observed pause even if resume has advanced the row during cleanup.
-  if (execContext.kind === 'container' && containerCtx) {
-    if (layerStop === 'paused') {
-      await suspendContainerForPause(
-        deps,
-        platform,
-        conversationId,
-        containerCtx,
-        execContext,
-        workflowRun.id,
-        executionClaim(workflowRun.metadata)
-      );
-      return {
-        kind: 'container_pause',
-        ...(pauseError !== undefined ? { error: pauseError } : {}),
-      };
-    }
+  if (execContext.kind === 'container' && containerCtx && layerStop === 'paused') {
+    await suspendContainerForPause(
+      deps,
+      platform,
+      conversationId,
+      containerCtx,
+      execContext,
+      workflowRun.id,
+      executionClaim(workflowRun.metadata)
+    );
+    return {
+      kind: 'container_pause',
+      ...(pauseError !== undefined ? { error: pauseError } : {}),
+    };
   }
+
+  if (claimLost) return { kind: 'container_pause', error: pauseError };
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
 }

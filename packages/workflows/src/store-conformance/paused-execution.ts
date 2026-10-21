@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { executionClaim, type IWorkflowStore } from '../store';
+import { executionClaim, WorkflowRunExecutionClaimLostError, type IWorkflowStore } from '../store';
 
 const approval = { nodeId: 'review', type: 'approval' as const, message: 'Review' };
 
@@ -15,6 +15,47 @@ export function describePausedExecutionConformance(getStore: () => IWorkflowStor
       if (!claimed) throw new Error('run was not claimed');
       return claimed;
     }
+    test.each([false, true])(
+      'accounting compares the segment claim atomically (resumed=%s)',
+      async resumed => {
+        const store = getStore();
+        let run = await running();
+        if (resumed) {
+          await store.pauseWorkflowRun(run.id, approval);
+          run = await store.resumeWorkflowRun(run.id);
+        }
+        const claim = executionClaim(run.metadata);
+        await expect(
+          store.updateWorkflowRun(crypto.randomUUID(), { outcome: 'succeeded' }, claim)
+        ).rejects.toBeInstanceOf(WorkflowRunExecutionClaimLostError);
+        await store.updateWorkflowRun(
+          run.id,
+          { outcome: 'succeeded', metadata: { total_cost_usd: 0.25 } },
+          claim
+        );
+        await store.pauseWorkflowRun(run.id, approval);
+        await store.updateWorkflowRun(run.id, { metadata: { total_tokens_in: 100 } }, claim);
+        const next = await store.resumeWorkflowRun(run.id);
+        await store.updateWorkflowRun(
+          run.id,
+          { outcome: 'failed', metadata: { total_cost_usd: 9 } },
+          executionClaim(next.metadata)
+        );
+        const before = await store.getWorkflowRun(run.id);
+        for (const patch of [
+          { outcome: 'succeeded' as const },
+          { metadata: { total_cost_usd: 0.25 } },
+          { status: 'paused' as const },
+          { output_root: '/stale' },
+          { working_path: '/stale' },
+        ]) {
+          await expect(store.updateWorkflowRun(run.id, patch, claim)).rejects.toBeInstanceOf(
+            WorkflowRunExecutionClaimLostError
+          );
+          expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        }
+      }
+    );
     test.each([false, true])('holds resume until cleanup settles (resumed=%s)', async resumed => {
       const store = getStore();
       let run = await running();

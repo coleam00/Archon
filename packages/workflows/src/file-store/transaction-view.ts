@@ -28,6 +28,7 @@ import {
   workflowUnpausedEvent,
   sourceReleaseMetadata,
   executionClaim,
+  WorkflowRunExecutionClaimLostError,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
 } from '../store';
@@ -318,8 +319,17 @@ export function createTransactionView(
       run.last_activity_at = new Date();
       return structuredClone(run);
     },
-    updateWorkflowRun: async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
+    updateWorkflowRun: async (
+      id,
+      updates,
+      expectedExecutionClaim
+    ): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
       validateWorkflowWaitMetadata(updates.metadata);
+      if (expectedExecutionClaim !== undefined) {
+        const current = runs.get(id);
+        if (!current || executionClaim(current.metadata) !== expectedExecutionClaim)
+          throw new WorkflowRunExecutionClaimLostError(id);
+      }
       const run = row(id);
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');

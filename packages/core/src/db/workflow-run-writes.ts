@@ -4,6 +4,10 @@
  * write-back claim, and deleting terminal runs. Re-exported from the
  * `./workflows` entry.
  */
+import {
+  EXECUTION_CLAIM_METADATA_KEY,
+  WorkflowRunExecutionClaimLostError,
+} from '@archon/workflows/store';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 import {
@@ -89,6 +93,23 @@ export async function setToolCallAttention(
   return changed;
 }
 
+function rejectUnmatchedRunUpdate(id: string, expectedClaim: string | null | undefined): never {
+  if (expectedClaim !== undefined) throw new WorkflowRunExecutionClaimLostError(id);
+  getLog().warn({ workflowRunId: id }, 'db.workflow_run_update_no_match');
+  throw new Error(`Workflow run not found (id: ${id})`);
+}
+
+function executionClaimPredicate(
+  values: unknown[],
+  expectedClaim: string | null | undefined
+): string {
+  if (expectedClaim === undefined) return '';
+  const claim = getDialect().jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY);
+  if (expectedClaim === null) return ` AND ${claim} IS NULL`;
+  values.push(expectedClaim);
+  return ` AND ${claim} = $${values.length}`;
+}
+
 /**
  * Partially update non-terminal workflow state. Terminal transitions use their
  * dedicated lifecycle writers so the run row cannot outpace its durable event.
@@ -99,7 +120,8 @@ export async function updateWorkflowRun(
     status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
     outcome?: WorkflowRunOutcome;
     working_path?: string;
-  }
+  },
+  expectedExecutionClaim?: string | null
 ): Promise<void> {
   const dialect = getDialect();
   const setClauses: string[] = [];
@@ -149,16 +171,15 @@ export async function updateWorkflowRun(
   values.push(id);
   const idParam = `$${values.length}`;
 
+  const claimPredicate = executionClaimPredicate(values, expectedExecutionClaim);
   try {
     const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}`,
+      `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}${claimPredicate}`,
       values
     );
-    if (result.rowCount === 0) {
-      getLog().warn({ workflowRunId: id }, 'db.workflow_run_update_no_match');
-      throw new Error(`Workflow run not found (id: ${id})`);
-    }
+    if (result.rowCount === 0) rejectUnmatchedRunUpdate(id, expectedExecutionClaim);
   } catch (error) {
+    if (error instanceof WorkflowRunExecutionClaimLostError) throw error;
     if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_update_failed');

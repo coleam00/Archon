@@ -19,7 +19,7 @@ import { hydrateResumableRun } from './run-resume';
 import { finishNodeExecution } from './node-execution';
 import { serializeNodeStateRecord } from './node-record-serialization';
 import { resolveWorkflow } from './graph-plan';
-import { workflowDefinitionSchema, type WorkflowRun } from './schemas';
+import { workflowDefinitionSchema, type WorkflowRun, type ResolvedWorkflow } from './schemas';
 import { approvalContextSchema } from './schemas/workflow-run';
 import { executionClaim, type IWorkflowStore, type PersistedNodeOutput } from './store';
 import type { ContainerWriteBackBackend } from './container-context';
@@ -44,7 +44,7 @@ type PausePath = (typeof paths)[number];
 async function setup(
   path: PausePath,
   ordinaryNodes?: unknown[],
-  outcome?: { returns: string; outcome_field: string }
+  options?: Pick<ResolvedWorkflow, 'returns' | 'outcome_field' | 'budget'>
 ) {
   const root = roots(await mkdtemp(join(tmpdir(), 'container-pause-')));
   setMockArtifactHome(root);
@@ -82,7 +82,7 @@ async function setup(
     workflowDefinitionSchema.parse({
       name: 'pause',
       description: 'Pause fixture',
-      ...outcome,
+      ...options,
       nodes:
         path === 'ordinary'
           ? (ordinaryNodes ?? [{ id: 'review', approval: { message: 'Review' } }])
@@ -133,6 +133,125 @@ function stopped(live: WorkflowEmitterEvent[]) {
 }
 
 describe('container pause segment ownership through the executor', () => {
+  it('budget refusal alongside a published pause remains an execution failure', async () => {
+    const transport = stubMissingContainer();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'result', cost: 0.25, sessionId: 'budget-work' };
+    });
+    const f = await setup(
+      'ordinary',
+      [
+        { id: 'work', prompt: 'Work' },
+        { id: 'refused', prompt: 'Cannot start' },
+        { id: 'review', approval: { message: 'Review' } },
+      ],
+      { budget: { max_work_units: 1 } }
+    );
+    try {
+      expect(await f.execute()).toMatchObject({
+        success: false,
+        error: expect.stringContaining('work_units_exhausted'),
+      });
+      const row = await f.store.getWorkflowRun(f.run.id);
+      expect(row?.status).toBe('paused');
+      expect(row?.metadata.approval).toMatchObject({ nodeId: 'review' });
+      expect(row?.metadata.total_cost_usd).toBe(0.25);
+      expect(f.stop).toHaveBeenCalledTimes(1);
+      expect(
+        (await f.store.listWorkflowEvents(f.run.id)).some(e => e.event_type === 'workflow_failed')
+      ).toBe(false);
+    } finally {
+      f.unsubscribe();
+      transport.mockRestore();
+    }
+  });
+
+  it.each(['after-layer', 'usage', 'unwind'] as const)(
+    'successor accounting survives old %s bookkeeping',
+    async mode => {
+      const transport = stubMissingContainer();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          cost: 0.25,
+          sessionId: 'old-work',
+          structuredOutput: { green: true },
+          tokens: { input: 100, output: 10 },
+        };
+      });
+      const f = await setup(
+        'ordinary',
+        [
+          {
+            id: 'verdict',
+            prompt: 'Verdict',
+            output_format: {
+              type: 'object',
+              properties: { green: { type: 'boolean' } },
+              required: ['green'],
+            },
+          },
+          { id: 'review', approval: { message: 'Review' } },
+        ],
+        mode === 'usage' ? undefined : { returns: 'verdict', outcome_field: 'green' }
+      );
+      let published = false;
+      let advanced = false;
+      let unwinding = false;
+      const advance = async () => {
+        await f.store.resumeWorkflowRun(f.run.id);
+        await f.store.updateWorkflowRun(f.run.id, {
+          outcome: 'failed',
+          metadata: {
+            total_cost_usd: 9,
+            total_tokens_in: 900,
+            total_tokens_out: 90,
+          },
+        });
+        advanced = true;
+      };
+      try {
+        const result = await f.execute({
+          pauseWorkflowRun: async (...args) => {
+            await f.store.pauseWorkflowRun(...args);
+            published = true;
+          },
+          updateWorkflowRun: async (id, updates, claim) => {
+            if (mode === 'unwind' && published && !unwinding && updates.outcome !== undefined) {
+              unwinding = true;
+              throw new Error('outcome unavailable');
+            }
+            if (
+              published &&
+              !advanced &&
+              (updates.outcome !== undefined || updates.metadata?.total_cost_usd !== undefined)
+            )
+              await advance();
+            await f.store.updateWorkflowRun(id, updates, claim);
+          },
+        });
+        expect(advanced).toBe(true);
+        expect(result).toMatchObject(
+          mode === 'unwind'
+            ? { success: false, error: 'outcome unavailable' }
+            : { success: true, paused: true }
+        );
+        const row = await f.store.getWorkflowRun(f.run.id);
+        expect(row?.outcome).toBe('failed');
+        expect(row?.metadata).toMatchObject({
+          total_cost_usd: 9,
+          total_tokens_in: 900,
+          total_tokens_out: 90,
+        });
+        expect(row?.status).toBe('running');
+        expect(f.stop).not.toHaveBeenCalled();
+      } finally {
+        f.unsubscribe();
+        transport.mockRestore();
+      }
+    }
+  );
+
   it.each(['approved', 'rejected'] as const)(
     'normal write-back pause resumes after %s',
     async decision => {
@@ -274,11 +393,11 @@ describe('container pause segment ownership through the executor', () => {
           const attempted = Promise.withResolvers<void>();
           try {
             const result = await f.execute({
-              updateWorkflowRun: async (id, updates) => {
+              updateWorkflowRun: async (id, updates, claim) => {
                 if (writeFailure === 'both' && updates.outcome !== undefined) {
                   throw new Error('Secondary outcome write rejected');
                 }
-                await f.store.updateWorkflowRun(id, updates);
+                await f.store.updateWorkflowRun(id, updates, claim);
               },
               persistWorkflowEvent: async event => {
                 if (
@@ -512,12 +631,12 @@ describe('container pause segment ownership through the executor', () => {
         };
         try {
           const result = await f.execute({
-            updateWorkflowRun: async (id, updates) => {
+            updateWorkflowRun: async (id, updates, claim) => {
               if (updates.outcome !== undefined) {
                 expect(published).toBe(true);
                 throw error;
               }
-              await f.store.updateWorkflowRun(id, updates);
+              await f.store.updateWorkflowRun(id, updates, claim);
             },
             pauseWorkflowRun: async (...args) => {
               await f.store.pauseWorkflowRun(...args);
@@ -530,10 +649,16 @@ describe('container pause segment ownership through the executor', () => {
           });
           expect(published).toBe(true);
           const row = await f.store.getWorkflowRun(f.run.id);
-          expect(row?.metadata).toMatchObject({
-            total_cost_usd: 0.25,
-            total_tokens_in: 100,
-            total_tokens_out: 10,
+          if (resume) expect(row?.metadata.total_cost_usd).toBeUndefined();
+          else
+            expect(row?.metadata).toMatchObject({
+              total_cost_usd: 0.25,
+              total_tokens_in: 100,
+              total_tokens_out: 10,
+            });
+          expect(await f.store.getDagResumeSnapshot(f.run.id)).toMatchObject({
+            costUsd: 0.25,
+            tokens: { input: 100, output: 10 },
           });
           expect(row?.status).toBe(resume ? 'running' : 'paused');
           expect(executionClaim(row?.metadata ?? {})).toBe(
@@ -633,10 +758,16 @@ describe('container pause segment ownership through the executor', () => {
             success: false,
             error: expect.stringContaining('node_suspended'),
           });
-          expect(row?.metadata).toMatchObject({
-            total_cost_usd: 0.25,
-            total_tokens_in: 100,
-            total_tokens_out: 10,
+          if (resume) expect(row?.metadata.total_cost_usd).toBeUndefined();
+          else
+            expect(row?.metadata).toMatchObject({
+              total_cost_usd: 0.25,
+              total_tokens_in: 100,
+              total_tokens_out: 10,
+            });
+          expect(await f.store.getDagResumeSnapshot(f.run.id)).toMatchObject({
+            costUsd: 0.25,
+            tokens: { input: 100, output: 10 },
           });
           if (!resume && row) {
             await expect(hydrateResumableRun({ store: f.store }, row)).rejects.toThrow(
