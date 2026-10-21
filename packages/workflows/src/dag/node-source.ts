@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../parent-status-read';
 import {
   assertWorkflowSourceIntegrity,
   isSourceReadFailure,
@@ -105,6 +106,7 @@ export function settledValuesOrThrow<T>(
   const selected =
     failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
     failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures.find(result => result.reason instanceof ParentStatusReadError) ??
     failures.find(result => result.reason instanceof RunBudgetRefusedError) ??
     failures.find(result => result.reason instanceof RunSourceUnreadableError) ??
     failures[0];

@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { ParentStatusReadError } from './parent-status-read';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -466,7 +467,11 @@ export async function executeDagWorkflow(
     // execution error already in flight. A run-budget refusal also escapes the join; it
     // fails the run here instead of propagating. An unreadable source escapes it too; the
     // run is released below after persisting the settled usage and outcome.
-    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
+    if (
+      error instanceof RunBudgetRefusedError ||
+      error instanceof RunSourceUnreadableError ||
+      error instanceof ParentStatusReadError
+    ) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
       // the in-memory totals miss it. The durable rows hold all of it.
       try {

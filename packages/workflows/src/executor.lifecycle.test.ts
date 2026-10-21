@@ -20,6 +20,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { ParentStatusReadError } from './parent-status-read';
 import { NodeEventWriteError } from './node-event-write';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
@@ -482,6 +483,33 @@ describe('scratch on exit', () => {
       expect(existsSync(checkout)).toBe(kept);
     }
   );
+
+  it('surfaces a parent status read cause without finalizing or deleting scratch', async () => {
+    const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
+    const run = makeRun({ output_root: root });
+    run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
+    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    const cause = new Error('Unsupported parent status');
+    mockExecuteDagWorkflow.mockRejectedValueOnce(new ParentStatusReadError(run.id, 'fan', cause));
+    const store = makeStore({
+      getWorkflowRun: mock(async () => run),
+      getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
+    });
+
+    await expect(startWorkflow({ store })).rejects.toBe(cause);
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    expect(existsSync(checkout)).toBe(true);
+    expect(noExecutorCanWrite(run)).toBe(true);
+    expect(keepAwake.activeCount()).toBe(0);
+    expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
+    expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
+      false
+    );
+  });
 
   // A parent resumed in its child's process publishes no owner endpoint; a release in
   // this process must still see it executing.

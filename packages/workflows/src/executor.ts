@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from './parent-status-read';
 import {
   continueBlockedRun,
   isFanOutParentReleased,
@@ -366,6 +367,7 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
+  let parentStatusUnknown = false;
   try {
     const sourced = await establishAdoptedRunSource(
       deps,
@@ -601,26 +603,17 @@ export async function executeWorkflow(
         if (continued !== undefined) return continued;
       }
     }
-    if (finalStatus?.status === 'completed') {
-      return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
-    } else if (finalStatus?.status === 'paused') {
-      const wait = pendingWorkflowWaitDeadline(finalStatus);
-      const waitCursor = wait ? deadlineWaitCursor(wait) : undefined;
-      await releaseContinuablePauseSlot(deps, finalStatus);
-      return {
-        success: true,
-        paused: true,
-        workflowRunId: workflowRun.id,
-        ...(waitCursor ? { waitCursor } : {}),
-      };
-    } else {
-      return {
-        success: false,
-        workflowRunId: workflowRun.id,
-        error: 'Workflow did not complete successfully',
-      };
-    }
+    return executionResult(deps, workflowRun.id, finalStatus, dagSummary);
   } catch (error) {
+    if (error instanceof ParentStatusReadError) {
+      parentStatusUnknown = true;
+      getLog().error(
+        { err: error.cause, workflowRunId: workflowRun.id, nodeId: error.nodeId },
+        'workflow.parent_status_read_failed'
+      );
+      getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+      throw error.cause;
+    }
     if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
@@ -702,11 +695,38 @@ export async function executeWorkflow(
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
     leaveRunExecution();
-    if (workflowRun && !terminalStatusWriteFailed) {
+    if (workflowRun && !terminalStatusWriteFailed && !parentStatusUnknown) {
       // A source release that lost to a cancel skips the backstop but still frees scratch.
       if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun);
     }
+  }
+}
+
+async function executionResult(
+  deps: WorkflowDeps,
+  workflowRunId: string,
+  finalStatus: WorkflowRun | null,
+  summary: string | undefined
+): Promise<WorkflowExecutionResult> {
+  if (finalStatus?.status === 'completed') {
+    return { success: true, workflowRunId, summary };
+  } else if (finalStatus?.status === 'paused') {
+    const wait = pendingWorkflowWaitDeadline(finalStatus);
+    const waitCursor = wait ? deadlineWaitCursor(wait) : undefined;
+    await releaseContinuablePauseSlot(deps, finalStatus);
+    return {
+      success: true,
+      paused: true,
+      workflowRunId,
+      ...(waitCursor ? { waitCursor } : {}),
+    };
+  } else {
+    return {
+      success: false,
+      workflowRunId,
+      error: 'Workflow did not complete successfully',
+    };
   }
 }
 

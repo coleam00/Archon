@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { safeSendMessage } from '../../../platform-messages';
 import { describeUnmetCompletion } from '../../../executor-shared';
 import { finishNodeExecution } from '../../../node-execution';
@@ -77,12 +78,12 @@ export async function executeLoopGroupNode(
       workflowPreset
     );
   } catch (error) {
-    // Durable-write rejection and an unreadable source belong to run recovery, not a
-    // failed node outcome.
+    // These interruptions leave lifecycle ownership to run recovery.
     if (
       error instanceof TerminalStatusWriteError ||
       error instanceof NodeEventWriteError ||
-      error instanceof RunSourceUnreadableError
+      error instanceof RunSourceUnreadableError ||
+      error instanceof ParentStatusReadError
     )
       throw error;
     const err = error instanceof Error ? error : new Error(String(error));
