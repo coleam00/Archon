@@ -506,9 +506,9 @@ describe('container pause segment ownership through the executor', () => {
     { wait: { duration_ms: 3_600_000 } },
   ]) {
     for (const nested of [false, true]) {
-      it.each(['resume-before-read', 'resume-after-read', 'read-failure'] as const)(
-        `ordinary ${'approval' in suspension ? 'gate' : 'wait'} (nested=${nested}): %s retains publication`,
-        async order => {
+      it.each([false, true])(
+        `ordinary ${'approval' in suspension ? 'gate' : 'wait'} (nested=${nested}, resume=%s) retains publication`,
+        async resume => {
           const leaf = { id: 'review', ...suspension };
           const group = (id: string, nodes: unknown[]) => ({
             id,
@@ -521,12 +521,10 @@ describe('container pause segment ownership through the executor', () => {
           ]);
           const completion = spyOn(untilBash, 'runGroupUntilBash');
           let published = false;
-          let statusReadsAfterPublication = 0;
           let successor: WorkflowRun | undefined;
           const publishedPause = async () => {
             published = true;
-            if (order === 'resume-before-read')
-              successor = await f.store.resumeWorkflowRun(f.run.id);
+            if (resume) successor = await f.store.resumeWorkflowRun(f.run.id);
           };
           try {
             const result = await f.execute({
@@ -538,29 +536,15 @@ describe('container pause segment ownership through the executor', () => {
                 await f.store.pauseWorkflowRunForWait(...args);
                 await publishedPause();
               },
-              getWorkflowRunStatus: async id => {
-                if (published) {
-                  statusReadsAfterPublication++;
-                  if (order === 'read-failure' && statusReadsAfterPublication === 1)
-                    throw new Error('status read unavailable after publication');
-                }
-                const status = await f.store.getWorkflowRunStatus(id);
-                if (published && order === 'resume-after-read' && successor === undefined) {
-                  successor = await f.store.resumeWorkflowRun(id);
-                }
-                return status;
-              },
             });
             expect(published).toBe(true);
-            if (order === 'resume-after-read')
-              expect(statusReadsAfterPublication).toBeGreaterThan(0);
             expect(result).toMatchObject({ success: true, paused: true });
             const row = await f.store.getWorkflowRun(f.run.id);
-            expect(row?.status).toBe(order === 'read-failure' ? 'paused' : 'running');
+            expect(row?.status).toBe(resume ? 'running' : 'paused');
             expect(executionClaim(row?.metadata ?? {})).toBe(
               executionClaim((successor ?? f.run).metadata)
             );
-            expect(f.stop).toHaveBeenCalledTimes(order === 'read-failure' ? 1 : 0);
+            expect(f.stop).toHaveBeenCalledTimes(resume ? 0 : 1);
             const events = await f.store.listWorkflowEvents(f.run.id);
             expect(
               events.some(e =>
@@ -574,7 +558,7 @@ describe('container pause segment ownership through the executor', () => {
               expect(events.filter(e => e.event_type === 'loop_iteration_started')).toHaveLength(2);
               expect(completion).not.toHaveBeenCalled();
             }
-            if (order === 'read-failure' && row) {
+            if (!resume && row) {
               expect((await hydrateResumableRun({ store: f.store }, row)) === null).toBe(
                 'approval' in suspension
               );
@@ -903,27 +887,16 @@ describe('container pause segment ownership through the executor', () => {
       async pausedAgain => {
         const f = await setup(path);
         const successor: { run?: WorkflowRun } = {};
-        let pausedObservations = 0;
         const resume = async () => {
           successor.run = await f.store.resumeWorkflowRun(f.run.id);
           if (pausedAgain) await f.store.pauseWorkflowRun(f.run.id, approval);
         };
-        const overrides: Partial<IWorkflowStore> =
-          path === 'ordinary'
-            ? {
-                getWorkflowRunStatus: async id => {
-                  const status = await f.store.getWorkflowRunStatus(id);
-                  // Resume after the layer walker reads its paused snapshot.
-                  if (status === 'paused' && ++pausedObservations === 1) await resume();
-                  return status;
-                },
-              }
-            : {
-                pauseWorkflowRun: async (...args) => {
-                  await f.store.pauseWorkflowRun(...args);
-                  await resume();
-                },
-              };
+        const overrides: Partial<IWorkflowStore> = {
+          pauseWorkflowRun: async (...args) => {
+            await f.store.pauseWorkflowRun(...args);
+            await resume();
+          },
+        };
         try {
           expect(await f.execute(overrides)).toEqual({
             success: true,

@@ -701,10 +701,10 @@ async function stopsBetweenLayers(
     pausePublished && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause'
       ? 'paused'
       : undefined;
+  if (publishedStop !== undefined) return publishedStop;
   // Check for non-running status between DAG layers (cancellation, deletion, pause)
   try {
     const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
-    if (publishedStop !== undefined) return publishedStop;
     if (dagStatus === null || dagStatus !== 'running') {
       const effectiveStatus = dagStatus ?? 'deleted';
       if (
@@ -744,5 +744,5 @@ async function stopsBetweenLayers(
       'dag.status_check_failed'
     );
   }
-  return publishedStop;
+  return undefined;
 }
