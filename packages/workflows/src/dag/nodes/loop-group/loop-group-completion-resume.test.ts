@@ -115,6 +115,10 @@ for (const pause of [false, true]) {
       }
       expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
       expect(count).toBe(2);
+      const completed = (await store.listWorkflowEvents(run.id)).find(
+        event => event.step_name === 'grp' && event.event_type === 'node_completed'
+      );
+      expect(completed?.data.node_output).toBe('second');
     } finally {
       await removeTempTree(root);
     }
