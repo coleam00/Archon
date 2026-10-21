@@ -1,6 +1,7 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isPathInside } from '@archon/paths';
@@ -167,12 +168,16 @@ export function createInMemoryWorkflowStore(
     }
     runs = nextRuns;
     events = nextEvents;
-    for (const event of nextEvents)
+    for (const event of nextEvents) {
       if (
-        !priorIds.has(event.id) &&
-        TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
+        priorIds.has(event.id) ||
+        !TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
       )
-        onTerminal(event.workflow_run_id);
+        continue;
+      const run = nextRuns.get(event.workflow_run_id);
+      if (run) await releaseRunScratch(run);
+      onTerminal(event.workflow_run_id);
+    }
     return result;
   };
   let queue: Promise<void> = Promise.resolve();

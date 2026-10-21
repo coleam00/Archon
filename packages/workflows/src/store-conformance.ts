@@ -1,4 +1,5 @@
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
+import { describeRunScratchConformance } from './store-conformance/run-scratch';
 import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
@@ -1446,6 +1447,7 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, run.id)).toContain('source_released');
     });
     describeSourceReleaseConformance(() => store);
+    describeRunScratchConformance(() => store);
     test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
       const run = await running(store);
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(

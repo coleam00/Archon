@@ -101,11 +101,23 @@ export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): 
  *
  * The executor keeps its own bookkeeping here — typed-artifact listings, node
  * output spills — so a workflow's own files stay at the root of
- * `$ARTIFACTS_DIR`. It is the single name shared by the WRITERS that put state
+ * `$ARTIFACTS_DIR`. Its `scratch` child ({@link getRunScratchDir}) is the one
+ * place under it a workflow writes to. It is the single name shared by the WRITERS that put state
  * under it and the READERS that list a run's artifacts for a person: a writer
  * that chose its own name would land in a listing no reader excludes.
  */
 export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
+
+/**
+ * A run's scratch directory: `$ARTIFACTS_DIR/.archon/scratch`. A workflow puts
+ * throwaway checkouts, dependency installs and other reproducible bulk here,
+ * and the run store removes it once the run becomes completed, failed or
+ * cancelled. Evidence a later node or the operator reads goes anywhere else in
+ * `$ARTIFACTS_DIR`, which is kept.
+ */
+export function getRunScratchDir(artifactsDir: string): string {
+  return join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'scratch');
+}
 
 /**
  * Whether an entry in a run's artifacts directory is the engine's own store,

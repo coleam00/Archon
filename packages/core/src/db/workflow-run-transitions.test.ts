@@ -424,7 +424,7 @@ describe('workflow run transitions', () => {
       const result = await cancelResumableRunsForConversation('conv-1');
 
       expect(result).toEqual([paused, failed]);
-      expect(mockQuery).toHaveBeenCalledTimes(8);
+      expect(mockQuery).toHaveBeenCalledTimes(10);
       const [selectSql, selectParams] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain(
         'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs'
@@ -488,7 +488,7 @@ describe('workflow run transitions', () => {
       });
 
       expect(result).toEqual({ cancelled: true });
-      expect(mockQuery).toHaveBeenCalledTimes(4);
+      expect(mockQuery).toHaveBeenCalledTimes(5);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       // Must not re-cancel / re-stamp completed_at on an already-finished run.
@@ -553,7 +553,7 @@ describe('workflow run transitions', () => {
         cancelled: true,
       });
 
-      expect(mockQuery).toHaveBeenCalledTimes(4);
+      expect(mockQuery).toHaveBeenCalledTimes(5);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       expect(query).toContain('metadata =');
