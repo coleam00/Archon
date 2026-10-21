@@ -133,6 +133,20 @@ const safeExec = [
   'format-changelog',
 ];
 
+function expectProducerContracts(
+  workflow: ReturnType<typeof load>,
+  executed: DryRunResult['trace']
+) {
+  for (const trace of executed) {
+    if (trace.nodeId === 'save-draft-json') continue;
+    const schema = workflow.nodes.find(node => node.id === trace.nodeId)?.output_format;
+    if (!schema) throw new Error(`Missing producer contract: ${trace.nodeId}`);
+    const output = object(JSON.parse(trace.output ?? ''));
+    expect(validateStructuredOutput(output, schema)).toEqual({ valid: true });
+    expect(Object.keys(output).sort()).toEqual(Object.keys(object(schema.properties)).sort());
+  }
+}
+
 test.each([
   {
     stack: 'node',
@@ -140,6 +154,8 @@ test.each([
     manifest: '{"version":"1.2.3"}',
     bump: 'patch',
     next: '1.2.4',
+    message: '',
+    dryRun: 'false',
   },
   {
     stack: 'python',
@@ -147,6 +163,8 @@ test.each([
     manifest: '[project]\nversion = "1.2.3"\n',
     bump: 'minor',
     next: '1.3.0',
+    message: 'minor',
+    dryRun: 'false',
   },
   {
     stack: 'rust',
@@ -154,28 +172,42 @@ test.each([
     manifest: '[package]\nversion = "1.2.3"\n',
     bump: 'major',
     next: '2.0.0',
+    message: 'major',
+    dryRun: 'false',
   },
-])('actual $stack producers conform and feed review for $bump', async scenario => {
+  {
+    stack: 'node',
+    file: 'package.json',
+    manifest: '{"version":"1.2.3"}',
+    bump: 'minor',
+    next: '1.3.0',
+    message: 'minor --dry-run',
+    dryRun: 'true',
+  },
+  {
+    stack: 'node',
+    file: 'package.json',
+    manifest: '{"version":"1.2.3"}',
+    bump: 'major',
+    next: '2.0.0',
+    message: 'major dry-run',
+    dryRun: 'true',
+  },
+])('actual $stack producers conform and feed review for "$message"', async scenario => {
   const cwd = track(await mkdtemp(join(tmpdir(), 'archon-release-contract-')));
   await writeFile(join(cwd, scenario.file), scenario.manifest);
   const workflow = load();
   const stubs: DryRunStubs = {
     ...createDryRunStubScaffold(workflow),
     ...approvals,
-    'check-homebrew': 'false',
+    'check-homebrew': 'true',
   };
   for (const id of safeExec) delete stubs[id];
-  if (scenario.bump !== 'patch') {
-    stubs['parse-args'] = {
-      ...object(createDryRunStubScaffold(workflow)['parse-args']),
-      bump: scenario.bump,
-    };
-  }
   const result = await dryRunWorkflow({
     workflow,
     cwd,
     execWorkspace: cwd,
-    userMessage: '',
+    userMessage: scenario.message,
     stubs,
     execCode: true,
   });
@@ -185,17 +217,12 @@ test.each([
   }).toEqual({ outcome: 'completed', failures: [] });
   expect(result.missingStubs).toEqual([]);
   const executed = result.trace.filter(e => e.reason === 'executed locally');
-  expect(executed.map(e => e.nodeId).sort()).toEqual(
-    safeExec.filter(id => scenario.bump === 'patch' || id !== 'parse-args').sort()
-  );
-  for (const trace of executed) {
-    if (trace.nodeId === 'save-draft-json') continue;
-    const schema = workflow.nodes.find(node => node.id === trace.nodeId)?.output_format;
-    if (!schema) throw new Error(`Missing producer contract: ${trace.nodeId}`);
-    const output = object(JSON.parse(trace.output ?? ''));
-    expect(validateStructuredOutput(output, schema)).toEqual({ valid: true });
-    expect(Object.keys(output).sort()).toEqual(Object.keys(object(schema.properties)).sort());
-  }
+  expect(executed.map(e => e.nodeId).sort()).toEqual([...safeExec].sort());
+  expectProducerContracts(workflow, executed);
+  expect(JSON.parse(entry(result, 'parse-args').output ?? '')).toEqual({
+    bump: scenario.bump,
+    dryRun: scenario.dryRun,
+  });
   const version = object(JSON.parse(entry(result, 'bump-version').output ?? ''));
   expect(version).toMatchObject({
     oldVersion: '1.2.3',
@@ -207,7 +234,7 @@ test.each([
   const smoke = object(JSON.parse(entry(result, 'preflight-smoke').output ?? ''));
   expect(smoke).toMatchObject({ passed: 'true', skipped: 'true' });
   const formatted = object(JSON.parse(entry(result, 'format-changelog').output ?? ''));
-  expect(formatted).toMatchObject({ ...version, dryRun: 'false' });
+  expect(formatted).toMatchObject({ ...version, dryRun: scenario.dryRun });
   const draft = object(stubs['draft-changelog']);
   if (typeof formatted.rendered !== 'string' || typeof draft.summary !== 'string') {
     throw new Error('Expected changelog text and draft summary');
@@ -215,5 +242,10 @@ test.each([
   expect(formatted.rendered).toContain(`## [${scenario.next}]`);
   expect(formatted.rendered).toContain(draft.summary);
   expect(entry(result, 'review-changelog').resolvedText).toContain(formatted.rendered);
+  for (const node of workflow.nodes.filter(node =>
+    node.when?.includes('$parse-args.output.dryRun')
+  )) {
+    expect(entry(result, node.id).state).toBe(scenario.dryRun === 'true' ? 'skipped' : 'stubbed');
+  }
   expect(entry(result, 'final-summary').state).toBe('stubbed');
 });
