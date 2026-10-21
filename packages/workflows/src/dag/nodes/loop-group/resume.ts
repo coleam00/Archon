@@ -331,7 +331,7 @@ export async function resumeTerminalWait(
     }
   );
   const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
-  if (status === 'paused') {
+  if (ctx.containerPause?.publish !== undefined || status === 'paused') {
     return {
       state: 'running',
       output: '',

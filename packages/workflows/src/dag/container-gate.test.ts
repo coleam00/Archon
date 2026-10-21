@@ -289,6 +289,47 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(backend.suspend).toHaveBeenCalledTimes(1);
   });
 
+  for (const container of [false, true]) {
+    it.each([
+      { duration_ms: 60_000 },
+      { until: '2099-01-01T00:00:00.000Z' },
+      { event: 'ready', deadline_ms: 60_000 },
+    ])(
+      `keeps an unresolved loop-group wait paused at the iteration cap (container=${container}, %j)`,
+      async wait => {
+        const group = dagNodeSchema.parse({
+          id: 'group',
+          loop_group: {
+            nodes: [{ id: 'delay', wait }],
+            until: 'DONE',
+            max_iterations: 1,
+          },
+        });
+        const { options, backend, store, run } = await realPauseFixture([group]);
+        if (!container) {
+          options.execContext = { kind: 'host' };
+          options.containerCtx = undefined;
+        }
+        await executeDagWorkflow(options);
+        const original = (await store.getWorkflowRun(run.id))?.metadata.wait;
+        options.workflowRun = await store.resumeWorkflowRun(run.id);
+        options.priorCompletedNodes = (
+          await store.getDagResumeSnapshot(run.id)
+        ).completedNodeOutputs;
+        const head = await store.getWorkflowEventHead();
+        await executeDagWorkflow(options);
+        expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(original);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+        expect((await store.getDagResumeSnapshot(run.id)).failedNodes.size).toBe(0);
+        const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+        expect(page.events.filter(({ event }) => event.event_type === 'node_failed')).toHaveLength(
+          0
+        );
+        expect(backend.suspend).toHaveBeenCalledTimes(container ? 2 : 0);
+      }
+    );
+  }
+
   it.each(['gate', 'interactive group', 'interactive loop', 'wait'] as const)(
     'nested %s pauses stop before completion checks or another iteration',
     async kind => {
