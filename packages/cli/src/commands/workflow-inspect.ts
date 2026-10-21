@@ -27,6 +27,7 @@ import { attentionAnswerLines } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
+import { formatRunUsage } from './workflow-usage';
 import { printVerboseNodes } from './workflow-node-summaries';
 
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
@@ -376,6 +377,7 @@ export function printRunDetail(
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
+  for (const line of formatRunUsage(run.metadata)) console.log(line);
   printRunPauseLines(run);
   // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
   // with the key still set (cancelWorkflowRun abandons a failed run without touching

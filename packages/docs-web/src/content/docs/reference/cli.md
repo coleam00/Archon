@@ -288,6 +288,24 @@ With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Each workflow 
 
 Run a workflow with an optional user message.
 
+Foreground completion and failure output includes the run's recorded cost and input/output
+tokens, even with `--quiet`. These are stored figures, not a certified complete bill:
+
+```text
+  Usage (recorded totals; completeness unknown):
+    Cost: $0.024
+    Input tokens: 8420
+    Output tokens: 2180
+```
+
+Provider usage metadata is optional. Missing or malformed values print `unknown`;
+a recorded zero prints `0` (or `$0` for cost). An unknown or malformed token-uncertainty
+marker makes both token counts unknown. Every summary carries the completeness warning,
+even when all values are numeric, because stored totals cannot certify that every
+contribution was recorded. If the persisted run cannot be read, output shows
+`Usage: unavailable (persisted run unavailable)` without changing the execution result.
+Paused runs can be inspected with [`workflow get`](#workflow-get).
+
 ```bash
 # Basic usage
 archon workflow run investigate --cwd /path/to/repo "Why does the export job time out?"
@@ -632,6 +650,11 @@ archon workflow get <run-id> --json
 archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
+
+The text view includes the same [recorded usage summary](#workflow-run-name-message)
+for any run status. It reads stored totals without recalculating them or certifying
+completeness. `--json` retains the raw usage values in `metadata`, including nulls or
+malformed historical values; it adds no formatted usage text.
 
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
