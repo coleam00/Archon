@@ -11,7 +11,7 @@
  * `./executor` or `@archon/workflows/executor` itself.
  */
 import { providerRegistry } from '@archon/providers';
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -186,6 +186,69 @@ describe('InProcessWorkflowEngine', () => {
     deliveries
       .filter(({ event }) => event.event_type.startsWith('workflow_') || event.step_name)
       .map(({ event }) => `${event.workflow_run_id}:${event.event_type}:${event.step_name ?? ''}`);
+
+  it.each(['read', 'post-publication', 'pre-publication'] as const)(
+    'preserves ownership across a %s rejection on resume',
+    async kind => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (failed?.status !== 'failed') throw new Error('expected failed run');
+      const cause = new Error('required operation failed');
+      let read: ReturnType<typeof spyOn> | undefined;
+      dagBody = async ({ workflowRun }) => {
+        if (kind === 'pre-publication') throw cause;
+        const context = {
+          type: 'approval' as const,
+          nodeId: 'review',
+          message: '',
+          pauseId: 'published',
+        };
+        await store.pauseWorkflowRun(workflowRun.id, context);
+        await store.resumeWorkflowRun(workflowRun.id);
+        if (kind === 'read') {
+          const get = store.getWorkflowRun.bind(store);
+          read = spyOn(store, 'getWorkflowRun')
+            .mockImplementation(get)
+            .mockImplementationOnce(async () => {
+              throw cause;
+            });
+        }
+        return {
+          kind: 'container_pause',
+          pause: { kind: 'gate', context },
+          ...(kind === 'post-publication' ? { postPublicationError: { cause } } : {}),
+        };
+      };
+      try {
+        const admission = await engine.resume({
+          platform,
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          userMessage: '',
+          run: failed,
+          legacyWorkflow: parent,
+        });
+        if (!admission.accepted) throw new Error('expected resume');
+        if (kind === 'pre-publication') {
+          expect(await admission.settled).toMatchObject({ success: false, error: cause.message });
+        } else {
+          await expect(admission.settled).rejects.toMatchObject({
+            name: 'WorkflowExecutionHandoffError',
+            workflowRunId: run.id,
+            cause,
+          });
+        }
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(
+          kind === 'pre-publication' ? 'failed' : 'running'
+        );
+      } finally {
+        read?.mockRestore();
+      }
+    }
+  );
 
   it('resume settles before the host drains scratch cleanup', async () => {
     const { engine, store } = await makeEngine();

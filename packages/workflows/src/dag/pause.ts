@@ -1,3 +1,4 @@
+import { WorkflowExecutionHandoffError } from '../engine-port';
 import type { NodeExecutionResult } from '../node-record-serialization';
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
@@ -26,6 +27,19 @@ export interface ContainerPauseReceipt {
     | { kind: 'gate'; context: ApprovalContext }
     | { kind: 'wait'; context: WorkflowWaitContext };
   postPublicationError?: { cause: unknown };
+}
+
+export async function readPublishedContainerPause(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRun'>,
+  runId: string,
+  receipt: ContainerPauseReceipt
+): Promise<WorkflowRun | null> {
+  try {
+    if (receipt.postPublicationError) throw receipt.postPublicationError.cause;
+    return await store.getWorkflowRun(runId);
+  } catch (cause) {
+    throw new WorkflowExecutionHandoffError(runId, cause);
+  }
 }
 
 export function containerPauseHandoff(

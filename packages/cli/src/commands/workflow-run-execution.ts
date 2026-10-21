@@ -1,6 +1,10 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
-import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
+import {
+  WorkflowExecutionHandoffError,
+  type IWorkflowEngine,
+  type WorkflowRunSubscription,
+} from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -94,6 +98,9 @@ export async function executeOwnedRun(
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
     await lease.start(ownedRunId);
     execution.result = await driveRun(launch, lease);
+  } catch (error) {
+    if (error instanceof WorkflowExecutionHandoffError) execution.containerPreserved = true;
+    throw error;
   } finally {
     containerTeardownError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
   }
@@ -361,16 +368,8 @@ function submitRun(
 }
 
 /**
- * Container teardown (Phase C) — run from `finally` so a throw from executeWorkflow
- * BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
- * can't orphan a privileged container+volume. A PAUSED run keeps its (already
- * suspended, by the engine) container + volume for resume — destroying it would
- * discard the overlay the resume needs. A handoff leaves teardown to the successor.
- * Every OTHER outcome (completed / failed /
- * cancelled, or a pre-result throw) is terminal for this process → destroy. The
- * write-back apply already ran inside the engine before completion, so a
- * completed run's live-root changes are safe before this teardown removes the
- * volume. Returns a destroy failure for the caller to judge.
+ * A published pause relinquishes cleanup authority even when execution rejects.
+ * Earlier setup failures still need teardown to avoid orphaning a privileged container.
  */
 async function settleRun(
   launch: ForegroundLaunch,
@@ -381,9 +380,11 @@ async function settleRun(
   const { result } = execution;
   const store = launch.request.host.deps.store;
   const container = ownedContainer(launch.workspace);
-  const keepContainer = Boolean(
-    result && ('handedOff' in result || (result.success && 'paused' in result && result.paused))
-  );
+  const keepContainer =
+    execution.containerPreserved ||
+    Boolean(
+      result && ('handedOff' in result || (result.success && 'paused' in result && result.paused))
+    );
   // H2 — preserve the container+volume whenever the un-applied overlay is still the
   // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
   // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw

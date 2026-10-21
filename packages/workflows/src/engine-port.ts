@@ -7,6 +7,17 @@ import type { AttentionLabels } from './schemas/dag-node';
 import type { AttentionQueueScope } from './attention-queue';
 import type { AttentionStreamLine } from './attention-watch';
 
+/** Publication relinquishes execution ownership even if subsequent work rejects. */
+export class WorkflowExecutionHandoffError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'WorkflowExecutionHandoffError';
+  }
+}
+
 // These lists own both the public input exclusions and their runtime validation.
 export const FRESH_RUN_FORBIDDEN_OPTIONS = [
   'priorCompletedNodes',

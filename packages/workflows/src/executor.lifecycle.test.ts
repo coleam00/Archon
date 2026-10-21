@@ -27,6 +27,7 @@ import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import { workflowRunStatusSchema, EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -277,7 +278,11 @@ describe('paused exit', () => {
         }),
         getWorkflowRunStatus: mock(async () => 'running' as const),
       });
-      await expect(run(store)).rejects.toBe(error);
+      await expect(run(store)).rejects.toMatchObject({
+        name: WorkflowExecutionHandoffError.name,
+        workflowRunId: 'run-123',
+        cause: error,
+      });
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
     }

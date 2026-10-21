@@ -11,6 +11,7 @@ import {
   resetCommittedTestEvents,
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type { WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
 import {
   workflowRunStatusSchema,
@@ -641,7 +642,8 @@ describe('workflowRunCommand — progress rendering', () => {
   async function signalDuringContainerDrain(
     end: ContainerRunEnd,
     signalAt: 'drain' | 'lookup' = 'drain',
-    handoffStatus?: WorkflowRunStatus | null
+    handoffStatus?: WorkflowRunStatus | null,
+    rejection?: 'published' | 'pre-publication'
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -656,10 +658,14 @@ describe('workflowRunCommand — progress rendering', () => {
       default_branch: null,
       kind: 'folder',
     });
+    const cause = new Error('required operation failed');
+    const failure =
+      rejection === 'published' ? new WorkflowExecutionHandoffError(OWNED_RUN, cause) : cause;
     let runSettled = false;
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
+      if (rejection) throw failure;
       if (handoffStatus !== undefined) {
         return handoffStatus === 'failed' || handoffStatus === 'cancelled'
           ? {
@@ -728,17 +734,29 @@ describe('workflowRunCommand — progress rendering', () => {
 
     try {
       const execution = workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
-      if (handoffStatus === 'failed' || handoffStatus === 'cancelled') {
+      if (rejection) {
+        await expect(execution).rejects.toBe(failure);
+      } else if (handoffStatus === 'failed' || handoffStatus === 'cancelled') {
         await expect(execution).rejects.toBeInstanceOf(WorkflowRunFailedError);
       } else {
         await execution;
       }
-      if (handoffStatus !== undefined) expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
+      if (handoffStatus !== undefined || rejection === 'published')
+        expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
     }
     return destroyedAtSignal;
   }
+
+  it.each(['published', 'pre-publication'] as const)(
+    'retains cleanup ownership only before publication on a %s rejection, including on a signal',
+    async rejection => {
+      expect(await signalDuringContainerDrain('settled', 'drain', undefined, rejection)).toBe(
+        rejection === 'published' ? 0 : 1
+      );
+    }
+  );
 
   it.each([...workflowRunStatusSchema.options, null])(
     'leaves container cleanup to the successor after handoff (status=%s), including on a signal',

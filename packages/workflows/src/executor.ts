@@ -1,4 +1,4 @@
-import { containerPauseHandoff } from './dag/pause';
+import { containerPauseHandoff, readPublishedContainerPause } from './dag/pause';
 import {
   continueBlockedRun,
   isFanOutParentReleased,
@@ -537,14 +537,15 @@ export async function executeWorkflow(
     if (typeof dagResult === 'object') {
       // Publication or release hands ownership to a successor, even when the row is running again.
       executionStopped = true;
-      if (dagResult.kind === 'container_pause') {
-        if (dagResult.postPublicationError) throw dagResult.postPublicationError.cause;
-      } else if (dagResult.released)
+      if (dagResult.kind === 'source_release' && dagResult.released)
         return { success: true, paused: true, workflowRunId: workflowRun.id };
     }
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
-    const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
+    const finalStatus =
+      typeof dagResult === 'object' && dagResult.kind === 'container_pause'
+        ? await readPublishedContainerPause(deps.store, workflowRun.id, dagResult)
+        : await deps.store.getWorkflowRun(workflowRun.id);
     const handoff =
       typeof dagResult === 'object' && dagResult.kind === 'container_pause'
         ? containerPauseHandoff(finalStatus, workflowRun, dagResult)
