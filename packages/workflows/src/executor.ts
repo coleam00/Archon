@@ -65,7 +65,12 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
+import {
+  deadlineWaitCursor,
+  executionClaim,
+  type PersistedNodeOutput,
+  type PriorFailedNode,
+} from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { releaseRunScratch } from './run-scratch';
@@ -734,8 +739,9 @@ export async function executeWorkflow(
           { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
         );
       }
-      await releaseScratchOnExit(deps, runId);
     }
+    // Outside the backstop's guard: a run whose source release lost to a cancel ends here too.
+    if (workflowRun && !terminalStatusWriteFailed) await releaseScratchOnExit(deps, workflowRun);
   }
 }
 
@@ -743,11 +749,17 @@ export async function executeWorkflow(
  * The executor owns the scratch of every run it ends or sees ended while executing: a
  * terminal write it did not make (a cooperative cancel, a fan-out cancel) commits while
  * its nodes may still write, so the store leaves scratch alone. They have stopped now.
+ * A run released and resumed elsewhere carries a new claim, and its new executor owns it.
  */
-async function releaseScratchOnExit(deps: WorkflowDeps, runId: string): Promise<void> {
-  const run = await deps.store.getWorkflowRun(runId).catch((err: unknown) => {
-    getLog().warn({ workflowRunId: runId, err }, 'executor.exit_scratch_lookup_failed');
+async function releaseScratchOnExit(deps: WorkflowDeps, executed: WorkflowRun): Promise<void> {
+  const run = await deps.store.getWorkflowRun(executed.id).catch((err: unknown) => {
+    getLog().warn({ workflowRunId: executed.id, err }, 'executor.exit_scratch_lookup_failed');
     return null;
   });
-  if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
+  if (
+    run &&
+    isTerminalRunStatus(run.status) &&
+    executionClaim(run.metadata) === executionClaim(executed.metadata)
+  )
+    await releaseRunScratch(run);
 }

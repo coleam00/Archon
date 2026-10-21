@@ -192,7 +192,6 @@ describe('stopped source establishment', () => {
             }
       );
       expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
-      expect(store.getWorkflowRun).toHaveBeenCalledTimes(released ? 0 : 1);
       expect(run.status).toBe(released ? 'paused' : 'running');
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
