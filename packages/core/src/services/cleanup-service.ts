@@ -638,12 +638,11 @@ function toUnpushedLock(
   };
 }
 
-/** `liveRemote` also asks the remote's live branches, which a push by URL or refspec
- *  updates without a tracking ref. A live tip this clone lacks covers nothing. */
+/** `liveTips` cover pushes no tracking ref records; a tip this clone lacks covers nothing. */
 async function countUnpushedCommits(
   env: { working_path: string; branch_name: string | null },
   repoPath: RepoPath,
-  liveRemote = false
+  liveTips: readonly string[] = []
 ): Promise<number> {
   const branchRevs =
     env.branch_name && (await localBranchExists(repoPath, toBranchName(env.branch_name)))
@@ -654,19 +653,24 @@ async function countUnpushedCommits(
     ? [worktreePath, ['HEAD', ...branchRevs]]
     : [repoPath, branchRevs];
   const tracked = await countCommitsMissingFromRemotes(path, revs);
-  if (tracked === 0 || !liveRemote) return tracked;
-  const remote = configuredRemote(await loadRepoConfig(repoPath));
-  const live = ['-C', repoPath, 'ls-remote', '--quiet', '--', remote, 'refs/heads/*'];
-  const tips = (await execFileAsync('git', live, { timeout: 10000 })).stdout
-    .split('\n')
-    .map(line => line.split('\t')[0])
-    .filter(Boolean);
+  if (tracked === 0 || liveTips.length === 0) return tracked;
   const { stdout } = await execFileAsync(
     'git',
     ['-C', path, 'rev-list', '--count', '--ignore-missing', '--stdin'],
-    { timeout: 10000, input: [...revs, '--not', '--remotes', ...tips].join('\n') }
+    { timeout: 10000, input: [...revs, '--not', '--remotes', ...liveTips].join('\n') }
   );
   return parseInt(stdout.trim(), 10);
+}
+
+/** Remote branch tips, read only when tracking refs miss commits. Network: never call in a claim. */
+async function readLiveRemoteTips(env: IsolationEnvironmentRow, repo: RepoPath): Promise<string[]> {
+  if ((await countUnpushedCommits(env, repo)) === 0) return [];
+  const remote = configuredRemote(await loadRepoConfig(repo));
+  const live = ['-C', repo, 'ls-remote', '--quiet', '--', remote, 'refs/heads/*'];
+  return (await execFileAsync('git', live, { timeout: 10000 })).stdout
+    .split('\n')
+    .map(line => line.split('\t')[0])
+    .filter(Boolean);
 }
 
 /** Why an environment cannot be removed. */
@@ -1385,13 +1389,14 @@ async function resolveOwnedWorktree(
 
 async function judgeLocalCompletedWorktree(
   env: IsolationEnvironmentRow,
-  repo: RepoPath
+  repo: RepoPath,
+  liveTips: readonly string[]
 ): Promise<WorktreeDisposition> {
   const path = toWorktreePath(env.working_path);
   if ((await worktreeExists(path)) && (await hasUncommittedChangesStrict(path))) {
     return { disposition: 'retained', reason: 'uncommitted_changes' };
   }
-  const commits = await countUnpushedCommits(env, repo, true);
+  const commits = await countUnpushedCommits(env, repo, liveTips);
   if (commits > 0) {
     return {
       disposition: 'retained',
@@ -1430,7 +1435,7 @@ export async function assessCompletedRunWorktree(
         detail: `run ${user.id} (${user.status})`,
       };
     }
-    return await judgeLocalCompletedWorktree(env, repo);
+    return await judgeLocalCompletedWorktree(env, repo, await readLiveRemoteTips(env, repo));
   } catch (err) {
     getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
     return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
@@ -1439,20 +1444,21 @@ export async function assessCompletedRunWorktree(
 
 /**
  * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
- * The local checks run again under the worktree lock.
+ * Remote tips are read before the claim; local checks rerun under the lock against them.
  */
 export async function releaseCompletedRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders
 ): Promise<void> {
-  const result = await reclaimOwnedWorktree(run, store, readers, {
-    beforeRemove: async (env, repo) => {
-      const disposition = await judgeLocalCompletedWorktree(env, repo);
+  const result = await reclaimOwnedWorktree(run, store, readers, async (env, repo) => {
+    const liveTips = await readLiveRemoteTips(env, repo);
+    return async () => {
+      const disposition = await judgeLocalCompletedWorktree(env, repo, liveTips);
       if (disposition.disposition !== 'release') {
         throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
       }
-    },
+    };
   });
   if (result.warnings.length > 0) {
     getLog().warn(
@@ -1466,9 +1472,8 @@ async function reclaimOwnedWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders,
-  verify?: {
-    beforeRemove: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>;
-  }
+  /** Runs before the registration claim; the check it returns runs under the worktree lock. */
+  prepareCheck?: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<() => Promise<void>>
 ): Promise<RunWorktreeRelease> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof) {
@@ -1505,6 +1510,7 @@ async function reclaimOwnedWorktree(
   }
   if (env.status === 'destroyed')
     return refuse('a path exists for an already destroyed environment');
+  const beforeRemove = await prepareCheck?.(env, repo);
   const user = await readers.getLiveRunOwningEnv(env.id);
   if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
   return store.withWorktreeRegistration(env, async markDestroyed => {
@@ -1513,7 +1519,7 @@ async function reclaimOwnedWorktree(
       guardedRemoval: {
         creationId: proof.creationId,
         beforeRemove: async () => {
-          await verify?.beforeRemove(env, repo);
+          await beforeRemove?.();
           await markDestroyed();
         },
       },

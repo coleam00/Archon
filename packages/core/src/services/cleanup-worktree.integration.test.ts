@@ -675,14 +675,17 @@ describe('completed run worktree release', () => {
   });
 
   // A push by URL leaves no remote-tracking ref, so only the live remote proves it.
-  const pushByUrl = (): Promise<string> =>
-    git(
+  const pushByUrl = async (): Promise<void> => {
+    await git(
       env.working_path,
       'push',
       '-q',
       join(root, 'remote.git'),
       `HEAD:refs/heads/${env.branch_name}`
     );
+    // Git on Windows matches the path to the upstream URL and writes the tracking ref anyway.
+    await git(repo, 'update-ref', '-d', `refs/remotes/upstream/${env.branch_name}`);
+  };
 
   test('a pushed run-named checkout is removed, keeping its local and remote branch', async () => {
     await commitInWorktree();
@@ -693,12 +696,48 @@ describe('completed run worktree release', () => {
       disposition: 'release',
     });
 
-    await releaseCompletedRunWorktree(completed, store, readers());
+    let inClaim = false;
+    const registrationStore: IIsolationStore = {
+      ...store,
+      withWorktreeRegistration: async (observed, remove) => {
+        inClaim = true;
+        try {
+          return await store.withWorktreeRegistration(observed, remove);
+        } finally {
+          inClaim = false;
+        }
+      },
+    };
+    const networkClaims: boolean[] = [];
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (args.includes('ls-remote')) networkClaims.push(inClaim);
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      await releaseCompletedRunWorktree(completed, registrationStore, readers());
+      expect(networkClaims).toEqual([false]);
+    } finally {
+      exec.mockRestore();
+    }
 
     expect(existsSync(env.working_path)).toBe(false);
     expect(await status()).toBe('destroyed');
     expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
     expect(await git(repo, 'ls-remote', 'upstream', `refs/heads/${env.branch_name}`)).not.toBe('');
+  });
+
+  test('a remote that cannot be read keeps a checkout with commits tracking refs miss', async () => {
+    await commitInWorktree();
+    await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow();
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
   });
 
   test('a worktree created for a named branch is never released at run end', async () => {
