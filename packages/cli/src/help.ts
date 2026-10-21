@@ -39,12 +39,7 @@ interface HelpEntry {
   // column 29. The renderer wraps to the next line when the spec itself
   // overflows the description column (spec.length > 35).
   description: string;
-  // Scoped-only flags: shown in the matching `archon <cmd> [<subcmd>] --help`
-  // slice but NOT in the global help. Used for flags the legacy template
-  // literal documented via a Commands-block alias (e.g. `isolation cleanup
-  // --merged`) rather than as a standalone Options entry, so the global
-  // Options block stays byte-identical to the pre-refactor text while
-  // scoped help can still surface every flag the entry actually accepts.
+  // Flags shown only in the matching command or subcommand Options block.
   scopedFlags?: FlagHelp[];
 }
 
@@ -87,14 +82,6 @@ const forgeOperationDescriptions = {
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 
-// One entry per Commands-block line, in global-help order. `renderHelp()`
-// returns the global index with no selection; `renderHelp(...)`
-// filters this list by the (command, subcommand) tuple for scoped slices.
-// Subcommands listed in `scopedOnlyHelp` below never render in the global
-// Commands block, so global help stays byte-identical to the pre-refactor
-// template literal while scoped slices can still surface every supported
-// subcommand (`--detach` is owned by `workflow approve`/`reject`, which
-// live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
     command: 'state',
@@ -151,8 +138,15 @@ const commandHelp: HelpEntry[] = [
   { command: 'chat', spec: 'chat <message>', description: 'Send a message to the orchestrator' },
   {
     command: 'setup',
-    spec: 'setup',
+    spec: 'setup [--scope <home|project>]',
     description: 'Interactive setup wizard for credentials and config',
+    scopedFlags: [
+      {
+        spec: '--scope <home|project>',
+        description:
+          'Write ~/.archon/.env (default) or <repo-root>/.archon/.env (requires a git repository)',
+      },
+    ],
   },
   {
     command: 'workflow',
@@ -338,6 +332,48 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'reset-sessions',
+    spec: 'workflow reset-sessions <workflow-name>',
+    description:
+      'Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])',
+    scopedFlags: [
+      {
+        spec: '--scope <key>',
+        description: 'Limit the reset to one scope (omit to delete every scope; requires --yes)',
+      },
+      {
+        spec: '--node <id>',
+        description:
+          'Limit the reset to one node in the selected scope, or every scope with --yes when --scope is omitted',
+      },
+      {
+        spec: '--yes',
+        description: 'Confirm cross-scope reset; refused without --scope or --yes',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'event',
+    spec: 'workflow event emit',
+    description: 'Emit a workflow event into a run',
+    scopedFlags: [
+      {
+        spec: '--run-id <id>',
+        description: 'Target run for the event (required)',
+      },
+      {
+        spec: '--type <event-type>',
+        description: 'Event type to emit (required)',
+      },
+      {
+        spec: '--data <json>',
+        description: 'JSON payload for the event (optional)',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
     subcommand: 'test',
     spec: 'workflow test [<name>|<folder>|<path>]',
     description:
@@ -516,14 +552,7 @@ const commandHelp: HelpEntry[] = [
   { command: 'help', spec: 'help', description: 'Show this help message' },
 ];
 
-// Scoped-only entries: subcommands the dispatch handles but whose Commands
-// line never appeared in the pre-refactor monolithic help. They render only
-// in their matching `archon <command> <subcommand> --help` slice; `archon
-// --help` must stay byte-identical, so they are NOT concatenated into the
-// global Commands block. Keeping them in a separate table (rather than
-// appending to `commandHelp`) makes that boundary explicit and keeps the
-// "no flag documentation is lost" invariant honest — nothing here ships in
-// global help that was not in the original.
+// Additional entries shown only in scoped help.
 const scopedOnlyHelp: HelpEntry[] = [
   ...attachmentHelp('plugin', true),
   ...attachmentHelp('skill', true),
@@ -705,47 +734,6 @@ const scopedOnlyHelp: HelpEntry[] = [
     subcommand: 'cleanup',
     spec: 'workflow cleanup [days]',
     description: 'Delete terminal runs older than N days (default: 7)',
-  },
-  {
-    command: 'workflow',
-    subcommand: 'reset-sessions',
-    spec: 'workflow reset-sessions <workflow-name>',
-    description:
-      'Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])',
-    scopedFlags: [
-      {
-        spec: '--scope <key>',
-        description: 'Limit the reset to one scope (omit to delete every scope; requires --yes)',
-      },
-      {
-        spec: '--node <id>',
-        description: 'Limit the reset to one node within the chosen scope',
-      },
-      {
-        spec: '--yes',
-        description: 'Skip the confirmation prompt (required for cross-scope deletion)',
-      },
-    ],
-  },
-  {
-    command: 'workflow',
-    subcommand: 'event',
-    spec: 'workflow event emit',
-    description: 'Emit a workflow event into a run',
-    scopedFlags: [
-      {
-        spec: '--run-id <id>',
-        description: 'Target run for the event (required)',
-      },
-      {
-        spec: '--type <event-type>',
-        description: 'Event type to emit (required)',
-      },
-      {
-        spec: '--data <json>',
-        description: 'JSON payload for the event (optional)',
-      },
-    ],
   },
 ];
 
@@ -1133,10 +1121,6 @@ function selectExamplesFor(selected: HelpEntry[]): ExampleHelp[] {
 
 function selectEntries(command: string | undefined, subcommand: string | undefined): HelpEntry[] {
   if (command === undefined) return commandHelp;
-  // Scoped renders combine `commandHelp` matches with `scopedOnlyHelp`
-  // matches. `scopedOnlyHelp` entries never render in the global Commands
-  // block (the previous branch), so global help stays byte-identical while
-  // every supported subcommand has a Commands line in its scoped slice.
   const sameCommand = commandHelp.filter(e => e.command === command);
   const scopedExtra = scopedOnlyHelp.filter(e => e.command === command);
   const merged = [...sameCommand, ...scopedExtra];
@@ -1146,8 +1130,8 @@ function selectEntries(command: string | undefined, subcommand: string | undefin
 
 /**
  * Render the help slice for `command`/`subcommand`. With no arguments the
- * output is the global index, byte-identical to the pre-refactor template
- * literal. With a (command, subcommand) tuple, only that slice is shown.
+ * output is the global index. With a (command, subcommand) tuple, only that
+ * slice is shown.
  */
 export function renderHelp(command?: string, subcommand?: string): string {
   const entries = selectEntries(command, subcommand);
