@@ -21,6 +21,7 @@ import {
 } from './run-source';
 import type { ResolvedWorkflow, WorkflowRun } from './schemas';
 import { SUBRUN_METADATA_KEYS } from './schemas';
+import type { IWorkflowStore } from './store';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -485,18 +486,10 @@ export async function runChildWorkflow(
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
         }
       );
-
-      // 6. Read the child back for the node-facing outcome (status + summary + cost +
-      //    tokens), including a child handed to a successor execution.
-      const finalChild = await deps.store.getWorkflowRun(childRunId);
-      if (!finalChild) {
-        return failOutcome('Child run row disappeared after execution.', childRunId);
-      }
-      return childOutcomeFromRun(finalChild);
     } catch (err) {
       if (err instanceof TerminalStatusWriteError) throw err;
 
-      // Ordinary setup/read-back failures become failed child outcomes after cleanup.
+      // Early setup failures become failed child outcomes after cleanup.
       // A terminal write rejection escapes instead: cleanup may not have released the lock.
       //
       // Wedge guard (symmetric to continueBlockedRun's post-CAS handler): a throw in
@@ -519,5 +512,26 @@ export async function runChildWorkflow(
         childRunId
       );
     }
+
+    return readChildOutcome(deps.store, childRunId);
   });
+}
+
+// Read-back cannot confer ownership: the child may now belong to a successor.
+async function readChildOutcome(
+  store: IWorkflowStore,
+  childRunId: string
+): Promise<ChildWorkflowOutcome> {
+  try {
+    const child = await store.getWorkflowRun(childRunId);
+    return child
+      ? childOutcomeFromRun(child)
+      : { childRunId, status: 'failed', error: 'Child run row disappeared after execution.' };
+  } catch (err) {
+    return {
+      childRunId,
+      status: 'failed',
+      error: `Could not read sub-run '${childRunId}' after execution: ${(err as Error).message}`,
+    };
+  }
 }

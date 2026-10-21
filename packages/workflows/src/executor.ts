@@ -1,6 +1,6 @@
 import { WorkflowRunExecutionClaimLostError } from './store';
 import {
-  maybeContinueReleasedFanOut,
+  maybeContinueReleasedChildren,
   maybeResumeParentRun,
   releaseContinuablePauseSlot,
 } from './parent-resume';
@@ -577,12 +577,12 @@ export async function executeWorkflow(
         resolveChildIsolation
       );
     }
-    // A fan-out parent builds its gate from a fresh read of its children, then commits
+    // A parent builds its child gate from a fresh read of its children, then commits
     // its pause. A child that finished in between saw this run still `running`, so its
     // hook stood down; check again now that the pause is committed. Whichever side reads
     // second sees the other, and the resume claim lets only one of them continue.
     if (finalStatus?.status === 'paused') {
-      const continued = await maybeContinueReleasedFanOut(
+      const continued = await maybeContinueReleasedChildren(
         deps,
         platform,
         conversationId,

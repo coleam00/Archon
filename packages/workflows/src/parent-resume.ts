@@ -14,7 +14,12 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
 } from './schemas';
-import { isApprovalContext, isFanOutBlockReleased, isRunBlockedOnChild } from './schemas';
+import {
+  isApprovalContext,
+  isFanOutBlockReleased,
+  isRunBlockedOnChild,
+  isTerminalRunStatus,
+} from './schemas';
 import { continuablePauseCursor } from './store';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -315,7 +320,7 @@ export async function releaseContinuablePauseSlot(
   }
 }
 
-export async function maybeContinueReleasedFanOut(
+export async function maybeContinueReleasedChildren(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
@@ -333,10 +338,15 @@ export async function maybeContinueReleasedFanOut(
   };
   let released = false;
   try {
-    released =
-      isApprovalContext(run.metadata.approval) &&
-      run.metadata.approval.type === 'fan_out' &&
-      (await isFanOutParentReleased(deps, run));
+    const approval = run.metadata.approval;
+    if (isApprovalContext(approval)) {
+      if (approval.type === 'fan_out') {
+        released = await isFanOutParentReleased(deps, run);
+      } else if (approval.type === 'child_workflow' && approval.childRunId) {
+        const child = await deps.store.getWorkflowRun(approval.childRunId);
+        released = child !== null && isTerminalRunStatus(child.status);
+      }
+    }
   } catch (err) {
     getLog().error(
       { err: err as Error, workflowRunId: run.id },

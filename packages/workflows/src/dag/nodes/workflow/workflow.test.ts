@@ -14,6 +14,8 @@ import {
   createMockDeps,
   dagOptions,
   makeWorkflowRun,
+  createMockPlatform,
+  deliveredMessages,
   readTranscript,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
@@ -53,6 +55,53 @@ describe('executeDagWorkflow -- workflow: node', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each(
+    (['paused', 'running', 'pending'] as const).flatMap(status =>
+      [false, true].map(existing => ({ status, existing }))
+    )
+  )(
+    'describes the child status without offering approval for live work (%j)',
+    async ({ status, existing }) => {
+      const store = createMockStore();
+      const parent = makeWorkflowRun();
+      const child = makeWorkflowRun('child-id', {
+        parent_run_id: parent.id,
+        status,
+        metadata: { parent_node_id: 'sub' },
+      });
+      store.findChildRuns = mock(async () => (existing ? [child] : []));
+      const platform = createMockPlatform();
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        childRunId: child.id,
+        status,
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflowRun: parent,
+          runChildWorkflow,
+          workflow: { name: 'parent', nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child' }] },
+        })
+      );
+      const blocked = `Sub-run \`child\` (run \`child-id\`) is ${status === 'paused' ? 'paused awaiting review' : status}.`;
+      expect(store.pauseWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+        type: 'child_workflow',
+        childRunId: child.id,
+        message: blocked,
+      });
+      const instruction =
+        status === 'paused'
+          ? 'Approve it by run id: `/workflow approve child-id`'
+          : 'Waiting for its result.';
+      expect(deliveredMessages(platform)).toContain(
+        `⏸ **Blocked on sub-run** \`child\`: ${blocked} ${instruction}`
+      );
+      expect(runChildWorkflow).toHaveBeenCalledTimes(existing ? 0 : 1);
+    }
+  );
 
   it.each(['node', 'terminal'] as const)(
     'mixed child fan-out rejections preserve the %s write failure',

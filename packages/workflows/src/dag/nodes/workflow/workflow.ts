@@ -217,10 +217,15 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
-    const approveChild = (surface: WorkflowCommandSurface): string =>
-      `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
+  const pauseParentOnChild = async (
+    childRunId: string,
+    status: 'paused' | 'running' | 'pending'
+  ): Promise<NodeExecutionResult> => {
+    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is ${status === 'paused' ? 'paused awaiting review' : status}. `;
+    const childNotice = (surface: WorkflowCommandSurface): string =>
+      status === 'paused'
+        ? `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``
+        : `${blocked}Waiting for its result.`;
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },
@@ -240,7 +245,7 @@ export async function executeWorkflowNode(
     await safeSendMessage(
       platform,
       conversationId,
-      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${childNotice(platform)}`,
       msgContext
     );
     return serializeNodeOutput(suspended);
@@ -253,7 +258,7 @@ export async function executeWorkflowNode(
       case 'paused':
       case 'running':
       case 'pending':
-        return pauseParentOnChild(outcome.childRunId);
+        return pauseParentOnChild(outcome.childRunId, outcome.status);
       case 'failed':
         return failResult(
           outcome.error ?? `Sub-run '${node.workflow}' failed`,
@@ -330,7 +335,7 @@ export async function executeWorkflowNode(
     ) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
-      return await pauseParentOnChild(existing.id);
+      return await pauseParentOnChild(existing.id, existing.status);
     }
     // completed / cancelled — thread the outcome through the same state table a
     // freshly-run child uses (interpret handles both).
