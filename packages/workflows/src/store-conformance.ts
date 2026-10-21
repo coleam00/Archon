@@ -2029,6 +2029,45 @@ export function describeWorkflowStoreConformance(
         gate.id,
       ]);
     });
+    test('loop question references survive pause, label, answer and resume writes', async () => {
+      const run = await running(store);
+      const loopQuestionReferences = {
+        '$LOOP_PREV.work.output': '$other.output',
+        $LOOP_USER_INPUT: 'feedback',
+      };
+      const pause: WorkflowWaitContext = {
+        ...attentionWait,
+        owner: 'loop_group',
+        nodeId: 'grp',
+        bodyWaitId: 'ask',
+        iteration: 2,
+        sessionId: null,
+        sessionProvider: null,
+        loopQuestionReferences,
+      };
+      await store.pauseWorkflowRunForWait(run.id, pause, { kind: 'started', stepName: 'grp.ask' });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(pause);
+      expect(
+        await store.labelAttentionWait(run.id, {
+          pauseId: 'ask-1',
+          set: { state: 'ready' },
+          unset: [],
+          via: 'cli',
+        })
+      ).toMatchObject({ labeled: true });
+      expect(await store.answerAttentionWait(run.id, attentionAnswer('use-main'))).toEqual({
+        answered: true,
+      });
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toMatchObject({
+        loopQuestionReferences,
+      });
+      const resumed = await store.resumeWorkflowRun(run.id, {
+        kind: 'answered',
+        nodeId: 'grp',
+        pauseId: 'ask-1',
+      });
+      expect(resumed.metadata.wait).toMatchObject({ loopQuestionReferences });
+    });
     test('an attention answer has one winner, is audited, and is due once at its exact occurrence', async () => {
       const due = async (): Promise<string[]> =>
         (await store.listDueWorkflowContinuations(new Date(), 10)).map(run => run.id);

@@ -1,3 +1,4 @@
+import { waitMessageRenderer } from './attention-message';
 import { sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from '../../../node-record-reader';
@@ -31,7 +32,6 @@ import { getStaleCachedDependencies } from '../../stale-dependencies';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
   resolveRunInputs,
-  substituteWaitMessage,
   substituteNodeOutputRefs,
   resolveAttentionOptions,
 } from '../../references';
@@ -83,8 +83,6 @@ function resumableWaitContext(
  * an `always_run` producer, a stale cache) and the question this pass renders differs,
  * the answer is discarded so the run never acts on an answer to a different question.
  *
- * Only a node-owned wait on a resume pass is checked: a loop_group body re-runs whole
- * each iteration and carries no prior snapshot, so its waits are out of scope for now.
  * A wait that was already re-asked once keeps its answer, so a question rendered from a
  * value that changes on every resume cannot be asked forever.
  */
@@ -95,22 +93,25 @@ function staleAnswer(
   render: (text: string) => string
 ): DiscardedAnswer | undefined {
   if (persisted.kind !== 'attention' || persisted.answer === undefined) return undefined;
-  if (persisted.owner !== 'node' || persisted.reaskedFrom !== undefined) return undefined;
-  if (ctx.priorCompletedNodes === undefined) return undefined;
+  if (persisted.reaskedFrom !== undefined) return undefined;
+  if (persisted.owner === 'node' && ctx.priorCompletedNodes === undefined) return undefined;
   const condition = waitCondition(node.wait);
   if (condition.kind !== 'attention') return undefined;
   const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs) ?? [];
   const same =
     render(condition.message).trim() === persisted.message &&
-    condition.form === persisted.form &&
+    condition.form === attentionForm(persisted) &&
     JSON.stringify(options) === JSON.stringify(persisted.options ?? []);
   if (same) return undefined;
-  const changed = getStaleCachedDependencies(
-    node,
-    ctx.nodeOutputs,
-    ctx.priorCompletedNodes,
-    ctx.replayedFailures
-  );
+  const changed =
+    ctx.priorCompletedNodes === undefined
+      ? []
+      : getStaleCachedDependencies(
+          node,
+          ctx.nodeOutputs,
+          ctx.priorCompletedNodes,
+          ctx.replayedFailures
+        );
   getLog().warn(
     { workflowRunId: ctx.workflowRun.id, nodeId: node.id, changedDependencies: changed },
     'dag.wait_answer_discarded_stale_question'
@@ -126,8 +127,7 @@ export async function executeWaitNode(
 ): Promise<NodeExecutionResult> {
   const { workflowRun, deps, platform, conversationId, nodeOutputs, stepNamePrefix, logDir } = ctx;
   const now = new Date();
-  const resolveEventText = (text: string): string =>
-    substituteWaitMessage(text, ctx, resolveRunInputs(workflowRun));
+  const { render: resolveEventText, pauseFields } = waitMessageRenderer(ctx, node, loopOwner);
   const { persisted, discarded } = resumableWaitContext(ctx, node, loopOwner, resolveEventText);
 
   const execution =
@@ -227,6 +227,7 @@ export async function executeWaitNode(
       ...(options !== undefined ? { options } : {}),
       ...(labels !== undefined ? { labels } : {}),
       ...(discarded !== undefined ? { reaskedFrom: discarded.occurrence } : {}),
+      ...pauseFields,
     };
   }
 

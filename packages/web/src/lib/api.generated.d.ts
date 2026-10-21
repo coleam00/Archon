@@ -6144,6 +6144,9 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          loopQuestionReferences?: {
+            [key: string]: string;
+          };
           reaskedFrom?: string;
         }
       | {
@@ -6275,6 +6278,9 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          loopQuestionReferences?: {
+            [key: string]: string;
+          };
           reaskedFrom?: string;
         };
     RunStopReason: {
