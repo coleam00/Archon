@@ -1,6 +1,7 @@
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { isPathInside } from '@archon/paths';
@@ -148,6 +149,11 @@ export function createInMemoryWorkflowStore(
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
+  const afterTerminal = async (id: string): Promise<void> => {
+    const run = runs.get(id);
+    if (run) await releaseRunScratch(run);
+    onTerminal(id);
+  };
   // Unqueued: admission calls it from inside its own queued operation.
   const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
     const nextRuns = structuredClone(runs);
@@ -172,7 +178,7 @@ export function createInMemoryWorkflowStore(
         !priorIds.has(event.id) &&
         TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
       )
-        onTerminal(event.workflow_run_id);
+        await afterTerminal(event.workflow_run_id);
     return result;
   };
   let queue: Promise<void> = Promise.resolve();

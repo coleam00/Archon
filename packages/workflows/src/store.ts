@@ -933,10 +933,10 @@ export interface IWorkflowStore
    * Atomically complete the run and persist its matching lifecycle event.
    *
    * Every terminal writer (complete, fail, cancel, fan-out cancel, and the failure of a
-   * paused attention wait) also owes terminal telemetry: after its write commits and
-   * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
-   * run's row and event log. The engine sends no terminal event itself. The SQL store
-   * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   * paused attention wait) also owes, after its write commits and only when it won the
+   * status change, terminal telemetry (`buildRunTerminalTelemetry` over the run's row and
+   * event log) and `releaseRunScratch`. The engine sends no terminal event itself. The SQL
+   * store does both in `packages/core/src/db/workflow-terminal-telemetry.ts`.
    */
   completeWorkflowRun(
     id: string,

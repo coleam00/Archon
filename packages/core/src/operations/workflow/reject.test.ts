@@ -7,6 +7,8 @@ import {
   mockResolveApprovalGate,
   mockResolveAndCancelApprovalGate,
   mockCaptureApprovalResolved,
+  mockReclaimContainerEnv,
+  isolationStore,
   makePausedRun,
   rejectWorkflow,
 } from './test-harness';
@@ -18,6 +20,7 @@ describe('rejectWorkflow', () => {
     mockCancelWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveAndCancelApprovalGate.mockClear();
+    mockReclaimContainerEnv.mockClear();
   });
 
   test('rejects with onRejectPrompt under max attempts — stays paused with staged rework', async () => {
@@ -338,6 +341,49 @@ describe('rejectWorkflow', () => {
     expect(nodeCompleted).toMatchObject({ step_name: 'grp.check' });
     const approvalReceived = casEvents.find(e => e.event_type === 'approval_received');
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
+  });
+
+  // A paused container run has no executor to remove its container, and its scratch
+  // goes only with the container.
+  const containerApproval = {
+    approval: { nodeId: 'review', message: 'Please review', type: 'approval' as const },
+    isolation: 'container',
+    isolation_env_id: 'env-9',
+  };
+
+  test('a cancelling reject reclaims a container run’s env', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(true);
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9', isolationStore);
+  });
+
+  test('a reject that stages rework keeps the container run’s env', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          ...containerApproval,
+          approval: { ...containerApproval.approval, onRejectPrompt: 'Fix it' },
+        },
+      })
+    );
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(false);
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  test('a reject that loses the cancel CAS does not reclaim the container', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+    mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(rejectWorkflow('run-1', 'no good', operator, { via: 'cli' })).rejects.toThrow(
+      'already resolved'
+    );
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
   test('terminal reject concurrent loser (CAS miss) writes NO event or telemetry (#2113)', async () => {

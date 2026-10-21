@@ -23,6 +23,7 @@ import {
 import { workflowRunNodeSessionSchema } from '../schemas/workflow-run-node-session';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { reportRunTerminalTelemetry } from '../run-terminal-telemetry';
+import { releaseRunScratch } from '../run-scratch';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import {
   createTransactionView,
@@ -137,6 +138,7 @@ export async function createFileWorkflowStore(
       };
     });
     for (const report of reports) {
+      await releaseRunScratch(report.run);
       try {
         const usage = await foldDagResumeSnapshot(report.events, report.run.id);
         reportRunTerminalTelemetry(report.run, report.events, usage);

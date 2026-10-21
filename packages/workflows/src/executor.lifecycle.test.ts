@@ -12,8 +12,13 @@ import {
   resetExecutorMocks,
   resumeOf,
   startWorkflow,
+  WS,
 } from './executor/test-utils';
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { NodeEventWriteError } from './node-event-write';
 import { hydrateResumableRun } from './run-resume';
 import type { WorkflowRunNodeSession } from './schemas';
@@ -437,6 +442,31 @@ describe('finally backstop', () => {
     });
     await startWorkflow({ store });
     expect(backstopWrites(failSpy)).toHaveLength(writes);
+  });
+});
+
+describe('scratch on exit', () => {
+  const trackTempRoot = trackTempRoots();
+
+  // A cooperative cancel commits while nodes still run; what they write after it is
+  // removed once the executor has stopped them.
+  it.each([
+    ['cancelled', false],
+    ['paused', true],
+  ] as const)('a run that exits %s keeps its scratch: %p', async (status, kept) => {
+    // Under the test's mocked ARCHON_HOME, so the run's output_root is trusted.
+    const root = trackTempRoot(join(WS, '_cwd', `exit-scratch-${crypto.randomUUID()}`));
+    const run = makeRun({ status, output_root: root });
+    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => run),
+      getWorkflowRunStatus: mock(async () => status),
+    });
+
+    await startWorkflow({ store });
+
+    expect(existsSync(checkout)).toBe(kept);
   });
 });
 

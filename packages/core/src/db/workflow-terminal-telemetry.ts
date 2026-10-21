@@ -4,6 +4,7 @@ import {
   RUN_TELEMETRY_EVENT_TYPES,
   type RunTelemetryEvent,
 } from '@archon/workflows/run-terminal-telemetry';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { pool } from './connection';
 import { getDagResumeSnapshot } from './workflow-events';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -15,23 +16,26 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Report a run's committed terminal transition to anonymous telemetry. Every
- * terminal writer in this module calls it once, after its transaction commits
- * and only when its status CAS won — so each transition is reported exactly
- * once, never before the write, whichever caller ended the run.
+ * The SQL store's duties after a committed terminal transition: remove the run's
+ * scratch directory, then report the transition to anonymous telemetry. Every
+ * terminal writer in this module calls it once, after its transaction commits and
+ * only when its status CAS won — so each transition is handled exactly once, never
+ * before the write, whichever caller ended the run.
  *
- * Best-effort: the status write is authoritative. A failure here is logged and
- * reports nothing for that run; it never fails the caller.
+ * Best-effort: the status write is authoritative. A failure here is logged; it never
+ * fails the caller.
  */
-export async function reportRunTerminal(runId: string): Promise<void> {
-  if (isTelemetryDisabled()) return;
+export async function afterRunTerminalCommit(runId: string): Promise<void> {
   try {
     const runResult = await pool.query<WorkflowRunRow>(
       'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [runId]
     );
-    const run = runResult.rows[0];
-    if (!run) return;
+    const row = runResult.rows[0];
+    if (!row) return;
+    const run = normalizeWorkflowRun(row);
+    await releaseRunScratch(run);
+    if (isTelemetryDisabled()) return;
     // Only the rows the projection reads: a long run's tool and activity rows would
     // otherwise be loaded, with their payloads, on every terminal write.
     const events = await pool.query<RunTelemetryEvent>(
@@ -42,11 +46,11 @@ export async function reportRunTerminal(runId: string): Promise<void> {
       [runId, ...RUN_TELEMETRY_EVENT_TYPES]
     );
     const usage = await getDagResumeSnapshot(runId);
-    reportRunTerminalTelemetry(normalizeWorkflowRun(run), events.rows, usage);
+    reportRunTerminalTelemetry(run, events.rows, usage);
   } catch (error) {
     getLog().warn(
       { err: error as Error, workflowRunId: runId },
-      'db.run_terminal_telemetry_failed'
+      'db.run_terminal_after_commit_failed'
     );
   }
 }
