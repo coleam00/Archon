@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, win32, posix } from 'node:path';
+import * as pathModule from 'node:path';
 import { tmpdir } from 'node:os';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -568,6 +569,11 @@ test.each([
   'id',
   'resource',
   'resource-mismatch',
+  'id-mismatch',
+  'launch-id-mismatch',
+  'status-admitted',
+  'status-skipped',
+  'status-withdrawn',
   'overlap',
   'blocker',
   'launch',
@@ -594,7 +600,12 @@ test.each([
     );
     const target = join(root, path);
     const row = JSON.parse(await readFile(target, 'utf8'));
+    const intact = structuredClone(row);
+    const relationshipMismatch = field.endsWith('-mismatch') || field.startsWith('status-');
     if (field === 'resource-mismatch') row.resource = 'wrong-resource';
+    else if (field === 'id-mismatch') row.id = crypto.randomUUID();
+    else if (field === 'launch-id-mismatch') row.launch.run.id = crypto.randomUUID();
+    else if (field.startsWith('status-')) row.status = field.slice('status-'.length);
     else row[field] = field === 'blocker' ? {} : null;
     const damaged = JSON.stringify(row);
     await writeFile(target, damaged);
@@ -626,14 +637,14 @@ test.each([
     expect(await store.getWorkflowRun(otherHolder.launch.run.id)).toMatchObject({
       status: 'pending',
     });
-    if (field !== 'resource-mismatch')
+    if (!relationshipMismatch)
       await expect(store.getResourceStartRequest(corrupt.launch.run.id)).rejects.toThrow();
     await expect(
       store.drainResourceStarts({ resource: 'other', hostId: 'host' })
     ).rejects.toThrow();
-    if (field === 'resource-mismatch') {
+    if (relationshipMismatch) {
       await expect(store.admitResourceStart({ ...intent(), resource: 'other' })).rejects.toThrow(
-        'does not belong to resource'
+        'Queued resource request'
       );
       await store.claimPendingWorkflowRun(otherHolder.launch.run.id, '/other');
       await store.pauseWorkflowRunForWait(
@@ -648,9 +659,9 @@ test.each([
         { kind: 'started', stepName: 'wait' }
       );
       await expect(store.resumeWorkflowRun(otherHolder.launch.run.id)).rejects.toThrow(
-        'does not belong to resource'
+        'Queued resource request'
       );
-      await writeFile(target, JSON.stringify({ ...row, resource: 'other' }));
+      await writeFile(target, JSON.stringify(intact));
       await finishRun(root, otherHolder.launch.run.id);
       expect(await store.drainResourceStarts({ resource: 'other', hostId: 'host' })).toMatchObject([
         { status: 'admitted', runId: corrupt.launch.run.id },
@@ -664,12 +675,14 @@ test.each([
   'null',
   'missing-resource',
   'invalid-resource',
+  'resource-mismatch',
   'missing-status',
   'invalid-status',
 ] as const)(
   'a released paused holder with %s corruption cannot become foreign',
   async corruption => {
-    const { root, store } = await fixture();
+    const { root, store: originalStore } = await fixture();
+    let store = originalStore;
     const holder = intent();
     const queued = intent();
     queued.launch.run.metadata.admission_checkout_guard = false;
@@ -690,6 +703,14 @@ test.each([
       kind: 'started',
       stepName: 'wait',
     });
+    const slotPath = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update(holder.resource).digest('hex')}.json`
+    );
+    const shippedSlot = JSON.parse(await readFile(slotPath, 'utf8'));
+    delete shippedSlot.admitted;
+    await writeFile(slotPath, JSON.stringify(shippedSlot));
     const cursor = { kind: 'wait' as const, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
     expect(await store.releasePausedRunSlot(holder.launch.run.id, cursor)).toEqual({
       released: true,
@@ -709,11 +730,13 @@ test.each([
     const row = JSON.parse(await readFile(path, 'utf8'));
     if (corruption === 'missing-resource') delete row.resource;
     if (corruption === 'invalid-resource') row.resource = 42;
+    if (corruption === 'resource-mismatch') row.resource = 'wrong-resource';
     if (corruption === 'missing-status') delete row.status;
     if (corruption === 'invalid-status') row.status = 'unsupported';
     const damaged =
       corruption === 'json' ? '{' : JSON.stringify(corruption === 'null' ? null : row);
     await writeFile(path, damaged);
+    store = await createFileWorkflowStore({ root });
     const head = await readFile(join(root, 'head.json'), 'utf8');
     for (const overlap of ['queue', 'skip'] as const) {
       const next = { ...intent(), overlap };
@@ -725,11 +748,16 @@ test.each([
       store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
     ).rejects.toThrow();
     await expect(store.resumeWorkflowRun(resuming.launch.run.id)).rejects.toThrow();
+    await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toThrow();
     expect(await store.getWorkflowRun(queued.launch.run.id)).toBeNull();
     expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('paused');
     expect((await store.getWorkflowRun(resuming.launch.run.id))?.status).toBe('paused');
     expect(await readFile(path, 'utf8')).toBe(damaged);
     expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    const foreignReader = { ...intent(), resource: 'foreign-reader' };
+    foreignReader.launch.run.metadata.admission_checkout_guard = false;
+    expect(await store.admitResourceStart(foreignReader)).toMatchObject({ status: 'admitted' });
+    await finishRun(root, foreignReader.launch.run.id);
     await writeFile(path, JSON.stringify({ ...row, resource: 'resource', status: 'admitted' }));
     expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
     await finishRun(root, holder.launch.run.id);
@@ -853,3 +881,34 @@ for (const corruption of queuedCorruptions) {
     ).rejects.toThrow();
   });
 }
+
+test.each(['posix', 'win32'] as const)(
+  'host listing uses canonical membership keys under %s paths',
+  async platform => {
+    const { root, store } = await fixture();
+    const holder = intent(),
+      queued = intent();
+    await store.admitResourceStart(holder);
+    await store.admitResourceStart(queued);
+    const nativeJoin = pathModule.join;
+    const relativeJoin = platform === 'win32' ? win32.join : posix.join;
+    const paths = spyOn(pathModule, 'join').mockImplementation((...parts: string[]) =>
+      parts[0] === 'resource' ? relativeJoin(...parts) : nativeJoin(...parts)
+    );
+    try {
+      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual([
+        queued.launch.run.id,
+      ]);
+      const target = nativeJoin(
+        root,
+        'resource/requests',
+        `${createHash('sha256').update(queued.launch.run.id).digest('hex')}.json`
+      );
+      const row = JSON.parse(await readFile(target, 'utf8'));
+      await writeFile(target, JSON.stringify({ ...row, resource: 'wrong-resource' }));
+      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+    } finally {
+      paths.mockRestore();
+    }
+  }
+);

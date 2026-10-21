@@ -67,6 +67,8 @@ const slotSchema = (source: string) =>
       ])
     ),
     queue: z.array(z.string()),
+    // Checkout membership survives giving back capacity while paused.
+    admitted: z.array(z.string()).default([]),
   });
 const requestSchema = z.object({
   id: z.string(),
@@ -78,6 +80,16 @@ const requestSchema = z.object({
   launch: preparedWorkflowLaunchSchema,
   position: z.number().int().nonnegative(),
 });
+function queuedRequestSchema(id: string, slotPath: string) {
+  return requestSchema.refine(
+    row =>
+      row.id === id &&
+      row.launch.run.id === id &&
+      row.status === 'queued' &&
+      pathFor('slots', row.resource) === slotPath,
+    { message: `Queued resource request '${id}' does not belong to resource slot '${slotPath}'` }
+  );
+}
 const requestEnvelopeSchema = requestSchema.pick({ resource: true, status: true }).extend({
   status: z.literal('admitted'),
   launch: z.unknown(),
@@ -114,7 +126,7 @@ async function documentPaths(root: string, kind: string): Promise<string[]> {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
   }
-  return names.filter(name => name.endsWith('.json')).map(name => join('resource', kind, name));
+  return names.filter(name => name.endsWith('.json')).map(name => `resource/${kind}/${name}`);
 }
 
 function disposition(row: Request): ResourceStartDisposition {
@@ -200,12 +212,19 @@ export function createAdmissionTransaction(
     row.holders = holders;
     return row;
   }
-  async function hasForeignSlotHolder(id: string, resource: string): Promise<boolean> {
+  async function hasForeignSlotMembership(id: string, resource: string): Promise<boolean> {
     for (const path of await documentPaths(root, 'slots')) {
       if (path === pathFor('slots', resource)) continue;
       try {
-        const row = await read(path, slotSchema(join(root, path)).pick({ holders: true }));
-        if (row?.holders.some(holder => holder.kind === 'run' && holder.id === id)) return true;
+        const row = await read(
+          path,
+          slotSchema(join(root, path)).pick({ holders: true, admitted: true })
+        );
+        if (
+          row?.admitted.includes(id) ||
+          row?.holders.some(holder => holder.kind === 'run' && holder.id === id)
+        )
+          return true;
       } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
       }
@@ -222,6 +241,8 @@ export function createAdmissionTransaction(
         local ||= membership.data.resource === resource;
         knownForeign = membership.data.resource !== resource;
       }
+      if (local && membership.success && membership.data.resource !== resource)
+        requestSchema.extend({ resource: z.literal(resource) }).parse(raw);
       const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
       if (local && envelope)
         return { kind: 'local' as const, run: { ...run, launch: requestSchema.parse(raw).launch } };
@@ -243,7 +264,7 @@ export function createAdmissionTransaction(
     if (!holdsWorkflowPath(run)) return null;
     // A released paused run may still be local. Only proven foreign membership
     // permits the corruption fallback, which allows read-only concurrency.
-    if (!knownForeign && !(await hasForeignSlotHolder(run.id, resource))) throw error;
+    if (!knownForeign && !(await hasForeignSlotMembership(run.id, resource))) throw error;
     // Corrupt foreign requests still hold their recorded path and registered aliases.
     // Without a path, guarded starts must wait for the holder to end.
     log.error(
@@ -270,7 +291,8 @@ export function createAdmissionTransaction(
       const holder = await occupancyRun(
         run,
         resource,
-        row.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
+        row.admitted.includes(run.id) ||
+          row.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
       );
       if (holder?.kind === 'local') admittedRuns.push(holder.run);
       else if (holder) {
@@ -282,11 +304,7 @@ export function createAdmissionTransaction(
     for (const id of row.queue) {
       const queued = await request(id);
       if (!queued) throw new Error('Queued resource request missing');
-      if (queued.resource !== resource)
-        throw new Error(
-          `Queued resource request '${id}' does not belong to resource '${resource}'`
-        );
-      queue.push(queued);
+      queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(queued));
     }
     const reusable = await listReusableCheckouts();
     return {
@@ -319,6 +337,7 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     resource.queue = resource.queue.filter(id => id !== row.id);
     resource.holders.push({ kind: 'run', id: row.id });
+    if (!resource.admitted.includes(row.id)) resource.admitted.push(row.id);
     documents[pathFor('requests', row.id)] = row;
     return disposition(row);
   }
@@ -373,6 +392,8 @@ export function createAdmissionTransaction(
   async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
     const row = await request(run.id);
     if (row?.status !== 'admitted') return null;
+    if (await hasForeignSlotMembership(run.id, row.resource))
+      throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     const blocker = resourceResumeBlocker(await occupancy(row.resource), {
@@ -391,6 +412,7 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     const holders = resource.holders.filter(h => h.kind !== 'run' || h.id !== id);
     if (holders.length === resource.holders.length) return false;
+    if (!resource.admitted.includes(id)) resource.admitted.push(id);
     resource.holders = holders;
     return true;
   }
@@ -632,12 +654,10 @@ export function createFileAdmissionStore(
               pathFor('requests', id),
               requestSchema.pick({ hostId: true, status: true })
             );
-            if (!envelope || envelope.hostId !== hostId || envelope.status !== 'queued') continue;
+            if (!envelope || envelope.hostId !== hostId) continue;
             const row = await queueCandidate(
               pathFor('requests', id),
-              requestSchema.refine(row => pathFor('slots', row.resource) === path, {
-                message: 'Queued resource request does not belong to its slot',
-              })
+              queuedRequestSchema(id, path)
             );
             if (row) queued.push(row);
           }
