@@ -64,7 +64,10 @@ async function settleSequentially(
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
-export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stopped' | undefined> {
+export async function runLayers(
+  ctx: RunLayersContext,
+  onPausePublished?: () => void
+): Promise<'paused' | 'stopped' | undefined> {
   // Nested walkers inherit these wrappers, so a body's publication also stops its parent.
   let pausePublished = false;
   const deps: RunLayersContext['deps'] = {
@@ -74,10 +77,12 @@ export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stop
       pauseWorkflowRun: async (...args) => {
         await ctx.deps.store.pauseWorkflowRun(...args);
         pausePublished = true;
+        onPausePublished?.();
       },
       pauseWorkflowRunForWait: async (...args) => {
         await ctx.deps.store.pauseWorkflowRunForWait(...args);
         pausePublished = true;
+        onPausePublished?.();
       },
     },
   };

@@ -456,12 +456,9 @@ export async function executeDagWorkflow(
     return true;
   };
 
-  await persistAuthoredOutcome();
-  let sourceUnreadable: RunSourceUnreadableError | undefined;
-  let layerStop: Awaited<ReturnType<typeof runLayers>>;
-  try {
-    layerStop = await runLayers(runCtx);
-  } catch (error) {
+  const recoverLayerFailure = async (
+    error: unknown
+  ): Promise<RunSourceUnreadableError | 'budget_refused'> => {
     // runLayers guards almost everything, but a failed durable write (terminal status or
     // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
@@ -485,7 +482,7 @@ export async function executeDagWorkflow(
       }
     }
     if (error instanceof RunSourceUnreadableError) {
-      sourceUnreadable = error;
+      return error;
     } else {
       await persistRunUsage();
       try {
@@ -498,24 +495,57 @@ export async function executeDagWorkflow(
       }
       if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
         await failRunForBudget(runBudget, error.refusal);
-        return;
+        return 'budget_refused';
       }
       throw error;
     }
-  } finally {
-    await runCtx.toolAttention.refresh();
-  }
+  };
 
-  // Normal return has no primary error to preserve, so a verdict persistence failure
-  // remains visible to the caller. These two small calls intentionally mirror the
-  // unwind path above; extracting a policy flag would hide which error owns the throw.
-  await persistRunUsage();
   await persistAuthoredOutcome();
-  if (sourceUnreadable !== undefined) {
-    return {
-      kind: 'source_release',
-      released: await releaseRunForUnreadableSource(sourceUnreadable),
-    };
+  // Publication belongs to this segment even when a nested walker or later hook throws.
+  let pausePublished = false;
+  let layerStop: Awaited<ReturnType<typeof runLayers>>;
+  const refreshAttentionAfterLayers = async (): Promise<void> => {
+    try {
+      await runCtx.toolAttention.refresh();
+    } catch (error) {
+      if (!pausePublished || execContext.kind !== 'container') throw error;
+      getLog().error(
+        { err: error, workflowRunId: workflowRun.id },
+        'dag.attention_refresh_failed_after_pause'
+      );
+    }
+  };
+  try {
+    let sourceUnreadable: RunSourceUnreadableError | undefined;
+    try {
+      layerStop = await runLayers(runCtx, () => {
+        pausePublished = true;
+      });
+    } catch (error) {
+      if (pausePublished && execContext.kind === 'container') throw error;
+      const recovery = await recoverLayerFailure(error);
+      if (recovery === 'budget_refused') return;
+      sourceUnreadable = recovery;
+    } finally {
+      await refreshAttentionAfterLayers();
+    }
+
+    await persistRunUsage();
+    await persistAuthoredOutcome();
+    if (sourceUnreadable !== undefined) {
+      return {
+        kind: 'source_release',
+        released: await releaseRunForUnreadableSource(sourceUnreadable),
+      };
+    }
+  } catch (error) {
+    if (!pausePublished || execContext.kind !== 'container') throw error;
+    getLog().error(
+      { err: error, workflowRunId: workflowRun.id },
+      'dag.execution_error_after_pause'
+    );
+    layerStop = 'paused';
   }
 
   // Layers have drained all node work before stopping Docker, which would kill live execs.

@@ -9,7 +9,9 @@ import {
   createMockPlatform,
   deliveredMessages,
   mockLogFn,
+  mockSendQueryDag,
   setMockArtifactHome,
+  stubMissingContainer,
 } from './dag/test-utils';
 import { createFileWorkflowStore } from './file-store/store';
 import { executeWorkflow } from './executor';
@@ -36,7 +38,11 @@ const summary = {
 const paths = ['ordinary', 'writeback', 'unresolved'] as const;
 type PausePath = (typeof paths)[number];
 
-async function setup(path: PausePath, ordinaryNodes?: unknown[]) {
+async function setup(
+  path: PausePath,
+  ordinaryNodes?: unknown[],
+  outcome?: { returns: string; outcome_field: string }
+) {
   const root = roots(await mkdtemp(join(tmpdir(), 'container-pause-')));
   setMockArtifactHome(root);
   const store = await createFileWorkflowStore({ root: join(root, 'store') });
@@ -73,6 +79,7 @@ async function setup(path: PausePath, ordinaryNodes?: unknown[]) {
     workflowDefinitionSchema.parse({
       name: 'pause',
       description: 'Pause fixture',
+      ...outcome,
       nodes:
         path === 'ordinary'
           ? (ordinaryNodes ?? [{ id: 'review', approval: { message: 'Review' } }])
@@ -226,6 +233,163 @@ describe('container pause segment ownership through the executor', () => {
         }
       );
     }
+  }
+
+  for (const suspension of [
+    { approval: { message: 'Review' } },
+    { wait: { duration_ms: 3_600_000 } },
+  ]) {
+    it.each([false, true])(
+      `post-publication ${'approval' in suspension ? 'gate' : 'wait'} outcome hook failure (resume=%s) preserves the segment`,
+      async resume => {
+        const transport = stubMissingContainer();
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'result', sessionId: 'verdict-session', structuredOutput: { green: true } };
+        });
+        const error = new Error('outcome write unavailable after pause');
+        const f = await setup(
+          'ordinary',
+          [
+            {
+              id: 'verdict',
+              prompt: 'Return a verdict',
+              output_format: {
+                type: 'object',
+                properties: { green: { type: 'boolean' } },
+                required: ['green'],
+              },
+            },
+            { id: 'review', ...suspension },
+            { id: 'after', bash: 'echo MUST_NOT_RUN', depends_on: ['review', 'verdict'] },
+          ],
+          { returns: 'verdict', outcome_field: 'green' }
+        );
+        let published = false;
+        let successor: WorkflowRun | undefined;
+        const afterPublication = async () => {
+          published = true;
+          if (resume) successor = await f.store.resumeWorkflowRun(f.run.id);
+        };
+        try {
+          const result = await f.execute({
+            updateWorkflowRun: async (id, updates) => {
+              if (updates.outcome !== undefined) {
+                expect(published).toBe(true);
+                throw error;
+              }
+              await f.store.updateWorkflowRun(id, updates);
+            },
+            pauseWorkflowRun: async (...args) => {
+              await f.store.pauseWorkflowRun(...args);
+              await afterPublication();
+            },
+            pauseWorkflowRunForWait: async (...args) => {
+              await f.store.pauseWorkflowRunForWait(...args);
+              await afterPublication();
+            },
+          });
+          expect(published).toBe(true);
+          const row = await f.store.getWorkflowRun(f.run.id);
+          expect(row?.status).toBe(resume ? 'running' : 'paused');
+          expect(executionClaim(row?.metadata ?? {})).toBe(
+            executionClaim((successor ?? f.run).metadata)
+          );
+          expect(result).toMatchObject({ success: true, paused: true });
+          expect(f.stop).toHaveBeenCalledTimes(resume ? 0 : 1);
+          expect(
+            mockLogFn.mock.calls.some(
+              ([data, site]) =>
+                site === 'dag.execution_error_after_pause' &&
+                typeof data === 'object' &&
+                data !== null &&
+                'err' in data &&
+                data.err instanceof Error &&
+                data.err === error
+            )
+          ).toBe(true);
+          const events = await f.store.listWorkflowEvents(f.run.id);
+          expect(
+            events.some(event =>
+              ['workflow_failed', 'workflow_completed'].includes(event.event_type)
+            )
+          ).toBe(false);
+          expect(events.some(event => event.step_name === 'after')).toBe(false);
+        } finally {
+          transport.mockRestore();
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+            yield { type: 'result', sessionId: 'dag-session-id' };
+          });
+          f.unsubscribe();
+        }
+      }
+    );
+  }
+
+  for (const nested of [false, true]) {
+    it.each([false, true])(
+      `post-publication wait event failure (nested=${nested}, resume=%s) preserves the segment`,
+      async resume => {
+        const leaf = { id: 'review', wait: { duration_ms: 3_600_000 } };
+        const pauseNode = nested
+          ? {
+              id: 'group',
+              loop_group: { max_iterations: 2, until_bash: 'echo MUST_NOT_RUN', nodes: [leaf] },
+            }
+          : leaf;
+        const f = await setup('ordinary', [
+          pauseNode,
+          { id: 'after', bash: 'echo MUST_NOT_RUN', depends_on: [pauseNode.id] },
+        ]);
+        const error = new Error('node_suspended write rejected after pause');
+        let successor: WorkflowRun | undefined;
+        let rejected = false;
+        try {
+          const result = await f.execute({
+            pauseWorkflowRunForWait: async (...args) => {
+              await f.store.pauseWorkflowRunForWait(...args);
+              if (resume) successor = await f.store.resumeWorkflowRun(f.run.id);
+            },
+            persistWorkflowEvent: async event => {
+              if (event.event_type === 'node_suspended') {
+                rejected = true;
+                throw error;
+              }
+              await f.store.persistWorkflowEvent(event);
+            },
+          });
+          expect(rejected).toBe(true);
+          const row = await f.store.getWorkflowRun(f.run.id);
+          expect(row?.status).toBe(resume ? 'running' : 'paused');
+          expect(executionClaim(row?.metadata ?? {})).toBe(
+            executionClaim((successor ?? f.run).metadata)
+          );
+          expect(result).toMatchObject({ success: true, paused: true });
+          expect(f.stop).toHaveBeenCalledTimes(resume ? 0 : 1);
+          const events = await f.store.listWorkflowEvents(f.run.id);
+          expect(
+            events.some(event =>
+              ['workflow_failed', 'workflow_completed', 'loop_iteration_completed'].includes(
+                event.event_type
+              )
+            )
+          ).toBe(false);
+          expect(events.some(event => event.step_name === 'after')).toBe(false);
+          expect(
+            mockLogFn.mock.calls.some(
+              ([data]) =>
+                typeof data === 'object' &&
+                data !== null &&
+                'err' in data &&
+                data.err instanceof Error &&
+                data.err.cause === error
+            )
+          ).toBe(true);
+        } finally {
+          f.unsubscribe();
+        }
+      }
+    );
   }
 
   for (const path of paths) {
