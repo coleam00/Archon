@@ -240,11 +240,21 @@ beforeEach(async () => {
   await rm(hookLog, { force: true });
 });
 
-/** Runs `body` with `lines` appended to the fixture's config.toml, then restores it. */
-async function withUserConfig<T>(lines: string, body: () => Promise<T>): Promise<T> {
+/**
+ * Runs `body` with `lines` added to the fixture's config.toml, then restores it. Top-level
+ * keys go first, because the file ends inside a table.
+ */
+async function withUserConfig<T>(
+  lines: string,
+  body: () => Promise<T>,
+  placement: 'append' | 'prepend' = 'append'
+): Promise<T> {
   const configPath = join(home, 'config.toml');
   const original = await readFile(configPath, 'utf8');
-  await writeFile(configPath, `${original}\n${lines}\n`);
+  await writeFile(
+    configPath,
+    placement === 'append' ? `${original}\n${lines}\n` : `${lines}\n${original}`
+  );
   try {
     return await body();
   } finally {
@@ -641,58 +651,41 @@ describe('Codex capability scope on the real binary', () => {
   test(
     'a model listed as tool-free for structured output gets its tools first, then a tool-free schema request with the evidence',
     async () => {
-      const answer = { summary: 'done' };
-      let responses = 0;
-      modelReply = () => {
-        const index = responses++;
-        const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(answer);
-        const item = {
-          type: 'message',
-          id: `msg_${String(index)}`,
-          role: 'assistant',
-          content: [{ type: 'output_text', text, annotations: [] }],
-        };
-        const events = [
-          { type: 'response.output_item.done', output_index: 0, item },
-          {
-            type: 'response.completed',
-            response: {
-              id: `resp_${String(index)}`,
-              status: 'completed',
-              output: [item],
-              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-            },
-          },
-        ];
-        return new Response(
-          events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
-          { headers: { 'content-type': 'text/event-stream' } }
-        );
-      };
-      const result = resultOf(
-        await runRequest({
-          assistantConfig: { model: 'stub-model', toolFreeStructuredOutputModels: ['stub-model'] },
-          nodeConfig: {
-            nodeId: 'review',
-            output_format: {
-              type: 'object',
-              properties: { summary: { type: 'string' } },
-              required: ['summary'],
-            },
-          },
-        })
+      const [work, final] = await runToolFreeStructuredNode();
+      expect(work.tools.length).toBeGreaterThan(0);
+      expect(final.tools).toEqual([]);
+    },
+    testTimeout(20_000)
+  );
+
+  test.each([
+    {
+      toolMode: 'code_mode_only',
+      added: ['exec', 'wait', 'request_user_input_async', 'clock.sleep'],
+    },
+    { toolMode: 'direct', added: ['request_user_input_async', 'clock.sleep', 'apply_patch'] },
+  ])(
+    'the tool-free schema request drops the tools a $toolMode catalog entry adds, and the tool turn keeps them',
+    async ({ toolMode, added }) => {
+      const [work, final] = await withUserCatalog(
+        { ...CATALOG_TOOLS, tool_mode: toolMode },
+        runToolFreeStructuredNode
       );
-      expect(result.failure).toBeUndefined();
-      expect(result.structuredOutput).toEqual(answer);
-      const bodies = modelRequests.map(
-        request => JSON.parse(request.body) as { tools?: unknown[]; text?: { format?: unknown } }
+      expect(work.tools).toEqual(expect.arrayContaining(added));
+      expect(final.tools).toEqual([]);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a catalog entry with multi-agent v2 keeps exactly its collaboration tools on the schema request',
+    async () => {
+      const [work, final] = await withUserCatalog(
+        { ...CATALOG_TOOLS, multi_agent_version: 'v2' },
+        runToolFreeStructuredNode
       );
-      expect(bodies).toHaveLength(2);
-      expect(bodies[0].tools?.length).toBeGreaterThan(0);
-      expect(bodies[0].text?.format).toBeUndefined();
-      expect(bodies[1].tools ?? []).toEqual([]);
-      expect(bodies[1].text?.format).toMatchObject({ type: 'json_schema' });
-      expect(modelRequests[1].body).toContain('REVIEW-FINDING-MARKER');
+      expect(work.tools).toEqual(expect.arrayContaining(['exec', 'wait', ...COLLABORATION]));
+      expect(final.tools).toEqual(COLLABORATION);
     },
     testTimeout(20_000)
   );
@@ -708,6 +701,135 @@ describe('Codex capability scope on the real binary', () => {
     testTimeout(20_000)
   );
 });
+
+/** The tools a model request carries, top-level and in `additional_tools` input items. */
+function requestTools(body: string): string[] {
+  interface Tool {
+    type: string;
+    name?: string;
+    tools?: Tool[];
+  }
+  const request = JSON.parse(body) as {
+    tools?: Tool[];
+    input?: { type: string; tools?: Tool[] }[];
+  };
+  const listed = [
+    ...(request.tools ?? []),
+    ...(request.input ?? []).flatMap(item =>
+      item.type === 'additional_tools' ? (item.tools ?? []) : []
+    ),
+  ];
+  return listed.flatMap(tool =>
+    tool.tools
+      ? tool.tools.map(inner => `${tool.name ?? tool.type}.${inner.name ?? inner.type}`)
+      : [tool.name ?? tool.type]
+  );
+}
+
+/** A model request's tools and output format, and whether it carries the tool turn's evidence. */
+interface SplitRequest {
+  tools: string[];
+  format: unknown;
+  evidence: boolean;
+}
+
+/**
+ * Runs an `output_format` node on a model listed in `toolFreeStructuredOutputModels`: the
+ * stub answers the tool turn with a marker and the final turn with the JSON answer. Asserts
+ * the call's shape and returns its two model requests.
+ */
+async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
+  const answer = { summary: 'done' };
+  let responses = 0;
+  modelReply = () => {
+    const index = responses++;
+    const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(answer);
+    const item = {
+      type: 'message',
+      id: `msg_${String(index)}`,
+      role: 'assistant',
+      content: [{ type: 'output_text', text, annotations: [] }],
+    };
+    const events = [
+      { type: 'response.output_item.done', output_index: 0, item },
+      {
+        type: 'response.completed',
+        response: {
+          id: `resp_${String(index)}`,
+          status: 'completed',
+          output: [item],
+          usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        },
+      },
+    ];
+    return new Response(
+      events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'content-type': 'text/event-stream' } }
+    );
+  };
+  const result = resultOf(
+    await runRequest({
+      assistantConfig: { model: 'stub-model', toolFreeStructuredOutputModels: ['stub-model'] },
+      nodeConfig: {
+        nodeId: 'review',
+        output_format: {
+          type: 'object',
+          properties: { summary: { type: 'string' } },
+          required: ['summary'],
+        },
+      },
+    })
+  );
+  expect(result.failure).toBeUndefined();
+  expect(result.structuredOutput).toEqual(answer);
+  const requests = modelRequests.map(({ body }) => ({
+    tools: requestTools(body),
+    format: (JSON.parse(body) as { text?: { format?: unknown } }).text?.format,
+    evidence: body.includes('REVIEW-FINDING-MARKER'),
+  }));
+  expect(requests).toHaveLength(2);
+  expect(requests[0].format).toBeUndefined();
+  expect(requests[1].format).toMatchObject({ type: 'json_schema' });
+  expect(requests[1].evidence).toBe(true);
+  return requests;
+}
+
+/**
+ * A user catalog entry for the stub model whose direct tool settings add tools: code mode's
+ * `exec` and `wait`, the async input tool and `clock`, and `apply_patch` outside code mode.
+ */
+const CATALOG_TOOLS = {
+  slug: 'stub-model',
+  display_name: 'stub-model',
+  supported_reasoning_levels: [],
+  shell_type: 'unified_exec',
+  visibility: 'list',
+  supported_in_api: true,
+  priority: 0,
+  support_verbosity: false,
+  truncation_policy: { mode: 'tokens', limit: 10000 },
+  base_instructions: '',
+  tool_mode: 'code_mode_only',
+  experimental_supported_tools: ['send_user_message_async', 'clock'],
+  apply_patch_tool_type: 'freeform',
+};
+
+/** The tools a `multi_agent_version: v2` catalog entry adds, which persist with the thread. */
+const COLLABORATION = [
+  'collaboration.followup_task',
+  'collaboration.interrupt_agent',
+  'collaboration.list_agents',
+  'collaboration.send_message',
+  'collaboration.spawn_agent',
+  'collaboration.wait_agent',
+];
+
+/** Runs `body` with the user's config.toml pointing `model_catalog_json` at a one-entry catalog. */
+async function withUserCatalog<T>(entry: object, body: () => Promise<T>): Promise<T> {
+  const catalogPath = join(root, 'user-catalog.json');
+  await writeFile(catalogPath, JSON.stringify({ models: [entry] }));
+  return await withUserConfig(`model_catalog_json = ${toml(catalogPath)}`, body, 'prepend');
+}
 
 async function sha256(path: string): Promise<string> {
   return new Bun.CryptoHasher('sha256').update(await readFile(path)).digest('hex');

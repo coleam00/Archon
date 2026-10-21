@@ -5,6 +5,9 @@
  */
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
@@ -48,6 +51,7 @@ import {
   loadNodeMcpServers,
   resolveModelReasoningEffort,
   splitsStructuredOutput,
+  TOOL_FREE_MODEL_CATALOG,
   TOOL_FREE_THREAD_CONFIG,
   type CodexConfig,
 } from './turn-params';
@@ -148,7 +152,11 @@ async function* nodeMcpServers(
   return mcpServers;
 }
 
-function appServerArgs(login: CodexLogin | undefined, nodePlugins: readonly string[] | undefined) {
+function appServerArgs(
+  login: CodexLogin | undefined,
+  nodePlugins: readonly string[] | undefined,
+  modelCatalogPath?: string
+) {
   return [
     // An Archon-supplied login stays out of the user's CODEX_HOME; without one Codex
     // uses the user's own login there.
@@ -157,7 +165,17 @@ function appServerArgs(login: CodexLogin | undefined, nodePlugins: readonly stri
     // node that names plugins could not find them. This process serves only this
     // node's thread, and the thread config switches off every plugin it does not name.
     ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+    // TOML basic strings take JSON string escapes, so a Windows path survives.
+    ...(modelCatalogPath ? ['-c', `model_catalog_json=${JSON.stringify(modelCatalogPath)}`] : []),
   ];
+}
+
+/** Writes `TOOL_FREE_MODEL_CATALOG` to a new temp directory; the caller removes the directory. */
+async function writeToolFreeCatalog(): Promise<{ dir: string; path: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'archon-codex-catalog-'));
+  const path = join(dir, 'catalog.json');
+  await writeFile(path, JSON.stringify(TOOL_FREE_MODEL_CATALOG));
+  return { dir, path };
 }
 
 /** A turn's result as `sendQuery` reports it, with the thread id as Archon's session id. */
@@ -318,8 +336,9 @@ export class CodexProvider implements IAgentProvider {
    *
    * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
    * two turns on one thread: the tool turn without the schema, then, on a second process
-   * that resumes the thread with every tool off, a turn with the schema. The tool turn's
-   * success result is held back; the final turn's result is the call's only one.
+   * that resumes the thread with Archon's and the model catalog's tools off, a turn with the
+   * schema. The tool turn's success result is held back; the final turn's result is the
+   * call's only one.
    */
   async *sendQuery(
     prompt: string,
@@ -375,10 +394,13 @@ export class CodexProvider implements IAgentProvider {
         splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
-      const startAppServer = (plugins: readonly string[] | undefined): AppServerConnection =>
+      const startAppServer = (
+        plugins: readonly string[] | undefined,
+        modelCatalogPath?: string
+      ): AppServerConnection =>
         AppServerConnection.start(
           binary,
-          appServerArgs(login, plugins),
+          appServerArgs(login, plugins, modelCatalogPath),
           launch.env,
           this.spawner,
           requestOptions?.protectedEnvKeys
@@ -394,7 +416,13 @@ export class CodexProvider implements IAgentProvider {
       });
       if (call.toolTurnResult && finalTurnParams) {
         const finalRequest = finalTurnRequestOf(request, finalTurnParams, launch.config);
-        yield* this.finalTurn(run, finalRequest, startAppServer, call, catalogId);
+        yield* this.finalTurn(
+          run,
+          finalRequest,
+          catalogPath => startAppServer([], catalogPath),
+          call,
+          catalogId
+        );
       }
     } catch (error) {
       await run.connection?.finishToolCalls();
@@ -419,28 +447,34 @@ export class CodexProvider implements IAgentProvider {
 
   /**
    * The tool-free turn of a split call, on a second process that resumes the tool turn's
-   * thread. The tool turn's process ends first.
+   * thread with `TOOL_FREE_MODEL_CATALOG`. The tool turn's process ends first.
    */
   private async *finalTurn(
     run: CodexRun,
     request: Omit<TurnRequest, 'connection' | 'resumeSessionId'>,
-    startAppServer: (plugins: readonly string[]) => AppServerConnection,
+    startAppServer: (modelCatalogPath: string) => AppServerConnection,
     call: CallState,
     catalogId: string | undefined
   ): AsyncGenerator<MessageChunk> {
     if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
-    run.connection = startAppServer([]);
-    if (request.abortSignal?.aborted) throw new Error('Query aborted');
-    const stream = streamTurn({
-      ...request,
-      connection: run.connection,
-      resumeSessionId: run.threadId,
-    });
-    yield* reportedTurn(stream, call, {
-      holdsSuccess: false,
-      catalogId,
-      abortSignal: request.abortSignal,
-    });
+    const catalog = await writeToolFreeCatalog();
+    // The process serves only this turn, so the catalog file goes when the turn ends.
+    try {
+      run.connection = startAppServer(catalog.path);
+      if (request.abortSignal?.aborted) throw new Error('Query aborted');
+      const stream = streamTurn({
+        ...request,
+        connection: run.connection,
+        resumeSessionId: run.threadId,
+      });
+      yield* reportedTurn(stream, call, {
+        holdsSuccess: false,
+        catalogId,
+        abortSignal: request.abortSignal,
+      });
+    } finally {
+      await rm(catalog.dir, { recursive: true, force: true });
+    }
   }
 
   /**
@@ -594,7 +628,8 @@ function turnRequestOf(
         outputSchema,
       }
     : undefined;
-  // Multi-agent is fixed when the thread starts, so a split thread starts without it.
+  // Multi-agent is fixed when the thread starts, so a split thread starts without it. A
+  // catalog entry with `multi_agent_version: v2` adds its collaboration tools regardless.
   const threadConfig = split
     ? { ...inputs.threadConfig, features: { multi_agent: false } }
     : inputs.threadConfig;
