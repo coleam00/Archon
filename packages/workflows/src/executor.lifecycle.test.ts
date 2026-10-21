@@ -23,6 +23,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { NodeEventWriteError } from './node-event-write';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
+import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import { EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
@@ -175,6 +176,102 @@ describe('paused exit', () => {
   const pausedAt = (approval: Record<string, unknown>) =>
     makeRun({ status: 'paused', metadata: { approval } });
   const run = (store: IWorkflowStore) => startWorkflow({ store });
+
+  const receipt: ContainerPauseReceipt = {
+    kind: 'container_pause',
+    pause: {
+      kind: 'gate',
+      context: { type: 'approval', nodeId: 'review', message: '', pauseId: 'old-pause' },
+    },
+  };
+
+  it.each(['running', 'paused'] as const)(
+    'does not finalize a successor that is %s after a container pause',
+    async status => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const store = makeStore({
+        getWorkflowRun: mock(async () =>
+          makeRun({
+            status,
+            metadata: {
+              approval: {
+                type: 'approval',
+                nodeId: 'review',
+                message: '',
+                pauseId: 'successor-pause',
+              },
+            },
+          })
+        ),
+        getWorkflowRunStatus: mock(async () => status),
+        releasePausedRunSlot,
+      });
+      expect(await run(store)).toMatchObject({ success: true, paused: true });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not release the same wait occurrence under a successor claim', async () => {
+    const context = {
+      kind: 'time' as const,
+      owner: 'node' as const,
+      nodeId: 'delay',
+      pauseId: 'same-wait',
+      waitingSince: '2026-01-01T00:00:00.000Z',
+      resumeAt: '2099-01-02T00:00:00.000Z',
+    };
+    mockExecuteDagWorkflow.mockResolvedValueOnce({
+      kind: 'container_pause',
+      pause: { kind: 'wait', context },
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () =>
+        makeRun({ status: 'paused', metadata: { wait: context, execution_claim: 'successor' } })
+      ),
+    });
+    const result = await run(store);
+    expect(result).toMatchObject({ success: true, paused: true });
+    expect(result).not.toHaveProperty('waitCursor');
+    expect(store.releasePausedRunSlot).not.toHaveBeenCalled();
+  });
+
+  it('finalizes only the same container pause occurrence', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+    const store = makeStore({ getWorkflowRun: mock(async () => pausedAt(receipt.pause.context)) });
+    expect(await run(store)).toMatchObject({ success: true, paused: true });
+    expect(store.releasePausedRunSlot).toHaveBeenCalledWith('run-123', {
+      kind: 'pause',
+      nodeId: 'review',
+      pauseId: 'old-pause',
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it.each(['read', 'post-publication'] as const)(
+    'surfaces a %s error after publication without failing the successor',
+    async kind => {
+      const error = new Error('required write/read failed');
+      mockExecuteDagWorkflow.mockResolvedValueOnce({
+        ...receipt,
+        ...(kind === 'post-publication' ? { postPublicationError: { cause: error } } : {}),
+      });
+      const store = makeStore({
+        getWorkflowRun: mock(async () => {
+          throw error;
+        }),
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+      });
+      await expect(run(store)).rejects.toBe(error);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
 
   for (const kind of ['approval', 'deadline'] as const) {
     it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {

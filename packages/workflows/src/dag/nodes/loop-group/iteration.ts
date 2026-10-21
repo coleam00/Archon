@@ -2,6 +2,7 @@ import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import {
+  runOrStagePause,
   pauseGateRespectingExternalTransition,
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
@@ -235,6 +236,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   const iterCtx: RunLayersContext = {
     toolAttention: ctx.toolAttention,
+    containerPause: ctx.containerPause,
     bodyGateOwner:
       terminalSuspendNode && isGateNode(terminalSuspendNode)
         ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
@@ -385,6 +387,12 @@ async function suspendedBody(
   body: BodyRun,
   postBodyStatus: string | null
 ): Promise<LoopGroupBodyResult | undefined> {
+  if (
+    run.ctx.containerPause?.publish &&
+    run.ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause'
+  ) {
+    return { state: 'running', output: state.lastOutput, ...run.progress.usage, loopIterations: i };
+  }
   if (postBodyStatus !== 'paused') return undefined;
   const running: LoopGroupBodyResult = {
     state: 'running',
@@ -673,45 +681,51 @@ async function pauseAtGroupGate(
     // the pause, so the group's bare-approve finalize deliberately writes no `tokens`.
     // Only the plain `loop` gate carries it.
   };
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused)
-    return {
-      state: 'running',
-      output: state.lastOutput,
-      ...run.progress.usage,
-      loopIterations: i,
-    };
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  const gateMsg =
-    `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-    `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    run.stepName,
-    gateMsg
-  );
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: run.stepName,
-      data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-    })
-    .catch((err: Error) => {
-      logGroupIterationEventError(node.id, err, i);
-    });
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused)
+        return {
+          state: 'running',
+          output: state.lastOutput,
+          ...run.progress.usage,
+          loopIterations: i,
+        };
+      await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+      const gateMsg =
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        gateOccurrence(paused),
+        run.stepName,
+        gateMsg
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: run.stepName,
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
+        })
+        .catch((err: Error) => {
+          logGroupIterationEventError(node.id, err, i);
+        });
 
-  return { ...serializeNodeOutput(suspended), loopIterations: i };
+      return { ...serializeNodeOutput(suspended), loopIterations: i };
+    },
+    () => ({ state: 'running', output: state.lastOutput, ...run.progress.usage, loopIterations: i })
+  );
 }

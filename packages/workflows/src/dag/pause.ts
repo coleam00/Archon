@@ -1,8 +1,9 @@
+import type { NodeExecutionResult } from '../node-record-serialization';
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { safeSendMessage } from '../platform-messages';
-import type { ApprovalContext, WorkflowRunStatus } from '../schemas';
+import type { ApprovalContext, WorkflowWaitContext, WorkflowRunStatus } from '../schemas';
 import {
   isApprovalContext,
   isWorkflowWaitContext,
@@ -12,6 +13,57 @@ import type { GatePauseEventInput } from '../store';
 import { WorkflowRunPauseConflictError } from '../store';
 import { getLog } from './log';
 import { type RunLayersContext } from './run-context';
+
+export interface ContainerPauseReceipt {
+  kind: 'container_pause';
+  pause:
+    | { kind: 'gate'; context: ApprovalContext }
+    | { kind: 'wait'; context: WorkflowWaitContext };
+  postPublicationError?: { cause: unknown };
+}
+
+/** Shared by one DAG pass and its nested bodies; never persisted. */
+export interface ContainerPauseBoundary {
+  publish?: () => Promise<NodeExecutionResult>;
+  receipt?: ContainerPauseReceipt;
+}
+
+/**
+ * Container peers must settle before stopping. Keep one publication: its successor
+ * can resume immediately, so no second candidate may publish from this execution.
+ */
+export async function runOrStagePause<T extends NodeExecutionResult>(
+  ctx: RunLayersContext,
+  publish: () => Promise<T>,
+  deferred: (selected: boolean) => T | Promise<T>
+): Promise<T> {
+  const boundary = ctx.containerPause;
+  if (boundary === undefined) return publish();
+  const selected = boundary.publish === undefined;
+  if (selected) boundary.publish = publish;
+  return deferred(selected);
+}
+
+export async function publishContainerPause(
+  boundary: ContainerPauseBoundary,
+  publish: () => Promise<unknown>,
+  afterPublication?: () => Promise<void>
+): Promise<ContainerPauseReceipt | undefined> {
+  try {
+    await publish();
+  } catch (cause) {
+    if (boundary.receipt === undefined) throw cause;
+    boundary.receipt.postPublicationError = { cause };
+  }
+  if (boundary.receipt !== undefined && afterPublication !== undefined) {
+    try {
+      await afterPublication();
+    } catch (cause) {
+      boundary.receipt.postPublicationError ??= { cause };
+    }
+  }
+  return boundary.receipt;
+}
 
 /**
  * Send a paused run's inline notice. The durable pause is the record and the attention
@@ -86,6 +138,7 @@ export async function pauseGateRespectingExternalTransition(
     event: GatePauseEventInput;
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
+    boundary?: ContainerPauseBoundary;
   }
 ): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
@@ -94,36 +147,13 @@ export async function pauseGateRespectingExternalTransition(
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
-    const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);
-    if (status === 'running' || status === 'pending') throw pauseErr;
-    if (status === 'paused') {
-      const run = await deps.store.getWorkflowRun(runId);
-      const active = run?.metadata?.approval;
-      const wait = run?.metadata?.wait;
-      if (isWorkflowWaitContext(wait)) {
-        getLog().info(
-          { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
-          'dag.gate_deferred'
-        );
-        return undefined;
-      }
-      if (
-        !isApprovalContext(active) ||
-        (active.nodeId === approvalContext.nodeId &&
-          active.bodyGateId === approvalContext.bodyGateId)
-      )
-        throw pauseErr;
-      getLog().info(
-        { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
-        'dag.gate_deferred'
-      );
-      return undefined;
-    }
-    getLog().warn(
-      { workflowRunId: runId, status, err: pauseErr as Error },
-      'dag.gate_pause_skipped_external_transition'
-    );
-    return undefined;
+    return recoverGatePauseConflict(deps, runId, approvalContext, pauseErr);
+  }
+  if (options.boundary !== undefined) {
+    options.boundary.receipt = {
+      kind: 'container_pause',
+      pause: { kind: 'gate', context: approvalContext },
+    };
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
@@ -134,6 +164,43 @@ export async function pauseGateRespectingExternalTransition(
     pauseId: approvalContext.pauseId,
   });
   return approvalContext;
+}
+
+async function recoverGatePauseConflict(
+  deps: WorkflowDeps,
+  runId: string,
+  approvalContext: ApprovalContext,
+  pauseErr: WorkflowRunPauseConflictError
+): Promise<undefined> {
+  const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);
+  if (status === 'running' || status === 'pending') throw pauseErr;
+  if (status === 'paused') {
+    const run = await deps.store.getWorkflowRun(runId);
+    const active = run?.metadata?.approval;
+    const wait = run?.metadata?.wait;
+    if (isWorkflowWaitContext(wait)) {
+      getLog().info(
+        { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
+        'dag.gate_deferred'
+      );
+      return undefined;
+    }
+    if (
+      !isApprovalContext(active) ||
+      (active.nodeId === approvalContext.nodeId && active.bodyGateId === approvalContext.bodyGateId)
+    )
+      throw pauseErr;
+    getLog().info(
+      { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
+      'dag.gate_deferred'
+    );
+    return undefined;
+  }
+  getLog().warn(
+    { workflowRunId: runId, status, err: pauseErr as Error },
+    'dag.gate_pause_skipped_external_transition'
+  );
+  return undefined;
 }
 
 export function snapshotBodySessionCursorAncestry(

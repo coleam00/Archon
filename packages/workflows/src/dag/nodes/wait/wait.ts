@@ -1,5 +1,5 @@
 import { waitMessageRenderer } from './attention-message';
-import { sendPauseNotice, statusAfterPauseFailure } from '../../pause';
+import { runOrStagePause, sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -242,41 +242,12 @@ export async function executeWaitNode(
     persisted !== undefined &&
     (context.answer !== undefined || attentionForm(context) === 'message');
   if (!isSignaled && !isDue && !isAttentionResume) {
-    let paused = false;
-    try {
-      await deps.store.pauseWorkflowRunForWait(
-        workflowRun.id,
-        context,
-        persisted === undefined
-          ? { kind: 'started', stepName: stepNamePrefix + node.id }
-          : { kind: 'continued' }
-      );
-      paused = true;
-    } catch (pauseError) {
-      const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
-      if (status === 'running') throw pauseError;
-      getLog().warn(
-        { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
-        'dag.wait_pause_skipped_external_transition'
-      );
-    }
-    if (paused && context.kind === 'attention') {
-      await sendPauseNotice(
-        deps,
-        platform,
-        conversationId,
-        workflowRun.id,
-        node.id,
-        attentionOccurrence(context),
-        stepNamePrefix + node.id,
-        attentionNotification(platform, workflowRun.id, context, discarded)
-      );
-    }
-    return execution === undefined
-      ? { state: 'running', output: '' }
-      : !paused
-        ? serializeNodeOutput(execution)
-        : recordNodeState(
+    return runOrStagePause(
+      ctx,
+      async () => {
+        let stagedOutput: NodeExecutionResult | undefined;
+        if (ctx.containerPause !== undefined && execution !== undefined) {
+          stagedOutput = await recordNodeState(
             { store: deps.store, logDir },
             finishNodeExecution(
               execution,
@@ -284,6 +255,60 @@ export async function executeWaitNode(
               { output: { text: '' } }
             )
           );
+        }
+        let paused = false;
+        try {
+          await deps.store.pauseWorkflowRunForWait(
+            workflowRun.id,
+            context,
+            persisted === undefined
+              ? { kind: 'started', stepName: stepNamePrefix + node.id }
+              : { kind: 'continued' }
+          );
+          paused = true;
+          if (ctx.containerPause !== undefined) {
+            ctx.containerPause.receipt = {
+              kind: 'container_pause',
+              pause: { kind: 'wait', context },
+            };
+          }
+        } catch (pauseError) {
+          const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
+          if (status === 'running') throw pauseError;
+          getLog().warn(
+            { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
+            'dag.wait_pause_skipped_external_transition'
+          );
+        }
+        if (paused && context.kind === 'attention') {
+          await sendPauseNotice(
+            deps,
+            platform,
+            conversationId,
+            workflowRun.id,
+            node.id,
+            attentionOccurrence(context),
+            stepNamePrefix + node.id,
+            attentionNotification(platform, workflowRun.id, context, discarded)
+          );
+        }
+        if (paused && stagedOutput !== undefined) return stagedOutput;
+        return execution === undefined
+          ? { state: 'running', output: '' }
+          : !paused
+            ? serializeNodeOutput(execution)
+            : recordNodeState(
+                { store: deps.store, logDir },
+                finishNodeExecution(
+                  execution,
+                  { status: 'suspended', point: 'wait' },
+                  { output: { text: '' } }
+                )
+              );
+      },
+      () =>
+        execution === undefined ? { state: 'running', output: '' } : serializeNodeOutput(execution)
+    );
   }
 
   const status = context.kind === 'event' && !isSignaled ? 'expired' : 'satisfied';
