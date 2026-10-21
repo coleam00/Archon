@@ -2,7 +2,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 function recordedCost(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? `$${String(value)}`
+    ? `$${value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 12 })}`
     : 'unknown';
 }
 

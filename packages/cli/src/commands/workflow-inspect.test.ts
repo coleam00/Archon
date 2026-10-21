@@ -821,7 +821,21 @@ describe('workflowGetCommand', () => {
     [
       'tiny cost',
       { total_cost_usd: 0.00000001, total_tokens_in: 2, total_tokens_out: 3 },
-      '$1e-8',
+      '$0.00000001',
+      '2',
+      '3',
+    ],
+    [
+      'summed cost',
+      { total_cost_usd: 0.1 + 0.2, total_tokens_in: 2, total_tokens_out: 3 },
+      '$0.3',
+      '2',
+      '3',
+    ],
+    [
+      'large cost',
+      { total_cost_usd: 1e21, total_tokens_in: 2, total_tokens_out: 3 },
+      '$1000000000000000000000',
       '2',
       '3',
     ],
