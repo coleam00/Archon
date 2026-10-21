@@ -107,6 +107,12 @@ export async function suspendContainerForPause(
     });
     executed = result.executed;
   } catch (error) {
+    if (outcome && !outcome.stopped) {
+      getLog().error(
+        { err: outcome.error, runId, envId: containerCtx.envId },
+        'dag.container_suspend_on_pause_failed'
+      );
+    }
     getLog().error(
       { err: error, runId, envId: containerCtx.envId },
       'dag.container_pause_cleanup_unconfirmed'

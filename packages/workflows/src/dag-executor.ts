@@ -458,8 +458,9 @@ export async function executeDagWorkflow(
 
   await persistAuthoredOutcome();
   let sourceUnreadable: RunSourceUnreadableError | undefined;
+  let layerStop: Awaited<ReturnType<typeof runLayers>>;
   try {
-    await runLayers(runCtx);
+    layerStop = await runLayers(runCtx);
   } catch (error) {
     // runLayers guards almost everything, but a failed durable write (terminal status or
     // node event) escapes through its layer join. Persist both durable facts before rethrowing that
@@ -517,16 +518,10 @@ export async function executeDagWorkflow(
     };
   }
 
-  // Container pause economics (Phase C): if a node paused the run (approval /
-  // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
-  // The pause happens BETWEEN layers, after node completion — the #2134 background-
-  // task wait gate has already drained and no `docker exec` is in flight (docker
-  // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
-  // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
-  // suspended. Only 'paused' triggers this.
+  // Layers have drained all node work before stopping Docker, which would kill live execs.
+  // Preserve an observed pause even if resume has advanced the row during cleanup.
   if (execContext.kind === 'container' && containerCtx) {
-    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (pausedStatus === 'paused') {
+    if (layerStop === 'paused') {
       await suspendContainerForPause(
         deps,
         platform,

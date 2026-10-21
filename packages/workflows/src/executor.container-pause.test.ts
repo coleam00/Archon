@@ -160,8 +160,8 @@ describe('container pause segment ownership through the executor', () => {
             ? {
                 getWorkflowRunStatus: async id => {
                   const status = await f.store.getWorkflowRunStatus(id);
-                  // The layer walker observes the pause before DAG cleanup reads it.
-                  if (status === 'paused' && ++pausedObservations === 2) await resume();
+                  // Resume after the layer walker reads its paused snapshot.
+                  if (status === 'paused' && ++pausedObservations === 1) await resume();
                   return status;
                 },
               }
@@ -201,6 +201,80 @@ describe('container pause segment ownership through the executor', () => {
             expect(f.backend.discardChanges).not.toHaveBeenCalled();
           }
           expect(f.backend.prepareSuspend).toHaveBeenCalledWith('env', 'cid');
+        } finally {
+          f.unsubscribe();
+        }
+      }
+    );
+
+    it(`${path}: cancellation during preparation retains its terminal result and parent hook`, async () => {
+      const f = await setup(path);
+      const parent = await f.store.createWorkflowRun({
+        workflow_name: 'parent',
+        user_message: '',
+        working_path: f.run.working_path ?? undefined,
+      });
+      let parentRead = false;
+      f.backend.prepareSuspend.mockImplementation(async () => {
+        await f.store.cancelWorkflowRun(f.run.id);
+        return f.stop;
+      });
+      try {
+        expect(
+          await f.execute({
+            getWorkflowRun: async id => {
+              if (id === parent.id) parentRead = true;
+              const run = await f.store.getWorkflowRun(id);
+              return run?.id === f.run.id ? { ...run, parent_run_id: parent.id } : run;
+            },
+          })
+        ).toMatchObject({ success: false });
+        expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe('cancelled');
+        expect(parentRead).toBe(true);
+        expect(f.stop).not.toHaveBeenCalled();
+        expect(stopped(f.live)).toEqual([]);
+      } finally {
+        f.unsubscribe();
+      }
+    });
+
+    it.each(['preparation', 'stop'] as const)(
+      `${path}: %s failure survives a store completion failure`,
+      async failure => {
+        const f = await setup(path);
+        const backendError = new Error(`${failure} failed before store completion`);
+        const storeError = new Error('store completion failed');
+        if (failure === 'preparation') f.backend.prepareSuspend.mockRejectedValue(backendError);
+        else f.stop.mockRejectedValue(backendError);
+        try {
+          expect(
+            await f.execute({
+              withPausedExecution: async (id, claim, action) => {
+                await f.store.withPausedExecution(id, claim, action);
+                throw storeError;
+              },
+            })
+          ).toMatchObject({ success: true, paused: true });
+          for (const [error, diagnostic] of [
+            [backendError, 'dag.container_suspend_on_pause_failed'],
+            [storeError, 'dag.container_pause_cleanup_unconfirmed'],
+          ] as const) {
+            expect(
+              mockLogFn.mock.calls.some(
+                ([data, message]) =>
+                  message === diagnostic &&
+                  typeof data === 'object' &&
+                  data !== null &&
+                  'err' in data &&
+                  data.err === error
+              )
+            ).toBe(true);
+          }
+          expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe('paused');
+          expect(stopped(f.live)).toEqual([]);
+          expect(deliveredMessages(f.platform).join('\n')).toContain(
+            'cleanup could not be confirmed'
+          );
         } finally {
           f.unsubscribe();
         }

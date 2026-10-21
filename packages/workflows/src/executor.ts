@@ -543,7 +543,7 @@ export async function executeWorkflow(
     if (
       typeof dagResult === 'object' &&
       dagResult.kind === 'container_pause' &&
-      (finalStatus?.status !== 'paused' ||
+      (!finalStatus ||
         executionClaim(finalStatus.metadata) !== executionClaim(workflowRun.metadata))
     ) {
       return { success: true, paused: true, workflowRunId: workflowRun.id };

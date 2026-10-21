@@ -58,12 +58,13 @@ async function settleSequentially(
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
- * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ * state (paused/cancelled/deleted). Returns the observed stop reason so top-level
+ * cleanup preserves the pause boundary even if resume has already acquired the run.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
-export async function runLayers(ctx: RunLayersContext): Promise<void> {
+export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stopped' | undefined> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
@@ -108,8 +109,10 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
 
     await ctx.afterLayer?.();
 
-    if (await stopsBetweenLayers(ctx, layerIdx)) break;
+    const stop = await stopsBetweenLayers(ctx, layerIdx);
+    if (stop !== undefined) return stop;
   }
+  return undefined;
 }
 
 async function runLayerPhase(
@@ -666,11 +669,10 @@ async function aggregateLayerResults(
   return layerHadFailure;
 }
 
-/**
- * Check for non-running status between DAG layers (cancellation, deletion, pause).
- * True when the walk stops here.
- */
-async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Promise<boolean> {
+async function stopsBetweenLayers(
+  ctx: RunLayersContext,
+  layerIdx: number
+): Promise<'paused' | 'stopped' | undefined> {
   // Check for non-running status between DAG layers (cancellation, deletion, pause)
   try {
     const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
@@ -684,7 +686,7 @@ async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Prom
           { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
           'dag.claimed_work_continues_through_parent_pause'
         );
-        return false;
+        return undefined;
       }
       getLog().info(
         {
@@ -704,7 +706,7 @@ async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Prom
           { workflowId: ctx.workflowRun.id }
         );
       }
-      return true;
+      return effectiveStatus === 'paused' ? 'paused' : 'stopped';
     }
   } catch (statusErr) {
     // Non-fatal — status check failure should not crash the workflow
@@ -713,5 +715,5 @@ async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Prom
       'dag.status_check_failed'
     );
   }
-  return false;
+  return undefined;
 }

@@ -20,7 +20,9 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
    claude + bash/script nodes all run INSIDE via `docker exec`
    env = the Archon-managed bag + auth only (never the host process.env)
         │
-   … approval gate?  →  docker stop (0 RAM while paused)  →  approve/resume → docker start
+   … approval gate?  →  pause
+        ├─ cleanup first → docker stop → approve/resume → docker start
+        └─ resume first  → skip old stop, continue running
         │
    nodes done → WRITE-BACK GATE: overlay diff summarized, run pauses
         │
@@ -76,7 +78,7 @@ An **empty diff** skips the gate and completes silently. Set `container.write_ba
 
 ## Pause economics
 
-Any pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, **`docker stop`s the container**. A multi-day wait costs ~0 CPU/RAM. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+Pauses, including unreadable-source recovery before or inside the DAG, approval/interactive gates mid-run, and the write-back gate at the end, attempt to stop the container with `docker stop`. If resume acquires an ordinary DAG or write-back pause first, old cleanup skips the stop and the successor keeps running. A successfully stopped container costs ~0 CPU/RAM during a multi-day wait. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
 
 Unreadable-source suspension uses a one-second Docker stop grace and a two-second timeout per Docker call (ownership restoration, stop, and failure inspection), keeping Docker work under the file store's ten-second lock wait. Other pauses retain Docker's default stop grace.
 
