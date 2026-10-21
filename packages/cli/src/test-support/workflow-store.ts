@@ -188,7 +188,16 @@ export function createInMemoryWorkflowStore(
     serialize(() => apply(call));
   const admission = createInMemoryResourceStartStore(
     input => apply(view => view.createWorkflowRun(input)),
-    async id => structuredClone(runs.get(id) ?? null)
+    async id => structuredClone(runs.get(id) ?? null),
+    () => [...runs.values()],
+    async () =>
+      (await records.isolation.listActive())
+        .filter(row => row.workflow_type === 'task')
+        .map(row => ({
+          codebaseId: row.codebase_id,
+          branch: row.workflow_id,
+          workingPath: row.working_path,
+        }))
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -247,7 +256,8 @@ export function createInMemoryWorkflowStore(
         const blocker = await admission.resume(run);
         if (!blocker) return view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
-        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        if (busy.refusal !== 'waiting') throw busy;
+        view.recordCapacityWait(id);
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;

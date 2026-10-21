@@ -9,6 +9,7 @@ import type {
   StartBindingInspection,
   StartReceiptInspection,
   ResourceStartRequestInspection,
+  QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
@@ -29,11 +30,12 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDialect } from './connection';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
   resourceStartOccupancy,
+  parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
@@ -47,6 +49,12 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
+}
+
+// Different resource rows can reserve the same checkout. Hold one transaction lock
+// across occupancy and publication; SQLite already serializes writers.
+async function lockCheckoutReservations(query: Query): Promise<void> {
+  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -89,6 +97,7 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
+  await lockCheckoutReservations(query);
   const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -144,6 +153,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
     const { capacity } = await lockResourceSlot(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
@@ -438,14 +448,26 @@ export async function getResourceStartRequest(
 
 export async function listQueuedResourceStartsForHost(
   hostId: string
-): Promise<ResourceStartRequestInspection[]> {
+): Promise<QueuedResourceStartInspection[]> {
   const result = await getDatabase().query<Record<string, unknown>>(
     `${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
       ORDER BY r.resource_key, r.queue_position`,
     [hostId]
   );
-  return result.rows.map(inspectRequest);
+  return result.rows.map(row => {
+    try {
+      parseQueuedResourceStart(row);
+      return inspectRequest(row);
+    } catch (error) {
+      return {
+        id: String(row.id),
+        resource: String(row.resource_key),
+        receiptId: typeof row.receipt_id === 'string' ? row.receipt_id : undefined,
+        error,
+      };
+    }
+  });
 }
 
 export async function withdrawQueuedResourceStart(

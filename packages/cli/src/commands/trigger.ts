@@ -244,10 +244,7 @@ async function drainReceipt(
     }
     // Other pending work on the host can fail in the same drain; only this receipt's
     // failures are this command's failure.
-    // A failure with no receipt id could be this one, so it counts as ours.
-    const others = error.failures.filter(
-      failure => failure.receiptId !== undefined && failure.receiptId !== receiptId
-    );
+    const others = error.failures.filter(failure => failure.receiptId !== receiptId);
     const own = error.failures.filter(failure => !others.includes(failure));
     if (own.length > 0)
       throw new Error(
@@ -255,7 +252,7 @@ async function drainReceipt(
         { cause: error }
       );
     process.stderr.write(
-      `Warning: ${String(others.length)} other start(s) on this host failed and are not part of receipt ${receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
+      `Warning: ${String(others.length)} other or unattributed start operation(s) on this host failed while draining receipt ${receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
     );
   }
 }

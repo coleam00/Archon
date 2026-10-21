@@ -1,3 +1,4 @@
+import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
@@ -75,8 +76,7 @@ export type TransactionView = Omit<
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
   resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
-  /** Record a paused run's first capacity refusal; false when there is nothing to record. */
-  recordCapacityWait(id: string): boolean;
+  recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
 
@@ -417,9 +417,8 @@ export function createTransactionView(
     resumableRun: (id, cursor) => structuredClone(resumableRun(id, cursor)),
     recordCapacityWait: id => {
       const run = row(id);
-      if (run.status !== 'paused' || readCapacityWait(run.metadata) !== undefined) return false;
+      if (run.status !== 'paused' || readCapacityWait(run.metadata) !== undefined) return;
       run.metadata[CAPACITY_WAIT_METADATA_KEY] = { since: new Date().toISOString() };
-      return true;
     },
     clearCapacityWait: id => {
       Reflect.deleteProperty(row(id).metadata, CAPACITY_WAIT_METADATA_KEY);
@@ -544,9 +543,7 @@ export function createTransactionView(
               run.working_path === path &&
               run.id !== self?.id &&
               !self?.excludeRunIds?.includes(run.id) &&
-              (run.status === 'running' ||
-                run.status === 'paused' ||
-                (run.status === 'pending' && run.started_at.getTime() > Date.now() - 300_000)) &&
+              holdsWorkflowPath(run) &&
               (!self ||
                 run.started_at < self.startedAt ||
                 (run.started_at.getTime() === self.startedAt.getTime() && run.id < self.id))

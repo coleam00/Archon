@@ -1,3 +1,7 @@
+import {
+  STALE_PENDING_AGE_MS,
+  WORKFLOW_PATH_LOCK_STATUSES,
+} from '@archon/workflows/workflow-path-lock';
 /**
  * Point reads of workflow runs: lookups by id, conversation, path, parent and
  * worker platform id. Re-exported from the `./workflows` entry.
@@ -151,7 +155,16 @@ export async function getPausedWorkflowRun(conversationId: string): Promise<Work
   }
 }
 
-export const STALE_PENDING_AGE_MS = 5 * 60 * 1000; // 5 minutes
+export { STALE_PENDING_AGE_MS } from '@archon/workflows/workflow-path-lock';
+
+export function activeWorkflowPathHolderCondition(): string {
+  const cutoff =
+    getDatabaseType() === 'postgresql'
+      ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
+      : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
+  const statuses = WORKFLOW_PATH_LOCK_STATUSES.map(status => `'${status}'`).join(', ');
+  return `(status IN (${statuses}) OR (status = 'pending' AND started_at > ${cutoff}))`;
+}
 
 /**
  * Find the workflow run currently holding the lock on `workingPath`.
@@ -179,17 +192,10 @@ export async function getActiveWorkflowRunByPath(
   self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
-  const stalePendingCutoff = isPostgres
-    ? `NOW() - INTERVAL '${String(STALE_PENDING_AGE_MS)} milliseconds'`
-    : `datetime('now', '-${String(Math.floor(STALE_PENDING_AGE_MS / 1000))} seconds')`;
-
   // Build params + clauses dynamically. Self exclusion + tiebreaker travel
   // together — the tiebreaker references both ids and timestamps.
   const params: unknown[] = [workingPath];
-  const clauses: string[] = [
-    'working_path = $1',
-    `(status IN ('running', 'paused') OR (status = 'pending' AND started_at > ${stalePendingCutoff}))`,
-  ];
+  const clauses: string[] = ['working_path = $1', activeWorkflowPathHolderCondition()];
   let selfIdParam: string | undefined;
   if (self !== undefined) {
     params.push(self.id);

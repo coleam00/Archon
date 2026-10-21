@@ -14,6 +14,7 @@
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
     "./router": "./src/router.ts",
+    "./workflow-path-lock": "./src/workflow-path-lock.ts",
     "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",

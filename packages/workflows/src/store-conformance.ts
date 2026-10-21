@@ -1,10 +1,14 @@
+export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
+import {
+  describeForeignCheckoutAdmission,
+  resourceStartFixtures,
+} from './resource-start-conformance';
 import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
 } from './resource-start-store';
 import type {
-  PreparedWorkflowLaunch,
   ResourceStartBindingIntent,
   ResourceStartIntent,
   SourceReceiptAcceptance,
@@ -267,6 +271,12 @@ export function describeWorkflowStoreConformance(
   label: string,
   makeHarness: () => Promise<WorkflowStoreHarness>
 ): void {
+  describeForeignCheckoutAdmission(
+    label,
+    makeHarness,
+    CONFORMANCE_CODEBASE_ID,
+    CONFORMANCE_CONVERSATION_ID
+  );
   describe(`workflow store conformance: ${label}`, () => {
     let harness: WorkflowStoreHarness;
     let store: IWorkflowStore;
@@ -312,38 +322,10 @@ export function describeWorkflowStoreConformance(
       });
     });
 
-    type Lane = PreparedWorkflowLaunch['execution']['isolation'];
-    /** Each launch runs in a checkout of its own unless `checkout` names a shared one. */
-    const launch = (
-      id = crypto.randomUUID(),
-      checkout: { cwd?: string; isolation?: Lane } = {}
-    ): PreparedWorkflowLaunch => ({
-      version: 2,
-      run: {
-        id,
-        workflow_name: 'conformance',
-        codebase_id: CONFORMANCE_CODEBASE_ID,
-        user_message: '',
-        metadata: {},
-      },
-      execution: {
-        cwd: checkout.cwd ?? `/conformance/${id}`,
-        conversationId: CONFORMANCE_CONVERSATION_ID,
-        isolation: checkout.isolation ?? { kind: 'in-place' },
-      },
-    });
-    const start = (
-      overlap: 'queue' | 'skip' = 'queue',
-      hostId = 'host',
-      capacity = 1,
-      checkout?: { cwd?: string; isolation?: Lane }
-    ): ResourceStartIntent => ({
-      resource: 'resource',
-      capacity,
-      hostId,
-      overlap,
-      launch: launch(undefined, checkout),
-    });
+    const { launch, start } = resourceStartFixtures(
+      CONFORMANCE_CODEBASE_ID,
+      CONFORMANCE_CONVERSATION_ID
+    );
     const binding: ResourceStartBindingIntent = {
       bindingId: 'binding',
       bindingRevision: 'v1',
@@ -993,6 +975,15 @@ export function describeWorkflowStoreConformance(
           launch: prepared,
         })
       ).toBeNull();
+      prepared.run.metadata.admission_checkout_guard = 'false';
+      await expect(
+        store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).rejects.toThrow('expected a boolean');
+      expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+      expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+        bindings: [{ status: 'preparing' }],
+      });
+      prepared.run.metadata.admission_checkout_guard = true;
       const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
       expect(result).toEqual({
         status: 'admitted',
