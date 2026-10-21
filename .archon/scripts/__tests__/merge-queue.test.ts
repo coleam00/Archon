@@ -466,13 +466,16 @@ describe('the merge queue scripts', () => {
       { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true, headRefName: 'wip' },
       { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'build/9-add-a-thing-0123abcd' },
+      // A hand-opened branch under build/ that the build queue could not have created.
+      { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/docs' },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true], [53, true]]);
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
     expect(stored(at, 51).value).toBeNull();
     expect(stored(at, 52).value).toBeNull();
+    expect(stored(at, 53).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '53'));
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
 
@@ -608,6 +611,46 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const output = ok(run(at, 'facts', {})) as { items: { item: { number: number }; own_pr: boolean }[] };
     expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[30, true]]);
     expect(stored(at, 30).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('a build item whose latest round names no pull request owns none, so an earlier round\'s pull request enrolls and stays an own PR', () => {
+    const emptyLatest = { ...BUILT, status: 'next' as const, rounds: [...BUILT.rounds, { ...BUILT.rounds[0]!, run_id: 'ship-2', pr_url: '' }] };
+    const ownPrs = [{ number: 42, url: PR_URL, isDraft: false, headRefName: 'fix-the-thing' }];
+    const enrolling = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(enrolling, item(emptyLatest));
+    const enrolled = ok(run(enrolling, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(enrolled.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true]]);
+
+    const existing = install();
+    seed(existing, item(emptyLatest));
+    seed(existing, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
+    const swept = ok(run(existing, 'facts', {})) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(swept.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true]]);
+    expect(stored(existing, 42).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('an own-PR item whose claim ends between supersession and pickup is settled as superseded, not swept', () => {
+    const at = install();
+    seed(at, item({ ...BUILT, status: 'next' }));
+    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), claim: { run_id: 'owner', at: AT, requests: [] }, facts: { own_pr: { url: PR_URL, at: AT } } });
+    // The owner is running when supersession reads it and has completed when the pickup does.
+    const ending = `
+let reads = 0;
+const ending = Bun.spawnSync;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const at = argv.indexOf('workflow');
+  if (at >= 0 && argv[at + 1] === 'get' && argv[at + 2] === 'owner') {
+    reads += 1;
+    return { exitCode: 0, stdout: Buffer.from(JSON.stringify({ id: 'owner', status: reads === 1 ? 'running' : 'completed' })), stderr: Buffer.from('') };
+  }
+  return ending(argv, settings);
+} });
+`;
+    const output = ok(run(at, 'facts', {}, { preload: ending })) as { path: string; items: unknown[]; settled: MergeSettled[] };
+    expect(output.items).toEqual([]);
+    expect(output.path).toBe('record');
+    expect(output.settled.map(entry => [entry.item.number, entry.status, entry.decision])).toEqual([[42, 'parked', 'superseded']]);
+    expect(output.settled[0]?.reason).toContain('work item 7');
   }, 60_000);
 
   test('a merged own-PR item stays merged when a build item names its pull request', () => {

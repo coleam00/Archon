@@ -610,7 +610,9 @@ then the project's file, whose lines win where the two conflict.
   build item's latest round names a pull request that already has an unmerged own-PR
   item, the run settles the own-PR item as superseded before claiming, recording the
   build item's number, so the sweep never sees it. A claim whose run ended is released
-  in the same write; one a live run still holds waits for that run to end. No build round owns an
+  in the same write. One a live run still holds stays with that run; once it ends, the
+  pickup that releases the claim records the same supersession instead of sweeping it.
+  A latest round that names no pull request owns none. No build round owns an
   own-PR pull request, so where another would go back to the build queue (no verdict,
   a stale one, a conflict, a holding thread, red CI the change caused) the sweep asks
   instead, naming what is wrong and the command a maintainer can launch, and its
