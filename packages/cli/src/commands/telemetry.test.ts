@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { telemetryStatusCommand, telemetryResetCommand } from './telemetry';
+import * as paths from '@archon/paths';
+import {
+  telemetryWorkflowNoMatchCommand,
+  telemetryStatusCommand,
+  telemetryResetCommand,
+} from './telemetry';
 
 const ENV_VARS = [
   'ARCHON_HOME',
@@ -114,4 +119,17 @@ describe('telemetryResetCommand', () => {
     errSpy.mockRestore();
     rmSync(filePath, { force: true });
   });
+});
+
+it('records the CLI agent no-match decision through the shared event', () => {
+  const capture = spyOn(paths, 'captureWorkflowNoMatch').mockImplementation(() => {});
+  const output = spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    expect(telemetryWorkflowNoMatchCommand()).toBe(0);
+    expect(capture).toHaveBeenCalledWith('cli');
+    expect(capture).toHaveBeenCalledTimes(1);
+  } finally {
+    capture.mockRestore();
+    output.mockRestore();
+  }
 });

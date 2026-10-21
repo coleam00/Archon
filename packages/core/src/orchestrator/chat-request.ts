@@ -32,7 +32,7 @@ import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { getCodebaseEnvVars } from '../db/env-vars';
 import { generateTitleForUser } from '../services/user-title-generator';
-import { buildOrchestratorSystemAppend, buildRunManagementSection } from './prompt-builder';
+import { buildOrchestratorSystemAppend } from './prompt-builder';
 import { getLog } from './agent-log';
 
 export function applyPresetToRequestOptions(
@@ -467,23 +467,12 @@ export async function prepareChatTurnRequest(
     }
   }
 
-  // Providers with in-process tools launch and register through typed tools; the
-  // others still write command lines that the command scan reads from the reply.
-  let systemAppend = await buildOrchestratorSystemAppend(
+  const systemAppend = await buildOrchestratorSystemAppend(
     conversation,
     codebases,
     workflows,
-    caps.nativeTools ? 'tools' : 'commands'
+    caps.nativeTools ? 'tools' : 'cli'
   );
-  // Providers WITHOUT the in-process manage_run tool (OpenCode/Copilot) get a
-  // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
-  // project's runs over bash. Native-tool providers get the tool instead and are nudged to it
-  // — adding the CLI pointer there would be redundant and steer them onto a bash path
-  // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
-  // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
-  if (conversation.codebase_id !== null && !caps.nativeTools) {
-    systemAppend += `\n\n${buildRunManagementSection()}`;
-  }
   const requestOptions: SendQueryOptions = {
     assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
     env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,

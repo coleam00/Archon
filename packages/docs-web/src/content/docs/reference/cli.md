@@ -85,11 +85,13 @@ Start workflows from deployment bindings and inspect durable resource admission.
 
 ### `chat <message>`
 
-Send a message to the orchestrator for a one-off AI interaction.
+Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
 
 ```bash
 archon chat "What does the orchestrator do?"
 ```
+
+Chat prints text; `--json` is not supported.
 
 ### `setup`
 
@@ -242,6 +244,10 @@ archon telemetry status
 ```
 
 Useful for verifying that an opt-out env var (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, `CI=true`, `POSTHOG_API_KEY=off`) is being picked up. Inspecting status never creates a `telemetry-id` file while opted out.
+
+### `telemetry no-match`
+
+Reports an agent decision that the user requested work but no available workflow fits. Chat uses `report_workflow_no_match` on native-tool providers and `archon telemetry no-match` on CLI providers. This emits the anonymous `workflow_no_match` event (transport only), respects telemetry opt-out, and launches nothing. Ordinary questions and missing project or input details are not no-match decisions.
 
 ### `telemetry reset`
 
@@ -577,17 +583,17 @@ Ambiguous workflow 'review'. Did you mean:
 
 ### `workflow status`
 
-Show **active** workflow runs (running and paused) for the current project. The project is resolved from `cwd` through the registered checkout, including linked git worktrees. Use `--all` for install-wide active runs. For full history (all statuses), use `workflow runs`.
+With explicit chat scope (`--chat-project-id <id>`), show **active** workflow runs (running and paused) for the selected project, provided `cwd` passes the CLI directory check (a Git checkout or registered folder project); `--all` is rejected. Without explicit chat scope, show active runs for the current project. The project is resolved from `cwd` through the registered checkout, including linked git worktrees. Without explicit chat scope, use `--all` for install-wide active runs. For full history (all statuses), use `workflow runs`.
 
 ```bash
 archon workflow status
 archon workflow status --json
-archon workflow status --all      # active runs across all projects
+archon workflow status --all      # without explicit chat scope: active runs across all projects
 archon workflow status --verbose   # add a per-node summary for each run
 archon workflow status --json --verbose
 ```
 
-If `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
+Without explicit chat scope, if `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
 
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
@@ -599,7 +605,7 @@ Tool-call advisories appear in nonverbose text and in the JSON `attention` field
 
 ### `workflow runs`
 
-List recent runs of **every** execution status for the current project. The project is resolved from `cwd` by its registered checkout path or linked-worktree identity. A separate clone does not resolve to that project, even after a launch with `workflow run --project`. Complements `workflow status` (which is active-only).
+List recent runs of **every** execution status for the current project. With explicit chat scope (`--chat-project-id <id>`), queries use the selected project and reject `--all`. The CLI still requires `cwd` to be a Git checkout or registered folder project. Otherwise the project is resolved from `cwd` by its registered checkout path or linked-worktree identity. A separate clone does not resolve to that project, even after a launch with `workflow run --project`. Complements `workflow status` (which is active-only).
 
 ```bash
 archon workflow runs
@@ -607,10 +613,10 @@ archon workflow runs --json
 archon workflow runs --json --verbose  # add per-node state and attention to each run
 archon workflow runs --status failed   # filter to one status
 archon workflow runs --limit 50        # cap rows (default 20)
-archon workflow runs --all             # list across all projects (ignore cwd scope)
+archon workflow runs --all             # without explicit chat scope: list across all projects
 ```
 
-If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
+Without explicit chat scope, if `cwd` is an unregistered Git checkout, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 After a separate-clone launch, use `archon workflow get <full-run-id>` to inspect the run directly, or run `archon workflow runs` from the registered checkout for a project-scoped list. The global list defaults to 20 rows and may omit the run.
 
@@ -1021,7 +1027,7 @@ archon workflow attention --watch --json --all                     # stream read
 archon workflow attention --watch --json --after <cursor>          # resume a stream
 ```
 
-- **Scope.** The default is the current project, resolved from the working directory as
+- **Scope.** With explicit chat scope (`--chat-project-id <id>`), list, count and watch use the selected project regardless of the working directory. `--all` and `--project` selecting another project are rejected; the selected project's ID, name or key is accepted. Without explicit chat scope, the default is the current project, resolved from the working directory as
   [`state`](#state) resolves it. `--project` takes a codebase id, a codebase name, or a
   project key such as `@cwd/scratch-<digest>`; copy the exact key from
   `items[].project.key` in `archon workflow attention --all --json`. `--all` covers the install. A run is in scope when
@@ -1983,10 +1989,12 @@ for recovery details.
 
 ## Environment
 
+For project-scoped run management, add `--chat-project-id <registered-project-id>` to every command, for example `archon workflow get <run-id> --chat-project-id <id> --json`. Copilot and OpenCode chat receive this argument in their CLI instructions. Every full ID or prefix must match exactly one run in that project before reading or changing it. Launches and continuations must belong to that project; use `/setproject` to change projects. Run lists, status, open work, and attention list/count/watch use that project, subject to each command's CLI directory check. `--all` and an attention `--project` selecting another project are rejected. An empty or unregistered scope fails instead of falling back to install-wide queries. Scope comes from the explicit argument, so CWD and Archon env files cannot change, clear or supply it; `ARCHON_WORKFLOW_CODEBASE_ID` no longer selects a project. Without the argument, full run IDs retain their install-wide operator behavior; short prefixes resolve from the current project. This scopes run lookup, not process permissions.
+
 At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 
 On startup, the CLI:
-1. Strips keys named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+1. Strips every key named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
 2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
 3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope except `GH_CONFIG_DIR` and inherited workflow identity). Same verbosity gate as step 2. The CLI preserves the user-scope `GH_CONFIG_DIR`, including its absence; inside a workflow, an inherited login directory takes precedence over both files. See [forge configuration](/reference/forge/#plugin-configuration).
 4. Auto-enables global Claude auth if no explicit tokens are set.

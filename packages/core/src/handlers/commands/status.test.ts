@@ -195,12 +195,13 @@ describe('CommandHandler', () => {
     });
 
     describe('/status with active workflow', () => {
-      test('should show active workflow info in status', async () => {
+      test.each(['cb-123', null])('shows the active workflow in scope %s', async codebaseId => {
         const startedAt = new Date(Date.now() - 3 * 60 * 1000); // 3 minutes ago
         const lastActivity = new Date(Date.now() - 10 * 1000); // 10 seconds ago
         mockGetActiveWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
             id: 'wf-active-123',
+            codebase_id: 'cb-123',
             workflow_name: 'investigate-issue',
             started_at: startedAt,
             user_message: 'test',
@@ -208,7 +209,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/status', operator);
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: codebaseId },
+          '/status',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Active Workflow: `investigate-issue`');

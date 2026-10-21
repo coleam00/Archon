@@ -142,6 +142,7 @@ export async function runHelp({ positionals }: CliRouteContext): Promise<number>
 
 export async function runChat({ positionals, json }: CliRouteContext): Promise<number> {
   const chatMessage = positionals.slice(1).join(' ');
+  if (json) return await fail(json, 'Chat does not support --json. Use archon chat <message>.');
   if (!chatMessage) return await fail(json, 'Usage: archon chat <message>');
   const { chatCommand } = await loadRoute(() => import('../commands/chat'), {
     database: true,
@@ -454,21 +455,21 @@ async function runAiAlias(
 }
 
 export async function runTelemetry({ subcommand, json }: CliRouteContext): Promise<number> {
-  const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
-    () => import('../commands/telemetry'),
-    { providers: false }
-  );
+  const { telemetryStatusCommand, telemetryResetCommand, telemetryWorkflowNoMatchCommand } =
+    await loadRoute(() => import('../commands/telemetry'), { providers: false });
   switch (subcommand) {
     case 'status':
       return telemetryStatusCommand();
     case 'reset':
       return telemetryResetCommand();
+    case 'no-match':
+      return telemetryWorkflowNoMatchCommand();
     default: {
       const problem =
         subcommand === undefined
           ? 'Missing telemetry subcommand'
           : `Unknown telemetry subcommand: ${subcommand}`;
-      return await fail(json, `${problem}\nAvailable: status, reset`);
+      return await fail(json, `${problem}\nAvailable: status, reset, no-match`);
     }
   }
 }

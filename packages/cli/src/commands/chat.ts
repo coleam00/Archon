@@ -1,17 +1,7 @@
-/**
- * CLI chat command — send a message to the orchestrator agent
- *
- * Single-shot: streams response to stdout and exits.
- * Multi-turn conversations happen via the web UI.
- */
 import { generateConversationId } from '../utils/conversation-id';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { handleMessage } from '@archon/core';
 
-/**
- * Execute a single-shot orchestrator chat message.
- * Creates a unique conversation, streams the response to stdout, and returns.
- */
 export async function chatCommand(message: string): Promise<void> {
   const adapter = new CLIAdapter({ streamingMode: 'batch' });
   const conversationId = generateConversationId('cli-chat');
