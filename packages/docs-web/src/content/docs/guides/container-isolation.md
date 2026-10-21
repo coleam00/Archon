@@ -30,7 +30,7 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
    teardown → container + volume removed
 ```
 
-The diagram shows a normal gate pause. Failed resume setup or suspension can leave a paused run's container running; see [Pause economics](#pause-economics).
+The diagram shows a normal gate pause. Failed resume setup or suspension can leave the container running; see [Pause economics](#pause-economics).
 
 The overlay's upper layer **is** the diff by overlayfs construction, so computing what changed is a directory walk, not a tree comparison. Claude nodes run via the SDK's `spawnClaudeCodeProcess` hook into `docker exec`; `bash:`/`script:` nodes exec in the same container rather than silently falling back to host execution.
 
