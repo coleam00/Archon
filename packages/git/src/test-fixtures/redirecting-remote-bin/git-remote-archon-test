@@ -1,2 +1,0 @@
-#!/bin/sh
-exec git remote-ext "$1" "git %s $ARCHON_TEST_GIT_RECEIVER"

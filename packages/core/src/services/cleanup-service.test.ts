@@ -185,7 +185,6 @@ mock.module('@archon/git', () => ({
 }));
 
 const mockDestroy = mock<IIsolationProvider['destroy']>();
-const mockDeleteRemoteBranch = mock<typeof Isolation.deleteRemoteBranchTracked>();
 const mockGetPrState = mock<typeof Isolation.getPrState>();
 const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 const mockContainerOptions =
@@ -201,7 +200,6 @@ mock.module('@archon/isolation', () => ({
     destroy: mockDestroy,
   }),
   getPrState: mockGetPrState,
-  deleteRemoteBranchTracked: mockDeleteRemoteBranch,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -293,7 +291,6 @@ beforeEach(() => {
     directoryClean: true,
     warnings: [],
   });
-  mockDeleteRemoteBranch.mockReset().mockResolvedValue(true);
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
   mockContainerOptions.mockReset();
@@ -519,7 +516,9 @@ describe('removeEnvironment', () => {
       });
       expect(result.worktreeRemoved).toBe(true);
       expect(result.warnings.join(' ')).toContain('Remote branch retained');
-      expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
+      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
+        true
+      );
       expect(mockMarkWorktreeDestroyed).toHaveBeenCalled();
     }
   );
@@ -674,7 +673,9 @@ describe('runScheduledCleanup', () => {
         branchName: 'pr-99',
         canonicalRepoPath: '/workspace/repo',
       });
-      expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
+      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
+        true
+      );
     }
   );
 
@@ -1278,7 +1279,7 @@ describe('cleanupMergedWorktrees', () => {
       '/workspace/repo/worktrees/merged-branch',
       expect.objectContaining({ branchName: 'merged-branch' })
     );
-    expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
+    expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(true);
   });
 
   // Git proves the branch merged, but the worktree's HEAD (detached, or a branch
@@ -1593,7 +1594,9 @@ describe('onConversationClosed', () => {
       );
 
       await onConversationClosed('github', 'owner/repo#100', options);
-      expect(mockDeleteRemoteBranch).not.toHaveBeenCalled();
+      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
+        true
+      );
 
       expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-100', {
         force: false,

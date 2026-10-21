@@ -7,9 +7,6 @@ import { createHash } from 'crypto';
 
 import {
   execFileAsync,
-  resolvePushDestinations,
-  pinGitDestination,
-  type PushDestination,
   fetchWithRetry,
   listWorktrees,
   syncWorkspace,
@@ -453,27 +450,6 @@ export async function deleteBranchTracked(
   }
 }
 
-/** Read the exact advertised ref; an empty value means the branch is absent. */
-async function readRemoteBranchOid(
-  gitArgs: string[],
-  branchName: string,
-  remote: string,
-  env: NodeJS.ProcessEnv
-): Promise<string> {
-  const ref = `refs/heads/${branchName}`;
-  const { stdout } = await execFileAsync(
-    'git',
-    [...gitArgs, 'ls-remote', '--refs', '--', remote, ref],
-    { timeout: GIT_OPERATION_TIMEOUT_MS, env }
-  );
-  for (const line of stdout.trim().split('\n')) {
-    const [oid, name] = line.split('\t');
-    if (name === ref && /^[0-9a-f]{40,64}$/.test(oid)) return oid;
-  }
-  if (stdout.trim()) throw new Error(`Invalid remote advertisement for '${branchName}'`);
-  return '';
-}
-
 /**
  * Delete a remote branch and track the result. Never throws - remote branch deletion is best-effort.
  * Returns true if branch was deleted or already gone, false if deletion failed.
@@ -485,59 +461,23 @@ export async function deleteRemoteBranchTracked(
   remote = 'origin'
 ): Promise<boolean> {
   try {
-    const destinations = await resolvePushDestinations(repoPath, remote);
-    let deleted = true;
-    for (const destination of destinations) {
-      if (!(await deleteRemoteBranchAtDestination(repoPath, branchName, result, destination)))
-        deleted = false;
-    }
-    return deleted;
-  } catch {
-    result.warnings.push(
-      `Failed to delete remote branch '${branchName}': could not resolve push destinations`
-    );
-    getLog().error({ repoPath, branchName }, 'remote_branch_destination_failed');
-    return false;
-  }
-}
-
-async function deleteRemoteBranchAtDestination(
-  repoPath: string,
-  branchName: string,
-  result: DestroyResult,
-  destination: PushDestination
-): Promise<boolean> {
-  const { endpoint, env } = pinGitDestination(destination);
-  const gitArgs = ['-C', repoPath];
-  try {
-    const oid = await readRemoteBranchOid(gitArgs, branchName, endpoint, env);
-    if (!oid) return true;
-    await execFileAsync(
-      'git',
-      [
-        ...gitArgs,
-        'push',
-        endpoint,
-        `--force-with-lease=refs/heads/${branchName}:${oid}`,
-        `:refs/heads/${branchName}`,
-      ],
-      {
-        timeout: GIT_OPERATION_TIMEOUT_MS,
-        env,
-      }
-    );
+    await execFileAsync('git', ['-C', repoPath, 'push', remote, '--delete', branchName], {
+      timeout: GIT_OPERATION_TIMEOUT_MS,
+    });
     getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
     return true;
-  } catch {
+  } catch (error) {
+    const err = error as Error;
     try {
-      if (!(await readRemoteBranchOid(gitArgs, branchName, endpoint, env))) return true;
-    } catch {
-      getLog().warn({ repoPath, branchName }, 'remote_branch_delete_inspection_failed');
+      if (!(await remoteBranchExists(repoPath, remote, branchName))) return true;
+    } catch (inspectionError) {
+      getLog().warn(
+        { err: inspectionError, repoPath, branchName },
+        'remote_branch_delete_inspection_failed'
+      );
     }
-    result.warnings.push(
-      `Failed to delete remote branch '${branchName}': remote inspection or leased deletion failed`
-    );
-    getLog().error({ repoPath, branchName }, 'remote_branch_delete_failed');
+    result.warnings.push(`Failed to delete remote branch '${branchName}': ${err.message}`);
+    getLog().error({ err, repoPath, branchName }, 'remote_branch_delete_failed');
     return false;
   }
 }

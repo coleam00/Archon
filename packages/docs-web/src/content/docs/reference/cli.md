@@ -720,17 +720,8 @@ JSON; it does not masquerade as a missing historical record.
 
 When the run holds proof that it created its worktree, the record has
 `worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote, and unpublished at every push destination of the
-configured remote. Publication includes the same branch name or a non-default branch
-containing the local branch tip, even under another name. The advertised default
-branch alone does not count as publication under another name. If ancestry cannot be
-checked because an advertised commit is unavailable locally, the checkout stays with
-`check_failed`.
-If `remote.<name>.uploadpack`, `remote.<name>.receivepack`, or `remote.<name>.vcs`
-is configured for that remote, the engine cannot verify receiving endpoints: it
-retains the checkout with `check_failed` before inspecting destinations. Without
-these service overrides or transport helpers, it checks every push destination.
-The engine removes a releasable checkout after the completion write, keeping the branch. The record is written before the removal, so a
+was clean, fully on a remote and unpublished, so the engine removes it after the
+completion write, keeping the branch. The record is written before the removal, so a
 removal that is refused because work appeared in the meantime, or that fails, leaves the
 checkout and is logged. Otherwise it is
 `{ "disposition": "retained", "reason": ... }` with an optional `detail`:
@@ -743,7 +734,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | At least one push destination advertises the branch name, or a non-default branch containing its tip; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch |
+| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch, retaining the remote branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1565,20 +1556,10 @@ The scheduled cleanup keeps an environment whose checkout is missing the same wa
 the branch Archon created for it holds such a commit.
 
 A completed run removes the worktree it created when it completes, if the checkout is
-clean, every commit on its HEAD and branch is on a remote, and none of the configured
-remote's push destinations advertises the branch name or a non-default branch
-containing its tip. This also detects publication under another name; the advertised
-default branch alone does not count. Unavailable commits that prevent ancestry
-checks retain the checkout with `check_failed`.
-If `remote.<name>.uploadpack`, `remote.<name>.receivepack`, or `remote.<name>.vcs`
-is configured for that remote, receiving endpoints cannot be verified: the checkout
-stays with `check_failed` before destination inspection. Without these service
-overrides or transport helpers, the publication check reads every push destination,
-which can differ from the fetch URL.
-The removal keeps the branch, so
-the run can still be adopted. A branch advertised by a push destination waits for
-`--merged`, which removes its local branch. When any push destination cannot be read,
-the worktree stays and the record says `check_failed`. The
+clean, every commit on its HEAD and branch is on a remote, and the configured remote
+does not advertise the branch. The removal keeps the branch, so the run can still be
+adopted. A branch that was published waits for `--merged`, which removes the local
+branch and retains the remote branch with a warning. When the remote cannot be read, the worktree stays and the record says `check_failed`. The
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
 
@@ -1610,8 +1591,8 @@ git config --get-all "remote.$remote.vcs"
 ```
 
 Either service override or a transport helper can redirect Git to a repository
-other than the URL. Cleanup refuses automatic inspection in these cases. Before
-manual cleanup, verify the actual receiving repository with the service or helper owner.
+other than the URL. Before manual cleanup, verify the actual receiving repository
+with the service or helper owner.
 Use an endpoint whose upload and receive services you have verified target that
 repository; do not infer absence from the configured URL or upload service.
 The URL procedure below applies only when no service override or transport helper

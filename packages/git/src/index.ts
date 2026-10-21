@@ -89,7 +89,6 @@ export { trustRegisteredPath } from './registration-trust';
 
 export {
   inspectRemoteBranches,
-  isPushBranchPublished,
   validateBranchName,
   ConfiguredBaseBranchNotFoundError,
   InvalidBaseBranchError,
@@ -97,9 +96,3 @@ export {
 export type { RemoteBranchTarget, RemoteBranches } from './remote-branches';
 
 export { githubTokenCredentials } from './credentials';
-
-export {
-  type PushDestination,
-  resolvePushDestinations,
-  pinGitDestination,
-} from './push-destinations';
