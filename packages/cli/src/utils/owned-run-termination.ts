@@ -118,3 +118,28 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     nodeTrees?.release();
   };
 }
+
+/**
+ * Let in-flight setup settle before admission rollback. Exiting or racing setup
+ * would leave Docker work running after the claim becomes available to a successor.
+ */
+export function registerResumePreparationTermination(): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const interrupt = (signal: TerminationSignal): void => {
+    controller.abort(new Error(`Resume preparation interrupted (${signal})`));
+  };
+  const sigint = (): void => interrupt('SIGINT');
+  const sigterm = (): void => interrupt('SIGTERM');
+  process.on('SIGINT', sigint);
+  process.on('SIGTERM', sigterm);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      process.off('SIGINT', sigint);
+      process.off('SIGTERM', sigterm);
+    },
+  };
+}

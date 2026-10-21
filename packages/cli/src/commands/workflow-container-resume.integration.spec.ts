@@ -21,6 +21,7 @@ import { CLIAdapter } from '../adapters/cli-adapter';
 import * as receipts from '../utils/detached-resume-receipt';
 import { workflowRunCommand } from './workflow-run-owned';
 import * as preflight from './workflow-run-preflight';
+import * as launch from './workflow-run-launch';
 import { OwnedRunLease } from '../utils/owned-run-lease';
 
 const roots = trackTempRoots();
@@ -174,7 +175,7 @@ test('two commands with the same candidate restart only the admitted container',
     );
     try {
       await entered.promise;
-      expect(process.listenerCount('SIGTERM')).toBe(listeners);
+      expect(process.listenerCount('SIGTERM')).toBe(listeners + 1);
       expect(isRunOwnedByThisProcess(candidate.id)).toBe(false);
       const loser = f.command(candidate);
       // A second restart is allowed through to expose pre-admission provisioning.
@@ -277,6 +278,91 @@ test.each(['restart', 'credentials'] as const)(
     });
   }
 );
+
+for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lease'] as const) {
+  for (const successor of stage === 'admission' ? [false] : [false, true]) {
+    test.each(['SIGINT', 'SIGTERM'] as const)(
+      `resume interruption during ${stage} preserves ${successor ? 'successor' : 'pause'} on %s`,
+      async signal => {
+        await fixture(async f => {
+          const candidate = await f.paused('approved');
+          let events = await f.store.listWorkflowEvents(candidate.id);
+          const baseline = process.listeners(signal);
+          const entered = Promise.withResolvers<void>();
+          const finish = Promise.withResolvers<void>();
+          const block = async () => {
+            entered.resolve();
+            await finish.promise;
+          };
+          if (stage === 'admission') {
+            const resume = f.host.engine.resume.bind(f.host.engine);
+            watch(spyOn(f.host.engine, 'resume')).mockImplementationOnce(async input => {
+              await block();
+              return resume(input);
+            });
+          } else if (stage === 'restart') {
+            const restart = f.resume.getMockImplementation()!;
+            f.resume.mockImplementationOnce(async id => {
+              await block();
+              return restart(id);
+            });
+          } else if (stage === 'credentials') {
+            f.auth.mockImplementation(async (...args) => {
+              if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
+                await block();
+            });
+          } else if (stage === 'conversation') {
+            watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
+          } else watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(block);
+          const pending = f.command(candidate).catch(error => error);
+          let expected = candidate;
+          try {
+            await entered.promise;
+            if (successor) {
+              await f.store.pauseWorkflowRun(candidate.id, {
+                type: 'approval',
+                nodeId: 'successor',
+                message: 'Review',
+                pauseId: 'new-pause',
+              });
+              expected = await f.store.resumeWorkflowRun(candidate.id);
+              events = await f.store.listWorkflowEvents(candidate.id);
+            }
+            const handlers = process
+              .listeners(signal)
+              .filter(handler => !baseline.includes(handler));
+            expect(handlers).toHaveLength(1);
+            handlers[0]?.(signal);
+          } finally {
+            finish.resolve();
+          }
+          const error = await pending;
+          expect(error).toBeInstanceOf(Error);
+          const interruption = { message: `Resume preparation interrupted (${signal})` };
+          expect(error).toMatchObject({
+            cause: successor ? { cause: interruption } : interruption,
+          });
+          if (successor) expect(error.message).toContain('lost execution ownership');
+          expect(f.resume).toHaveBeenCalledTimes(stage === 'admission' ? 0 : 1);
+          expect(await f.store.getWorkflowRun(candidate.id)).toEqual(expected);
+          expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
+          expect(f.overlay.contents).toBe('unapplied edits');
+          expect(f.destroy).not.toHaveBeenCalled();
+          expect(f.suspend).not.toHaveBeenCalled();
+          expect(f.apply).not.toHaveBeenCalled();
+          expect(f.accepted).not.toHaveBeenCalled();
+          expect(f.execute).not.toHaveBeenCalled();
+          expect(process.listeners(signal)).toEqual(baseline);
+          if (!successor) {
+            f.auth.mockResolvedValue();
+            await f.command(candidate);
+            expect(f.apply).toHaveBeenCalledTimes(1);
+          }
+        });
+      }
+    );
+  }
+}
 
 test('invalid prepared options undo admission before execution', async () => {
   await fixture(async f => {

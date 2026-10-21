@@ -4,7 +4,10 @@ import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
-import { registerOwnedRunTermination } from '../utils/owned-run-termination';
+import {
+  registerOwnedRunTermination,
+  registerResumePreparationTermination,
+} from '../utils/owned-run-termination';
 import { getLog } from './workflow-shared';
 import { type OpenToolCalls, presentRunResult, workflowEventLine } from './workflow-run-output';
 import { maybePrintTierNotice } from './workflow-run-preflight';
@@ -87,7 +90,10 @@ export async function executeOwnedRun(
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
   let containerTeardownError: Error | undefined;
-  if (!defersContainerResume(launch)) registerTermination();
+  const preparationTermination = defersContainerResume(launch)
+    ? registerResumePreparationTermination()
+    : undefined;
+  if (!preparationTermination) registerTermination();
   try {
     // One-time-per-version notice when the workflow uses unconfigured tier keywords.
     await maybePrintTierNotice(
@@ -102,19 +108,34 @@ export async function executeOwnedRun(
     // Progress lines render from the run's committed rows, its sub-runs' included.
     // Subscribed before submit or resume so the run's first row cannot be missed.
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
-    const prepareExecution = defersContainerResume(launch)
+    preparationTermination?.signal.throwIfAborted();
+    const prepareExecution = preparationTermination
       ? async (run: WorkflowRun) => {
+          preparationTermination.signal.throwIfAborted();
           await provisionWorkspace(launch, lease, run);
+          preparationTermination.signal.throwIfAborted();
           await recordConversationLaunch(launch);
+          preparationTermination.signal.throwIfAborted();
           await lease.start(ownedRunId);
+          preparationTermination.signal.throwIfAborted();
           registerTermination();
+          preparationTermination.dispose();
           return { cwd: workspace.workingCwd, options: commonRunOptions(launch) };
         }
       : undefined;
     if (!prepareExecution) await lease.start(ownedRunId);
     execution.result = await driveRun(launch, lease, prepareExecution);
   } finally {
-    containerTeardownError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
+    try {
+      containerTeardownError = await settleRun(
+        launch,
+        execution,
+        ownedRunId,
+        deregisterTermination
+      );
+    } finally {
+      preparationTermination?.dispose();
+    }
   }
   const { result } = execution;
 
