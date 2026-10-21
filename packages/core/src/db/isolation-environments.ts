@@ -4,6 +4,7 @@
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
+  type WorkflowRunStatus,
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -19,6 +20,7 @@ import type {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
@@ -439,7 +441,7 @@ export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
   excludeRunId?: string
-): Promise<{ id: string; status: string } | null> {
+): Promise<{ id: string; status: WorkflowRunStatus } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
   const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
@@ -487,7 +489,8 @@ export async function getLiveRunOwningEnv(
      LIMIT 1`,
     params
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? { id: row.id, status: readWorkflowRunStatus(row.id, row.status) } : null;
 }
 
 /**
@@ -590,10 +593,9 @@ export async function listByCodebaseWithAge(
 
 /**
  * List active CONTAINER isolation environments (folder-project container backend),
- * newest first, with the codebase name and age in days. Used by `isolation
- * list/cleanup` to surface + reap containers; the run status (which decides
- * whether a container is reapable) is looked up per-row via
- * {@link import('./workflows').getRunByIsolationEnvId}.
+ * newest first, with the codebase name and age in days. This inventory serves
+ * both listing and cleanup. Listing's environment-ID run match is display-only;
+ * cleanup separately checks wider ownership via {@link getLiveRunOwningEnv}.
  */
 export async function listActiveContainerEnvironments(): Promise<
   readonly (IsolationEnvironmentRow & {

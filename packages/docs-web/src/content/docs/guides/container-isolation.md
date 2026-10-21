@@ -88,7 +88,7 @@ Container pauses are only resumable **from the CLI**, where the Docker backend i
 
 Precedence: `--container` flag > workflow `container.enabled` > config `container.enabled` > off. See [configuration](/reference/configuration/#container-isolation-folder-projects) for the `container:` config block (image, network, memory, pids) and the `container.write_back` workflow policy.
 
-`archon isolation list` shows active container environments (a paused run's container appears here with its age and is **never** auto-pruned); `archon isolation cleanup` reaps the containers + volumes of terminal or orphaned runs older than the threshold.
+`archon isolation list` shows active container environments (a paused run's container appears here with its age and is **never** auto-pruned). `archon isolation cleanup` reaps containers and volumes older than the threshold only when no claimable run owns the environment and platform policy permits removal. The displayed run status or `no run (orphan)` label does not establish eligibility: cleanup checks run metadata, conversation links, and same-codebase checkout paths. If that ownership lookup fails, cleanup reports the error and skips removal.
 
 ## Provider support
 
