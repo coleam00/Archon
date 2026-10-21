@@ -30,6 +30,7 @@ import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
+  type Decision,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -40,10 +41,11 @@ import {
   type PrFacts,
   readBase,
   readPr,
+  readSweep,
+  type Sweep,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { readSweep, type Sweep, type SweepDecision as Decision } from '../../.shared/merge-sweep.generated.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
 const OWN_PR_PARK = 'Stops queue work until a later sweep observes a different head from the head asked about.';

@@ -29,18 +29,6 @@ nodes:
 
 The bundled `sdlc` pack in [`.archon/workflows/sdlc/`](https://github.com/coleam00/Archon/tree/dev/.archon/workflows/sdlc) is the largest working example. To start from it, copy the whole pack folder: its workflows include each other and share modules in `sdlc/.shared/`. A same-named workflow in your `.archon/workflows/` overrides the bundled one.
 
-If you edit the merge queue's `sweep.output_format`, regenerate its TypeScript
-contract with Bun from your project root:
-
-```sh
-bun run .archon/workflows/sdlc/.shared/generate-merge-sweep-contract.ts
-bun run .archon/workflows/sdlc/.shared/generate-merge-sweep-contract.ts --check
-```
-
-Add the `--check` command to your project's validation to reject a missing or stale
-contract. Both commands use the copied pack's own YAML and generated module and
-need no project dependencies. Adjust the path if you copy the pack elsewhere.
-
 ## File Location
 
 Workflows live in `.archon/workflows/` relative to the working directory:

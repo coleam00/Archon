@@ -31,7 +31,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     commands: [
       ['bun', 'run', 'check:pi-vendor-map'],
       ['bun', 'run', 'check:capability-matrix'],
-      ['bun', 'run', 'check:merge-sweep-contract'],
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
