@@ -48,6 +48,39 @@ describe('CommandHandler', () => {
     expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
   });
 
+  test.each([
+    ['/workflow cancel', 'cb-old'],
+    ['/workflow cancel', null],
+    ['/status', 'cb-old'],
+    ['/status', null],
+  ])(
+    '%s ignores an active run from %s after the conversation changes project',
+    async (command, runCodebaseId) => {
+      const oldConversation = makeConversation({ codebase_id: runCodebaseId });
+      const reboundConversation = { ...oldConversation, codebase_id: 'cb-new' };
+      const oldRun = makeWorkflowRun({
+        id: 'old-project-run',
+        workflow_name: 'old-project-workflow',
+        conversation_id: oldConversation.id,
+        codebase_id: oldConversation.codebase_id,
+      });
+      mockGetActiveWorkflowRun.mockResolvedValueOnce(oldRun);
+
+      const result = await handleCommand(reboundConversation, command, operator);
+
+      expect(result.success).toBe(true);
+      expect(mockGetActiveWorkflowRun).toHaveBeenCalledWith(oldConversation.id);
+      expect(result.message).not.toContain(oldRun.workflow_name);
+      expect(result.message).not.toContain(oldRun.id);
+      expect(result.message).not.toContain('Cancel:');
+      expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+      if (command === '/workflow cancel') {
+        expect(result.message).toBe('No active workflow to cancel.');
+      }
+    }
+  );
+
   test.each(['cancel', 'resume', 'abandon', 'approve', 'reject', 'respond', 'get'])(
     'refuses a foreign full run ID for /workflow %s before any global lookup',
     async command => {
@@ -139,6 +172,7 @@ describe('CommandHandler', () => {
         return makeWorkflowRun({
           id,
           workflow_name: 'test-workflow',
+          codebase_id: conversationWithCodebase.codebase_id,
           status: 'running' as const,
           user_message: 'test',
           last_activity_at: new Date(),
@@ -146,29 +180,34 @@ describe('CommandHandler', () => {
         });
       }
 
-      test('cancels cooperatively the active run this process executes', async () => {
-        // A real endpoint published by this process, as the server's own runs have.
-        const runId = `chat-cancel-${crypto.randomUUID()}`;
-        const owner = await startRunLiveOwner(runId);
-        try {
-          mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
-          mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
-          mockRequestDetachedRunStop.mockClear();
+      test.each(['codebase-123', null])(
+        'cancels cooperatively the active run in scope %s',
+        async codebaseId => {
+          // A real endpoint published by this process, as the server's own runs have.
+          const runId = `chat-cancel-${crypto.randomUUID()}`;
+          const owner = await startRunLiveOwner(runId);
+          try {
+            mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
+            mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
+            mockRequestDetachedRunStop.mockClear();
 
-          const result = await handleCommand(
-            conversationWithCodebase,
-            '/workflow cancel',
-            operator
-          );
+            const result = await handleCommand(
+              { ...conversationWithCodebase, codebase_id: codebaseId },
+              '/workflow cancel',
+              operator
+            );
 
-          expect(result.success).toBe(true);
-          expect(result.message).toBe('Cancelled workflow: `test-workflow`');
-          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
-          expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-        } finally {
-          await owner.close();
+            expect(result.success).toBe(true);
+            expect(result.message).toBe('Cancelled workflow: `test-workflow`');
+            expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
+              cancel_reason: 'operator',
+            });
+            expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+          } finally {
+            await owner.close();
+          }
         }
-      });
+      );
 
       test('cancels the run the id names, not the active one (and resolves a short id)', async () => {
         const target = runningRun(`abcd1234-${crypto.randomUUID()}`);

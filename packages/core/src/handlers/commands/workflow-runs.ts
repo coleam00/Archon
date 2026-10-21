@@ -62,6 +62,11 @@ export async function resolveChatRunId(arg: string, conversation: Conversation):
   return run.id;
 }
 
+export async function getActiveChatWorkflowRun(conversation: Conversation) {
+  const run = await workflowDb.getActiveWorkflowRun(conversation.id);
+  return conversation.codebase_id && run?.codebase_id !== conversation.codebase_id ? null : run;
+}
+
 /** What a run needs from the operator, and the commands that answer it, one line each. */
 function runAttentionLines(
   run: Parameters<typeof runAttention>[0] & { id: string },
@@ -93,7 +98,7 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
   try {
     runId = runId
       ? await resolveChatRunId(runId, conversation)
-      : (await workflowDb.getActiveWorkflowRun(conversation.id))?.id;
+      : (await getActiveChatWorkflowRun(conversation))?.id;
     if (!runId) {
       return { success: true, message: 'No active workflow to cancel.' };
     }
