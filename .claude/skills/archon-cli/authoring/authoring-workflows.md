@@ -106,15 +106,18 @@ Work through these questions in order, with the user where marked:
 9. **Validate** before any real run. None of these steps spends on a model:
 
    ```bash
-   archon validate workflows <name>                        # schema, references, command files
-   archon workflow run <name> --dry-run --stubs-init <pack>/<name>/fixtures/<case>.stubs.yaml
-   archon workflow run <name> --dry-run --stubs <pack>/<name>/fixtures/<case>.stubs.yaml
-   archon workflow test <name>                             # every declared fixture
+   archon validate workflows <name>                    # schema, references, command files
+   archon workflow run <name> --dry-run --stubs-init stubs.yaml   # scratch stub scaffold
+   archon workflow run <name> --dry-run --stubs stubs.yaml
+   archon workflow test <name>                         # every declared fixture
    ```
 
-   `--stubs-init` writes a stub scaffold to fill in. A dry run walks the graph with
-   stubbed node outputs and prints each node's resolved provider and model; add
-   `--exec-code` only for trusted `bash:` and `script:` nodes. Then make a planted
+   `--stubs-init` writes a stub scaffold to fill in. Keep it outside `fixtures/`: a
+   dry-run stub file is not a fixture. A fixture file declares a `fixture:` block, and
+   `--stubs` refuses it ("this is a fixture file; run it with 'workflow test'"). Copy
+   the stub values you need into a fixture and run it with `workflow test`. A dry run
+   walks the graph with stubbed node outputs and prints each node's resolved provider
+   and model; add `--exec-code` only for trusted `bash:` and `script:` nodes. Then make a planted
    bad case fail: a fixture that never went red proves nothing. Finish with one real
    run on a genuine task.
 

@@ -147,8 +147,8 @@ with a warning. A schemaless child stays schemaless. Fan-out returns an ordered
 array of item values; consume the whole aggregate, not a field on the array.
 
 For field-access and file-pointer rules, read `variables.md` → Node Output Details and
-Artifact pointers. The repository's `guides/authoring-workflows.md` → Result
-contracts gives the full composition examples.
+Artifact pointers. The docs' `reference/workflow-language.md` → Result contracts
+gives the full composition examples.
 
 ### loop — iterate ONE AI job
 
