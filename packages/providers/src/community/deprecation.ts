@@ -13,3 +13,12 @@ export function deprecatedForRemovalNotice(name: string): string {
     'https://archon.diy/guides/publishing-plugins/'
   );
 }
+
+/** Chat providers without native tools use the detached CLI until removal. */
+export function deprecatedChatProviderNotice(name: string): string {
+  return (
+    deprecatedForRemovalNotice(name) +
+    ' Chat workflow launches use the detached CLI and are headless: they use CLI identity, ' +
+    'return a run ID for inspection, and do not deliver progress or results to the originating chat.'
+  );
+}

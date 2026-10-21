@@ -1,4 +1,4 @@
-import type { createRunToolCallAttention } from './tool-call-attention';
+import type { createRunToolCallAttention, StreamStall } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
  * loops (the agent node and the loop node, under `dag/nodes/`) hand every event to one
@@ -80,6 +80,8 @@ export interface ProviderEventHandler {
   handle(event: ProviderEvent): Promise<void>;
   /** Subtasks that started and have not ended: the work a stream cut short would lose. */
   liveSubtaskIds(): string[];
+  /** This pass's attention stall while its stalled calls are on the run row. */
+  stall(): StreamStall | undefined;
   hasOpenTools(): boolean;
   refreshAttention(): Promise<void>;
   clearAttention(): Promise<void>;
@@ -189,6 +191,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
       }
     },
     hasOpenTools: () => deps.toolAttention.hasOpenTools(),
+    stall: () => deps.toolAttention.stall(),
     refreshAttention: async (): Promise<void> => {
       await deps.toolAttention.refresh();
     },

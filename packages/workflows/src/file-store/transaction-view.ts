@@ -329,6 +329,13 @@ export function createTransactionView(
         working_path: run.working_path ?? updates.working_path ?? null,
       });
     },
+    updateWorkflowRunMetadataIfRunning: async (id, metadata) => {
+      validateWorkflowWaitMetadata(metadata);
+      const run = runs.get(id);
+      if (run?.status !== 'running') return false;
+      Object.assign(run.metadata, structuredClone(metadata));
+      return true;
+    },
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
       const run = runs.get(id);
       if (run) run.last_activity_at = new Date();
@@ -673,16 +680,14 @@ export function createTransactionView(
       const run = structuredClone(runs.get(id));
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = cancellation;
       await terminal(
         run,
         {
           workflow_run_id: id,
           event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
-          step_name: cancellation.step_name,
-          data: {
-            cancel_reason: 'approval_rejected',
-            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
-          },
+          step_name,
+          data: { ...data, cancel_reason: 'approval_rejected' },
         },
         gateEvents.map(event => ({ ...event, workflow_run_id: id }))
       );
@@ -715,14 +720,12 @@ export function createTransactionView(
       if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = details ?? {};
       await terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
-        step_name: details?.step_name,
-        data: {
-          ...(details?.reason === undefined ? {} : { reason: details.reason }),
-          ...(details?.cancel_reason === undefined ? {} : { cancel_reason: details.cancel_reason }),
-        },
+        step_name,
+        data,
       });
       return { cancelled: true };
     },
@@ -765,10 +768,11 @@ export function createTransactionView(
       record({ workflow_run_id: id, event_type: 'workflow_resumed' });
       return structuredClone(run);
     },
-    releaseRunForUnreadableSource: async (id, release) => {
+    releaseRunForUnreadableSource: async (id, release, beforePublish) => {
       const run = row(id);
       if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)
         return { released: false };
+      await beforePublish?.();
       run.status = 'paused';
       run.last_activity_at = new Date();
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));

@@ -138,6 +138,7 @@ export {
   captureArchonStarted,
   captureArchonActive,
   captureChatTurn,
+  captureWorkflowNoMatch,
   captureApprovalResolved,
   captureCodebaseRegistered,
   captureWorkflowTerminal,

@@ -609,7 +609,10 @@ then the project's file, whose lines win where the two conflict.
   verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch,
   and its question offers no `return`. The record never hands one to the build queue.
-  The queue never starts that run itself.
+  The queue never starts that run itself. An own-PR item answered `park` or `other`
+  waits again only when its current head differs from its latest merge decision's
+  head. At the same head it stays parked. Merged own-PR items and other kinds of
+  settlement, including unreadable and superseded parks, do not recover this way.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -617,7 +620,10 @@ then the project's file, whose lines win where the two conflict.
   else can post a verdict. A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
-  read resets that sequence even if later work fails.
+  read resets that sequence even if later work fails. An unreadable own-PR park stays
+  parked; it is not an answered park. To reconsider an answered own-PR park, facts
+  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
+  read leaves that unclaimed item unchanged and reports the error.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default
@@ -676,14 +682,19 @@ then the project's file, whose lines win where the two conflict.
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. Every pull-request item also offers `other`, which returns the pull request to
-  the build queue with the answer's text as the ruling. A red default branch is only
+  links. Every pull-request item also offers `other`; for a build item, it returns
+  the pull request to the build queue with the answer's text as the ruling. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue, whose next round starts at once; `park` stops working it until the build queue readies it
-  again. Any other ask waits for a later sweep, which decides it again.
+  again. For an own PR, both `park` and `other` stop queue work until a later sweep
+  observes a different head from the one asked about. The `other` answer stays on
+  the work item as its ruling; it writes no issue body and starts no build round.
+  New CI or review results at the same head do not unpark it. Approval remains pinned
+  to its approved head, subject to the existing conflict-only carry rule. Any other
+  ask waits for a later sweep, which decides it again.
 
 The pack installs no binding. A schedule sweeps the queue. A run never changes its
 checkout, and the claim keeps two runs off the same item:
@@ -782,9 +793,17 @@ back:
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
-removes each worktree whose pull request merged, with the branch Archon created and its
-remote branch. A worktree with uncommitted changes, a run that can still claim it, or a
-commit its pull request did not carry stays and is reported. With `include_closed: "true"`
+removes each worktree whose pull request merged, with its local branch. Remote
+branches are retained with a warning: after registration retirement, a Git commit
+ID cannot prove whether the branch belongs to a replacement registration. Force
+does not bypass this refusal. For manual cleanup, follow the
+[remote branch recovery procedure](https://archon.diy/reference/cli/#recovering-remote-branch-cleanup)
+in the CLI reference. It covers destination inspection, ownership verification and leased deletion.
+On GitHub, enable **Automatically delete head branches** in repository settings to have
+GitHub remove merged pull requests' branches automatically.
+
+A worktree with uncommitted changes, a run
+that can still claim it, or a commit its pull request did not carry stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 

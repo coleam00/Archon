@@ -137,7 +137,9 @@ export async function* streamMultiAgentOpencodeSession(
 
   getLog().info({ nodeId, agentCount: agents.length, cwd }, 'opencode.multi_agent_starting');
 
+  requestOptions?.abortSignal?.throwIfAborted();
   const events = await client.event.subscribe({ query: { directory: cwd } });
+  requestOptions?.abortSignal?.throwIfAborted();
   getLog().info({ nodeId }, 'opencode.multi_agent_events_subscribed');
   const streamController = new AbortController();
   const sessionToAgent = new Map<string, AgentRunState>();
@@ -195,10 +197,13 @@ export async function* streamMultiAgentOpencodeSession(
       })
     );
 
+    requestOptions?.abortSignal?.throwIfAborted();
+
     // Phase 2: Fire all prompts in parallel
     getLog().info({ nodeId, sessionCount: states.length }, 'opencode.multi_agent_prompting');
     await Promise.all(
       states.map(async state => {
+        requestOptions?.abortSignal?.throwIfAborted();
         const agentRequestOptions = withAgentNodeConfig(requestOptions, state.agent);
         const promptBody = createSessionPromptBody(prompt, model, agentRequestOptions, state.agent);
         getLog().info(

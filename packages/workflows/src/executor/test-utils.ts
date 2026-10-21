@@ -208,6 +208,9 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     recordWorkflowRunCheckoutBaseline: mock(
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
+    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
+      async () => true
+    ),
     updateWorkflowRun: mock(async () => undefined),
     failWorkflowRun: mock(async () => ({ failed: true })),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
@@ -367,6 +370,7 @@ export const repoCodebase = {
 export function containerBackend(): NonNullable<ExecuteWorkflowOptions['container']>['backend'] {
   return {
     suspend: mock(async () => undefined),
+    prepareSuspend: mock(async () => mock(async () => undefined)),
     finalize: mock(async () => ({ requiresApproval: false })),
     applyChanges: mock(async () => ({ filesApplied: 0, filesDeleted: 0, warnings: [] })),
     discardChanges: mock(async () => undefined),

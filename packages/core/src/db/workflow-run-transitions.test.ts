@@ -508,6 +508,24 @@ describe('workflow run transitions', () => {
       });
     });
 
+    test('persists cancellation warnings without truncation', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockTerminalSnapshot('cancelled');
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const warnings = [`${'Held output. '.repeat(30)}Use lsof on the checkout.`];
+      await cancelWorkflowRun('workflow-run-123', {
+        cancel_reason: 'operator',
+        reason: warnings.join('\n'),
+        warnings,
+      });
+      const params = mockQuery.mock.calls[3]?.[1];
+      if (!Array.isArray(params)) throw new Error('Missing cancellation event');
+      const data: Record<string, unknown> = JSON.parse(String(params[5]));
+      expect(data.reason).toBe(warnings[0]);
+      expect(params[2]).toBe('workflow_cancelled');
+      expect(data.warnings).toEqual(warnings);
+    });
+
     test('reports { cancelled: false } when the run is already terminal (no throw)', async () => {
       // UPDATE matches nothing because the run is completed/cancelled
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));

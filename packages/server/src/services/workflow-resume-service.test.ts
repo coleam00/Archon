@@ -58,7 +58,11 @@ const mockStartRunLiveOwner = mock<
   typeof import('@archon/core/services/run-live-owner')['startRunLiveOwner']
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
-  return { close: mockCloseRunLiveOwner, isStopRequested: () => false };
+  return {
+    close: mockCloseRunLiveOwner,
+    isStopRequested: () => false,
+    registerTerminationPreparation: () => () => undefined,
+  };
 });
 const mockStoreFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({
   failed: true,

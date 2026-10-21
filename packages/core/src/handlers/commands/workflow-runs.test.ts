@@ -4,6 +4,7 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import { handleCommand } from '../command-handler';
+import { resolveChatRunId } from './workflow-runs';
 import { startRunLiveOwner } from '../../services/run-live-owner';
 import {
   operator,
@@ -36,6 +37,120 @@ describe('CommandHandler', () => {
   afterAll(() => {
     restoreSpies();
   });
+
+  test('resolves an undashed full UUID within the conversation project', async () => {
+    const id = 'abcdef00-1111-2222-3333-444455556666';
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([makeWorkflowRun({ id })]);
+    expect(
+      await resolveChatRunId(id.replaceAll('-', ''), makeConversation({ codebase_id: 'cb-1' }))
+    ).toBe(id);
+    expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
+  });
+
+  test.each([
+    ['/workflow cancel', 'cb-old'],
+    ['/workflow cancel', null],
+    ['/status', 'cb-old'],
+    ['/status', null],
+  ])(
+    '%s ignores an active run from %s after the conversation changes project',
+    async (command, runCodebaseId) => {
+      const oldConversation = makeConversation({ codebase_id: runCodebaseId });
+      const reboundConversation = { ...oldConversation, codebase_id: 'cb-new' };
+      const oldRun = makeWorkflowRun({
+        id: 'old-project-run',
+        workflow_name: 'old-project-workflow',
+        conversation_id: oldConversation.id,
+        codebase_id: oldConversation.codebase_id,
+      });
+      mockGetActiveWorkflowRun.mockImplementationOnce(async (_conversationId, codebaseId) =>
+        !codebaseId || oldRun.codebase_id === codebaseId ? oldRun : null
+      );
+
+      const result = await handleCommand(reboundConversation, command, operator);
+
+      expect(result.success).toBe(true);
+      expect(mockGetActiveWorkflowRun).toHaveBeenCalledWith(oldConversation.id, 'cb-new');
+      expect(result.message).not.toContain(oldRun.workflow_name);
+      expect(result.message).not.toContain(oldRun.id);
+      expect(result.message).not.toContain('Cancel:');
+      expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+      if (command === '/workflow cancel') {
+        expect(result.message).toBe('No active workflow to cancel.');
+      }
+    }
+  );
+
+  test.each([
+    ['/workflow cancel', 'cb-current'],
+    ['/workflow cancel', null],
+    ['/status', 'cb-current'],
+    ['/status', null],
+  ])('%s selects the newest run within scope %s', async (command, codebaseId) => {
+    const current = makeWorkflowRun({
+      id: `current-${crypto.randomUUID()}`,
+      workflow_name: 'current-project-workflow',
+      codebase_id: 'cb-current',
+      started_at: new Date('2026-10-21T10:00:00Z'),
+    });
+    const foreign = makeWorkflowRun({
+      id: 'foreign-run',
+      workflow_name: 'foreign-project-workflow',
+      codebase_id: 'cb-foreign',
+      started_at: new Date('2026-10-21T11:00:00Z'),
+    });
+    mockGetActiveWorkflowRun.mockImplementationOnce(
+      async (_conversationId, codebaseId) =>
+        [foreign, current].find(run => !codebaseId || run.codebase_id === codebaseId) ?? null
+    );
+    const selected = codebaseId ? current : foreign;
+    if (command === '/workflow cancel') mockGetWorkflowRun.mockResolvedValueOnce(selected);
+    const owner = await startRunLiveOwner(selected.id);
+    try {
+      const result = await handleCommand(
+        makeConversation({ codebase_id: codebaseId }),
+        command,
+        operator
+      );
+      expect(result.success).toBe(true);
+      expect(result.message).toContain(selected.workflow_name);
+      expect(result.message).not.toContain(
+        codebaseId ? foreign.workflow_name : current.workflow_name
+      );
+      if (command === '/workflow cancel') {
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(selected.id, {
+          cancel_reason: 'operator',
+        });
+      } else {
+        expect(result.message).toContain('Cancel: `/workflow cancel`');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+      }
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test.each(['cancel', 'resume', 'abandon', 'approve', 'reject', 'respond', 'get'])(
+    'refuses a foreign full run ID for /workflow %s before any global lookup',
+    async command => {
+      const id = 'abcdef00-1111-2222-3333-444455556666';
+      mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+
+      const result = await handleCommand(
+        makeConversation({ codebase_id: 'cb-1' }),
+        `/workflow ${command} ${id} approve`,
+        operator
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Workflow run not found');
+      expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
+      expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   describe('handleCommand', () => {
     describe('/workflow reset-sessions', () => {
@@ -108,6 +223,7 @@ describe('CommandHandler', () => {
         return makeWorkflowRun({
           id,
           workflow_name: 'test-workflow',
+          codebase_id: conversationWithCodebase.codebase_id,
           status: 'running' as const,
           user_message: 'test',
           last_activity_at: new Date(),
@@ -115,29 +231,34 @@ describe('CommandHandler', () => {
         });
       }
 
-      test('cancels cooperatively the active run this process executes', async () => {
-        // A real endpoint published by this process, as the server's own runs have.
-        const runId = `chat-cancel-${crypto.randomUUID()}`;
-        const owner = await startRunLiveOwner(runId);
-        try {
-          mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
-          mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
-          mockRequestDetachedRunStop.mockClear();
+      test.each(['codebase-123', null])(
+        'cancels cooperatively the active run in scope %s',
+        async codebaseId => {
+          // A real endpoint published by this process, as the server's own runs have.
+          const runId = `chat-cancel-${crypto.randomUUID()}`;
+          const owner = await startRunLiveOwner(runId);
+          try {
+            mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
+            mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
+            mockRequestDetachedRunStop.mockClear();
 
-          const result = await handleCommand(
-            conversationWithCodebase,
-            '/workflow cancel',
-            operator
-          );
+            const result = await handleCommand(
+              { ...conversationWithCodebase, codebase_id: codebaseId },
+              '/workflow cancel',
+              operator
+            );
 
-          expect(result.success).toBe(true);
-          expect(result.message).toBe('Cancelled workflow: `test-workflow`');
-          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
-          expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-        } finally {
-          await owner.close();
+            expect(result.success).toBe(true);
+            expect(result.message).toBe('Cancelled workflow: `test-workflow`');
+            expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
+              cancel_reason: 'operator',
+            });
+            expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+          } finally {
+            await owner.close();
+          }
         }
-      });
+      );
 
       test('cancels the run the id names, not the active one (and resolves a short id)', async () => {
         const target = runningRun(`abcd1234-${crypto.randomUUID()}`);
@@ -191,15 +312,32 @@ describe('CommandHandler', () => {
         mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockGetWorkflowRun.mockResolvedValueOnce(runningRun('wf-detached'));
         mockRequestDetachedRunStop.mockImplementationOnce(() =>
-          Promise.resolve({ pid: 4242, stop: () => Promise.resolve(), release: () => undefined })
+          Promise.resolve({
+            pid: 4242,
+            stop: () =>
+              Promise.resolve({
+                warnings: [
+                  'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+                ],
+              }),
+            release: () => undefined,
+          })
         );
 
         const result = await handleCommand(conversationWithCodebase, '/workflow cancel', operator);
 
         expect(result.success).toBe(true);
+        expect(result.message).toContain(
+          'Some process still holds node output; it was not signalled. Use lsof on the checkout.'
+        );
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached', {
           cancel_reason: 'operator',
+          reason:
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          warnings: [
+            'Some process still holds node output; it was not signalled. Use lsof on the checkout.',
+          ],
         });
       });
 
@@ -279,15 +417,13 @@ describe('CommandHandler', () => {
 
       test('does not show a run that belongs to another project', async () => {
         mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
-        mockGetWorkflowRun.mockResolvedValueOnce(
-          makeWorkflowRun({ id: 'run-other', codebase_id: 'other-project' })
-        );
         const conversation = makeConversation({ ...baseConversation, codebase_id: 'codebase-123' });
 
         const result = await handleCommand(conversation, '/workflow get run-other', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Workflow run not found');
+        expect(mockGetWorkflowRun).not.toHaveBeenCalled();
       });
 
       test('reports a missing run', async () => {
@@ -301,6 +437,38 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow status', () => {
+      test.each(['cb-1', null])('lists only the selected scope (%s)', async codebaseId => {
+        const runs = [
+          makeDashboardRun({ id: 'own-run', codebase_id: 'cb-1' }),
+          makeDashboardRun({ id: 'foreign-run', codebase_id: 'cb-2' }),
+        ];
+        mockListDashboardRuns.mockImplementationOnce(async options => {
+          const visible = runs.filter(
+            run => !options?.codebaseId || run.codebase_id === options.codebaseId
+          );
+          return { runs: visible, total: visible.length, counts: EMPTY_DASHBOARD_COUNTS };
+        });
+
+        const result = await handleCommand(
+          makeConversation({ codebase_id: codebaseId }),
+          '/workflow status',
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('own-run');
+        if (codebaseId) {
+          expect(result.message).not.toContain('foreign-run');
+        } else {
+          expect(result.message).toContain('foreign-run');
+        }
+        expect(mockListDashboardRuns).toHaveBeenLastCalledWith({
+          status: ['running', 'paused'],
+          limit: 50,
+          ...(codebaseId ? { codebaseId } : {}),
+        });
+      });
+
       test('should show all running workflows', async () => {
         const startedAt = new Date(Date.now() - 2 * 60 * 1000);
         mockListDashboardRuns.mockResolvedValueOnce({

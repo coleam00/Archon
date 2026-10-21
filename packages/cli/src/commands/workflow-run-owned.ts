@@ -1,8 +1,10 @@
+import { OwnedRunLease } from '../utils/owned-run-lease';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { withCapturedSource } from '@archon/workflows/run-source';
 import {
   claimDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
+  DETACHED_LAUNCH_TOKEN_ENV,
 } from '../utils/detached-run-control';
 import { consumeDetachedResumeReceiptRequest } from '../utils/detached-resume-receipt';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
@@ -22,7 +24,6 @@ import {
 } from './workflow-run-admission';
 import {
   launchDetachedOwnedRun,
-  OwnedRunLease,
   prepareForegroundLaunch,
   provisionWorkspace,
   recordConversationLaunch,
@@ -92,28 +93,39 @@ export async function workflowRunCommand(
   const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
   if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
 
+  const launchToken = process.env[DETACHED_LAUNCH_TOKEN_ENV];
+  Reflect.deleteProperty(process.env, DETACHED_LAUNCH_TOKEN_ENV);
+
   const notifyResumeAccepted = consumeDetachedResumeReceiptRequest((runId, error) => {
     getLog().warn({ err: error, runId }, 'cli.detached_resume_receipt_failed');
   });
 
+  const processClaim = detachedProcessOwner ? claimDetachedRunProcessOwner() : undefined;
   let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
     try {
-      // Inside the try so a refused owner claim still records the `pending` row
-      // the launcher handed over (#2872) instead of stranding it.
-      if (detachedProcessOwner) await claimDetachedRunProcessOwner();
+      await processClaim;
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource({
           host,
           owner,
           ...attempt,
           detachedProcessOwner,
+          launchToken,
           notifyResumeAccepted,
         })
       );
     } catch (error) {
-      await recordDetachedChildStartupFailure(host, options.detachedRunId, error as Error);
+      await recordDetachedChildStartupFailure(
+        host,
+        {
+          detachedRunId: options.detachedRunId,
+          detachedProcessOwner,
+          launchToken,
+        },
+        error as Error
+      );
       if (isResumeSuperseded(error)) {
         getLog().info(
           { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },

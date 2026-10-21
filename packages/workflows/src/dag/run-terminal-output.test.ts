@@ -600,7 +600,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       );
       try {
         await secondStarted;
-        expect(failures).toBe(4);
+        expect(failures).toBe(5);
         expect(snapshots.get(firstStream!)).toEqual([]);
         expect(workflowRun.status).toBe('running');
         expect(store.failWorkflowRun).not.toHaveBeenCalled();

@@ -2,7 +2,7 @@
  * Database operations for isolation environments
  */
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
@@ -261,8 +261,13 @@ function observedRegistrationPredicate(
   const $ = (offset: number): string => `$${String(first + offset)}`;
   const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const sqlite = getDatabaseType() === 'sqlite';
-  const sql = ` AND provider = 'worktree'
-       AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
+  const tokenSql = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
+  const sql = ` AND provider = 'worktree'${
+    !legacy && !sqlite
+      ? ` AND jsonb_typeof(metadata->'${WORKTREE_REGISTRATION_ID}') = 'string'`
+      : ''
+  }
+       AND ${legacy ? `COALESCE(${tokenSql}, '')` : tokenSql} = ${$(0)}
        AND working_path = ${$(1)}${
          legacy
            ? `
@@ -308,9 +313,12 @@ function observedRegistrationPredicate(
 }
 
 /** Mark only the observed worktree registration destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+export async function markWorktreeDestroyed(
+  observed: IsolationEnvironmentRow,
+  query: typeof pool.query = pool.query.bind(pool)
+): Promise<void> {
   const predicate = observedRegistrationPredicate(observed, 2);
-  const result = await pool.query(
+  const result = await query(
     `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
      WHERE id = $1${predicate.sql}`,
     [observed.id, ...predicate.params]
@@ -320,6 +328,30 @@ export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): 
   }
   getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
 }
+
+/**
+ * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
+ * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
+ * The callback must use the supplied retirement callback, not the pooled connection.
+ */
+export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
+  observed,
+  remove
+) => {
+  const predicate = observedRegistrationPredicate(observed, 2);
+  return getDatabase().withTransaction(
+    async query => {
+      const locked = await query(
+        `UPDATE remote_agent_isolation_environments SET status = status
+       WHERE id = $1 AND status = 'active'${predicate.sql}`,
+        [observed.id, ...predicate.params]
+      );
+      if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
+      return remove(() => markWorktreeDestroyed(observed, query));
+    },
+    { retryOnBusy: 'first-statement' }
+  );
+};
 
 /**
  * Update environment metadata (merge with existing)
@@ -595,6 +627,7 @@ export function createIsolationStore(): IIsolationStore {
     updateStatus,
     updateMetadata,
     markWorktreeDestroyed,
+    withWorktreeRegistration,
     countActiveByCodebase,
   };
 }

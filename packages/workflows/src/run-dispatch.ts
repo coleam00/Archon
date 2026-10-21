@@ -1,3 +1,4 @@
+import { resolveRunExecutionMode, type RunExecutionMode } from './container-context';
 import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { requireProvider } from '@archon/provider-contract';
@@ -36,6 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** What a run executes with, settled before its row is created or claimed. */
 export interface RunDispatch {
+  execution: RunExecutionMode;
   /** The row's owner on a continuation, the invoking user otherwise. */
   executionUserId: string | undefined;
   /** A resume of a run that already started; a pre-created pending row is a fresh dispatch. */
@@ -74,6 +76,11 @@ export async function resolveRunDispatch(
     opts
   );
   if (containerRefusal) return { stopped: true, result: containerRefusal };
+  const execution = resolveRunExecutionMode(
+    opts.execContext,
+    opts.container,
+    isContinuation ? preCreatedRun.metadata : undefined
+  );
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : origin?.userId;
   const prepared = await prepareDispatchAiConfiguration(
@@ -130,6 +137,7 @@ export async function resolveRunDispatch(
   return {
     stopped: false,
     value: {
+      execution,
       executionUserId,
       isContinuation,
       prepared,

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'bun:test';
+import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
@@ -31,7 +32,7 @@ function scopedHelpOptions(argv: string[]): string {
 
 it('keeps run source and isolation flags consistent with the parser', () => {
   const options = scopedHelpOptions(['workflow', 'run']).split('\n');
-  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+  for (const name of ['project', 'workflow-source', 'no-worktree', 'folder', 'container']) {
     const parserOption = cliArgOptions[name];
     expect(parserOption).toBeDefined();
     const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
@@ -239,6 +240,7 @@ Commands:
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
+  workflow end-turn <run-id> Record a request to end stalled tools or reported work
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
@@ -254,7 +256,7 @@ Commands:
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  complete <branch> [...]    Remove worktree and local branch; retain remote branch
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill add [path]           Add archon-cli into .claude/skills and .agents/skills
   provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
@@ -281,13 +283,18 @@ Commands:
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
+  telemetry no-match         Record an agent decision that no workflow fits
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
+  --chat-project-id <id>     Confine chat workflow commands to a registered project ID
   --cwd <path>               Override working directory (default: current directory)
+  --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
+                             isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.
+                             Cannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.

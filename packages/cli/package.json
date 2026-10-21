@@ -35,6 +35,9 @@
   "testConcurrency": 3,
   "testGroups": [
     [
+      "src/routes/workflow-run.test.ts"
+    ],
+    [
       "src/commands/image-chat-plugin.test.ts"
     ],
     [
@@ -86,6 +89,9 @@
       "src/commands/workflow-inspect.test.ts"
     ],
     [
+      "src/commands/workflow-end-turn.test.ts"
+    ],
+    [
       "src/commands/workflow-runs.test.ts"
     ],
     [
@@ -120,6 +126,9 @@
       "src/commands/isolation.test.ts"
     ],
     [
+      "src/commands/isolation-completion-registration.test.ts"
+    ],
+    [
       "src/commands/chat.test.ts"
     ],
     [
@@ -145,6 +154,7 @@
     ],
     [
       "src/cli.test.ts",
+      "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
@@ -165,6 +175,12 @@
     ],
     [
       "src/utils/owned-run-termination.test.ts"
+    ],
+    [
+      "src/utils/owned-run-lease.test.ts"
+    ],
+    [
+      "src/utils/detached-node-cli.integration.spec.ts"
     ],
     [
       "src/telemetry-exit.integration.spec.ts"

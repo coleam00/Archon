@@ -170,6 +170,18 @@ the answer starts merges it once the gate passes. The approval carries to a late
 only when the sweep judges that everything since is merges of the default branch and
 their conflict resolutions, and the verdict is Ready at the later head.
 
+A maintainer's own pull request enrolled through `merge_queue: "own-prs"` has no
+build round to return to, so its question offers no `return`. Answering `park` or
+`other` stops queue work until a later sweep observes a head different from the
+head asked about. At the same head it stays parked, even after green CI or a new
+review. The `other` text is recorded as the ruling on the work item; it starts no
+build round. Recovery preserves the approval's original head and every merge gate.
+
+A build item parked by an answer waits for renewed build readiness. A pull request
+whose read fails twice consecutively is also parked: renewed build readiness can
+bring a build item back, but an unreadable own-PR park stays parked. Changed-head
+recovery applies only to answered own-PR parks, never merged or superseded items.
+
 ## Discoveries drain
 
 Each pass decides the records of up to `limit` finished runs, oldest first. Repeat
@@ -190,9 +202,11 @@ does, and what happens if nobody answers. Answer them as `managing-runs.md`
 archon workflow respond <run-id> <choice> "<reason>" --detach
 ```
 
-The build and merge queues write the answer's text into the issue body as a dated
-"Current scope" section, and later rounds work from it. Write the reason as a ruling a
-later round can act on: what is in scope, what is not, and why. An answer that
+The build queue and merge items owned by a build write the ruling into the issue
+body as a dated "Current scope" section, and later rounds work from it. An enrolled
+own PR keeps the answer on its work item's merge decision entry; it writes no issue
+section. Write the reason as a ruling a later round can act on: what is in scope,
+what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
 run at once, on the run config the answered run started with, so you don't relaunch.
 

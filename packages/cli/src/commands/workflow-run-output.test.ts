@@ -22,7 +22,7 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
-import { resolveCliExitCode } from '../utils/workflow-exit-code';
+import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 
 describe('workflowRunCommand — progress rendering', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -91,13 +91,17 @@ describe('workflowRunCommand — progress rendering', () => {
       id: execution.workflowRunId,
       status,
       outcome,
+      metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
     });
 
+    const readsBefore = workflowDb.getWorkflowRun.mock.calls.length;
     try {
       await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
       return undefined;
     } catch (error) {
       return error;
+    } finally {
+      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(1);
     }
   }
 
@@ -123,6 +127,10 @@ describe('workflowRunCommand — progress rendering', () => {
   it('renders aligned completed execution and succeeded authored outcome', async () => {
     await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
 
+    expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
+    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
+    expect(consoleSpy).toHaveBeenCalledWith('    Input tokens: 8420');
+    expect(consoleSpy).toHaveBeenCalledWith('    Output tokens: 2180');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: succeeded'
     );
@@ -144,6 +152,7 @@ describe('workflowRunCommand — progress rendering', () => {
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
+    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: failed\n  Authored outcome: succeeded'
     );
@@ -156,6 +165,7 @@ describe('workflowRunCommand — progress rendering', () => {
       'succeeded'
     );
 
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow paused — waiting for approval.\n  Status: paused\n  Authored outcome: succeeded'
     );
@@ -185,6 +195,144 @@ describe('workflowRunCommand — progress rendering', () => {
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run'
     );
   });
+
+  it('preserves a failure before run creation without claiming an outcome read failed', async () => {
+    setupWorkflowMocks(true);
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: 'Database error creating workflow run',
+    });
+    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    const readsBefore = lookup.mock.calls.length;
+    let thrown: unknown;
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(WorkflowRunFailedError);
+    expect(thrown).toMatchObject({
+      message: 'Workflow failed: Database error creating workflow run',
+    });
+    expect(resolveCliExitCode(thrown)).toBe(1);
+    expect(lookup.mock.calls.length).toBe(readsBefore);
+    expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not look up usage for an approval pause without an authored outcome', async () => {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-paused',
+      paused: true,
+    });
+    const workflowDb = require('@archon/core/db/workflows');
+    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    const readsBefore = lookup.mock.calls.length;
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    expect(lookup.mock.calls.length).toBe(readsBefore);
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
+  });
+
+  const completionUsageCases = [
+    {
+      kind: 'numbers',
+      metadata: { total_cost_usd: 0, total_tokens_in: 12, total_tokens_out: 4 },
+      expected: [
+        '  Usage (recorded totals; completeness unknown):',
+        '    Cost: $0',
+        '    Input tokens: 12',
+        '    Output tokens: 4',
+      ],
+    },
+    {
+      kind: 'empty',
+      metadata: {},
+      expected: [
+        '  Usage (recorded totals; completeness unknown):',
+        '    Cost: unknown',
+        '    Input tokens: unknown',
+        '    Output tokens: unknown',
+      ],
+    },
+    {
+      kind: 'missing',
+      metadata: null,
+      expected: ['  Usage: unavailable (persisted run unavailable)'],
+    },
+    {
+      kind: 'rejected',
+      metadata: null,
+      expected: ['  Usage: unavailable (persisted run unavailable)'],
+    },
+  ];
+
+  it.each(completionUsageCases)(
+    'shows usage without a declared outcome: $kind',
+    async ({ kind, metadata, expected }) => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      const workflowDb = require('@archon/core/db/workflows');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-usage',
+      });
+      const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+      if (kind === 'rejected') lookup.mockRejectedValueOnce(new Error('summary read failed'));
+      else
+        lookup.mockResolvedValueOnce(
+          metadata === null
+            ? null
+            : {
+                id: 'run-usage',
+                status: 'completed',
+                outcome: 'failed',
+                metadata,
+              }
+        );
+      const readsBefore = lookup.mock.calls.length;
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      expect(lookup.mock.calls.length - readsBefore).toBe(1);
+      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
+      expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
+      for (const line of expected) expect(consoleSpy).toHaveBeenCalledWith(line);
+      if (kind === 'rejected')
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: expect.any(Error), workflowRunId: 'run-usage' }),
+          'cli.workflow_summary_lookup_failed'
+        );
+    }
+  );
+
+  it.each(['missing', 'rejected'] as const)(
+    'keeps a failed execution nonzero when the summary is %s',
+    async kind => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      const workflowDb = require('@archon/core/db/workflows');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: false,
+        workflowRunId: 'run-missing',
+        error: 'execution failed',
+      });
+      const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+      if (kind === 'rejected') lookup.mockRejectedValueOnce(new Error('summary unavailable'));
+      else lookup.mockResolvedValueOnce(null);
+      let thrown: unknown;
+      try {
+        await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      } catch (error) {
+        thrown = error;
+      }
+      expect(resolveCliExitCode(thrown)).toBe(1);
+      expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
+    }
+  );
 
   const OWNED_RUN = 'test-run-id';
   const CHILD_RUN = 'child-run-id';
@@ -420,7 +568,7 @@ describe('workflowRunCommand — progress rendering', () => {
     ]);
   });
 
-  it('neither subscribes nor renders with --quiet', async () => {
+  it('suppresses progress but retains completion usage with --quiet', async () => {
     setupWorkflowMocks();
     executeCommitting(commitProgressRows);
     const host = createTestWorkflowHost();
@@ -430,6 +578,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     expect(head).not.toHaveBeenCalled();
     expect(progressLines()).toEqual([]);
+    expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
   });
 
   it('renders rows committed before the executor throws', async () => {

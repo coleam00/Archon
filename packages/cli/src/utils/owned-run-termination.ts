@@ -15,14 +15,9 @@ export interface OwnedRunTerminationInput {
   runId: string;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
-  liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested'>;
-  /**
-   * End the in-flight node process trees on interrupt, so a resume does not overlap the
-   * interrupted attempt (#3552); a descendant that calls `setsid` still escapes. False for
-   * a detached owner: `archon workflow cancel` ends its nodes by killing the owner's process
-   * group, which a recorded node escapes.
-   */
-  endNodeProcessTrees: boolean;
+  liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested' | 'registerTerminationPreparation'>;
+  /** Detached POSIX commands use separate, parent-owned process groups. */
+  detachedProcessOwner: boolean;
   /**
    * Resources the forced exit would otherwise strand, because it skips the caller's
    * `finally`. Report its own failures; a rejection is dropped.
@@ -41,7 +36,13 @@ export interface OwnedRunTerminationInput {
 export function registerOwnedRunTermination(input: OwnedRunTerminationInput): () => void {
   const { runId, liveOwner } = input;
   const log = createLogger(input.logModule);
-  const nodeTrees = input.endNodeProcessTrees ? recordNodeProcessTrees() : undefined;
+  const detached = input.detachedProcessOwner && process.platform !== 'win32';
+  const detachedTrees = detached ? recordNodeProcessTrees({ mode: 'detached-posix' }) : undefined;
+  const nodeTrees =
+    detachedTrees ?? (input.detachedProcessOwner ? undefined : recordNodeProcessTrees());
+  const unregisterPreparation = detachedTrees
+    ? liveOwner.registerTerminationPreparation(() => detachedTrees.prepareTermination())
+    : undefined;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
     if (terminating) return;
@@ -113,6 +114,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   return () => {
     process.off('SIGTERM', sigtermHandler);
     process.off('SIGINT', sigintHandler);
+    unregisterPreparation?.();
     nodeTrees?.release();
   };
 }

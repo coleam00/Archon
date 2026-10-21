@@ -255,11 +255,8 @@ export async function withRunDetail<
 }
 
 /**
- * Fetch a run's events for `--verbose` rendering. A failed event query must not
- * abort the command (the run summary itself is still useful), but it must NOT be
- * indistinguishable from "this run has no events" — so log a warn and flag the
- * failure to the caller, which prints a visible note. (In `--json` mode logs are
- * silenced; an empty derived/raw payload is the documented signal there.)
+ * Keep query failure distinct from an empty history: human output can retain the
+ * run summary with a warning, while JSON callers must fail the request.
  */
 export async function fetchVerboseEvents(
   host: WorkflowHost,

@@ -27,6 +27,10 @@ archon provider add claude codex pi   # any subset
 
 OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working until the release that removes them; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal.
 
+In chat, run management uses native `invoke_workflow`, `register_project` and scoped `manage_run` tools on Claude, Codex and Pi. Copilot and OpenCode instead use the existing `archon workflow` CLI after project selection. Their launches use `archon workflow run <workflow> "<message>" --detach` in the registered project directory and return a run ID for inspection. These runs are headless: they use CLI identity, carry no originating-chat provenance, and deliver no progress or results back to that chat.
+
+Projectless conversations can still answer questions. Submit `/setproject <name>` in the conversation or thread to select a registered project before CLI launch or run management. For a new local project, submit `/register-project [--folder] <name> <path>`, then `/setproject <name>`; registration alone does not bind the conversation. On Slack, post these commands with an @mention in the target thread, for example `@your-bot /setproject <name>`; `/archon` starts a new thread. Assistant command examples are plain text and have no side effects.
+
 If you need one of them after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
 Archon shows the notice only to someone who uses one, at most once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log instead.
@@ -316,7 +320,7 @@ This provider is deprecated and will be removed in the next minor release. It ke
 
 OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
 
-Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random password for each embedded server, and tears it down after its last request releases it. Connecting to an external OpenCode server (`baseUrl`) is not supported.
 
 ### Install
 

@@ -14,6 +14,7 @@ import type {
   ArtifactEvent,
   SystemEvent,
   ErrorEvent,
+  TextEvent,
 } from '../primitives/event';
 import type { ProviderEvent, ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import { StreamCard } from './StreamCard';
@@ -70,6 +71,7 @@ type TimelineEntry =
       timestamp: string;
       nodeId: string;
     }
+  | { kind: 'text'; key: string; at: number; event: TextEvent }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
@@ -290,14 +292,7 @@ export function RunStream({
       });
     }
 
-    for (const e of events) {
-      const at = new Date(e.timestamp).getTime();
-      if (e.kind === 'artifact') {
-        entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
-      } else if (e.kind === 'system' || e.kind === 'error') {
-        entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
-      }
-    }
+    entries.push(...runEventEntries(events));
     entries.sort((a, b) => a.at - b.at);
     return entries;
   }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem]);
@@ -423,10 +418,33 @@ export function RunStream({
         }
         return (
           <div key={entry.key} className="py-1">
-            <ArtifactItem event={entry.event} />
+            <ContentEventItem event={entry.event} />
           </div>
         );
       })}
     </div>
+  );
+}
+
+function runEventEntries(events: RunEvent[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const e of events) {
+    const at = new Date(e.timestamp).getTime();
+    if (e.kind === 'artifact') {
+      entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
+    } else if (e.kind === 'text') {
+      entries.push({ kind: 'text', key: `text:${e.id}`, at, event: e });
+    } else if (e.kind === 'system' || e.kind === 'error') {
+      entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
+    }
+  }
+  return entries;
+}
+
+function ContentEventItem({ event }: { event: TextEvent | ArtifactEvent }): ReactElement {
+  return event.kind === 'text' ? (
+    <div className="whitespace-pre-wrap py-4 text-sm text-text-primary">{event.content}</div>
+  ) : (
+    <ArtifactItem event={event} />
   );
 }

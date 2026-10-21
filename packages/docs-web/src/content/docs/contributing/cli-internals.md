@@ -323,9 +323,16 @@ archon isolation cleanup [days] (default: 7)
 │ Guard checks: no uncommitted changes, no run lock (checkRemoval │
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
-│ provider.destroy() → remove worktree + delete remote branch     │
+│ provider.destroy() → remove worktree and local branch           │
+│ → commit registration retirement; retain remote branch         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+Completion and merged cleanup retain remote branches, including with force,
+because registration ownership cannot be proved after retirement. Retention is
+logged as a warning and displayed in both completion and merged-cleanup reports.
+Enable GitHub's **Automatically delete head branches** setting for
+merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or

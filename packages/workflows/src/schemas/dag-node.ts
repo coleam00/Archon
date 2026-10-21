@@ -2415,9 +2415,8 @@ const LOOP_SETTING_OWNERS: ReadonlyMap<string, readonly NodeMode[]> = (() => {
  * A key owned by another mode asserts something this node will not do — run a
  * script under `runtime:`, bound its time, pass a child `input:` — and a loop
  * setting at the top level asserts iteration or a gate the node never gets. Both
- * fail the load rather than being dropped (#2478). Checked on the raw node: the
- * flat schema strips loop settings, and a misplaced key's value is beside the
- * point, so its placement is reported instead of a type error on the value.
+ * fail the load rather than being dropped (#2478). Check placement on the raw node
+ * before the flat schema strips loop settings or checks the misplaced value's type.
  */
 function validateRawDagNode(value: unknown, ctx: z.RefinementCtx): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
@@ -2445,9 +2444,10 @@ function rejectForeignModeKeys(
       code: z.ZodIssueCode.custom,
       message:
         launchOnly !== undefined
-          ? `'${key}' is not supported on an include node: ${launchOnly}. Use a 'workflow:' node instead when you want a separate governed run.`
-          : `'${key}' is only supported on ${joinOr(owners)} nodes, not on ${mode} node '${id}'.`,
+          ? `is not supported on an include node: ${launchOnly}. Use a 'workflow:' node instead when you want a separate governed run.`
+          : `is only supported on ${joinOr(owners)} nodes, not on ${mode} nodes.`,
       path: [key],
+      params: { nodeId: id },
     });
   }
 }
@@ -2457,7 +2457,6 @@ function rejectTopLevelLoopSettings(
   id: string,
   ctx: z.RefinementCtx
 ): void {
-  const where = id ? `of node '${id}' ` : '';
   for (const key of Object.keys(node)) {
     const owners = LOOP_SETTING_OWNERS.get(key);
     if (owners === undefined) continue;
@@ -2469,7 +2468,8 @@ function rejectTopLevelLoopSettings(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: [key],
-      message: `'${key}' is only honoured inside ${joinOr(owners.map(o => `'${o}:'`))}; at the top level ${where}nothing reads it.${pauseHint}`,
+      message: `is only honoured inside ${joinOr(owners.map(o => `'${o}:'`))}; at the top level nothing reads it.${pauseHint}`,
+      params: { nodeId: id },
     });
   }
 }

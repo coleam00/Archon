@@ -151,11 +151,15 @@ describe('owned worktree release policy', () => {
   });
 
   test('a record write failure before removal keeps the checkout', async () => {
+    const real = store;
     store = {
       ...store,
-      markWorktreeDestroyed: async () => {
-        throw new Error('record write failed');
-      },
+      withWorktreeRegistration: (observed, remove) =>
+        real.withWorktreeRegistration(observed, () =>
+          remove(async () => {
+            throw new Error('record write failed');
+          })
+        ),
     };
     await expect(reclaimRunWorktree(run, store)).rejects.toThrow('record write failed');
     expect(existsSync(env.working_path)).toBe(true);

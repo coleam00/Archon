@@ -404,14 +404,12 @@ export async function cancelWorkflowRun(
         [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
+        const { step_name, ...data } = event ?? {};
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
-          step_name: event?.step_name,
-          data: {
-            ...(event?.reason === undefined ? {} : { reason: event.reason }),
-            ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
-          },
+          step_name,
+          data,
         });
       }
       return update;
@@ -475,7 +473,8 @@ export async function cancelFanOutRun(
 /** Release a running run whose source this host could not read (see `IWorkflowStore`). */
 export async function releaseRunForUnreadableSource(
   id: string,
-  release: SourceReleaseWrite
+  release: SourceReleaseWrite,
+  beforePublish?: () => Promise<void>
 ): Promise<{ released: boolean }> {
   const dialect = getDialect();
   try {
@@ -493,6 +492,7 @@ export async function releaseRunForUnreadableSource(
         ]
       );
       if ((result.rowCount ?? 0) === 0) return { released: false };
+      await beforePublish?.();
       await insertWorkflowEvent(query, sourceReleasedEvent(id, release));
       return { released: true };
     });

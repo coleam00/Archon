@@ -14,7 +14,6 @@ import {
   type WorkflowStoreKind,
 } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
@@ -187,12 +186,9 @@ export function createWorkflowStore(): IWorkflowStore {
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
+    updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
-    // DB returns string | null; IWorkflowStore declares WorkflowRunStatus | null.
-    // The remote_agent_workflow_runs.status column is constrained to valid enum values
-    // in SQL, so this cast is safe as long as the column constraint matches WorkflowRunStatus.
-    getWorkflowRunStatus: id =>
-      workflowDb.getWorkflowRunStatus(id) as Promise<WorkflowRunStatus | null>,
+    getWorkflowRunStatus: workflowDb.getWorkflowRunStatus,
     completeWorkflowRun: workflowDb.completeWorkflowRun,
     failWorkflowRun: workflowDb.failWorkflowRun,
     pauseWorkflowRun: workflowDb.pauseWorkflowRun,

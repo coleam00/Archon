@@ -107,7 +107,14 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       labels: ['TODO'],
       meta: { reviewed: false },
     });
-    expect(await Bun.file(path).text()).toContain('ready: false');
+    const yaml = await Bun.file(path).text();
+    expect(
+      yaml
+        .split('\n')
+        .slice(0, 2)
+        .map(line => line.trimEnd())
+    ).toEqual(['review__classify:', '  kind: bug']);
+    expect(yaml).toContain('ready: false');
     await expect(writeDryRunStubScaffold(workflow, path)).rejects.toThrow(
       'stub scaffold already exists'
     );
