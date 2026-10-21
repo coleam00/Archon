@@ -35,6 +35,19 @@ function readAttentionWait(value: unknown) {
   return wait;
 }
 
+function expectWaitInvocation(events: ReturnType<typeof persistedEvents>, nested: boolean) {
+  for (const eventType of ['node_started', 'node_suspended']) {
+    const event = events.find(
+      event =>
+        event.step_name === (nested ? 'outer.grp.ask' : 'grp.ask') && event.event_type === eventType
+    );
+    expect(event?.data).toHaveProperty('invocation.loopPath', [
+      ...(nested ? [{ groupId: 'outer', iteration: 1 }] : []),
+      { groupId: 'grp', iteration: 1 },
+    ]);
+  }
+}
+
 for (const change of ['none', 'message', 'options', 'form', 'body', 'nested'] as const) {
   test(`answered loop question: ${change}`, async () => {
     const source = join(cwd, 'question');
@@ -161,6 +174,7 @@ for (const change of ['none', 'message', 'options', 'form', 'body', 'nested'] as
       });
       expect(fresh.answer).toBeUndefined();
       expect(fresh.pauseId).not.toBe(wait.pauseId);
+      expectWaitInvocation(persistedEvents(resumed), change === 'nested');
       await Bun.write(source, JSON.stringify({ ...current, message: 'Changed again' }));
       const final = await resume({
         ...fresh,

@@ -206,8 +206,9 @@ loops from burning tokens indefinitely.
 
 Only an explicit answer runs an iteration past the bound: a comment on a legacy
 [interactive gate](#interactive-and-gate_message), or an answer to a `loop_group`'s
-[terminal attention wait](#pausing-to-ask-inside-the-body). Each answer permits one more
-iteration, and each further iteration needs another answer.
+[terminal attention wait](#pausing-to-ask-inside-the-body) that passes question validation.
+Each accepted answer permits one more iteration, and each further iteration needs
+another accepted answer. A changed question pauses again in the same iteration.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -619,7 +620,11 @@ warning.
 
 To ask for an answer after each pass, end the body in a
 [`wait: attention`](/reference/workflow-language/#attention-waits) node. The run pauses
-there until someone answers. Then the group checks `until_bash`; if it does not pass,
+there until someone answers. On resume, the engine validates the current message,
+form, and options against the paused question. If they changed, it discards the stale
+answer and asks again in the same iteration. This re-ask happens at most once per
+occurrence chain; see [attention waits](/reference/workflow-language/#attention-waits).
+Once an answer passes validation, the group checks `until_bash`; if it does not pass,
 the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.output`.
 
 ```yaml
@@ -640,7 +645,8 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
           form: approval
 ```
 
-- `until_bash` reads the answer as `$review.output.decision`. Approving ends the group;
+- After question validation, `until_bash` reads the accepted answer as
+  `$review.output.decision`. Approving ends the group;
   rejecting runs another draft, which reads any text sent with the answer through
   `$LOOP_PREV.review.output.text`. A reject is an answer, so it never cancels the run.
 - Assign the reference, then quote the shell variable, as above. Archon already
@@ -651,7 +657,8 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
 - Any [form](/reference/workflow-language/#attention-waits) works. A `message` wait
   produces only `{ text }`, so with it decide completion from the work instead of the answer.
 - `max_iterations` bounds autonomous iterations. Each answer to the terminal attention
-  wait permits one more iteration even past that bound, so this loop runs until
+  wait accepted after question validation permits one more iteration even past that
+  bound, so this loop runs until
   someone approves.
 - The loader warns when the terminal attention wait has no `when:` and `until_bash`
   does not reference its `$<wait-id>.output`: the answers would be recorded but never
@@ -660,8 +667,10 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
 A wait pauses the group only as the body's **sole terminal sink**: nothing depends on
 it, and every other body node leads to it. Any other placement is a load error, because
 resuming in the middle of an iteration would replay or skip sibling work. The group
-resumes at the iteration boundary, so the next iteration starts with the answer
-available. A deprecated `approval:` gate is accepted in the same place; see
+validates the question before completing the paused iteration. If it asks again, the
+iteration stays paused; otherwise, if `until_bash` does not pass, the next iteration
+starts with the accepted answer available. A deprecated `approval:` gate is accepted
+in the same place; see
 [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates).
 
 A pause asks about the work; it is not the work. When the sink is an attention wait,
@@ -889,8 +898,10 @@ the workflow loads.
 Suspension and failure have different recovery rules:
 
 - **Resume after a terminal pause** (the body's terminal attention wait is
-  answered): the group rechecks `until_bash` against the answer and, if it does not
-  pass, continues with the **next** iteration's whole body. With
+  answered): the engine validates the question first and may ask again in the same
+  iteration, as described [above](#pausing-to-ask-inside-the-body). Once an answer is
+  accepted, the group rechecks `until_bash` against it and, if it does not pass,
+  continues with the **next** iteration's whole body. With
   `fresh_context: false`, the body's AI session continues from where it paused (the
   session cursor is persisted across the pause). `$LOOP_PREV.*` refs on the first resumed
   iteration resolve to the prior iteration's real body outputs, restored from

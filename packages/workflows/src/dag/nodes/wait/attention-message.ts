@@ -1,9 +1,4 @@
-import {
-  inputRefToken,
-  PRIOR_OUTPUT_PATH_SOURCE,
-  substituteTemplate,
-  templateToken,
-} from '../../../output-ref';
+import { inputRefToken, substituteTemplate } from '../../../output-ref';
 import {
   readWorkflowWaitContext,
   type WorkflowAttentionWaitContext,
@@ -12,6 +7,7 @@ import { nodeTemplateReferences, resolveRunInputs, substituteWaitMessage } from 
 import { waitCondition, type WaitNode } from '../../../schemas/dag-node';
 import type { WaitLoopOwner } from './wait';
 import type { RunLayersContext } from '../../run-context';
+import { loopScopeTokens } from '../../loop-scope';
 
 interface WaitMessageRenderer {
   render: (text: string) => string;
@@ -36,22 +32,24 @@ function attentionMessageRenderer(
     pauseFields: { loopQuestionReferences: references },
     render: text => {
       const { before, after } = nodeTemplateReferences(text, ctx);
+      const referenceTokens = loopScopeTokens(
+        { loopPrevOutputs: undefined, loopUserInput: '' },
+        'prompt'
+      ).map(token => ({
+        pattern: token.pattern,
+        resolve: persisted !== undefined ? frozen : (match: RegExpExecArray) => match[0],
+      }));
       const loopTokens =
         persisted !== undefined
-          ? [
-              templateToken(PRIOR_OUTPUT_PATH_SOURCE, frozen),
-              templateToken(String.raw`\$LOOP_USER_INPUT`, frozen),
-            ]
-          : [...before, templateToken(String.raw`\$LOOP_USER_INPUT`, match => match[0])].map(
-              token => ({
-                pattern: token.pattern,
-                resolve: (match: RegExpExecArray) => {
-                  const value = token.resolve(match);
-                  if (value !== undefined) references[match[0]] = value;
-                  return value;
-                },
-              })
-            );
+          ? referenceTokens
+          : [...before, ...referenceTokens].map(token => ({
+              pattern: token.pattern,
+              resolve: (match: RegExpExecArray) => {
+                const value = token.resolve(match);
+                if (value !== undefined) references[match[0]] = value;
+                return value;
+              },
+            }));
       return substituteTemplate(text, [
         ...loopTokens,
         inputRefToken(resolveRunInputs(ctx.workflowRun)),
