@@ -21,7 +21,6 @@ import {
   getHomeWorkflowsPath,
   getHomeCommandsPath,
   getHomeScriptsPath,
-  getLegacyHomeWorkflowsPath,
   isInsideArchonHome,
   logArchonPaths,
 } from './home-paths';
@@ -287,22 +286,6 @@ describe('home-paths', () => {
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       expect(getHomeScriptsPath()).toBe(join('/custom/archon', 'scripts'));
-    });
-  });
-
-  describe('getLegacyHomeWorkflowsPath', () => {
-    // This helper only exists so discovery can DETECT files at the old location
-    // and emit a deprecation warning. It is not a fallback read path.
-    test('returns ~/.archon/.archon/workflows (the retired location)', () => {
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      expect(getLegacyHomeWorkflowsPath()).toBe(join(homedir(), '.archon', '.archon', 'workflows'));
-    });
-
-    test('honors ARCHON_HOME so migration detection works in custom setups', () => {
-      delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = '/custom/archon';
-      expect(getLegacyHomeWorkflowsPath()).toBe(join('/custom/archon', '.archon', 'workflows'));
     });
   });
 
