@@ -27,7 +27,6 @@ import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
-  type BaseAttention,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
@@ -35,13 +34,13 @@ import {
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
-  type PolicyClass,
   type PrFacts,
   readBase,
   readPr,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
+import { readSweep, type Sweep, type SweepDecision as Decision } from '../../.shared/merge-sweep.generated.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
 const OWN_PR_PARK = 'Stops queue work until a later sweep observes a different head from the head asked about.';
@@ -72,28 +71,6 @@ interface Item {
   readonly record: MergeRecord | null;
   /** An enrolled maintainer's own pull request: no build round owns it. */
   readonly own_pr?: boolean;
-}
-
-interface Decision {
-  readonly number: number;
-  readonly action: SweepAction;
-  readonly class: PolicyClass;
-  readonly head: string;
-  readonly reran: boolean;
-  readonly reason: string;
-  readonly brief: string;
-  readonly attention: MergeAttention | null;
-}
-
-interface Sweep {
-  readonly decisions: readonly Decision[];
-  readonly base: {
-    readonly summary: string;
-    /** The sweep re-ran the default branch's failed jobs this run. */
-    readonly reran: boolean;
-    readonly attention: BaseAttention | null;
-  };
-  readonly summary: string;
 }
 
 function message(error: unknown): string {
@@ -272,7 +249,7 @@ function main(): void {
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
+  const sweep = readSweep(process.env.INPUTS_SWEEP);
   if (path === 'idle') {
     emit({
       merged: [],

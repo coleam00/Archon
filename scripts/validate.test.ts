@@ -38,6 +38,7 @@ describe('validate check selection', () => {
     expect(selectChecks(['generated-files'])[0].commands).toEqual([
       ['bun', 'run', 'check:pi-vendor-map'],
       ['bun', 'run', 'check:capability-matrix'],
+      ['bun', 'run', 'check:merge-sweep-contract'],
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],

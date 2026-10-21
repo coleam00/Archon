@@ -13,26 +13,16 @@
  */
 
 import { forgeSource, record, type QualifiedPr } from './forge.ts';
+import type { BaseAttention, MergeAttention, MergeEffect } from './merge-sweep.generated.ts';
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments } from './pr.ts';
-import type { Attention, DecisionEntry } from './queue.ts';
+import type { DecisionEntry } from './queue.ts';
 import { readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
-export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
-export type MergeEffect = (typeof MERGE_EFFECTS)[number];
-export type MergeAttention = Attention<MergeEffect>;
+export { BASE_EFFECTS, MERGE_EFFECTS, POLICY_CLASSES, SWEEP_ACTIONS } from './merge-sweep.generated.ts';
+export type { BaseAttention, MergeAttention, MergeEffect, PolicyClass, SweepAction } from './merge-sweep.generated.ts';
 
-/** The one answer to a red default branch: the queue holds merges until it is green again. */
-export const BASE_EFFECTS = ['hold'] as const;
-export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
-
-/** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
-export const SWEEP_ACTIONS = ['merged', 'return', 'ask', 'wait'] as const;
-export type SweepAction = (typeof SWEEP_ACTIONS)[number];
-export const POLICY_CLASSES = ['clear', 'unclear'] as const;
-export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
 /** Which attention item a run raised: its class label, which the YAML also declares. */
