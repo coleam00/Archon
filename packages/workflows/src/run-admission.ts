@@ -1,3 +1,4 @@
+import { executionClaim } from './store';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
@@ -105,7 +106,8 @@ export async function admitWorkflowRun(
       conversationId,
       cwd,
       workflowRun,
-      execContext
+      execContext,
+      opts.onExecutionClaimed
     );
     if (claimed.stopped) return claimed;
     checkoutBaselineSample = claimed.value;
@@ -237,7 +239,8 @@ async function claimPendingRun(
   conversationId: string,
   cwd: string,
   workflowRun: WorkflowRun,
-  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>
+  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
+  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
 ): Promise<RunPhase<CheckoutSample>> {
   let claimed: WorkflowRun | null;
   try {
@@ -272,6 +275,7 @@ async function claimPendingRun(
       },
     };
   }
+  onExecutionClaimed?.(executionClaim(claimed.metadata));
   workflowRun.status = claimed.status;
   workflowRun.started_at = claimed.started_at;
   // The run's starting checkout is sampled the moment execution ownership is won, with

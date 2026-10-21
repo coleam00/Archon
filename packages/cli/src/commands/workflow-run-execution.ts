@@ -65,9 +65,11 @@ export async function executeOwnedRun(
     progress: undefined,
     containerPreserved: false,
   };
+  let ownedExecutionClaim: string | null | undefined;
   const deregisterTermination = registerOwnedRunTermination({
     store: host.deps.store,
     runId: ownedRunId,
+    getExecutionClaim: () => ownedExecutionClaim,
     logModule: 'cli.workflow',
     liveOwner: {
       isStopRequested: () => lease.isStopRequested(),
@@ -97,7 +99,9 @@ export async function executeOwnedRun(
     // Subscribed before submit or resume so the run's first row cannot be missed.
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
     await lease.start(ownedRunId);
-    execution.result = await driveRun(launch, lease);
+    execution.result = await driveRun(launch, lease, claim => {
+      ownedExecutionClaim = claim;
+    });
   } catch (error) {
     if (error instanceof WorkflowExecutionHandoffError) execution.containerPreserved = true;
     throw error;
@@ -209,8 +213,12 @@ async function subscribeProgress(
 }
 
 /** Resume the bound run, or submit a fresh one, and wait for it to settle. */
-async function driveRun(launch: ForegroundLaunch, lease: OwnedRunLease): Promise<RunResult> {
-  const commonOptions = commonRunOptions(launch);
+async function driveRun(
+  launch: ForegroundLaunch,
+  lease: OwnedRunLease,
+  onExecutionClaimed: NonNullable<CommonRunOptions>['onExecutionClaimed']
+): Promise<RunResult> {
+  const commonOptions = { ...commonRunOptions(launch), onExecutionClaimed };
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
     return resumeRun(launch, resumable, commonOptions);

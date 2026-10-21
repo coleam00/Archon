@@ -3,7 +3,8 @@ import { createLogger } from '@archon/paths';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
-import { executeWorkflow } from './executor';
+import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { safeSendMessage } from './platform-messages';
 import { resolveWorkflowName } from './router';
 import { hydrateResumableRun } from './run-resume';
@@ -170,7 +171,8 @@ export async function continueBlockedRun(
   parent: WorkflowRun,
   notifyStuck: (reason: string) => Promise<void>,
   trigger: { childRunId?: string; childStatus?: WorkflowRunStatus },
-  resolveChildIsolation?: ChildIsolationResolver
+  resolveChildIsolation?: ChildIsolationResolver,
+  onExecutionClaimed?: ExecuteWorkflowOptions['onExecutionClaimed']
 ): Promise<WorkflowExecutionResult | undefined> {
   const parentRunId = parent.id;
   const parentCwd = parent.working_path;
@@ -266,12 +268,14 @@ export async function continueBlockedRun(
       parent.origin ?? undefined,
       {
         ...hydrated,
+        onExecutionClaimed,
         codebaseId: parent.codebase_id ?? undefined,
         resolveChildIsolation,
       }
     );
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
+    if (err instanceof TerminalStatusWriteError || err instanceof WorkflowExecutionHandoffError)
+      throw err;
 
     // The hydrate CAS above already flipped the parent paused→running, and
     // executeWorkflow's own failWorkflowRun catch-all doesn't cover its early

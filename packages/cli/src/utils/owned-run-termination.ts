@@ -1,4 +1,4 @@
-import { executionClaim, type IWorkflowStore } from '@archon/workflows/store';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
@@ -10,9 +10,11 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
-  store: Pick<IWorkflowStore, 'getWorkflowRun' | 'failWorkflowRun'>;
+  store: Pick<IWorkflowStore, 'failWorkflowRun'>;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
+  /** The engine supplies this execution's claim; undefined until admission. */
+  getExecutionClaim: () => string | null | undefined;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
   liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested' | 'registerTerminationPreparation'>;
@@ -48,6 +50,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   const cleanup = (signal: TerminationSignal): void => {
     if (!registered || terminating) return;
     terminating = true;
+    let cleanupAllowed = true;
     log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
       if (liveOwner.isStopRequested()) {
@@ -57,20 +60,19 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      const run = await input.store.getWorkflowRun(runId);
-      const status = run?.status ?? null;
-      if (!registered) return;
-      if (!run || status !== 'running') {
-        // Externally transitioned (paused at a new gate, completed, cancelled,
-        // failed) or never claimed (still pending) — not this handler's to mutate.
-        log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
-        return;
-      }
-      await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
-        exitReason: 'process_terminated',
-        signal,
-        expectedExecutionClaim: executionClaim(run.metadata),
-      });
+      const expectedExecutionClaim = input.getExecutionClaim();
+      if (expectedExecutionClaim === undefined) return;
+      cleanupAllowed = false;
+      const { failed } = await input.store.failWorkflowRun(
+        runId,
+        `Process terminated (${signal})`,
+        {
+          exitReason: 'process_terminated',
+          signal,
+          expectedExecutionClaim,
+        }
+      );
+      cleanupAllowed = failed;
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -81,13 +83,13 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       })
       // After the failed status write: ending a tree first lets the executor fail the
       // run through its own path and win the status write, losing stop_reason.
-      .then(() => (registered ? nodeTrees?.end() : undefined))
+      .then(() => (registered && cleanupAllowed ? nodeTrees?.end() : undefined))
       .catch((error: unknown) => {
         console.error(
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
-      .then(() => (registered ? input.teardown?.(signal) : undefined))
+      .then(() => (registered && cleanupAllowed ? input.teardown?.(signal) : undefined))
       .catch(() => undefined)
       .then(async () => {
         // A detached cancel already rang the handoff frame and must keep its lease

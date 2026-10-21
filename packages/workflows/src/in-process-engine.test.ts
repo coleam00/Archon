@@ -120,7 +120,7 @@ import { createFileWorkflowStore } from './file-store';
 import { resolveWorkflow } from './graph-plan';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import type { WorkflowRunDelivery } from './engine-port';
-import type { IWorkflowStore } from './store';
+import { executionClaim, type IWorkflowStore } from './store';
 
 runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
@@ -354,7 +354,13 @@ describe('InProcessWorkflowEngine', () => {
 
   it('a subscription opened before resume sees only the new segment', async () => {
     const { engine, store } = await makeEngine();
+    const claims: (string | null)[] = [];
+    const onExecutionClaimed = (claim: string | null): void => {
+      claims.push(claim);
+    };
     dagBody = async ({ deps, workflowRun, priorCompletedNodes }) => {
+      expect(claims).toHaveLength(priorCompletedNodes?.has('first') ? 2 : 1);
+      expect(claims.at(-1)).toBe(executionClaim(workflowRun.metadata));
       if (priorCompletedNodes?.has('first')) {
         await completeNode(deps.store, workflowRun.id, 'child');
         await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
@@ -370,6 +376,7 @@ describe('InProcessWorkflowEngine', () => {
       cwd: '/tmp/ops',
       workflow: parent,
       userMessage: '',
+      options: { onExecutionClaimed },
     });
     const failed = await store.getWorkflowRun(first.workflowRunId ?? '');
     if (failed?.status !== 'failed') throw new Error('expected a failed first segment');
@@ -383,9 +390,12 @@ describe('InProcessWorkflowEngine', () => {
       userMessage: '',
       run: failed,
       legacyWorkflow: parent,
+      options: { onExecutionClaimed },
     });
     if (!admission.accepted) throw new Error('expected resume');
     await admission.settled;
+    expect(claims[0]).toBeNull();
+    expect(typeof claims[1]).toBe('string');
     await subscription.close();
 
     expect(lifecycle(deliveries)).toEqual([

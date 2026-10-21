@@ -66,7 +66,12 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
+import {
+  executionClaim,
+  deadlineWaitCursor,
+  type PersistedNodeOutput,
+  type PriorFailedNode,
+} from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
@@ -115,6 +120,8 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Binds host termination handling to the admitted execution, before any node can publish a pause. */
+  onExecutionClaimed?: (claim: string | null) => void;
   /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
   deferScratchCleanup?: (cleanup: () => Promise<void>) => void;
   ownedWorktree?: OwnedWorktree;
@@ -286,6 +293,9 @@ export async function executeWorkflow(
     resolveChildIsolation,
     cutFromCommit,
   } = opts;
+
+  if (opts.preCreatedRun?.status === 'running')
+    opts.onExecutionClaimed?.(executionClaim(opts.preCreatedRun.metadata));
 
   const dispatched = await resolveRunDispatch(
     deps,
@@ -570,7 +580,8 @@ export async function executeWorkflow(
       platform,
       conversationId,
       finalStatus,
-      resolveChildIsolation
+      resolveChildIsolation,
+      opts.onExecutionClaimed
     );
     if (continued !== undefined) return continued;
     if (finalStatus?.status === 'completed') {
@@ -680,7 +691,8 @@ async function continueReleasedFanOut(
   platform: IWorkflowPlatform,
   conversationId: string,
   finalStatus: WorkflowRun | null,
-  resolveChildIsolation: ChildIsolationResolver | undefined
+  resolveChildIsolation: ChildIsolationResolver | undefined,
+  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
 ): Promise<WorkflowExecutionResult | undefined> {
   if (finalStatus?.status !== 'paused') return undefined;
   const notifyStuck = async (reason: string): Promise<void> => {
@@ -713,7 +725,8 @@ async function continueReleasedFanOut(
       finalStatus,
       notifyStuck,
       {},
-      resolveChildIsolation
+      resolveChildIsolation,
+      onExecutionClaimed
     );
   }
   return undefined;

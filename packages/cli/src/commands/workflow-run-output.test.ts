@@ -664,29 +664,32 @@ describe('workflowRunCommand — progress rendering', () => {
       rejection === 'published' ? new WorkflowExecutionHandoffError(OWNED_RUN, cause) : cause;
     let runSettled = false;
     const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      runSettled = true;
-      if (rejection) throw failure;
-      if (handoffStatus !== undefined) {
-        return handoffStatus === 'failed' || handoffStatus === 'cancelled'
-          ? {
-              success: false,
-              handedOff: true,
-              observedStatus: handoffStatus,
-              workflowRunId: OWNED_RUN,
-              error: `Workflow ${handoffStatus} after execution ownership changed`,
-            }
-          : {
-              success: true,
-              handedOff: true,
-              observedStatus: handoffStatus,
-              workflowRunId: OWNED_RUN,
-            };
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        runSettled = true;
+        if (rejection) throw failure;
+        if (handoffStatus !== undefined) {
+          return handoffStatus === 'failed' || handoffStatus === 'cancelled'
+            ? {
+                success: false,
+                handedOff: true,
+                observedStatus: handoffStatus,
+                workflowRunId: OWNED_RUN,
+                error: `Workflow ${handoffStatus} after execution ownership changed`,
+              }
+            : {
+                success: true,
+                handedOff: true,
+                observedStatus: handoffStatus,
+                workflowRunId: OWNED_RUN,
+              };
+        }
+        return end === 'paused'
+          ? { success: true, workflowRunId: OWNED_RUN, paused: true }
+          : { success: true, workflowRunId: OWNED_RUN };
       }
-      return end === 'paused'
-        ? { success: true, workflowRunId: OWNED_RUN, paused: true }
-        : { success: true, workflowRunId: OWNED_RUN };
-    });
+    );
     const exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     mockFolderBackendDestroy.mockClear();
     const signalBefore = process.listeners(signal);
