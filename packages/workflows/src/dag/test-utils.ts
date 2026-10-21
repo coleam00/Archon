@@ -75,7 +75,6 @@ mock.module('@archon/paths', () => ({
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => mockWorkflowHome,
-  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.

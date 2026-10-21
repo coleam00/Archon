@@ -23,6 +23,7 @@
     "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
+    "./run-scratch": "./src/run-scratch.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
     "./deps": "./src/deps.ts",
     "./event-emitter": "./src/event-emitter.ts",

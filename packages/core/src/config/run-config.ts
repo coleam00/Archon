@@ -83,6 +83,10 @@ const keyClassifications = {
   },
 } as const satisfies Record<ConfigKey, KeyClassification>;
 
+export const workflowRunConfigKeys = Object.entries(keyClassifications)
+  .filter(([, classification]) => classification.kind === 'runtime')
+  .map(([key]) => key);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

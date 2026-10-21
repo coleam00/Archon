@@ -432,3 +432,191 @@ test('empty-response mode is explicit and never disables existing JSON validatio
     await githubRequest(fetch, 'token', 'https://api.github.com/test', {}, undefined, 'empty')
   ).toBeUndefined();
 });
+
+describe('GitHub forge origins', () => {
+  test.each([
+    [
+      'http://GHES.example.test:8080/',
+      'ghes.example.test:8080',
+      'http://ghes.example.test:8080/api/v3',
+      'http://ghes.example.test:8080/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:80',
+      'ghes.example.test:80',
+      'http://ghes.example.test/api/v3',
+      'http://ghes.example.test/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'ghes.example.test:08080',
+      'http://ghes.example.test:8080/api/v3',
+      'http://ghes.example.test:8080/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:80',
+      'ghes.example.test',
+      'http://ghes.example.test/api/v3',
+      'http://ghes.example.test/api/graphql',
+    ],
+    [
+      'https://ghes.example.test:443',
+      'ghes.example.test:443',
+      'https://ghes.example.test/api/v3',
+      'https://ghes.example.test/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'GHES.EXAMPLE.TEST:8080',
+      'http://ghes.example.test:8080/api/v3',
+      'http://ghes.example.test:8080/api/graphql',
+    ],
+    [
+      'https://ghes.example.test:8443',
+      'ghes.example.test:8443',
+      'https://ghes.example.test:8443/api/v3',
+      'https://ghes.example.test:8443/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:443',
+      'ghes.example.test:443',
+      'http://ghes.example.test:443/api/v3',
+      'http://ghes.example.test:443/api/graphql',
+    ],
+    [
+      'http://github.com:8080',
+      'github.com',
+      'https://api.github.com',
+      'https://api.github.com/graphql',
+    ],
+    [
+      'http://other.example.test:8080',
+      'ghes.example.test:8080',
+      'https://ghes.example.test:8080/api/v3',
+      'https://ghes.example.test:8080/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'ghes.example.test:8443',
+      'https://ghes.example.test:8443/api/v3',
+      'https://ghes.example.test:8443/api/graphql',
+    ],
+    [
+      '',
+      'ghes.example.test',
+      'https://ghes.example.test/api/v3',
+      'https://ghes.example.test/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'github.com',
+      'https://api.github.com',
+      'https://api.github.com/graphql',
+    ],
+  ])('routes REST and GraphQL with GITHUB_URL=%s for %s', async (origin, host, rest, graphql) => {
+    const previous = process.env.GITHUB_URL;
+    process.env.GITHUB_URL = origin;
+    try {
+      const repo = { host, path: 'owner/repo' };
+      const calls: { url: string; authorization: string | null }[] = [];
+      const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+        calls.push({
+          url: String(input),
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        return Response.json(
+          init?.method === 'POST'
+            ? {
+                data: {
+                  repository: {
+                    pullRequest: {
+                      reviewThreads: {
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                        nodes: [],
+                      },
+                    },
+                  },
+                },
+              }
+            : []
+        );
+      };
+      expect(
+        await handleGithubOperation(
+          { operationId: 'labels', op: 'repo.labels.list', repo },
+          { token: 'selected-token', fetch }
+        )
+      ).toMatchObject({ ok: true });
+      expect(
+        await handleGithubOperation(
+          { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
+          { token: 'selected-token', fetch }
+        )
+      ).toMatchObject({ ok: true });
+      expect(calls).toEqual([
+        {
+          url: `${rest}/repos/owner/repo/labels?per_page=100&page=1`,
+          authorization: 'Bearer selected-token',
+        },
+        { url: graphql, authorization: 'Bearer selected-token' },
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_URL;
+      else process.env.GITHUB_URL = previous;
+    }
+  });
+
+  test('invalid repository paths fail before REST or GraphQL dispatch', async () => {
+    let calls = 0;
+    const fetch = async () => {
+      calls++;
+      return Response.json({});
+    };
+    const repo = { host: 'ghes.example.test:8080', path: 'owner/../repo' };
+    for (const request of [
+      { operationId: 'labels', op: 'repo.labels.list', repo },
+      { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
+    ] satisfies ForgeRequest[]) {
+      expect(
+        await handleGithubOperation(request, { token: 'selected-token', fetch })
+      ).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+    }
+    expect(calls).toBe(0);
+  });
+});
+
+test('invalid configured GitHub origins fail before sending a credential', async () => {
+  const previous = process.env.GITHUB_URL;
+  process.env.GITHUB_URL = 'http://user:private@ghes.example.test:8080';
+  try {
+    let calls = 0;
+    const fetch = async () => {
+      calls++;
+      return Response.json({});
+    };
+    const repo = { host: 'ghes.example.test:8080', path: 'owner/repo' };
+    for (const request of [
+      { operationId: 'labels', op: 'repo.labels.list', repo },
+      { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
+      {
+        operationId: 'create',
+        op: 'repo.label.ensure',
+        repo,
+        name: 'queued',
+        color: 'abcdef',
+        description: '',
+      },
+    ] satisfies ForgeRequest[]) {
+      const response = await handleGithubOperation(request, { token: 'selected-token', fetch });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining('GITHUB_URL') },
+      });
+      expect(JSON.stringify(response)).not.toContain('private');
+    }
+    expect(calls).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_URL;
+    else process.env.GITHUB_URL = previous;
+  }
+});

@@ -5,7 +5,11 @@
  */
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
+import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
 import {
   collectCredentialValues,
@@ -48,6 +52,7 @@ import {
   loadNodeMcpServers,
   resolveModelReasoningEffort,
   splitsStructuredOutput,
+  toolFreeModelCatalog,
   TOOL_FREE_THREAD_CONFIG,
   type CodexConfig,
 } from './turn-params';
@@ -106,6 +111,8 @@ interface CodexRun {
   connection: AppServerConnection | undefined;
   threadId: string | undefined;
   turnId: string | undefined;
+  /** The context window Codex last reported for the thread's model. */
+  contextWindow: number | undefined;
 }
 
 type NativeTools = ReturnType<typeof buildCodexNativeTools>;
@@ -148,7 +155,11 @@ async function* nodeMcpServers(
   return mcpServers;
 }
 
-function appServerArgs(login: CodexLogin | undefined, nodePlugins: readonly string[] | undefined) {
+function appServerArgs(
+  login: CodexLogin | undefined,
+  nodePlugins: readonly string[] | undefined,
+  modelCatalogPath?: string
+) {
   return [
     // An Archon-supplied login stays out of the user's CODEX_HOME; without one Codex
     // uses the user's own login there.
@@ -157,6 +168,8 @@ function appServerArgs(login: CodexLogin | undefined, nodePlugins: readonly stri
     // node that names plugins could not find them. This process serves only this
     // node's thread, and the thread config switches off every plugin it does not name.
     ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+    // TOML basic strings take JSON string escapes, so a Windows path survives.
+    ...(modelCatalogPath ? ['-c', `model_catalog_json=${JSON.stringify(modelCatalogPath)}`] : []),
   ];
 }
 
@@ -318,8 +331,9 @@ export class CodexProvider implements IAgentProvider {
    *
    * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
    * two turns on one thread: the tool turn without the schema, then, on a second process
-   * that resumes the thread with every tool off, a turn with the schema. The tool turn's
-   * success result is held back; the final turn's result is the call's only one.
+   * that resumes the thread with Archon's and the model catalog's tools off, a turn with the
+   * schema. The tool turn's success result is held back; the final turn's result is the
+   * call's only one.
    */
   async *sendQuery(
     prompt: string,
@@ -328,7 +342,12 @@ export class CodexProvider implements IAgentProvider {
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     const abortSignal = requestOptions?.abortSignal;
-    const run: CodexRun = { connection: undefined, threadId: undefined, turnId: undefined };
+    const run: CodexRun = {
+      connection: undefined,
+      threadId: undefined,
+      turnId: undefined,
+      contextWindow: undefined,
+    };
     const call: CallState = {
       resultReported: false,
       observationLost: false,
@@ -363,7 +382,7 @@ export class CodexProvider implements IAgentProvider {
       const login = codexLogin(launch.env);
       const binary = await launch.resolveBinary();
       const nodePlugins = nodePluginsOf(requestOptions, titleRequest);
-      const { request, finalTurnParams } = turnRequestOf(prompt, cwd, requestOptions, {
+      const { request, finalTurn } = turnRequestOf(prompt, cwd, requestOptions, {
         tools,
         login,
         resumeThreadId,
@@ -375,10 +394,13 @@ export class CodexProvider implements IAgentProvider {
         splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
-      const startAppServer = (plugins: readonly string[] | undefined): AppServerConnection =>
+      const startAppServer = (
+        plugins: readonly string[] | undefined,
+        modelCatalogPath?: string
+      ): AppServerConnection =>
         AppServerConnection.start(
           binary,
-          appServerArgs(login, plugins),
+          appServerArgs(login, plugins, modelCatalogPath),
           launch.env,
           this.spawner,
           requestOptions?.protectedEnvKeys
@@ -388,13 +410,20 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
       yield* reportedTurn(streamTurn({ ...request, connection: run.connection }), call, {
-        holdsSuccess: finalTurnParams !== undefined,
+        holdsSuccess: finalTurn !== undefined,
         catalogId,
         abortSignal,
       });
-      if (call.toolTurnResult && finalTurnParams) {
-        const finalRequest = finalTurnRequestOf(request, finalTurnParams, launch.config);
-        yield* this.finalTurn(run, finalRequest, startAppServer, call, catalogId);
+      if (call.toolTurnResult && finalTurn) {
+        const finalRequest = finalTurnRequestOf(request, finalTurn.turnParams, launch.config);
+        yield* this.finalTurn(
+          run,
+          finalRequest,
+          toolFreeModelCatalog(finalTurn.model, run.contextWindow),
+          catalogPath => startAppServer([], catalogPath),
+          call,
+          catalogId
+        );
       }
     } catch (error) {
       await run.connection?.finishToolCalls();
@@ -419,28 +448,37 @@ export class CodexProvider implements IAgentProvider {
 
   /**
    * The tool-free turn of a split call, on a second process that resumes the tool turn's
-   * thread. The tool turn's process ends first.
+   * thread with the tool-free model catalog. The tool turn's process ends first.
    */
   private async *finalTurn(
     run: CodexRun,
     request: Omit<TurnRequest, 'connection' | 'resumeSessionId'>,
-    startAppServer: (plugins: readonly string[]) => AppServerConnection,
+    modelCatalog: JsonValue,
+    startAppServer: (modelCatalogPath: string) => AppServerConnection,
     call: CallState,
     catalogId: string | undefined
   ): AsyncGenerator<MessageChunk> {
     if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
-    run.connection = startAppServer([]);
-    if (request.abortSignal?.aborted) throw new Error('Query aborted');
-    const stream = streamTurn({
-      ...request,
-      connection: run.connection,
-      resumeSessionId: run.threadId,
-    });
-    yield* reportedTurn(stream, call, {
-      holdsSuccess: false,
-      catalogId,
-      abortSignal: request.abortSignal,
-    });
+    const catalogDir = await mkdtemp(join(tmpdir(), 'archon-codex-catalog-'));
+    // The process serves only this turn, so the catalog file goes when the turn ends.
+    try {
+      const catalogPath = join(catalogDir, 'catalog.json');
+      await writeFile(catalogPath, JSON.stringify(modelCatalog));
+      run.connection = startAppServer(catalogPath);
+      if (request.abortSignal?.aborted) throw new Error('Query aborted');
+      const stream = streamTurn({
+        ...request,
+        connection: run.connection,
+        resumeSessionId: run.threadId,
+      });
+      yield* reportedTurn(stream, call, {
+        holdsSuccess: false,
+        catalogId,
+        abortSignal: request.abortSignal,
+      });
+    } finally {
+      await rm(catalogDir, { recursive: true, force: true });
+    }
   }
 
   /**
@@ -568,8 +606,8 @@ function finalTurnRequestOf(
 
 /**
  * The turn `streamTurn` runs, less the connection, which starts after it is built. When the
- * output schema must not ride with the tools, the turn goes without it and `finalTurnParams`
- * is the tool-free turn that carries it.
+ * output schema must not ride with the tools, the turn goes without it and `finalTurn` is the
+ * tool-free turn that carries it.
  */
 function turnRequestOf(
   prompt: string,
@@ -578,7 +616,7 @@ function turnRequestOf(
   inputs: TurnInputs
 ): {
   request: Omit<TurnRequest, 'connection'>;
-  finalTurnParams: TurnRequest['turnParams'] | undefined;
+  finalTurn: { model: string; turnParams: TurnRequest['turnParams'] } | undefined;
 } {
   const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
   const effort = resolveModelReasoningEffort(
@@ -586,15 +624,20 @@ function turnRequestOf(
     inputs.modelReasoningEffort
   );
   const { model, run } = inputs;
-  const split = inputs.splitsStructuredOutput && outputSchema !== undefined;
-  const finalTurnParams = split
+  // `splitsStructuredOutput` implies a model; the check narrows it for the final turn.
+  const split = inputs.splitsStructuredOutput && outputSchema !== undefined && model !== undefined;
+  const finalTurn = split
     ? {
-        input: [{ type: 'text' as const, text: FINAL_ANSWER_INSTRUCTION, text_elements: [] }],
-        ...(effort ? { effort } : {}),
-        outputSchema,
+        model,
+        turnParams: {
+          input: [{ type: 'text' as const, text: FINAL_ANSWER_INSTRUCTION, text_elements: [] }],
+          ...(effort ? { effort } : {}),
+          outputSchema,
+        },
       }
     : undefined;
-  // Multi-agent is fixed when the thread starts, so a split thread starts without it.
+  // Multi-agent is fixed when the thread starts, so a split thread starts without it. A
+  // catalog entry with `multi_agent_version: v2` adds its collaboration tools regardless.
   const threadConfig = split
     ? { ...inputs.threadConfig, features: { multi_agent: false } }
     : inputs.threadConfig;
@@ -630,6 +673,9 @@ function turnRequestOf(
     onTurn: id => {
       run.turnId = id;
     },
+    onContextWindow: tokens => {
+      run.contextWindow = tokens;
+    },
   };
-  return { request, finalTurnParams };
+  return { request, finalTurn };
 }

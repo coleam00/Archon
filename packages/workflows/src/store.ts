@@ -466,6 +466,7 @@ export class WorkflowRunExecutionClaimLostError extends Error {
   }
 }
 
+export const DETACHED_LAUNCH_METADATA_KEY = 'cli_detached_launch_token';
 export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
 
 /** The initial execution has no token; resumes mint one so old executors cannot release a later claim. */
@@ -959,6 +960,8 @@ export interface IWorkflowStore
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
    * outcome in place, so the caller must not announce its own failure. Missing runs and
    * other start states reject.
+   * `pendingLaunchToken` restricts the write to the matching detached launch while
+   * still pending; any ownership or status mismatch returns false without writing.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces
@@ -967,7 +970,7 @@ export interface IWorkflowStore
   failWorkflowRun(
     id: string,
     error: string,
-    options?: { exitReason?: RunExitReason; signal?: RunStopSignal }
+    options?: { exitReason?: RunExitReason; signal?: RunStopSignal; pendingLaunchToken?: string }
   ): Promise<{ failed: boolean }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

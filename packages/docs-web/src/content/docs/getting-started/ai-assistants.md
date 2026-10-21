@@ -38,7 +38,8 @@ When a node sets `output_format`, the parsed output is validated against the sch
 | Provider | Tier | How it works | On a validation miss |
 |---|---|---|---|
 | Claude, Codex, OpenCode | enforced | The SDK constrains decoding to the schema. | The node fails. A refusal or `max_tokens` truncation can still bypass the constraint, which is why the output is validated anyway. |
-| Pi, Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again with the schema errors, up to 3 times, then fails the node. |
+| Pi | best-effort | The schema, which must have `type: object` at its root, becomes the parameters of a `structured_output` tool the prompt asks the model to call. Pi validates each call and returns errors to the model in the same session; after 3 invalid calls the turn ends without output. A model that answers in text instead has JSON extracted from the reply, never from its thinking. The tool call cannot be forced, so the tier stays best-effort. | The executor asks again with the schema errors, up to 3 times, then fails the node. |
+| Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again with the schema errors, up to 3 times, then fails the node. |
 
 See [Workflow language → `output_format`](/reference/workflow-language/#output_format-for-structured-json) for field access.
 
@@ -165,7 +166,9 @@ assistants:
 
 A workflow's `effort:` overrides `modelReasoningEffort`.
 
-Some model routes reject a request that carries both tools and a strict output schema. On a model listed in `toolFreeStructuredOutputModels`, a node with `output_format` runs its tool turn without the schema, then one final turn on the same thread with the schema and no tools. That costs one extra model request per node. The list matches only a model Archon resolves (`assistants.codex.model`, a tier, an alias or the node's `model:`), not one set in Codex's own `config.toml`. Codex multi-agent is off on these threads. The list is read live, so a resumed run uses the current list.
+Some model routes reject a request that carries both tools and a strict output schema. On a model listed in `toolFreeStructuredOutputModels`, a node with `output_format` runs its tool turn without the schema, then one final turn on the same thread with the schema and no tools. That costs one extra model request per node. The list matches only a model Archon resolves (`assistants.codex.model`, a tier, an alias or the node's `model:`), not one set in Codex's own `config.toml`. The list is read live, so a resumed run uses the current list.
+
+The final turn drops the tools a Codex model catalog entry adds (`tool_mode`, `experimental_supported_tools`, `apply_patch_tool_type`): its process loads a catalog whose only entry is that model with no tools. The entry keeps the context window Codex reported for the tool turn, so Codex compacts the conversation before the final turn at about the size it would for the tool turn. Codex multi-agent is off on these threads, with one limit: Codex keeps a catalog entry's `multi_agent_version: v2` with the thread, so that entry's collaboration tools (`spawn_agent`, `send_message` and the rest) stay on both turns, including the final one. If such a model's route rejects them, drop `multi_agent_version` from that model's entry in the catalog Codex loads (`model_catalog_json` in Codex's `config.toml`; `codex debug models` prints the current one).
 
 ## Pi
 

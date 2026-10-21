@@ -22,6 +22,7 @@ import {
   SWEEP_ACTIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
+import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
 import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
@@ -184,8 +185,11 @@ describe('the merge record and the gate', () => {
     type Enum = { enum: string[] };
     type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
+      inputs: Record<string, unknown>;
       nodes: { id: string; output_format?: Schema }[];
     };
+    // A new input fails here until someone decides whether a follow-up sweep keeps it.
+    expect(Object.keys(workflow.inputs).sort()).toEqual([...MERGE_QUEUE_SELECTIONS, 'repo_host', 'repo_path'].sort());
     const at = (id: string, ...path: string[]): Schema | undefined =>
       path.reduce<Schema | undefined>(
         (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
@@ -990,26 +994,35 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
+  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge' };
+  const launchOf = (calls: string): string[] | undefined =>
+    readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
 
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
-    // The approval is acted on at once: a sweep starts on the answered run's config.
-    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
-    expect(launch).toEqual(expect.arrayContaining(['archon-merge-queue', '--config-from-run', 'run-1', '--detach']));
+    // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
+    expect(launchOf(calls)).toEqual(
+      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', '--config-from-run', 'run-1', '--detach'])
+    );
   }, 60_000);
 
   test('a return writes its ruling into the issue body and the build round starts from it', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'return', INPUTS_TEXT: '' });
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
+    // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
+    const launch = launchOf(calls);
+    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
+    expect(launch?.filter(arg => /^(order|limit|merge_method)=/.test(arg))).toEqual([]);
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });

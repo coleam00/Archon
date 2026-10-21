@@ -10,11 +10,12 @@ import type { ProviderCapabilities } from '../../types';
  * caller's env over Pi's inherited baseline), matching Claude/Codex semantics.
  *
  * structuredOutput is best-effort (not SDK-enforced like Claude/Codex): the
- * provider appends a "JSON only" instruction + the schema to the prompt and
- * the event bridge parses the final assistant transcript on agent_end.
- * Reliable on instruction-following models (GPT-5, Claude, Gemini 2.x,
- * recent Qwen Coder, DeepSeek V3); the dag-executor validates the parsed output
- * against the schema, re-asks up to 3× on a miss/invalid, then FAILS the node.
+ * node's schema becomes a terminating `structured_output` tool whose arguments
+ * are the output, with the reply text parsed as the fallback. It stays
+ * best-effort because Pi's agent session cannot force a tool call (`toolChoice`
+ * is not reachable from it), so a model can still answer in prose or not at
+ * all. The dag-executor validates the output against the schema, re-asks up to
+ * 3× on a miss/invalid, then FAILS the node.
  */
 export const PI_CAPABILITIES: ProviderCapabilities = {
   backgroundWork: 'none',
@@ -26,7 +27,7 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   plugins: false, // Pi has no plugins; its extensions are user-owned configuration
   agents: false,
   toolRestrictions: true,
-  structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
+  structuredOutput: 'best-effort', // terminating tool call, unforceable; text fallback + reask×3
   requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
   costControl: false, // no maxBudgetUsd translation — the executor warns and drops it

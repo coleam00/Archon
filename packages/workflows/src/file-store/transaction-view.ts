@@ -30,6 +30,7 @@ import {
   executionClaim,
   WorkflowRunExecutionClaimLostError,
   EXECUTION_CLAIM_METADATA_KEY,
+  DETACHED_LAUNCH_METADATA_KEY,
   sourceReleasedEvent,
 } from '../store';
 import {
@@ -375,6 +376,14 @@ export function createTransactionView(
       });
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
+      if (options?.pendingLaunchToken !== undefined) {
+        const current = runs.get(id);
+        if (
+          current?.status !== 'pending' ||
+          current.metadata[DETACHED_LAUNCH_METADATA_KEY] !== options.pendingLaunchToken
+        )
+          return { failed: false };
+      }
       const run = structuredClone(row(id));
       if (isTerminalRunStatus(run.status)) return { failed: false };
       if (run.status !== 'running' && run.status !== 'pending')

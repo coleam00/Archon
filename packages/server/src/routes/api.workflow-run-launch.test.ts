@@ -16,6 +16,12 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
+import { workflowRunConfigKeys } from '@archon/core/config';
+import {
+  workflowRunLaunchConfigSchema,
+  workflowRunLaunchJsonSchema,
+  workflowRunLaunchMultipartSchema,
+} from './schemas/workflow-run-launch.schemas';
 
 // ---------------------------------------------------------------------------
 // Tests: POST /api/workflows/:name/run
@@ -27,6 +33,116 @@ describe('POST /api/workflows/:name/run', () => {
     mockHandleMessage.mockReset();
     mockAddMessage.mockReset();
     mockGenerateAndSetTitle.mockReset();
+  });
+
+  test.each(['text', 'mixed', 'too many', 'too large'] as const)(
+    'refuses %s multipart files without writing uploads or dispatching',
+    async kind => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-invalid-launch-files-'));
+      setMockArchonHome(home);
+      const write = spyOn(fsPromises, 'writeFile');
+      mockFindConversationByPlatformId.mockResolvedValue(null);
+      try {
+        const form = new FormData();
+        form.set('conversationId', 'web-test-abc');
+        form.set('message', 'Deploy');
+        if (kind === 'text' || kind === 'mixed') form.append('files', 'request.txt');
+        if (kind === 'mixed' || kind === 'too many') {
+          const count = kind === 'too many' ? 6 : 1;
+          for (let index = 0; index < count; index++) {
+            form.append(
+              'files',
+              new File(['details'], `request-${index}.txt`, { type: 'text/plain' })
+            );
+          }
+        }
+        if (kind === 'too large') {
+          form.append(
+            'files',
+            new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'large.txt', { type: 'text/plain' })
+          );
+        }
+        const { app } = makeApp();
+        const response = await app.request('/api/workflows/deploy/run', {
+          method: 'POST',
+          body: form,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error:
+            kind === 'too many'
+              ? 'Maximum 5 files per message'
+              : kind === 'too large'
+                ? 'File "large.txt" exceeds the 10 MB size limit'
+                : 'files must contain only file parts',
+        });
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        expect(mockAddMessage).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+        expect(await fsPromises.readdir(home)).toEqual([]);
+      } finally {
+        write.mockRestore();
+        setMockArchonHome(originalHome);
+        await removeTempTree(home);
+      }
+    }
+  );
+
+  test('publishes both launch bodies with transport-specific fields', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/openapi.json');
+    expect(response.status).toBe(200);
+    const doc = (await response.json()) as ReturnType<typeof app.getOpenAPIDocument>;
+    type Schema = NonNullable<NonNullable<typeof doc.components>['schemas']>[string];
+    function resolve(schema: Schema | undefined): Exclude<Schema, { $ref: string }> {
+      if (!schema) throw new Error('Missing schema');
+      if ('$ref' in schema)
+        return resolve(doc.components?.schemas?.[schema.$ref.split('/').at(-1) ?? '']);
+      return schema;
+    }
+    const body = doc.paths['/api/workflows/{name}/run']?.post?.requestBody;
+    expect(body).toBeDefined();
+    if (!body || '$ref' in body) throw new Error('Missing launch request body');
+    expect(body.required).toBe(true);
+    expect(Object.keys(body.content)).toEqual(['application/json', 'multipart/form-data']);
+    const json = resolve(body.content['application/json']?.schema);
+    const form = resolve(body.content['multipart/form-data']?.schema);
+    for (const schema of [json, form]) {
+      expect(schema.required).toEqual(['conversationId', 'message']);
+      expect(resolve(schema.properties?.message).minLength).toBe(1);
+    }
+    expect(resolve(json.properties?.conversationId).pattern).toBeUndefined();
+    expect(resolve(form.properties?.conversationId).pattern).toBe('^[\\w-]+$');
+    for (const field of ['inputs', 'tiers', 'aliases', 'config']) {
+      expect(resolve(json.properties?.[field]).type).toBe('object');
+      expect(resolve(form.properties?.[field]).type).toBe('string');
+      expect(resolve(form.properties?.[field]).description).toContain('JSON');
+    }
+    expect(resolve(json.properties?.inputs).additionalProperties).toEqual({ type: 'string' });
+    expect(Object.keys(resolve(json.properties?.tiers).properties ?? {})).toEqual([
+      'small',
+      'medium',
+      'large',
+    ]);
+    const config = resolve(json.properties?.config);
+    expect(config.additionalProperties).toBe(false);
+    expect(Object.keys(config.properties ?? {}).sort()).toEqual([...workflowRunConfigKeys].sort());
+    for (const field of ['layer', 'source', 'docsPath', 'envVars'])
+      expect(config.properties).not.toHaveProperty(field);
+    expect(resolve(resolve(config.properties?.docs).properties?.path).type).toBe('string');
+    expect(resolve(config.properties?.env).additionalProperties).toEqual({ type: 'string' });
+    expect(config.not).toEqual({ required: ['assistant', 'defaultAssistant'] });
+    expect(json.not).toEqual({ required: ['adopt_run_id', 'supersedes_run_id'] });
+    for (const field of ['adopt_run_id', 'supersedes_run_id']) {
+      expect(resolve(json.properties?.[field]).minLength).toBe(1);
+      expect(form.properties).not.toHaveProperty(field);
+    }
+    const files = resolve(form.properties?.files);
+    expect(files.type).toBe('array');
+    expect(files.maxItems).toBe(5);
+    expect(resolve(files.items)).toMatchObject({ type: 'string', format: 'binary' });
+    expect(files.description).toContain('10485760 bytes');
   });
 
   test('dispatches workflow run to orchestrator and returns accepted', async () => {
@@ -453,6 +569,7 @@ describe('POST /api/workflows/:name/run', () => {
       body: 'not valid json {{{',
     });
     expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid JSON in request body' });
   });
 
   // -------------------------------------------------------------------------
@@ -526,7 +643,11 @@ describe('POST /api/workflows/:name/run', () => {
       });
       expect(response.status).toBe(400);
       const body = (await response.json()) as { error: string };
-      expect(body.error).toContain('inputs');
+      expect(body.error).toBe(
+        typeof inputs === 'object' && !Array.isArray(inputs)
+          ? "inputs value for 'diff' must be a string"
+          : 'inputs must be an object mapping input names to strings'
+      );
     }
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
@@ -601,6 +722,9 @@ describe('POST /api/workflows/:name/run', () => {
       body: form,
     });
     expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'inputs must be a JSON-encoded object of string values',
+    });
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
@@ -674,62 +798,109 @@ describe('POST /api/workflows/:name/run', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
-  test('forwards validated inline JSON config as structured context', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockHandleMessage.mockImplementationOnce(async () => {});
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/bench/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversationId: 'web-test-abc',
-        message: 'Go',
-        config: {
-          defaultAssistant: 'pi',
+  for (const assistantField of ['assistant', 'defaultAssistant'] as const) {
+    test.each(['json', 'multipart'])(
+      `forwards schema-valid %s config using ${assistantField}`,
+      async transport => {
+        mockFindConversationByPlatformId.mockResolvedValue(null);
+        mockHandleMessage.mockResolvedValue(undefined);
+        const config = {
+          [assistantField]: 'pi',
+          assistants: { pi: {} },
           tiers: { small: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
-          env: { BENCH_TOKEN: 'secret' },
-        },
-      }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(mockHandleMessage).toHaveBeenCalledWith(
-      expect.anything(),
-      'web-test-abc',
-      'Go',
-      expect.objectContaining({
-        workflowRunConfig: {
+          aliases: { '@planner': { provider: 'pi', model: 'minimax/MiniMax-M3' } },
+          docs: { path: 'handbook' },
+          env: { BENCH_TOKEN: 'test-token' },
+          workflows: { autoResumeOnQuotaReset: false },
+        };
+        expect(Object.keys(config).sort()).toEqual(
+          workflowRunConfigKeys
+            .filter(
+              key => key !== (assistantField === 'assistant' ? 'defaultAssistant' : 'assistant')
+            )
+            .sort()
+        );
+        const payload = {
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          inputs: { diff: 'D1' },
+          tiers: { large: 'pi/minimax/MiniMax-M3' },
+          aliases: { '@reviewer': 'pi/minimax/MiniMax-M3' },
+          config,
+        };
+        workflowRunLaunchJsonSchema.parse(payload);
+        const { app } = makeApp();
+        let response: Response;
+        if (transport === 'json') {
+          response = await app.request('/api/workflows/bench/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          const fields = {
+            ...payload,
+            inputs: JSON.stringify(payload.inputs),
+            tiers: JSON.stringify(payload.tiers),
+            aliases: JSON.stringify(payload.aliases),
+            config: JSON.stringify(config),
+          };
+          workflowRunLaunchMultipartSchema.parse(fields);
+          const form = new FormData();
+          for (const [name, value] of Object.entries(fields)) form.set(name, value);
+          response = await app.request('/api/workflows/bench/run', { method: 'POST', body: form });
+        }
+        expect(response.status).toBe(200);
+        expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({
+          workflowInputs: payload.inputs,
+          workflowModelOverrides: { tiers: payload.tiers, aliases: payload.aliases },
+        });
+        expect(mockHandleMessage.mock.calls[0]?.[3]?.workflowRunConfig).toEqual({
           source: { kind: 'http', label: 'inline' },
           layer: {
             assistant: 'pi',
-            tiers: { small: { provider: 'pi', model: 'minimax/MiniMax-M3' } },
-            envVars: { BENCH_TOKEN: 'secret' },
+            assistants: config.assistants,
+            tiers: config.tiers,
+            aliases: config.aliases,
+            docsPath: 'handbook',
+            envVars: config.env,
+            workflows: config.workflows,
           },
-        },
-      })
+        });
+      }
     );
-  });
+  }
 
-  test('accepts multipart config as a JSON-encoded object', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockHandleMessage.mockImplementationOnce(async () => {});
-    const form = new FormData();
-    form.append('conversationId', 'web-test-abc');
-    form.append('message', 'Go');
-    form.append('config', JSON.stringify({ docs: { path: 'handbook' } }));
-
+  test.each([
+    [{ docsPath: 'handbook' }, "Unknown run config key 'docsPath'"],
+    [{ envVars: { TOKEN: 'test' } }, "Unknown run config key 'envVars'"],
+    [{ layer: {} }, "Unknown run config key 'layer'"],
+    [{ docs: { unexpected: true } }, "Unknown run config key 'docs.unexpected'"],
+    [{ env: { TOKEN: 7 } }, "Invalid run config at 'envVars.TOKEN'"],
+    [{ tiers: { small: 'pi/model' } }, "Invalid run config at 'tiers.small'"],
+  ])('raw config schema and parser refuse %j', async (config, error) => {
+    expect(workflowRunLaunchConfigSchema.safeParse(config).success).toBe(false);
     const { app } = makeApp();
-    const response = await app.request('/api/workflows/bench/run', {
-      method: 'POST',
-      body: form,
-    });
-
-    expect(response.status).toBe(200);
-    const context = mockHandleMessage.mock.calls[0]?.[3];
-    expect(context?.workflowRunConfig).toEqual({
-      source: { kind: 'http', label: 'inline' },
-      layer: { docsPath: 'handbook' },
-    });
+    for (const transport of ['json', 'multipart']) {
+      const form = new FormData();
+      form.set('conversationId', 'web-test-abc');
+      form.set('message', 'Go');
+      form.set('config', JSON.stringify(config));
+      const response = await app.request(
+        '/api/workflows/bench/run',
+        transport === 'json'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Go', config }),
+            }
+          : { method: 'POST', body: form }
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: expect.stringContaining(error) });
+    }
+    expect(mockFindConversationByPlatformId).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   test('rejects caller-supplied server paths and ineffective config before dispatch', async () => {
@@ -739,6 +910,10 @@ describe('POST /api/workflows/:name/run', () => {
       [{ config: null }, "Invalid run config at 'document'"],
       [{ config: { paths: { worktrees: '/tmp/other' } } }, "Unknown run config key 'paths'"],
       [{ config: { unknown: true } }, "Unknown run config key 'unknown'"],
+      [
+        { config: { assistant: 'pi', defaultAssistant: 'pi' } },
+        "Run config cannot set both 'assistant' and 'defaultAssistant'; use one spelling.",
+      ],
     ] as const;
     for (const [payload, expectedError] of invalidConfigs) {
       const response = await app.request('/api/workflows/bench/run', {

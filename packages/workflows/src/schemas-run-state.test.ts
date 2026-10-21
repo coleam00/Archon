@@ -196,7 +196,14 @@ describe('persisted workflow continuation schemas', () => {
       for (const condition of [
         { kind: 'time' as const, resumeAt: timeWait.resumeAt },
         { kind: 'event' as const, event: 'checks.complete', resumeAt: timeWait.resumeAt },
-        { kind: 'attention' as const, message: 'Fix checks' },
+        {
+          kind: 'attention' as const,
+          message: 'Fix checks',
+          loopQuestionReferences: {
+            '$LOOP_PREV.work.output': '$other.output',
+            $LOOP_USER_INPUT: 'feedback',
+          },
+        },
       ]) {
         const wait = {
           owner: 'loop_group' as const,

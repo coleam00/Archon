@@ -313,6 +313,7 @@ export async function resumeTerminalWait(
   const waitOutput = await executeWaitNode(
     {
       ...ctx,
+      nodeOutputs: new Map([...ctx.nodeOutputs, ...(restoreLoopPrevOutputs(run) ?? [])]),
       stepNamePrefix: bodyStepNamePrefix,
       nodeInvocation: undefined,
       loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: resumeIteration }],

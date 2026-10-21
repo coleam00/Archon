@@ -12,6 +12,7 @@ const command = args.find(value => value === 'metadata' || value === 'op');
 
 if (command === 'metadata') {
   if (process.env.ARCHON_FORGE_TOKEN) throw new Error('metadata received credential');
+  if (process.env.GITHUB_URL) throw new Error('metadata received GitHub origin');
   if (mode === 'bad-metadata') process.stdout.write('{');
   else
     process.stdout.write(
@@ -19,7 +20,7 @@ if (command === 'metadata') {
         protocol: mode === 'bad-protocol' ? 2 : 1,
         name,
         version: '1.0.0',
-        forge: 'test',
+        forge: mode === 'github-origin' ? 'github' : 'test',
         hosts: ['forge.example'],
         capabilities: mode === 'unsupported' ? [] : ['resolve', 'checks.state'],
         token_env: mode === 'token' ? ['TEST_FORGE_TOKEN'] : [],
@@ -51,6 +52,16 @@ if (mode === 'environment') {
   process.stdout.write('x'.repeat(4096));
 } else {
   const input = (await Bun.stdin.json()) as { operationId: string; op: string; remote?: string };
+  if (mode === 'github-origin' || mode === 'other-origin') {
+    process.stdout.write(
+      JSON.stringify({
+        operationId: input.operationId,
+        ok: false,
+        error: { kind: 'forge_error', message: process.env.GITHUB_URL ?? 'absent' },
+      })
+    );
+    process.exit(1);
+  }
   if (mode === 'token-error') {
     process.stderr.write(`failed with ${process.env.ARCHON_FORGE_TOKEN}`);
     process.exit(7);

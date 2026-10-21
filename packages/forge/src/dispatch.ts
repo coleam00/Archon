@@ -543,6 +543,7 @@ export async function dispatchForge(
           credentialSource = credential.kind === 'selected' ? credential.source : undefined;
           const outcome = await runPluginProcess(plugin, ['op', request.op], {
             env,
+            forge: plugin.metadata.forge,
             stdin: JSON.stringify(request),
             token: credential.kind === 'selected' ? credential.token : undefined,
             timeoutMs: options.timeoutMs,

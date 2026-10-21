@@ -636,6 +636,45 @@ describe('workflow answer flag rejection and command discovery', () => {
 });
 
 describe('workflow run config argument', () => {
+  for (const flag of ['config', 'config-from-run']) {
+    it.each([false, true])(
+      `refuses --${flag} outside run before dispatch (json: %s)`,
+      async json => {
+        const root = mkdtempSync(join(tmpdir(), 'archon-config-refusal-'));
+        try {
+          const result = spawnSync(
+            process.execPath,
+            [CLI_ENTRY, 'help', `--${flag}`, 'unused-config', ...(json ? ['--json'] : [])],
+            {
+              cwd: root,
+              env: {
+                ...process.env,
+                ARCHON_HOME: root,
+                ARCHON_TELEMETRY_DISABLED: '1',
+                DATABASE_URL: '',
+              },
+              encoding: 'utf8',
+            }
+          );
+          const message =
+            flag === 'config'
+              ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+              : 'Error: --config-from-run can only be used with workflow run.';
+          expect(result.status, result.stderr).toBe(1);
+          if (json) {
+            expect(JSON.parse(result.stdout)).toEqual({ ok: false, error: message });
+            expect(result.stderr).toBe('');
+          } else {
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toBe(`${message}\n`);
+          }
+        } finally {
+          await removeTempTree(root);
+        }
+      }
+    );
+  }
+
   it('parses one local path', () => {
     const parsed = parseArgs({
       args: ['workflow', 'run', 'x', '--config', './config.minimax.yaml'],
