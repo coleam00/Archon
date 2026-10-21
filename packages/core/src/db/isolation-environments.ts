@@ -593,10 +593,9 @@ export async function listByCodebaseWithAge(
 
 /**
  * List active CONTAINER isolation environments (folder-project container backend),
- * newest first, with the codebase name and age in days. Used by `isolation
- * list/cleanup` to surface + reap containers; the run status (which decides
- * whether a container is reapable) is looked up per-row via
- * {@link import('./workflows').getRunByIsolationEnvId}.
+ * newest first, with the codebase name and age in days. This inventory serves
+ * both listing and cleanup. Listing's environment-ID run match is display-only;
+ * cleanup separately checks wider ownership via {@link getLiveRunOwningEnv}.
  */
 export async function listActiveContainerEnvironments(): Promise<
   readonly (IsolationEnvironmentRow & {

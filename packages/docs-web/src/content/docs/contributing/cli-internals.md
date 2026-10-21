@@ -241,8 +241,9 @@ archon isolation list → isolationListCommand()
   │
   ├─ @archon/core listContainerEnvironments()
   │    ├─ isolationDb.listActiveContainerEnvironments()
-  │    └─ getRunByIsolationEnvId() for each container
-  │         └─ Return matched run/status, no match, or lookup-failed
+  │    ├─ getRunByIsolationEnvId() for each container
+  │    │    └─ Return matched run or null; throw on query/status errors
+  │    └─ Build summaries; catch lookup errors and set runStatus: lookup-failed
   │
   └─ printContainerEnvironments()
        └─ Print run status, no run (orphan), or run lookup failed
