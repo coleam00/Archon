@@ -803,6 +803,130 @@ describe('workflowGetCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  const usageCases: [string, Record<string, unknown>, string, string, string][] = [
+    [
+      'recorded numbers',
+      { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      '$0.024',
+      '8420',
+      '2180',
+    ],
+    [
+      'reported zero',
+      { total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 },
+      '$0',
+      '0',
+      '0',
+    ],
+    [
+      'tiny cost',
+      { total_cost_usd: 0.00000001, total_tokens_in: 2, total_tokens_out: 3 },
+      '$1e-8',
+      '2',
+      '3',
+    ],
+    ['missing data', {}, 'unknown', 'unknown', 'unknown'],
+    [
+      'null values',
+      { total_cost_usd: null, total_tokens_in: null, total_tokens_out: null },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'invalid values',
+      { total_cost_usd: '0', total_tokens_in: {}, total_tokens_out: '12' },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'nonfinite values',
+      { total_cost_usd: Infinity, total_tokens_in: NaN, total_tokens_out: -Infinity },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'unknown tokens',
+      { total_cost_usd: 1, total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: true },
+      '$1',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'malformed token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: 'false' },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'null token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: null },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'valid output axis',
+      { total_tokens_in: 'bad', total_tokens_out: 3, total_tokens_unknown: false },
+      'unknown',
+      'unknown',
+      '3',
+    ],
+    ['valid input axis', { total_tokens_in: 2, total_tokens_out: [] }, 'unknown', '2', 'unknown'],
+    [
+      'undefined token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: undefined },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'numeric token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: 0 },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'object token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: {} },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'finite recorded values',
+      { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
+      '$-1',
+      '1.5',
+      '-2',
+    ],
+  ];
+
+  it.each(usageCases)(
+    'prints qualified usage for %s',
+    async (_name, metadata, cost, input, output) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-usage',
+        checkout_baseline: null,
+        workflow_name: 'plan',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata,
+      });
+      expect(await workflowGetCommand(createTestWorkflowHost(), 'run-usage')).toBe(0);
+      expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
+      expect(consoleSpy).toHaveBeenCalledWith(`    Cost: ${cost}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`    Input tokens: ${input}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`    Output tokens: ${output}`);
+    }
+  );
+
   it('prints not-found (human) and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
@@ -1211,6 +1335,13 @@ describe('workflowGetCommand', () => {
 
   it('emits the raw run as a single clean JSON object', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
+    const metadata = {
+      total_cost_usd: 0.024,
+      total_tokens_in: null,
+      total_tokens_out: 'historical',
+      total_tokens_unknown: null,
+      custom: { value: 1 },
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-json',
       checkout_baseline: null,
@@ -1218,7 +1349,7 @@ describe('workflowGetCommand', () => {
       status: 'completed',
       working_path: '/tmp/wt',
       started_at: new Date(),
-      metadata: {},
+      metadata,
     });
 
     const code = await workflowGetCommand(createTestWorkflowHost(), 'run-json', true);
@@ -1227,9 +1358,12 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       id: string;
       status: string;
+      metadata: Record<string, unknown>;
     };
     expect(parsed.id).toBe('run-json');
     expect(parsed.status).toBe('completed');
+    expect(parsed.metadata).toEqual(metadata);
+    expect(consoleSpy).not.toHaveBeenCalled();
     expect(code).toBe(0);
   });
 
