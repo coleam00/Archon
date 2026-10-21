@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const roots: string[] = [];
-const fixtures: ReturnType<typeof fixture>[] = [];
+const fixtures: { home: string; runs: () => RunRow[] }[] = [];
 afterEach(async () => {
   const priorHome = process.env.ARCHON_HOME;
   try {
