@@ -432,7 +432,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
 
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
@@ -485,7 +485,8 @@ else {
     env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
   }
 
-  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
+  // Parent env files must not reintroduce workflow inputs omitted by the fixture.
+  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',
