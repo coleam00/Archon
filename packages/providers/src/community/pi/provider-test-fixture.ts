@@ -53,6 +53,7 @@ const mockSession = {
   getAllTools: () => [],
   getToolDefinition: () => undefined,
   setActiveToolsByName: (_toolNames: string[]) => undefined,
+  agent: {},
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -220,7 +221,7 @@ export const mockSettingsManagerCreate = mock(() => ({
   getProjectSettings: mockSettingsManagerGetProjectSettings,
 }));
 export const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({
-  getDefaultTools: () => undefined,
+  getDefaultTools: (): string[] | undefined => undefined,
 }));
 export const mockResourceLoaderReload = mock(async () => undefined);
 

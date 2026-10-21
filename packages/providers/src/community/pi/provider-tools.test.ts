@@ -1,6 +1,7 @@
 import {
   mockCreateAgentSession,
   mockCreateBashTool,
+  mockSettingsManagerInMemory,
   consume,
   resetScript,
   scriptedAgentEnd,
@@ -212,5 +213,48 @@ describe('PiProvider tools', () => {
     for (const call of mockCreateBashTool.mock.calls) {
       expect(call[1]).toBeUndefined();
     }
+  });
+
+  test("the user's Pi defaultTools setting survives when output_format adds a tool", async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerInMemory.mockImplementationOnce(() => ({
+      getDefaultTools: () => ['read', 'grep', 'ls'],
+    }));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })
+    );
+
+    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
+    const tools = callArgs.customTools as { __piTool?: string; name?: string }[];
+    expect(tools.map(t => t.__piTool ?? t.name)).toEqual([
+      'read',
+      'grep',
+      'ls',
+      'structured_output',
+    ]);
+  });
+
+  test("the user's Pi defaultTools setting survives env-aware bash injection", async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerInMemory.mockImplementationOnce(() => ({
+      getDefaultTools: () => ['read', 'bash'],
+    }));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { DATABASE_URL: 'postgres://managed' },
+      })
+    );
+
+    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
+    const tools = callArgs.customTools as { __piTool: string }[];
+    expect(tools.map(t => t.__piTool)).toEqual(['read', 'bash']);
   });
 });

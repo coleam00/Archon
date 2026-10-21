@@ -38,7 +38,8 @@ When a node sets `output_format`, the parsed output is validated against the sch
 | Provider | Tier | How it works | On a validation miss |
 |---|---|---|---|
 | Claude, Codex, OpenCode | enforced | The SDK constrains decoding to the schema. | The node fails. A refusal or `max_tokens` truncation can still bypass the constraint, which is why the output is validated anyway. |
-| Pi, Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again with the schema errors, up to 3 times, then fails the node. |
+| Pi | best-effort | The schema, which must have `type: object` at its root, becomes the parameters of a `structured_output` tool the prompt asks the model to call. Pi validates each call and returns errors to the model in the same session; after 3 invalid calls the turn ends without output. A model that answers in text instead has JSON extracted from the reply, never from its thinking. The tool call cannot be forced, so the tier stays best-effort. | The executor asks again with the schema errors, up to 3 times, then fails the node. |
+| Copilot | best-effort | The schema is appended to the prompt. JSON is extracted from the reply and repaired (trailing commas, single quotes, truncated tails). | The executor asks again with the schema errors, up to 3 times, then fails the node. |
 
 See [Workflow language → `output_format`](/reference/workflow-language/#output_format-for-structured-json) for field access.
 

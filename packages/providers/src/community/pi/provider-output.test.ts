@@ -1,6 +1,7 @@
 import {
   type FakeEvent,
   mockPrompt,
+  mockCreateAgentSession,
   consume,
   resetScript,
   scriptedAgentEnd,
@@ -131,7 +132,7 @@ describe('PiProvider output', () => {
     ];
   }
 
-  test('outputFormat: schema is appended to prompt as JSON instruction', async () => {
+  test('outputFormat: the prompt asks for the structured_output tool call', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -145,11 +146,11 @@ describe('PiProvider output', () => {
       })
     );
 
-    // Prompt should now contain the original instruction + the schema hint.
     expect(mockPrompt).toHaveBeenCalled();
     const [sentPrompt] = mockPrompt.mock.calls[0] as [string];
     expect(sentPrompt).toContain('Summarize this bug.');
-    expect(sentPrompt).toContain('Respond with ONLY a JSON object');
+    expect(sentPrompt).toContain('calling the `structured_output` tool');
+    expect(sentPrompt).not.toContain('Respond with ONLY a JSON object');
     expect(sentPrompt).toContain('"area"');
   });
 
@@ -197,7 +198,7 @@ describe('PiProvider output', () => {
     const { chunks } = await consume(
       new PiProvider().sendQuery('x', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        outputFormat: { type: 'json_schema', schema: {} },
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
       })
     );
 
@@ -215,7 +216,7 @@ describe('PiProvider output', () => {
     const { chunks, error } = await consume(
       new PiProvider().sendQuery('x', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        outputFormat: { type: 'json_schema', schema: {} },
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
       })
     );
 
@@ -245,5 +246,61 @@ describe('PiProvider output', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
     );
     expect(result?.structuredOutput).toBeUndefined();
+  });
+
+  test('outputFormat: adds the structured_output tool beside the default tools', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })
+    );
+
+    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
+    const tools = callArgs.customTools as { __piTool?: string; name?: string }[];
+    expect(callArgs.noTools).toBe('builtin');
+    expect(tools.map(t => t.__piTool ?? t.name)).toEqual([
+      'read',
+      'bash',
+      'edit',
+      'write',
+      'structured_output',
+    ]);
+  });
+
+  test('outputFormat: a schema without an object root fails before the session opens', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { failure } = await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: { type: 'array', items: {} } },
+      })
+    );
+
+    expect(failure?.class).toBe('misconfigured');
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  test('outputFormat: a schema Pi cannot compile fails before the session opens', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { failure } = await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: {
+          type: 'json_schema',
+          schema: { type: 'object', properties: { id: { type: 'string', pattern: '(' } } },
+        },
+      })
+    );
+
+    expect(failure?.class).toBe('misconfigured');
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 });
