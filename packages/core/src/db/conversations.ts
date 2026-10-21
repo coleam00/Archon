@@ -148,7 +148,10 @@ export async function clearConversationCheckout(
 ): Promise<Conversation> {
   assertPublicConversation(id);
   await pool.query(
-    `UPDATE remote_agent_conversations SET isolation_env_id = NULL, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_conversations SET isolation_env_id = NULL,
+       cwd = CASE WHEN cwd = (SELECT working_path FROM remote_agent_isolation_environments WHERE id = $2)
+         THEN NULL ELSE cwd END,
+       updated_at = ${getDialect().now()}
      WHERE id = $1 AND isolation_env_id = $2`,
     [id, expectedEnvironmentId]
   );

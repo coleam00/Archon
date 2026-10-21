@@ -31,6 +31,7 @@ export interface IIsolationStore {
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
   listActive(): Promise<readonly IsolationEnvironmentRow[]>;
+  /** Adopted worktrees must still exist when published under the cleanup exclusion. */
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
   /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
   updateMetadata(
@@ -45,8 +46,8 @@ export interface IIsolationStore {
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
   /**
-   * Retire only the observed worktree registration, atomically. Succeeds if that
-   * registration is already destroyed; throws WorktreeRegistrationChangedError
+   * Retire only the observed worktree registration under the acquisition exclusion.
+   * Claimable run owners veto retirement. Succeeds if the registration is already destroyed; throws WorktreeRegistrationChangedError
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;

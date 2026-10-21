@@ -1,4 +1,6 @@
-import type { WorkflowRun } from './workflow-run';
+import { ownedWorktreeSchema, type WorkflowRun } from './workflow-run';
+
+const ownedCheckoutReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
 
 export type RunCheckout = Pick<WorkflowRun, 'codebase_id' | 'metadata'> & {
   working_path?: string | null;
@@ -9,11 +11,8 @@ type CheckoutRun = Pick<WorkflowRun, 'working_path' | 'metadata'>;
 export function checkoutEnvironmentReferences(
   metadata: Record<string, unknown>
 ): readonly [environmentId: unknown, ownedId: unknown] {
-  const owned = metadata.owned_worktree;
-  return [
-    metadata.isolation_env_id,
-    owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null,
-  ];
+  const owned = ownedCheckoutReferenceSchema.safeParse(metadata.owned_worktree);
+  return [metadata.isolation_env_id, owned.success ? owned.data.envId : null];
 }
 
 export function introducesCheckout(

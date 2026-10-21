@@ -1,10 +1,10 @@
 // @archon-test-isolated
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IsolationResolver } from '@archon/isolation';
+import { IsolationResolver, registerWorktree } from '@archon/isolation';
 import { toRepoPath, toBranchName } from '@archon/git';
 import { Database, SQLiteError } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
@@ -129,6 +129,154 @@ for (const kind of ['sql', 'files'] as const) {
       });
     }
   }
+
+  test.each(['metadata', 'owned', ...(kind === 'sql' ? ['conversation'] : [])])(
+    `${kind}: pending %s alias owner protects every registration of the checkout`,
+    async channel => {
+      const { env, create } = await fixture();
+      const alias = await isolation.create({
+        codebase_id: env.codebase_id,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: env.working_path,
+        branch_name: toBranchName(env.branch_name),
+      });
+      let origin;
+      if (channel === 'conversation') {
+        const conversationId = randomUUID();
+        await db.query(
+          `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+          [conversationId, conversationId, alias.id]
+        );
+        origin = { conversationId };
+      }
+      await create({
+        origin,
+        metadata:
+          channel === 'metadata'
+            ? { isolation_env_id: alias.id }
+            : channel === 'owned'
+              ? { owned_worktree: { envId: alias.id } }
+              : {},
+      });
+      await expect(
+        isolation.withWorktreeRegistration(env, async mark => mark())
+      ).rejects.toBeInstanceOf(WorktreeInUseError);
+    }
+  );
+
+  test.each(['pending', 'running', 'paused', 'failed'] as const)(
+    `${kind}: direct ghost retirement cannot bypass a %s owner`,
+    async status => {
+      const { env, create } = await fixture();
+      const run = await create({ metadata: { isolation_env_id: env.id } });
+      if (status !== 'pending') await store.claimPendingWorkflowRun(run.id);
+      if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+      if (status === 'failed') await store.failWorkflowRun(run.id, 'preserved');
+      await expect(isolation.markWorktreeDestroyed(env)).rejects.toBeInstanceOf(WorktreeInUseError);
+      expect((await isolation.getById(env.id))?.status).toBe('active');
+    }
+  );
+
+  test(`${kind}: retiring an already retired registration preserves a later alias owner`, async () => {
+    const { env, create } = await fixture();
+    await isolation.markWorktreeDestroyed(env);
+    const alias = await isolation.create({
+      codebase_id: env.codebase_id,
+      workflow_type: 'task',
+      workflow_id: randomUUID(),
+      working_path: env.working_path,
+      branch_name: toBranchName(env.branch_name),
+    });
+    await create({ metadata: { isolation_env_id: alias.id } });
+    await isolation.markWorktreeDestroyed(env);
+    expect((await isolation.getById(alias.id))?.status).toBe('active');
+  });
+
+  test.each(['branch', 'provider'] as const)(
+    `${kind}: %s adoption cannot publish a checkout removed before registration`,
+    async route => {
+      const { env, create } = await fixture();
+      const run = await create({ working_path: env.working_path });
+      await store.failWorkflowRun(run.id, 'preserved');
+      await mkdir(join(env.working_path, '.git'), { recursive: true });
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const cleanup = isolation.withWorktreeRegistration(
+        env,
+        async mark => {
+          entered.resolve();
+          await finish.promise;
+          await removeTempTree(env.working_path);
+          await mark();
+        },
+        { runOwnership: { releaseFailed: { kind: 'settled' } } }
+      );
+      await entered.promise;
+      const record = {
+        codebase_id: env.codebase_id,
+        workflow_type: 'pr' as const,
+        workflow_id: randomUUID(),
+      };
+      const adoption =
+        route === 'branch'
+          ? isolation.create({
+              ...record,
+              working_path: env.working_path,
+              branch_name: toBranchName(env.branch_name),
+              metadata: { adopted: true },
+            })
+          : registerWorktree(
+              {
+                store: isolation,
+                registrationsBeforeCreation: [env],
+                provider: {
+                  destroy: async () => {
+                    throw new Error('adopted worktrees must never be rolled back');
+                  },
+                },
+              },
+              {
+                id: env.working_path,
+                provider: 'worktree',
+                workingPath: env.working_path,
+                branchName: toBranchName(env.branch_name),
+                status: 'active',
+                createdAt: new Date(),
+                metadata: { provenance: 'adopted', adopted: true },
+              },
+              toRepoPath(root),
+              record
+            );
+      const outcome = Promise.allSettled([adoption]);
+      finish.resolve();
+      await cleanup;
+      await expect(adoption).rejects.toThrow(env.working_path);
+      await outcome;
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow('start a fresh run');
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+    }
+  );
+
+  test(`${kind}: published adoption and its pending owner win before retirement`, async () => {
+    const { env, create } = await fixture();
+    await mkdir(join(env.working_path, '.git'), { recursive: true });
+    const alias = await isolation.create({
+      codebase_id: env.codebase_id,
+      workflow_type: 'pr',
+      workflow_id: randomUUID(),
+      working_path: env.working_path,
+      branch_name: toBranchName(env.branch_name),
+      metadata: { adopted: true },
+    });
+    await create({ metadata: { isolation_env_id: alias.id } });
+    await expect(
+      isolation.withWorktreeRegistration(env, async mark => mark())
+    ).rejects.toBeInstanceOf(WorktreeInUseError);
+  });
 
   test(`${kind}: activation and resume winning first block every cleanup release policy`, async () => {
     for (const status of ['pending', 'running', 'paused'] as const) {
@@ -751,9 +899,13 @@ test('SQL conversation association is checked under the same checkout exclusion'
   );
 });
 
-test.each([false, true])(
-  'SQL conditional checkout clear preserves replacement=%s and its pending owner',
-  async replacement => {
+test.each(
+  [false, true].flatMap(replacement =>
+    ['matching', 'override', 'absent'].map(cwd => ({ replacement, cwd }))
+  )
+)(
+  'SQL conditional checkout clear preserves $cwd cwd and replacement=$replacement',
+  async ({ replacement, cwd }) => {
     const codebase = randomUUID();
     await db.query(
       'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
@@ -784,7 +936,11 @@ test.each([false, true])(
           origin: { conversationId },
         })
       : null;
+    const previousCwd =
+      cwd === 'matching' ? retired.working_path : cwd === 'override' ? root : null;
+    await updateConversation(conversationId, { cwd: previousCwd });
     const conversation = await clearConversationCheckout(conversationId, retired.id);
+    expect(conversation.cwd).toBe(!replacement && cwd === 'matching' ? null : previousCwd);
     expect(conversation.isolation_env_id).toBe(current?.id ?? null);
     expect((await getConversationById(conversationId))?.isolation_env_id).toBe(current?.id ?? null);
     if (current && run) {
@@ -801,3 +957,46 @@ test('SQL conditional checkout clear refuses a missing conversation', async () =
     'Conversation not found:'
   );
 });
+
+test.each(['path', 'metadata', 'owned'] as const)(
+  'SQL resume prefers durable %s checkout over a later conversation binding',
+  async channel => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const createEnv = () =>
+      sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+      });
+    const a = await createEnv();
+    const b = await createEnv();
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, a.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'original',
+      user_message: '',
+      codebase_id: codebase,
+      working_path: channel === 'path' ? a.working_path : undefined,
+      metadata:
+        channel === 'metadata'
+          ? { isolation_env_id: a.id }
+          : channel === 'owned'
+            ? { owned_worktree: { envId: a.id } }
+            : {},
+      origin: { conversationId },
+    });
+    await sqlStore.failWorkflowRun(run.id, 'original');
+    await updateConversation(conversationId, { isolation_env_id: b.id });
+    await sql.withWorktreeRegistration(b, async mark => mark(), { runOwnership: false });
+    await expect(sqlStore.resumeWorkflowRun(run.id)).resolves.toBeDefined();
+  }
+);

@@ -35,6 +35,7 @@ import type {
 } from './types';
 import {
   WorktreeRegistrationChangedError,
+  WorktreeInUseError,
   sameWorktreeRegistration,
   worktreeRegistrationMetadata,
 } from './types';
@@ -483,7 +484,11 @@ export class IsolationResolver {
     try {
       await this.store.markWorktreeDestroyed(env);
     } catch (cleanupError) {
-      if (cleanupError instanceof WorktreeRegistrationChangedError) throw cleanupError;
+      if (
+        cleanupError instanceof WorktreeRegistrationChangedError ||
+        cleanupError instanceof WorktreeInUseError
+      )
+        throw cleanupError;
       const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
       getLog().error(
         { err, errorType: err.constructor.name, isolationEnvId: env.id },

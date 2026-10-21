@@ -43,7 +43,9 @@ export async function releasedCheckout(
       run.working_path,
       typeof environmentId === 'string' ? environmentId : null,
       typeof ownedId === 'string' ? ownedId : null,
-      run.conversation_id,
+      run.working_path || typeof environmentId === 'string' || typeof ownedId === 'string'
+        ? null
+        : run.conversation_id,
     ]
   );
   return result.rows[0]?.working_path;

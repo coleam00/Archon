@@ -1,3 +1,5 @@
+import { worktreeExists, toWorktreePath } from '@archon/git';
+import { CheckoutReleasedError } from '@archon/workflows/schemas/checkout-ownership';
 import type { FailedRunRelease } from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
@@ -46,6 +48,7 @@ import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-li
 function liveOwner(
   runs: Iterable<WorkflowRun>,
   env: IsolationEnvironmentRow,
+  environments: readonly IsolationEnvironmentRow[],
   release?: FailedRunRelease,
   excludeRunId?: string
 ): WorkflowRun | undefined {
@@ -67,7 +70,12 @@ function liveOwner(
         if (time && time.getTime() < Date.now() - release.staleDays * 86_400_000) return false;
       }
       return (
-        checkoutEnvironmentReferences(run.metadata).includes(env.id) ||
+        environments.some(
+          alias =>
+            alias.codebase_id === env.codebase_id &&
+            alias.working_path === env.working_path &&
+            checkoutEnvironmentReferences(run.metadata).includes(alias.id)
+        ) ||
         (run.codebase_id === env.codebase_id && run.working_path === env.working_path)
       );
     });
@@ -251,6 +259,13 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       create: input =>
         commit(root, [], async () => {
           const rows = await environments();
+          if (
+            (input.provider ?? 'worktree') === 'worktree' &&
+            input.metadata?.adopted === true &&
+            !(await worktreeExists(toWorktreePath(input.working_path)))
+          ) {
+            throw new CheckoutReleasedError(input.working_path);
+          }
           const prior = rows.find(
             row =>
               row.codebase_id === input.codebase_id &&
@@ -315,11 +330,15 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
       markWorktreeDestroyed: observed =>
-        commit(root, [], async () => {
+        commit(root, 'all', async runs => {
           const rows = await environments();
           const row = rows.find(row => row.id === observed.id);
           if (!row || !sameWorktreeRegistration(row, observed)) {
             throw new WorktreeRegistrationChangedError(observed.id);
+          }
+          if (row.status === 'active') {
+            const owner = liveOwner(runs.values(), row, rows);
+            if (owner) throw new WorktreeInUseError(row.id, owner.id, owner.status);
           }
           row.status = 'destroyed';
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
@@ -332,7 +351,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
             throw new WorktreeRegistrationChangedError(observed.id);
           }
           if (options?.runOwnership !== false) {
-            const owner = liveOwner(runs.values(), row, options?.runOwnership?.releaseFailed);
+            const owner = liveOwner(runs.values(), row, rows, options?.runOwnership?.releaseFailed);
             if (owner) throw new WorktreeInUseError(row.id, owner.id, owner.status);
           }
           const result = await remove(async () => {
@@ -387,7 +406,10 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     getCodebase: id => records.codebases.getCodebase(id),
     getLiveRunOwningEnv: async (id, release, excludeRunId) => {
       const env = await records.isolation.getById(id);
-      return env ? (liveOwner(await listRuns(root), env, release, excludeRunId) ?? null) : null;
+      return env
+        ? (liveOwner(await listRuns(root), env, await readEnvironments(), release, excludeRunId) ??
+            null)
+        : null;
     },
   };
   const deps: ReturnType<typeof createWorkflowDeps> = {
