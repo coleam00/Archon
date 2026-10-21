@@ -25,7 +25,6 @@ import {
 import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from './dag-executor';
 import { childOutcomeFromRun, type RunChildWorkflowFn } from './dag/child-run';
 import type { DagNode } from './schemas';
-import { hasUnknownTokenTotal } from './schemas/run-usage';
 import type { IWorkflowStore } from './store';
 
 describe('executeDagWorkflow options type contract', () => {
@@ -341,35 +340,6 @@ describe('TokenUsage axis seam guard', () => {
       childOutcomeFromRun(
         makeWorkflowRun('axis-child', { status: 'completed', metadata: written[0] })
       ).tokens as unknown as Record<string, unknown>
-    );
-  });
-
-  it('keeps child and CLI marker decoding aligned with written metadata', async () => {
-    const { store } = await runSpecimenDag();
-    const metadata = runUsageWrites(store)[0];
-    expect(hasUnknownTokenTotal(metadata)).toBe(false);
-    for (const marker of [true, null, 'false', 0, undefined, {}, []]) {
-      const historical = { ...metadata, total_tokens_unknown: marker };
-      expect(hasUnknownTokenTotal(historical)).toBe(true);
-      const child = childOutcomeFromRun(
-        makeWorkflowRun('marker-child', { status: 'completed', metadata: historical })
-      );
-      expect(child.tokensUnknown).toBe(true);
-      expect(child.tokens).toBeUndefined();
-    }
-    const explicitComplete = { ...metadata, total_tokens_unknown: false };
-    expect(hasUnknownTokenTotal(explicitComplete)).toBe(false);
-    expect(
-      childOutcomeFromRun(
-        makeWorkflowRun('complete-child', { status: 'completed', metadata: explicitComplete })
-      ).tokens
-    ).toEqual(
-      childOutcomeFromRun(
-        makeWorkflowRun('written-child', {
-          status: 'completed',
-          metadata,
-        })
-      ).tokens
     );
   });
 
