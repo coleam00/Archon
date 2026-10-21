@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, spyOn, test } from 'bun:test';
+import { ZodError } from 'zod';
 import { mkdtemp, readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join, win32, posix } from 'node:path';
 import * as pathModule from 'node:path';
@@ -998,6 +999,12 @@ for (const corruption of queuedCorruptions) {
     await store.admitResourceStart(queued);
     await store.admitResourceStart(foreignHolder);
     await store.admitResourceStart(foreignQueued);
+    const slotPath = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update('foreign').digest('hex')}.json`
+    );
+    const intactSlot = await readFile(slotPath, 'utf8');
     const path = await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
     const unclassified = !['launch', 'missing-status', 'invalid-status'].includes(corruption);
     const checkListing = async () => {
@@ -1021,6 +1028,12 @@ for (const corruption of queuedCorruptions) {
     await checkListing();
     await finishRun(root, holder.launch.run.id);
     const listed = await checkListing();
+    if (corruption === 'slot-json' || corruption === 'slot-null') {
+      await expect(
+        store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).rejects.toThrow();
+      await writeFile(slotPath, intactSlot);
+    }
     for (const resource of new Set(
       listed.flatMap(row => ('error' in row ? [] : [row])).map(row => row.resource)
     )) {
@@ -1028,6 +1041,8 @@ for (const corruption of queuedCorruptions) {
         { status: 'admitted', runId: queued.launch.run.id },
       ]);
     }
+    if (corruption === 'slot-json' || corruption === 'slot-null')
+      await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
     expect(await store.listQueuedResourceStartsForHost('foreign-host')).toMatchObject([
       { error: expect.any(Error) },
     ]);
@@ -1204,14 +1219,14 @@ test.each(['paused', 'failed'] as const)(
 );
 
 test.each(
-  (['first', 'repeated'] as const).flatMap(refusal =>
+  (['first', 'repeated', 'before retry'] as const).flatMap(refusal =>
     (['admission', 'drain', 'paused resume', 'failed resume'] as const).map(operation => ({
       refusal,
       operation,
     }))
   )
 )(
-  'a $refusal refused historical continuation keeps priority over $operation',
+  'historical continuation with $refusal refusal keeps priority over $operation',
   async ({ refusal, operation }) => {
     const { root, store, holder, queued, resuming } = await releasedHolderFixture(
       'released-before-upgrade',
@@ -1222,16 +1237,17 @@ test.each(
     occupant.launch.execution.cwd = '/occupant';
     expect(await store.admitResourceStart(occupant)).toMatchObject({ status: 'admitted' });
     const existingWait = { since: '2026-01-02T00:00:00.000Z' };
-    if (refusal === 'repeated') {
+    if (refusal !== 'first') {
       await store.updateWorkflowRun(holder.launch.run.id, {
         metadata: { capacity_wait: existingWait },
       });
     }
-    await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
-      blocker: { kind: 'run', id: occupant.launch.run.id },
-      refusal: 'waiting',
-    });
-    if (refusal === 'repeated')
+    if (refusal !== 'before retry')
+      await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
+        blocker: { kind: 'run', id: occupant.launch.run.id },
+        refusal: 'waiting',
+      });
+    if (refusal !== 'first')
       expect((await store.getWorkflowRun(holder.launch.run.id))?.metadata.capacity_wait).toEqual(
         existingWait
       );
@@ -1303,3 +1319,58 @@ for (const status of ['paused', 'failed'] as const) {
     }
   );
 }
+
+test.each(
+  (['admission', 'drain', 'paused resume', 'failed resume'] as const).flatMap(operation =>
+    (['admitted', 'holders', 'json'] as const).map(damage => ({ operation, damage }))
+  )
+)(
+  'damaged foreign slot $damage surfaces its error during $operation',
+  async ({ operation, damage }) => {
+    const { root, store } = await fixture();
+    const foreign = { ...intent(), resource: 'foreign' };
+    const contender = intent();
+    contender.launch.run.metadata.admission_checkout_guard = false;
+    if (operation.includes('resume')) contender.launch.execution.cwd = '/contender';
+    if (operation !== 'admission') {
+      const occupant = intent();
+      occupant.launch.execution.cwd = '/occupant';
+      await store.admitResourceStart(occupant);
+      if (operation === 'drain') await store.admitResourceStart(contender);
+      else {
+        await finishRun(root, occupant.launch.run.id);
+        await store.admitResourceStart(contender);
+        if (operation === 'paused resume')
+          await store.updateWorkflowRun(contender.launch.run.id, { status: 'paused' });
+        else await store.failWorkflowRun(contender.launch.run.id, 'failed');
+      }
+      await finishRun(root, occupant.launch.run.id);
+    }
+    await store.admitResourceStart(foreign);
+    const path = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update('foreign').digest('hex')}.json`
+    );
+    const slot = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, damage === 'json' ? '{' : JSON.stringify({ ...slot, [damage]: 42 }));
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    const attempt = () =>
+      operation === 'admission'
+        ? store.admitResourceStart(contender)
+        : operation === 'drain'
+          ? store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+          : store.resumeWorkflowRun(contender.launch.run.id);
+    await expect(attempt()).rejects.toMatchObject({
+      message: `Invalid resource slot membership 'resource/slots/${createHash('sha256').update('foreign').digest('hex')}.json'`,
+      cause: expect.any(damage === 'json' ? SyntaxError : ZodError),
+    });
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('pending');
+    await writeFile(path, JSON.stringify(slot));
+    if (operation === 'admission') expect(await attempt()).toMatchObject({ status: 'admitted' });
+    else if (operation === 'drain')
+      expect(await attempt()).toMatchObject([{ runId: contender.launch.run.id }]);
+    else expect(await attempt()).toMatchObject({ status: 'running' });
+  }
+);

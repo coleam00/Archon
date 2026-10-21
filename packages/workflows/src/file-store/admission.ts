@@ -230,7 +230,7 @@ export function createAdmissionTransaction(
         )
           return true;
       } catch (error) {
-        if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+        throw new Error(`Invalid resource slot membership '${path}'`, { cause: error });
       }
     }
     return false;
@@ -251,8 +251,16 @@ export function createAdmissionTransaction(
           },
         };
       const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
-      // Old released slots have no independent membership. Their checkout remains
-      // exclusive, but they must not become capacity waiters on an unproven resource.
+      if (!knownForeign && envelope?.resource === resource && capacityWaiters([run]).length > 0) {
+        const row = requestSchema
+          .refine(row => row.id === run.id && row.launch.run.id === run.id, {
+            message: `Admitted resource request '${run.id}' does not identify the waiting run`,
+          })
+          .parse(raw);
+        return { kind: 'local' as const, run: { ...run, launch: row.launch } };
+      }
+      // Without a capacity refusal, old released slots have no independent membership.
+      // A readable envelope alone cannot establish capacity membership.
       if (!knownForeign && envelope)
         return {
           kind: 'unknown' as const,
