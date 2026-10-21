@@ -13,6 +13,7 @@ import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { WorkflowNode, FanOutConfig, WorkflowRun } from '../../../schemas';
+import { isTerminalRunStatus } from '../../../schemas';
 import type { FanOutCancelReason } from '../../../store';
 import {
   TerminalStatusWriteError,
@@ -155,7 +156,7 @@ async function driveChildWindow(
       waiting,
       maxParallel - state.heldByIndex.size,
       spawn,
-      outcome => outcome.status === 'paused'
+      outcome => !isTerminalRunStatus(outcome.status)
     );
     const claimed = settled.flatMap((result, k) =>
       result === undefined ? [] : [{ index: waiting[k], result }]
@@ -166,7 +167,7 @@ async function driveChildWindow(
     );
     claimed.forEach(({ index }, k) => {
       const outcome = outcomes[k];
-      if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
+      if (!isTerminalRunStatus(outcome.status)) state.heldByIndex.set(index, outcome.childRunId);
       else state.settledByIndex.set(index, outcome);
     });
 

@@ -487,7 +487,7 @@ export async function runChildWorkflow(
       );
 
       // 6. Read the child back for the node-facing outcome (status + summary + cost +
-      //    tokens). Works for synchronous completion AND a child paused at its gate.
+      //    tokens), including a child handed to a successor execution.
       const finalChild = await deps.store.getWorkflowRun(childRunId);
       if (!finalChild) {
         return failOutcome('Child run row disappeared after execution.', childRunId);

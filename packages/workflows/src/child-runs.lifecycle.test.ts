@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { createFileWorkflowStore } from './file-store/store';
 import { hydrateResumableRun } from './run-resume';
 import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
@@ -25,6 +26,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import type { IWorkflowStore } from './store';
 import { sourceReleaseMetadata, sourceReleasedEvent } from './store';
 import type { ResolvedWorkflow } from './schemas/workflow';
+import type { WorkflowRun } from './schemas/workflow-run';
 
 /** A `workflow:` node runs, pauses, resumes and fails one governed child run. */
 describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
@@ -56,6 +58,61 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  it.each([false, true])(
+    'holds a child successor after the old execution loses its claim (fan-out=%s)',
+    async fanOut => {
+      await writeWorkflow(
+        'claim-child',
+        `name: claim-child
+description: child with an approval gate
+nodes:
+  - id: review
+    approval:
+      message: review
+`
+      );
+      await writeWorkflow(
+        'claim-parent',
+        `name: claim-parent
+description: parent waiting for a child
+nodes:
+  - id: sub
+    workflow: claim-child
+${fanOut ? '    fan_out:\n      items: \'["first","second"]\'\n      max_parallel: 1\n' : ''}`
+      );
+      const store = await createFileWorkflowStore({ root: join(cwd, 'store') });
+      const pause = store.pauseWorkflowRun.bind(store);
+      let successor: WorkflowRun | undefined;
+      store.pauseWorkflowRun = async (...args) => {
+        const run = await store.getWorkflowRun(args[0]);
+        if (run?.parent_run_id) {
+          await pause(args[0], args[1]);
+          successor = await store.resumeWorkflowRun(args[0]);
+        }
+        return pause(...args);
+      };
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('claim-parent'),
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      expect(successor).toBeDefined();
+      expect(await store.getWorkflowRun(successor!.id)).toEqual(successor!);
+      expect(successor!.status).toBe('running');
+      expect(cancel).not.toHaveBeenCalled();
+      const parent = await store.getWorkflowRun(result.workflowRunId!);
+      expect(parent?.status).toBe('paused');
+      expect(await store.findChildRuns(parent!.id)).toHaveLength(1);
+      const events = await store.listWorkflowEvents(parent!.id);
+      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+    }
+  );
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'child source recovery',

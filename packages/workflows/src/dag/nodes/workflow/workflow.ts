@@ -251,6 +251,8 @@ export async function executeWorkflowNode(
       case 'completed':
         return await asCompleted(outcome);
       case 'paused':
+      case 'running':
+      case 'pending':
         return pauseParentOnChild(outcome.childRunId);
       case 'failed':
         return failResult(

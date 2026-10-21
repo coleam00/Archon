@@ -2,10 +2,10 @@ import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../sche
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
-/** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
+/** Persisted outcome of a child sub-run, as consumed by a `workflow:` node. */
 export interface ChildWorkflowOutcome {
   childRunId: string;
-  status: 'completed' | 'paused' | 'failed' | 'cancelled';
+  status: WorkflowRun['status'];
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
   output?: string;
   /**
@@ -87,8 +87,10 @@ export interface RunChildWorkflowArgs {
 export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWorkflowOutcome>;
 
 /**
- * Derive a child's node-facing outcome from its persisted run row. Cost and tokens are
- * written into the child's metadata at its run tail regardless of outcome (#2469) and
+ * Derive a child's node-facing outcome from its persisted run row. A running successor
+ * belongs to another execution claim and holds the parent just like a paused child.
+ * Cost and tokens are written into the child's metadata at its run tail regardless of
+ * outcome (#2469) and
  * the terminal `summary` at completion, so both the synchronous path (runChildWorkflow
  * reads the row back) and the re-entry path (executeWorkflowNode finds an
  * already-terminal child) read the same source — and a child that burned tokens and
@@ -96,13 +98,7 @@ export type RunChildWorkflowFn = (args: RunChildWorkflowArgs) => Promise<ChildWo
  */
 export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   if (run.status === 'running' || run.status === 'pending') {
-    // Fail fast instead of a blind narrowing cast: every caller must hand this a
-    // settled (terminal or paused) run. A non-settled status slipping through
-    // would fall out of interpret()'s switch and corrupt the node result with
-    // `undefined` — throwing turns that into a loud, attributable node failure.
-    throw new Error(
-      `Sub-run ${run.id} is still '${run.status}' — cannot derive a node outcome from an unsettled run.`
-    );
+    return { childRunId: run.id, status: run.status };
   }
   const md: Record<string, unknown> = run.metadata ?? {};
   const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
