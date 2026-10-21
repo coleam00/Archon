@@ -683,7 +683,7 @@ async function pauseAtGroupGate(
     approvalContext,
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused)
+  if (paused.kind !== 'paused')
     return {
       state: 'running',
       output: state.lastOutput,
@@ -702,7 +702,7 @@ async function pauseAtGroupGate(
     conversationId,
     workflowRun.id,
     node.id,
-    gateOccurrence(paused),
+    gateOccurrence(paused.approval),
     run.stepName,
     gateMsg
   );

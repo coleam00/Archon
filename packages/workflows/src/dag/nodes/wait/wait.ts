@@ -51,6 +51,33 @@ interface DiscardedAnswer {
   readonly changed: readonly string[];
 }
 
+async function pauseWait(
+  ctx: RunLayersContext,
+  node: WaitNode,
+  context: WorkflowWaitContext,
+  continued: boolean
+): Promise<'paused' | 'deferred' | 'external_transition'> {
+  const { deps, workflowRun } = ctx;
+  try {
+    await deps.store.pauseWorkflowRunForWait(
+      workflowRun.id,
+      context,
+      continued
+        ? { kind: 'continued' }
+        : { kind: 'started', stepName: ctx.stepNamePrefix + node.id }
+    );
+    return 'paused';
+  } catch (pauseError) {
+    const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
+    if (status === 'running') throw pauseError;
+    getLog().warn(
+      { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
+      'dag.wait_pause_skipped_external_transition'
+    );
+    return status === 'paused' ? 'deferred' : 'external_transition';
+  }
+}
+
 /**
  * The persisted wait context this invocation resumes: the run's stored wait when it
  * belongs to this node (or this loop-group iteration's body wait), unless it holds an
@@ -241,25 +268,8 @@ export async function executeWaitNode(
     persisted !== undefined &&
     (context.answer !== undefined || attentionForm(context) === 'message');
   if (!isSignaled && !isDue && !isAttentionResume) {
-    let paused = false;
-    try {
-      await deps.store.pauseWorkflowRunForWait(
-        workflowRun.id,
-        context,
-        persisted === undefined
-          ? { kind: 'started', stepName: stepNamePrefix + node.id }
-          : { kind: 'continued' }
-      );
-      paused = true;
-    } catch (pauseError) {
-      const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
-      if (status === 'running') throw pauseError;
-      getLog().warn(
-        { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
-        'dag.wait_pause_skipped_external_transition'
-      );
-    }
-    if (paused && context.kind === 'attention') {
+    const pause = await pauseWait(ctx, node, context, persisted !== undefined);
+    if (pause === 'paused' && context.kind === 'attention') {
       await sendPauseNotice(
         deps,
         platform,
@@ -272,6 +282,7 @@ export async function executeWaitNode(
       );
     }
     if (execution === undefined) return { state: 'running', output: '' };
+    if (pause === 'external_transition') return serializeNodeOutput(execution);
     const suspended = await recordNodeState(
       { store: deps.store, logDir },
       finishNodeExecution(
@@ -280,7 +291,7 @@ export async function executeWaitNode(
         { output: { text: '' } }
       )
     );
-    return paused ? suspended : serializeNodeOutput(execution);
+    return pause === 'paused' ? suspended : serializeNodeOutput(execution);
   }
 
   const status = context.kind === 'event' && !isSignaled ? 'expired' : 'satisfied';

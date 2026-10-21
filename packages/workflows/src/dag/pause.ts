@@ -70,13 +70,18 @@ export async function statusAfterPauseFailure(
   }
 }
 
+type GatePauseResult =
+  | { kind: 'paused'; approval: ApprovalContext }
+  | { kind: 'deferred' }
+  | { kind: 'external_transition' };
+
 /**
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
  * `event` commits with the pause, so every gate pause reaches the event feed the
- * attention watch follows. Returns the persisted context, including its minted
- * `pauseId`; undefined when the gate did not pause.
+ * attention watch follows. Only sibling deferral leaves a resumable leaf; an
+ * external terminal transition owns the run without suspending this node.
  */
 export async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
@@ -87,7 +92,7 @@ export async function pauseGateRespectingExternalTransition(
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
   }
-): Promise<ApprovalContext | undefined> {
+): Promise<GatePauseResult> {
   const { extraMetadata, failClosed = false } = options;
   approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
@@ -105,7 +110,7 @@ export async function pauseGateRespectingExternalTransition(
           { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
           'dag.gate_deferred'
         );
-        return undefined;
+        return { kind: 'deferred' };
       }
       if (
         !isApprovalContext(active) ||
@@ -117,13 +122,13 @@ export async function pauseGateRespectingExternalTransition(
         { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
         'dag.gate_deferred'
       );
-      return undefined;
+      return { kind: 'deferred' };
     }
     getLog().warn(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return undefined;
+    return { kind: 'external_transition' };
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
@@ -133,7 +138,7 @@ export async function pauseGateRespectingExternalTransition(
     decisions: approvalContext.decisions,
     pauseId: approvalContext.pauseId,
   });
-  return approvalContext;
+  return { kind: 'paused', approval: approvalContext };
 }
 
 export function snapshotBodySessionCursorAncestry(

@@ -555,6 +555,14 @@ export async function executeDagWorkflow(
     );
     await refreshRunUsage();
     await persistRunUsage();
+    try {
+      await persistAuthoredOutcome();
+    } catch (outcomeError) {
+      getLog().error(
+        { err: outcomeError as Error, workflowRunId: workflowRun.id },
+        'dag.authored_outcome_persist_failed_during_unwind'
+      );
+    }
     if (error instanceof NodeEventWriteError) pauseError = error.message;
     layerStop = 'paused';
   }

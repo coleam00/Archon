@@ -188,9 +188,51 @@ describe('container pause segment ownership through the executor', () => {
     },
   ]) {
     for (const nested of [false, true]) {
-      it.each([false, true])(
-        `deferred ${JSON.stringify(leaf)} (nested=${nested}, write rejected=%s) resumes only after settlement`,
-        async rejectWrite => {
+      it.each(['failed', 'cancelled'] as const)(
+        `terminal %s wins ${JSON.stringify(leaf)} pause (nested=${nested}) without suspension`,
+        async status => {
+          const node = { id: 'deferred', ...leaf };
+          const f = await setup('ordinary', [
+            nested
+              ? {
+                  id: 'group',
+                  loop_group: { max_iterations: 2, until_bash: 'true', nodes: [node] },
+                }
+              : node,
+          ]);
+          await mkdir(join(f.root, '.archon', 'commands'), { recursive: true });
+          await writeFile(join(f.root, '.archon', 'commands', 'review.md'), 'Review');
+          const terminate = async () => {
+            if (status === 'failed') await f.store.failWorkflowRun(f.run.id, 'External failure');
+            else await f.store.cancelWorkflowRun(f.run.id);
+          };
+          try {
+            await f.execute({
+              pauseWorkflowRun: async (...args) => {
+                await terminate();
+                await f.store.pauseWorkflowRun(...args);
+              },
+              pauseWorkflowRunForWait: async (...args) => {
+                await terminate();
+                await f.store.pauseWorkflowRunForWait(...args);
+              },
+            });
+            expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe(status);
+            expect(
+              (await f.store.listWorkflowEvents(f.run.id)).filter(
+                event => event.event_type === 'node_suspended'
+              )
+            ).toEqual([]);
+            expect(f.stop).not.toHaveBeenCalled();
+          } finally {
+            f.unsubscribe();
+          }
+        }
+      );
+      it.each(['none', 'suspension', 'both'] as const)(
+        `deferred ${JSON.stringify(leaf)} (nested=${nested}, rejected write=%s) resumes only after settlement`,
+        async writeFailure => {
+          const rejectWrite = writeFailure !== 'none';
           const sibling = nested
             ? {
                 id: 'group',
@@ -201,16 +243,43 @@ describe('container pause segment ownership through the executor', () => {
                 },
               }
             : { id: 'deferred', ...leaf };
-          const f = await setup('ordinary', [
-            { id: 'review', approval: { message: 'First' } },
-            sibling,
-          ]);
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'Review' };
+            yield {
+              type: 'result',
+              sessionId: 'verdict-session',
+              structuredOutput: { green: true },
+            };
+          });
+          const f = await setup(
+            'ordinary',
+            [
+              { id: 'review', approval: { message: 'First' } },
+              sibling,
+              {
+                id: 'verdict',
+                prompt: 'Return a verdict',
+                output_format: {
+                  type: 'object',
+                  properties: { green: { type: 'boolean' } },
+                  required: ['green'],
+                },
+              },
+            ],
+            { returns: 'verdict', outcome_field: 'green' }
+          );
           await mkdir(join(f.root, '.archon', 'commands'), { recursive: true });
           await writeFile(join(f.root, '.archon', 'commands', 'review.md'), 'Review');
           const published = Promise.withResolvers<void>();
           const attempted = Promise.withResolvers<void>();
           try {
             const result = await f.execute({
+              updateWorkflowRun: async (id, updates) => {
+                if (writeFailure === 'both' && updates.outcome !== undefined) {
+                  throw new Error('Secondary outcome write rejected');
+                }
+                await f.store.updateWorkflowRun(id, updates);
+              },
               persistWorkflowEvent: async event => {
                 if (
                   rejectWrite &&
@@ -247,6 +316,22 @@ describe('container pause segment ownership through the executor', () => {
             );
             const paused = await f.store.getWorkflowRun(f.run.id);
             if (!paused) throw new Error('Missing pause');
+            expect(paused.outcome).toBe(writeFailure === 'both' ? null : 'succeeded');
+            if (writeFailure === 'both') {
+              expect(
+                mockLogFn.mock.calls.some(
+                  ([data, site]) =>
+                    site === 'dag.authored_outcome_persist_failed_during_unwind' &&
+                    data.err instanceof Error &&
+                    data.err.message === 'Secondary outcome write rejected'
+                )
+              ).toBe(true);
+            }
+            expect(
+              (await f.store.listWorkflowEvents(f.run.id)).some(
+                event => event.step_name === 'verdict' && event.event_type === 'node_completed'
+              )
+            ).toBe(true);
             const active = approvalContextSchema.parse(paused.metadata.approval);
             if (!active.execution) throw new Error('Missing gate execution');
             const completion = serializeNodeStateRecord(

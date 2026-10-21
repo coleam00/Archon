@@ -213,9 +213,12 @@ export async function executeApprovalNode(
     approvalContext,
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) {
-    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, suspended);
-    return { ...serializeNodeOutput(execution), ...reworkUsage };
+  switch (paused.kind) {
+    case 'deferred':
+      await recordNodeState({ store: deps.store, logDir: ctx.logDir }, suspended);
+      return { ...serializeNodeOutput(execution), ...reworkUsage };
+    case 'external_transition':
+      return { ...serializeNodeOutput(execution), ...reworkUsage };
   }
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   const approvalMsg =
@@ -228,7 +231,7 @@ export async function executeApprovalNode(
     conversationId,
     workflowRun.id,
     node.id,
-    gateOccurrence(paused),
+    gateOccurrence(paused.approval),
     stepName,
     approvalMsg
   );

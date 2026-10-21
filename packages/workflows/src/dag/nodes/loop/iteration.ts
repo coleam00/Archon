@@ -595,11 +595,13 @@ async function pauseAtLoopGate(
     approvalContext,
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) {
+  if (paused.kind !== 'paused') {
     if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
       await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
     }
-    await recordNodeState({ store: deps.store, logDir }, suspended);
+    if (paused.kind === 'deferred') {
+      await recordNodeState({ store: deps.store, logDir }, suspended);
+    }
     return deferredLoopOutput;
   }
   await recordDerivedExecution({ logDir }, suspended);
@@ -614,7 +616,7 @@ async function pauseAtLoopGate(
     conversationId,
     workflowRun.id,
     node.id,
-    gateOccurrence(paused),
+    gateOccurrence(paused.approval),
     run.stepName,
     gateMsg
   );

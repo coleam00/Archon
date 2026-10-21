@@ -489,14 +489,14 @@ async function raiseWriteBackGate(
     expectedExecutionClaim
   );
   // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
-  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  if (paused.kind !== 'paused') throw new Error(`Write-back gate for run ${runId} did not pause`);
   await sendPauseNotice(
     deps,
     platform,
     conversationId,
     runId,
     WRITEBACK_GATE_NODE_ID,
-    gateOccurrence(paused),
+    gateOccurrence(paused.approval),
     'container',
     message
   );

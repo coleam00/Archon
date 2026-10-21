@@ -220,7 +220,7 @@ async function suspendOnHeldChildren(
     },
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) return serializeNodeOutput(execution);
+  if (paused.kind !== 'paused') return serializeNodeOutput(execution);
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   await notify(
     `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +

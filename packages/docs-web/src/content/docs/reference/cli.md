@@ -1140,8 +1140,8 @@ A paused host or container run can refuse resume with "no durable completion or 
 To recover:
 
 1. Inspect `archon workflow get <run-id> --json --verbose` and `archon workflow logs <run-id>` for the named node and the original write error. If the executor is still settling, let it finish, then retry resume.
-2. If the executor exited with a failed write, reconcile the node's effects against the checkout and external systems. Establish what completed, what needs compensation, and what is safe to repeat. Preserve needed artifacts, including container overlay changes, before cancellation or cleanup.
-3. There is no supported in-place repair command for missing node-state records. Do not synthesize lifecycle events with `workflow event emit`. After reconciliation, use `archon workflow cancel <run-id>`, then `archon workflow run <workflow-name> "<remaining work and reconciled effects>"`. The fresh run inherits no completed-node state, so its input and workflow must account for work already done.
+2. If the executor exited with a failed write, reconcile the node's effects against the checkout and external systems. Establish what completed, what needs compensation, and what is safe to repeat. Preserve needed artifacts, including container overlay changes, before abandonment or cleanup.
+3. There is no supported in-place repair command for missing node-state records. Do not synthesize lifecycle events with `workflow event emit`. After reconciliation, use `archon workflow abandon <run-id>`, then `archon workflow run <workflow-name> "<remaining work and reconciled effects>"`. The fresh run inherits no completed-node state, so its input and workflow must account for work already done.
 
 ### `workflow cancel`
 

@@ -231,7 +231,7 @@ export async function executeWorkflowNode(
       { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
       { event: serializeNodeStateRecord(suspended) }
     );
-    if (!paused) return serializeNodeOutput(execution);
+    if (paused.kind !== 'paused') return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
     await safeSendMessage(
       platform,
