@@ -164,7 +164,7 @@ Full documentation is at **[archon.diy/docs](https://archon.diy/docs/)**.
 | Topic | Description |
 |---|---|
 | [Quickstart](https://archon.diy/getting-started/quick-start/) | Install and first run |
-| [Authoring workflows](https://archon.diy/guides/authoring-workflows/) | Write your own YAML workflows |
+| [Workflow language](https://archon.diy/reference/workflow-language/) | Write your own YAML workflows |
 | [Operate runs](https://archon.diy/getting-started/operate/) | Watch runs, answer the ones that need you, read results |
 | [CLI reference](https://archon.diy/reference/cli/) | Every command and flag |
 | [Configuration](https://archon.diy/reference/configuration/) | Config options, model tiers and aliases, env vars |

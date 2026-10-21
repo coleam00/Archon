@@ -192,6 +192,6 @@ Do not expand this file with copied reference material. Use the owning source:
 - Workflow-language design: [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md)
 - Engineering craft and review values: [`.archon/engineering.md`](.archon/engineering.md)
 - CLI: [`packages/docs-web/src/content/docs/reference/cli.md`](packages/docs-web/src/content/docs/reference/cli.md) and `archon --help`
-- Workflow authoring: [`packages/docs-web/src/content/docs/guides/authoring-workflows.md`](packages/docs-web/src/content/docs/guides/authoring-workflows.md) and workflow schemas
+- Workflow authoring: [`packages/docs-web/src/content/docs/reference/workflow-language.md`](packages/docs-web/src/content/docs/reference/workflow-language.md) and workflow schemas
 - Database behavior: [`packages/docs-web/src/content/docs/reference/database.md`](packages/docs-web/src/content/docs/reference/database.md), migrations, and adapter tests
 - Available commands and generated-file checks: root and package `package.json` scripts

@@ -107,7 +107,7 @@ ${hasNodes ? 'nodes:\n  - id: work\n    prompt: work\n' : ''}`,
       expect(result.error?.error).toContain('steps:');
       expect(result.error?.error).toContain('has been removed');
       expect(result.error?.error).toContain('nodes:');
-      expect(result.error?.error).toContain('https://archon.diy/guides/authoring-workflows/');
+      expect(result.error?.error).toContain('https://archon.diy/reference/workflow-language/');
       expect(result.error?.error).not.toContain('docs/sequential-dag-migration-guide.md');
       expect(result.error?.error).not.toContain('claude');
     }

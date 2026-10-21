@@ -44,7 +44,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
 | Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
-In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
+In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Workflow language → `output_format`](/reference/workflow-language/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
 ## Claude Code
 
@@ -170,7 +170,7 @@ assistants:
     # claudeBinaryPath: /absolute/path/to/claude
 ```
 
-The `settingSources` option controls where the Claude Code SDK discovers `CLAUDE.md`, skill, command, and agent files. The default is `['project', 'user']`, which includes both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. For workflow skills, discovery is only eligibility: the node's `skills:` list remains the exact active selection, and omission/`[]` activates none. Set `settingSources` to `['project']` to exclude user-level resources, or `[]` for a lean node with no setting sources; a declared skill must live under a source the node enables. See [Claude SDK Advanced Options](/guides/authoring-workflows/#claude-sdk-advanced-options).
+The `settingSources` option controls where the Claude Code SDK discovers `CLAUDE.md`, skill, command, and agent files. The default is `['project', 'user']`, which includes both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. For workflow skills, discovery is only eligibility: the node's `skills:` list remains the exact active selection, and omission/`[]` activates none. Set `settingSources` to `['project']` to exclude user-level resources, or `[]` for a lean node with no setting sources; a declared skill must live under a source the node enables. See [Claude SDK Advanced Options](/reference/workflow-language/#claude-sdk-advanced-options).
 
 ### Set as Default (Optional)
 
@@ -265,7 +265,7 @@ With `store: database`, a credential you connect in Archon for `openai` (`archon
 
 ### How Archon runs Codex
 
-Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so the run [waits until the reset](/reference/configuration/#workflow-attention-and-continuation-settings)), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/reference/workflow-language/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so the run [waits until the reset](/reference/configuration/#workflow-attention-and-continuation-settings)), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
 
 Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title if provider generation fails. In per-user mode, a missing or unusable user credential skips generation and leaves the current title unchanged.
 
@@ -360,7 +360,7 @@ assistants:
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/reference/workflow-language/#concurrent-runs)) |
 | MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming a required `mcp:` fails the run at start (`optional: true` runs without the servers) |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
@@ -618,7 +618,7 @@ nodes:
     model: anthropic/claude-opus-4-5
     prompt: "..."
     effort: high
-    skills: [archon-dev]                   # Archon name refs work — see Pi capabilities below
+    skills: [archon-cli]                   # a skill name from .claude/skills or .agents/skills; see Pi capabilities below
 ```
 
 ### Pi capabilities
@@ -716,7 +716,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
+| Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/reference/workflow-language/#concurrent-runs)) |
 | Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max` passes through; `ultra` and `persistent` map to SDK `max`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |

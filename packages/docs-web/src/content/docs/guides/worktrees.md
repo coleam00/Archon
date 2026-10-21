@@ -25,7 +25,7 @@ Use `--branch` with a descriptive name for work that changes code; it makes work
 
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
 
-A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/guides/authoring-workflows/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.
+A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/reference/workflow-language/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.
 
 ## Provision new worktrees
 

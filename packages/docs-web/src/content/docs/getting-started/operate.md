@@ -233,7 +233,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 
 ### Several items from one workflow
 
-A workflow can [fan out one child per question](/guides/authoring-workflows/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
+A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
 
 ```bash
 archon workflow attention --json --all

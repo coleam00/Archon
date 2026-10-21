@@ -90,7 +90,7 @@ reference to an upstream output:
 ```
 
 The attention message accepts runtime references (`$plan.output`, `$INPUTS.x`).
-See [Attention waits](/guides/authoring-workflows/#attention-waits) for the full
+See [Attention waits](/reference/workflow-language/#attention-waits) for the full
 rules on forms, options and output.
 
 ## Answering

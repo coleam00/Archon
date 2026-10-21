@@ -94,7 +94,7 @@ function parseWorkflowHeader(
   }
 
   if (Object.hasOwn(raw, 'steps')) {
-    return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/guides/authoring-workflows/ for the workflow language reference.';
+    return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/reference/workflow-language/ for the workflow language reference.';
   }
 
   if (!Array.isArray(raw.nodes) || raw.nodes.length === 0) {

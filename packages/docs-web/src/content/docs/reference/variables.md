@@ -22,7 +22,7 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. |
-| `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
+| `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/reference/workflow-language/#typed-artifacts-output_type). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
 | `$BASE_BRANCH` | Base branch for git operations | For top-level runs, resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Fresh shared-checkout children (`inherit` or omitted) inherit the parent's resolved value, including `--base`. New isolated branches use `worktree.baseBranch`, then the codebase default, then detection, independently of parent flags. If an isolated branch is reused without a surviving child run record, its original base is unavailable; config is not used to guess it. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so for a newly created top-level branch this variable names the branch the worktree was cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
@@ -74,8 +74,8 @@ If Archon finds a legacy `<repo>/.archon/state/` directory when a run starts, it
 warning with the exact `mv` command and moves nothing.
 
 **Concurrency.** The engine does no locking on `$STATE_DIR`. See
-[Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
-the read-modify-write hazard. Use [durable state documents](/guides/authoring-workflows/#durable-state-documents) for concurrent, audited JSON updates.
+[Workflow language](/reference/workflow-language/#cross-run-state-with-state_dir) for
+the read-modify-write hazard. Use [durable state documents](/reference/workflow-language/#durable-state-documents) for concurrent, audited JSON updates.
 
 **Name collisions.** The project segment is derived from the project's identity, and distinct
 projects can derive the same one — two no-remote local repos both called `api`, or two folder
@@ -143,7 +143,7 @@ every nested key must exist and intermediate values must be objects; a missing k
 non-object intermediate fails the consuming node.
 
 A `wait:` node's contract is fixed by the engine. A time or event wait declares
-`status`, `waited_ms`, `event` and `payload`. An [attention wait](/guides/authoring-workflows/#attention-waits)
+`status`, `waited_ms`, `event` and `payload`. An [attention wait](/reference/workflow-language/#attention-waits)
 declares its answer by form: `message` declares `text`; `approval` and `select` declare
 `decision` and `text`; `multi_select` declares `decisions` (an array of option ids) and
 `text`. So `$ask.output.decision` is checked at load time, and in a `loop_group` whose body
@@ -284,7 +284,7 @@ A node output is a value, not a file. When a node produces something large, writ
 a node's logical value, must be a valid pointer: `run_id` and `path` are required non-empty
 strings. `path` is relative to the run's own artifacts directory. For how a pointer fits
 into a workflow's declared result, see
-[Authoring workflows → Result contracts](/guides/authoring-workflows/#result-contracts).
+[Workflow language → Result contracts](/reference/workflow-language/#result-contracts).
 
 Every pointer is checked once, **at the producing node and against its own run**, before the
 value is persisted — so a bad one fails the node that produced it rather than surfacing
