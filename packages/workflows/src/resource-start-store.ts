@@ -214,7 +214,7 @@ export interface ResourceSlotOccupancy {
   waiters: readonly CapacityWaiter[];
   /** Queued start requests, oldest first. */
   queue: readonly QueuedStart[];
-  /** `heldCheckouts` of the live runs admitted on the resource. */
+  /** Checkouts requiring local serialization, including holders not provably foreign. */
   heldCheckouts: ReadonlyMap<string, string>;
   foreignHeldCheckouts: ReadonlyMap<string, string>;
   /** Oldest foreign holder whose corrupt launch and absent path hide its checkout. */

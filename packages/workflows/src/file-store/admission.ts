@@ -232,39 +232,42 @@ export function createAdmissionTransaction(
     return false;
   }
   async function occupancyRun(run: WorkflowRun, resource: string, local: boolean) {
-    let knownForeign = false;
+    const knownForeign = !local && (await hasForeignSlotMembership(run.id, resource));
     try {
       const path = pathFor('requests', run.id);
       const raw = path in documents ? documents[path] : await readJson(join(root, path));
-      const membership = requestSchema.pick({ resource: true }).safeParse(raw);
-      if (membership.success) {
-        local ||= membership.data.resource === resource;
-        knownForeign = membership.data.resource !== resource;
-      }
-      if (local && membership.success && membership.data.resource !== resource)
-        requestSchema.extend({ resource: z.literal(resource) }).parse(raw);
+      if (local)
+        return {
+          kind: 'local' as const,
+          run: {
+            ...run,
+            launch: requestSchema
+              .extend({ resource: z.literal(resource), status: z.literal('admitted') })
+              .parse(raw).launch,
+          },
+        };
       const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
-      if (local && envelope)
-        return { kind: 'local' as const, run: { ...run, launch: requestSchema.parse(raw).launch } };
+      // Old released slots have no independent membership. Their checkout remains
+      // exclusive, but they must not become capacity waiters on an unproven resource.
+      if (!knownForeign && envelope)
+        return {
+          kind: 'unknown' as const,
+          run: { ...run, launch: requestSchema.parse(raw).launch },
+        };
       if (!holdsWorkflowPath(run)) return null;
       const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
       return { kind: 'foreign' as const, run: { ...run, launch }, unknown: false };
     } catch (error) {
       if (local) throw error;
-      return corruptForeignOccupancy(run, resource, knownForeign, error);
+      return corruptForeignOccupancy(run, knownForeign, error);
     }
   }
-  async function corruptForeignOccupancy(
-    run: WorkflowRun,
-    resource: string,
-    knownForeign: boolean,
-    error: unknown
-  ) {
+  async function corruptForeignOccupancy(run: WorkflowRun, knownForeign: boolean, error: unknown) {
     if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
     if (!holdsWorkflowPath(run)) return null;
     // A released paused run may still be local. Only proven foreign membership
     // permits the corruption fallback, which allows read-only concurrency.
-    if (!knownForeign && !(await hasForeignSlotMembership(run.id, resource))) throw error;
+    if (!knownForeign) throw error;
     // Corrupt foreign requests still hold their recorded path and registered aliases.
     // Without a path, guarded starts must wait for the holder to end.
     log.error(
@@ -282,6 +285,7 @@ export function createAdmissionTransaction(
     const row = await live(resource);
     const admittedRuns: (WorkflowRun & { launch: Request['launch'] })[] = [];
     const foreign: (WorkflowRun & { launch?: Request['launch'] })[] = [];
+    const possiblyLocal: (WorkflowRun & { launch: Request['launch'] })[] = [];
     const runs = (await listRunSnapshots(root)).sort(
       (a, b) => a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
     );
@@ -294,7 +298,10 @@ export function createAdmissionTransaction(
         row.admitted.includes(run.id) ||
           row.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
       );
-      if (holder?.kind === 'local') admittedRuns.push(holder.run);
+      if (holder?.kind === 'local') {
+        admittedRuns.push(holder.run);
+        possiblyLocal.push(holder.run);
+      } else if (holder?.kind === 'unknown') possiblyLocal.push(holder.run);
       else if (holder) {
         foreign.push(holder.run);
         if (holder.unknown) unknownForeignCheckoutHolder ??= run.id;
@@ -315,7 +322,7 @@ export function createAdmissionTransaction(
         admittedRuns.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
       ),
       queue,
-      heldCheckouts: heldCheckouts(admittedRuns, reusable),
+      heldCheckouts: heldCheckouts(possiblyLocal, reusable),
       foreignHeldCheckouts: heldCheckouts(foreign, reusable),
       unknownForeignCheckoutHolder,
     };
@@ -392,8 +399,14 @@ export function createAdmissionTransaction(
   async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
     const row = await request(run.id);
     if (row?.status !== 'admitted') return null;
+    const resource = await slot(row.resource);
     if (await hasForeignSlotMembership(run.id, row.resource))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
+    if (
+      !resource.admitted.includes(run.id) &&
+      !resource.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
+    )
+      throw new Error(`Admitted resource membership unknown for run '${run.id}'`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     const blocker = resourceResumeBlocker(await occupancy(row.resource), {
@@ -401,7 +414,6 @@ export function createAdmissionTransaction(
       status: run.status,
     });
     if (blocker) return blocker;
-    const resource = await slot(row.resource);
     if (!resource.holders.some(h => h.kind === 'run' && h.id === run.id))
       resource.holders.push({ kind: 'run', id: run.id });
     return null;
