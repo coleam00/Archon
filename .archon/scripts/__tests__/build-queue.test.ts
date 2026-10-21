@@ -475,7 +475,15 @@ describe('the build queue scripts', () => {
     const at = install();
     const request = { at: AT, run_id: 'event', action: 'edited' as const, label: null, actor: null, body_digest: null };
     seed(at, triaged({ requests: [request] }));
-    const picked = run(at, 'facts', {});
+    const parentNumber = process.env.INPUTS_NUMBER;
+    let picked: ScriptRun;
+    try {
+      process.env.INPUTS_NUMBER = '4807';
+      picked = run(at, 'facts', {});
+    } finally {
+      if (parentNumber === undefined) delete process.env.INPUTS_NUMBER;
+      else process.env.INPUTS_NUMBER = parentNumber;
+    }
     expect(ok(picked)).toMatchObject({ path: 'route', item: SUBJECT, url: ISSUE_URL, brief: '', at_cap: false });
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1', requests: [] }, requests: [request] });
     expect(readFileSync(join(picked.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
