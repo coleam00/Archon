@@ -176,8 +176,8 @@ error for explicit continuation. The failure report selects the latest verified 
 by artifact write time across the typed output and creation record, and reports an
 unreadable creation record. An unresolved
 creation claim reports `pr_create_unresolved`; the build queue refuses to select
-another PR or branch until newer triage explicitly names the reconciled PR or a later
-round records it. `update-pr-body` corrects the
+another PR or branch until a newer triage settles it: it names the reconciled PR, or
+names none and the next round opens one. `update-pr-body` corrects the
 description's stale claims and links the issue once the rounds end. A standalone
 `archon-pr` leaves a continued pull request's description as its author left it:
 its `publish_description` input defaults off. `publish-review` upserts the one marked review

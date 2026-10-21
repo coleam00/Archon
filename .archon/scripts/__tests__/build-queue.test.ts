@@ -140,7 +140,7 @@ describe('the build record', () => {
     expect(itemPullRequest([unresolved, round('r3', AT)], TRIAGE, PR.repo)).toEqual(PR);
   });
 
-  test('a newer explicit re-triage reconciles an unresolved create, overriding an older PR', () => {
+  test('a newer re-triage settles an unresolved create: its PR overrides an older one, and no PR opens a new one', () => {
     const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
     for (const prior of [[], [round('r1', AT)]]) {
       for (const at of ['2026-10-15T23:00:00.000Z', AT]) {
@@ -148,7 +148,7 @@ describe('the build record', () => {
       }
       const newer = { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 43 };
       expect(itemPullRequest([...prior, unresolved], newer, PR.repo)).toEqual({ ...PR, number: 43 });
-      expect(() => itemPullRequest([...prior, unresolved], { ...newer, pull_request: null }, PR.repo)).toThrow('unresolved PR create');
+      expect(itemPullRequest([...prior, unresolved], { ...newer, pull_request: null }, PR.repo)).toBeNull();
     }
   });
 

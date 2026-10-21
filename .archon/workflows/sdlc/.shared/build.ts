@@ -186,17 +186,20 @@ export function itemPullRequest(
   triage: TriageFacts | undefined,
   repo: QualifiedPr['repo']
 ): QualifiedPr | null {
+  const triaged = triage?.pull_request == null ? null : { repo, number: triage.pull_request };
   const unresolved = rounds.map(round => round.reason).lastIndexOf(PR_CREATE_UNRESOLVED);
-  if (unresolved >= 0 && !rounds.slice(unresolved + 1).some(round => round.pr_url !== '')) {
-    if (triage?.pull_request != null && triage.at > (rounds[unresolved]?.at ?? '')) {
-      return { repo, number: triage.pull_request };
-    }
-    throw new Error(`round ${rounds[unresolved]?.run_id} has an unresolved PR create; reconcile its artifacts and continue that PR explicitly`);
+  const settled = rounds.slice(unresolved + 1).some(round => round.pr_url !== '');
+  if (unresolved >= 0 && !settled) {
+    const round = rounds[unresolved];
+    // Only a re-triage after the unresolved round has looked for the PR it may have opened.
+    if (triage !== undefined && triage.at > (round?.at ?? '')) return triaged;
+    throw new Error(`round ${round?.run_id} has an unresolved PR create; reconcile its artifacts and re-triage the item, naming the PR if one exists`);
   }
   const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
-  if (url === undefined) {
-    return triage?.pull_request == null ? null : { repo, number: triage.pull_request };
-  }
+  return url === undefined ? triaged : { repo, number: roundPrNumber(url, repo) };
+}
+
+function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
   const parsed = URL.canParse(url) ? new URL(url) : null;
   const match = parsed === null ? null : /^\/(.+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
   if (
@@ -206,7 +209,7 @@ export function itemPullRequest(
   ) {
     throw new Error(`round pr_url ${url} is not a pull request of ${repo.host}/${repo.path}`);
   }
-  return { repo, number: Number(match[2]) };
+  return Number(match[2]);
 }
 
 /**
