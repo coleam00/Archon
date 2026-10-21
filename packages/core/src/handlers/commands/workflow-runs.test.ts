@@ -30,6 +30,15 @@ import {
   resetCommandHandlerMocks,
 } from './test-harness';
 
+// Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+const posixHost = process.platform !== 'win32';
+const hostCommandWarning = posixHost
+  ? {
+      warnings: [expect.stringContaining('untracked background work')],
+      reason: expect.stringContaining('untracked background work'),
+    }
+  : {};
+
 describe('CommandHandler', () => {
   beforeEach(resetCommandHandlerMocks);
 
@@ -122,8 +131,7 @@ describe('CommandHandler', () => {
       if (command === '/workflow cancel') {
         expect(mockCancelWorkflowRun).toHaveBeenCalledWith(selected.id, {
           cancel_reason: 'operator',
-          warnings: [expect.stringContaining('untracked background work')],
-          reason: expect.stringContaining('untracked background work'),
+          ...hostCommandWarning,
         });
       } else {
         expect(result.message).toContain('Cancel: `/workflow cancel`');
@@ -250,11 +258,12 @@ describe('CommandHandler', () => {
             );
 
             expect(result.success).toBe(true);
-            expect(result.message).toContain('Cancelled workflow: `test-workflow`');
-            expect(result.message).toContain('untracked background work');
-            expect(mockCancelWorkflowRun.mock.calls.at(-1)?.[1]?.warnings).toEqual([
-              expect.stringContaining('untracked background work'),
-            ]);
+            expect(result.message).toStartWith('Cancelled workflow: `test-workflow`');
+            expect(mockCancelWorkflowRun).toHaveBeenLastCalledWith(runId, {
+              cancel_reason: 'operator',
+              ...hostCommandWarning,
+            });
+            if (posixHost) expect(result.message).toContain('untracked background work');
             expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
           } finally {
             await owner.close();
@@ -281,8 +290,7 @@ describe('CommandHandler', () => {
           expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
           expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id, {
             cancel_reason: 'operator',
-            warnings: [expect.stringContaining('untracked background work')],
-            reason: expect.stringContaining('untracked background work'),
+            ...hostCommandWarning,
           });
           expect(mockGetActiveWorkflowRun).not.toHaveBeenCalled();
         } finally {

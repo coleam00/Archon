@@ -25,6 +25,14 @@ import {
 } from './test-harness';
 
 const trackTempRoot = trackTempRoots();
+// Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+const posix = process.platform === 'win32' ? test.skip : test;
+
+function expectHostCommandWarnings(cleanupWarnings: string[] | undefined): void {
+  expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(cleanupWarnings);
+  if (process.platform === 'win32') expect(cleanupWarnings).toBeUndefined();
+  else expect(cleanupWarnings?.join(' ')).toContain('Cooperative cancellation cannot rule out');
+}
 
 describe('cancelWorkflow', () => {
   beforeEach(() => {
@@ -59,10 +67,7 @@ describe('cancelWorkflow', () => {
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-      expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(result.cleanupWarnings);
-      expect(result.cleanupWarnings?.join(' ')).toContain(
-        'Cooperative cancellation cannot rule out'
-      );
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await owner.close();
     }
@@ -94,10 +99,7 @@ describe('cancelWorkflow', () => {
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
       expect(mockGetRunAncestry).toHaveBeenCalledWith('run-1');
-      expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(result.cleanupWarnings);
-      expect(result.cleanupWarnings?.join(' ')).toContain(
-        'Cooperative cancellation cannot rule out'
-      );
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await rootOwner.close();
     }
@@ -114,16 +116,13 @@ describe('cancelWorkflow', () => {
       const result = await cancelWorkflow('run-1', operator);
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
-      expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(result.cleanupWarnings);
-      expect(result.cleanupWarnings?.join(' ')).toContain(
-        'Cooperative cancellation cannot rule out'
-      );
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await new Promise(resolve => listener.close(resolve));
     }
   });
 
-  test('omits result warnings when cancellation loses the race', async () => {
+  posix('omits result warnings when cancellation loses the race', async () => {
     const id = `cancel-child-${crypto.randomUUID()}`;
     const owner = await startRunLiveOwner(id);
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id, status: 'running' }));
@@ -143,7 +142,7 @@ describe('cancelWorkflow', () => {
     }
   });
 
-  test('reports every known host checkout without relying on command history', async () => {
+  posix('reports every known host checkout without relying on command history', async () => {
     const id = `cancel-checkouts-${crypto.randomUUID()}`;
     const owner = await startRunLiveOwner(id);
     const parent = makePausedRun({ id, status: 'running', working_path: '/parent' });

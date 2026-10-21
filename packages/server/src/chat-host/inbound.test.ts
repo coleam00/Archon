@@ -170,7 +170,10 @@ test('starter cancel succeeds; another member is forbidden; admins can act', asy
       result: {
         kind: 'cooperative',
         cancelled: true,
-        cleanupWarnings: [expect.stringContaining('untracked background work')],
+        // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+        ...(process.platform === 'win32'
+          ? {}
+          : { cleanupWarnings: [expect.stringContaining('untracked background work')] }),
       },
     });
   } finally {

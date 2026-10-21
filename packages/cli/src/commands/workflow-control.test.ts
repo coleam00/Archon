@@ -1307,14 +1307,19 @@ describe('workflowCancelCommand', () => {
 
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
       expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
+      // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+      const posixHost = process.platform !== 'win32';
       if (json) {
-        expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
-          ok: true,
-          status: 'cancelled',
-          processStopped: false,
-          cleanupWarnings: [expect.stringContaining('untracked background work')],
-        });
-      } else expect(consoleSpy.mock.calls.flat().join(' ')).toContain('untracked background work');
+        const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
+        expect(payload).toMatchObject({ ok: true, status: 'cancelled', processStopped: false });
+        expect(payload.cleanupWarnings).toEqual(
+          posixHost ? [expect.stringContaining('untracked background work')] : undefined
+        );
+      } else {
+        expect(consoleSpy.mock.calls.flat().join(' ').includes('untracked background work')).toBe(
+          posixHost
+        );
+      }
     }
   );
 });

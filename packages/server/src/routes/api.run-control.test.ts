@@ -74,13 +74,19 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
 
       const body = (await response.json()) as { success: boolean; message: string };
       expect(body.success).toBe(true);
-      expect(body.message).toStartWith('Cancelled workflow: deploy — warning: ');
-      expect(body.message).toContain('untracked background work');
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
-        cancel_reason: 'operator',
-        reason: expect.stringContaining('untracked background work'),
-        warnings: [expect.stringContaining('untracked background work')],
-      });
+      // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+      if (process.platform === 'win32') {
+        expect(body.message).toBe('Cancelled workflow: deploy');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
+      } else {
+        expect(body.message).toStartWith('Cancelled workflow: deploy — warning: ');
+        expect(body.message).toContain('untracked background work');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
+          cancel_reason: 'operator',
+          reason: expect.stringContaining('untracked background work'),
+          warnings: [expect.stringContaining('untracked background work')],
+        });
+      }
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
     });
   });
