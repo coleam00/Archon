@@ -42,6 +42,12 @@ nodes:
       const bump = bumpToken ?? "patch";
       // dryRun is stringified as "true"/"false" so `when:` can compare against quoted strings
       console.log(JSON.stringify({ bump, dryRun: String(dryRun) }));
+    output_format:
+      type: object
+      properties:
+        bump: { type: string, enum: [patch, minor, major] }
+        dryRun: { type: string, enum: ["false", "true"] }
+      required: [bump, dryRun]
     runtime: bun
     timeout: 5000
 
@@ -146,6 +152,13 @@ nodes:
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    output_format:
+      type: object
+      properties:
+        passed: { type: string, enum: ["true", "false"] }
+        skipped: { type: string, enum: ["false", "true"] }
+        reason: { type: string }
+      required: [passed, skipped, reason]
     runtime: bun
     timeout: 180000
     depends_on: [validate-state]
@@ -194,6 +207,13 @@ nodes:
 
       console.error("No supported version file found (package.json, pyproject.toml, Cargo.toml).");
       process.exit(1);
+    output_format:
+      type: object
+      properties:
+        stack: { type: string, enum: [node, python, rust] }
+        versionFile: { type: string }
+        currentVersion: { type: string }
+      required: [stack, versionFile, currentVersion]
     runtime: bun
     timeout: 10000
     depends_on: [preflight-smoke]
@@ -227,6 +247,15 @@ nodes:
         stack: stack.stack,
         versionFile: stack.versionFile,
       }));
+    output_format:
+      type: object
+      properties:
+        oldVersion: { type: string }
+        newVersion: { type: string }
+        versionFile: { type: string }
+        bump: { type: string, enum: [patch, minor, major] }
+        stack: { type: string, enum: [node, python, rust] }
+      required: [oldVersion, newVersion, versionFile, bump, stack]
     runtime: bun
     timeout: 5000
     depends_on: [detect-stack, parse-args]
@@ -375,6 +404,17 @@ nodes:
         stack: ver.stack,
         versionFile: ver.versionFile,
       }));
+    output_format:
+      type: object
+      properties:
+        rendered: { type: string }
+        oldVersion: { type: string }
+        newVersion: { type: string }
+        versionFile: { type: string }
+        bump: { type: string, enum: [patch, minor, major] }
+        stack: { type: string, enum: [node, python, rust] }
+        dryRun: { type: string, enum: ["false", "true"] }
+      required: [rendered, oldVersion, newVersion, versionFile, bump, stack, dryRun]
     runtime: bun
     timeout: 10000
     depends_on: [save-draft-json, draft-changelog, bump-version, parse-args]
