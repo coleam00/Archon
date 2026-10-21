@@ -697,9 +697,10 @@ export async function executeWorkflow(
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
     leaveRunExecution();
-    if (workflowRun && !terminalStatusWriteFailed && !parentStatusUnknown) {
+    if (workflowRun && !terminalStatusWriteFailed) {
       // A source release that lost to a cancel skips the backstop but still frees scratch.
-      if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
+      if (!sourceExecutionStopped && !parentStatusUnknown)
+        await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
   }

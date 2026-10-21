@@ -541,6 +541,29 @@ describe('scratch on exit', () => {
     }
   );
 
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    "releases a %s run's scratch despite another run's lifecycle interruption",
+    async status => {
+      const root = trackTempRoot(join(WS, '_cwd', `terminal-child-${crypto.randomUUID()}`));
+      const run = makeRun({
+        status,
+        output_root: root,
+        metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
+      });
+      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      mkdirSync(scratch, { recursive: true });
+      const interruption = new ParentStatusReadError('another-run', 'fan', new Error('unreadable'));
+      mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+      const store = makeStore({ getWorkflowRun: mock(async () => run) });
+
+      await expect(startWorkflow({ store })).rejects.toBe(interruption);
+
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+      expect(existsSync(scratch)).toBe(false);
+    }
+  );
+
   // A parent resumed in its child's process publishes no owner endpoint; a release in
   // this process must still see it executing.
   it('holds its run as executing in this process until it exits', async () => {

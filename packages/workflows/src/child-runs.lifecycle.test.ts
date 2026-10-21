@@ -59,6 +59,123 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  it.each([false, true])(
+    'releases completed child scratch when its resumed parent status is unreadable (deferred=%p)',
+    async deferred => {
+      await writeWorkflow(
+        'gated-child',
+        `name: gated-child
+description: child awaiting approval
+nodes:
+  - id: gate
+    approval:
+      message: approve
+  - id: work
+    prompt: work
+    depends_on: [gate]
+`
+      );
+      await writeWorkflow(
+        'block',
+        `name: block
+description: composed work
+nodes:
+  - id: work
+    prompt: work
+`
+      );
+      await writeWorkflow(
+        'parent',
+        `name: parent
+description: parent continuing after its child
+nodes:
+  - id: sub
+    workflow: gated-child
+  - id: fan
+    include: block
+    depends_on: [sub]
+    fan_out:
+      items: '[1]'
+      as: item
+      join: all_success
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const first = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('parent'),
+        'goal'
+      );
+      expect(first).toMatchObject({ success: true, paused: true });
+      const parent = [...store.runs.values()].find(run => run.workflow_name === 'parent');
+      const child = [...store.runs.values()].find(run => run.workflow_name === 'gated-child');
+      if (!parent?.output_root || !child?.output_root) throw new Error('Missing run storage');
+      const scratchFor = (root: string, id: string): string =>
+        realArchonPaths.getRunScratchDir(realArchonPaths.getRunArtifactsDirForRoot(root, id));
+      const childScratch = scratchFor(child.output_root, child.id);
+      const parentScratch = scratchFor(parent.output_root, parent.id);
+      await mkdir(childScratch, { recursive: true });
+      await mkdir(parentScratch, { recursive: true });
+      const cause = new Error('Unsupported parent status');
+      const readStatus = store.getWorkflowRunStatus;
+      let rejected = false;
+      store.getWorkflowRunStatus = async id => {
+        if (
+          id === parent.id &&
+          store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.data?.type === 'compose_fan_out_instance'
+          )
+        ) {
+          rejected = true;
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      store.approveGate(child.id);
+      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+      if (!hydrated) throw new Error('Child was not resumable');
+      const cleanups: (() => Promise<void>)[] = [];
+      const error: unknown = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('gated-child'),
+        'goal',
+        undefined,
+        {
+          ...hydrated,
+          ...(deferred ? { deferScratchCleanup: cleanup => cleanups.push(cleanup) } : {}),
+        }
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(error.workflowRunId).toBe(parent.id);
+      expect(rejected).toBe(true);
+      expect((await store.getWorkflowRun(parent.id))?.status).toBe('running');
+      expect((await store.getWorkflowRun(child.id))?.status).toBe('completed');
+      expect(fail).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(cleanups).toHaveLength(deferred ? 1 : 0);
+      expect(existsSync(childScratch)).toBe(deferred);
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      expect(existsSync(childScratch)).toBe(false);
+      expect(existsSync(parentScratch)).toBe(true);
+    }
+  );
+
   for (const caller of ['child', 'child fan-out', 'engine resume', 'automatic resume'] as const) {
     for (const persistent of [false, true]) {
       it(`preserves unreadable composed parent through ${caller} (persistent=${persistent})`, async () => {
