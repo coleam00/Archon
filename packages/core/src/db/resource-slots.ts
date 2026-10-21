@@ -6,6 +6,7 @@ import {
   heldCheckouts,
   type ReusableCheckout,
   type ResourceSlotOccupancy,
+  type QueuedStart,
 } from '@archon/workflows/resource-start-store';
 import {
   preparedWorkflowLaunchSchema,
@@ -295,12 +296,28 @@ export async function resourceStartOccupancy(
         return run;
       }
     });
+  const queue: QueuedStart[] = [];
+  let queueError: Error | undefined;
+  for (const row of queued.rows) {
+    try {
+      queue.push(parseQueuedResourceStart(row, resource));
+    } catch (error) {
+      if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      queueError = new Error(`Invalid queued request '${String(row.id)}'`, { cause: error });
+      getLog().error(
+        { requestId: row.id, err: queueError },
+        'db.queued_request_invalid_drain_prefix_only'
+      );
+      break;
+    }
+  }
   return {
     capacity,
     reusableCheckouts: reusable.rows,
     holders,
     waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
-    queue: queued.rows.map(row => parseQueuedResourceStart(row, resource)),
+    queue,
+    queueError,
     heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
     unknownForeignCheckoutHolder,

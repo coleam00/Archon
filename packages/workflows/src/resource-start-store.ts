@@ -212,8 +212,10 @@ export interface ResourceSlotOccupancy {
   /** Live holders, oldest first. */
   holders: readonly { id: string }[];
   waiters: readonly CapacityWaiter[];
-  /** Queued start requests, oldest first. */
+  /** Valid prefix of queued start requests, oldest first. */
   queue: readonly QueuedStart[];
+  /** Damage at the next queue position prevents admitting successors. */
+  queueError?: Error;
   /** Checkouts requiring local serialization, including holders not provably foreign. */
   heldCheckouts: ReadonlyMap<string, string>;
   foreignHeldCheckouts: ReadonlyMap<string, string>;
@@ -272,6 +274,7 @@ export function resourceStartBlocker(
   launch: PreparedWorkflowLaunch
 ): ResourceBlocker | null {
   readAdmissionCheckoutGuard(launch);
+  if (slot.queueError) throw slot.queueError;
   // An older request that could run keeps FIFO even when a slot is free.
   const older = runnableQueue(slot)[0];
   if (older) return { kind: 'request', id: older.id };
@@ -316,6 +319,7 @@ export function resourceResumeBlocker(
   slot: ResourceSlotOccupancy,
   run: Pick<WorkflowRun, 'id' | 'metadata'> & { status: 'failed' | 'paused' }
 ): ResourceBlocker | null {
+  if (slot.queueError) throw slot.queueError;
   const others = slot.holders.filter(holder => holder.id !== run.id);
   if (others[0] && others.length >= slot.capacity) return { kind: 'run', id: others[0].id };
   if (others.length < slot.holders.length) return null;

@@ -400,10 +400,8 @@ function queuedDrainResources(
   queued: readonly QueuedResourceStartInspection[],
   failures: ResourceStartDrainFailure[]
 ): string[] {
-  const damaged = new Set<string>();
   for (const request of queued) {
     if (!('error' in request)) continue;
-    if (request.resource !== undefined) damaged.add(request.resource);
     failures.push({
       resource: request.resource,
       receiptId: request.receiptId,
@@ -412,11 +410,7 @@ function queuedDrainResources(
       }),
     });
   }
-  const resources: string[] = [];
-  for (const resource of new Set(queued.map(request => request.resource))) {
-    if (resource !== undefined && !damaged.has(resource)) resources.push(resource);
-  }
-  return resources;
+  return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
 }
 
 async function worktreeLane(

@@ -690,107 +690,117 @@ for (const corruption of [
   'only-missing-launch',
   'only-missing-position',
 ] as const) {
-  test(`host drain contains queued ${corruption} corruption within its resource`, async () => {
-    const root = roots(await mkdtemp(join(tmpdir(), 'host-drain-')));
-    const host = await createFileWorkflowHost(root);
-    const store = host.deps.store;
-    const launch = (resource: string): PreparedWorkflowLaunch => ({
-      version: 2,
-      run: {
-        id: crypto.randomUUID(),
-        workflow_name: 'test',
-        codebase_id: 'project',
-        user_message: '',
-        metadata: {},
-      },
-      execution: { cwd: `/${resource}`, conversationId: 'test', isolation: { kind: 'in-place' } },
-    });
-    const queued: string[] = [];
-    const holders: string[] = [];
-    const queueResource = async (resource: string, count: number): Promise<void> => {
-      for (let index = 0; index < count; index++) {
-        const prepared = launch(resource);
-        const decision = await store.admitResourceStart({
-          resource,
-          capacity: 1,
-          hostId: 'host',
-          overlap: 'queue',
-          launch: prepared,
-        });
-        if (index === 0) {
-          holders.push(prepared.run.id);
-        } else {
-          expect(decision.status).toBe('queued');
-          queued.push(prepared.run.id);
+  test.each(corruption.startsWith('only-slot-') ? [0] : [0, 1])(
+    `host drain contains queued ${corruption} corruption at offset %i`,
+    async offset => {
+      const root = roots(await mkdtemp(join(tmpdir(), 'host-drain-')));
+      const host = await createFileWorkflowHost(root);
+      const store = host.deps.store;
+      const launch = (resource: string): PreparedWorkflowLaunch => ({
+        version: 2,
+        run: {
+          id: crypto.randomUUID(),
+          workflow_name: 'test',
+          codebase_id: 'project',
+          user_message: '',
+          metadata: {},
+        },
+        execution: { cwd: `/${resource}`, conversationId: 'test', isolation: { kind: 'in-place' } },
+      });
+      const queued: string[] = [];
+      const holders: string[] = [];
+      const queueResource = async (resource: string, count: number): Promise<void> => {
+        for (let index = 0; index < count; index++) {
+          const prepared = launch(resource);
+          const decision = await store.admitResourceStart({
+            resource,
+            capacity: 1,
+            hostId: 'host',
+            overlap: 'queue',
+            launch: prepared,
+          });
+          if (index === 0) {
+            holders.push(prepared.run.id);
+          } else {
+            expect(decision.status).toBe('queued');
+            queued.push(prepared.run.id);
+          }
         }
+      };
+      await queueResource('a', 4);
+      await queueResource('z', 2);
+      for (const id of holders) {
+        if (corruption === 'only-slot-json' && id === holders[0]) continue;
+        await store.claimPendingWorkflowRun(id);
+        await store.completeWorkflowRun(id, { duration_ms: 1 });
       }
-    };
-    await queueResource('a', corruption === 'launch' ? 3 : 2);
-    await queueResource('z', 2);
-    for (const id of holders) {
-      if (corruption === 'only-slot-json' && id === holders[0]) continue;
-      await store.claimPendingWorkflowRun(id);
-      await store.completeWorkflowRun(id, { duration_ms: 1 });
+      const damagedId = queued[offset]!;
+      const slotDamage = corruption.startsWith('only-slot-');
+      const path = join(
+        root,
+        slotDamage ? 'resource/slots' : 'resource/requests',
+        `${createHash('sha256')
+          .update(slotDamage ? 'a' : damagedId)
+          .digest('hex')}.json`
+      );
+      const damageRequest = async (): Promise<void> => {
+        if (corruption === 'missing') await fs.unlink(path);
+        else if (corruption === 'json' || corruption === 'only-slot-json')
+          await writeFile(path, '{');
+        else if (corruption === 'only-null') await writeFile(path, 'null');
+        else {
+          const row = JSON.parse(await readFile(path, 'utf8'));
+          if (corruption.startsWith('only-missing-'))
+            delete row[corruption.slice('only-missing-'.length)];
+          else if (corruption === 'only-resource') row.resource = null;
+          else if (corruption === 'only-slot-queue') row.queue = 42;
+          else row.launch = {};
+          await writeFile(path, JSON.stringify(row));
+        }
+      };
+      await damageRequest();
+      const before = corruption === 'missing' ? undefined : await readFile(path, 'utf8');
+      const started: string[] = [];
+      const error = await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async id => {
+          started.push(id);
+        },
+      }).catch((caught: unknown) => caught);
+      expect(started).toEqual([...queued.slice(0, offset), queued.at(-1)!]);
+      expect(error).toBeInstanceOf(ResourceStartDrainError);
+      if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+      expect(error.failures).toHaveLength(1);
+      expect(error.failures[0]?.resource).toBe(
+        [
+          'only-resource',
+          'only-missing-resource',
+          'json',
+          'missing',
+          'only-null',
+          'only-missing-hostId',
+          'only-slot-json',
+          'only-slot-queue',
+        ].includes(corruption)
+          ? undefined
+          : 'a'
+      );
+      const failure = error.failures[0]?.error;
+      if (!(failure instanceof Error)) throw new Error('expected original drain error');
+      expect(failure.message).toContain('Queued request');
+      if (slotDamage) expect(failure.message).toContain('resource/slots/');
+      else expect(failure.message).toContain(damagedId);
+      expect(failure.cause).toBeInstanceOf(Error);
+      expect(await store.getWorkflowRun(damagedId)).toBeNull();
+      if (offset > 0) {
+        await store.claimPendingWorkflowRun(queued[0]!);
+        await store.completeWorkflowRun(queued[0]!, { duration_ms: 1 });
+        expect(await store.drainResourceStarts({ resource: 'a', hostId: 'host' })).toEqual([]);
+        expect(await store.getWorkflowRun(queued[2]!)).toBeNull();
+      }
+      if (before !== undefined) expect(await readFile(path, 'utf8')).toBe(before);
+      else await expect(access(path)).rejects.toThrow();
     }
-    const damagedId = queued[0]!;
-    const slotDamage = corruption.startsWith('only-slot-');
-    const path = join(
-      root,
-      slotDamage ? 'resource/slots' : 'resource/requests',
-      `${createHash('sha256')
-        .update(slotDamage ? 'a' : damagedId)
-        .digest('hex')}.json`
-    );
-    const damageRequest = async (): Promise<void> => {
-      if (corruption === 'missing') await fs.unlink(path);
-      else if (corruption === 'json' || corruption === 'only-slot-json') await writeFile(path, '{');
-      else if (corruption === 'only-null') await writeFile(path, 'null');
-      else {
-        const row = JSON.parse(await readFile(path, 'utf8'));
-        if (corruption.startsWith('only-missing-'))
-          delete row[corruption.slice('only-missing-'.length)];
-        else if (corruption === 'only-resource') row.resource = null;
-        else if (corruption === 'only-slot-queue') row.queue = 42;
-        else row.launch = {};
-        await writeFile(path, JSON.stringify(row));
-      }
-    };
-    await damageRequest();
-    const before = corruption === 'missing' ? undefined : await readFile(path, 'utf8');
-    const started: string[] = [];
-    const error = await drainResourceStartHost({
-      ...host,
-      hostId: 'host',
-      startAdmitted: async id => {
-        started.push(id);
-      },
-    }).catch((caught: unknown) => caught);
-    expect(started).toEqual([queued.at(-1)!]);
-    expect(error).toBeInstanceOf(ResourceStartDrainError);
-    if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
-    expect(error.failures).toHaveLength(1);
-    expect(error.failures[0]?.resource).toBe(
-      [
-        'only-resource',
-        'only-missing-resource',
-        'json',
-        'missing',
-        'only-null',
-        'only-missing-hostId',
-        'only-slot-json',
-        'only-slot-queue',
-      ].includes(corruption)
-        ? undefined
-        : 'a'
-    );
-    const failure = error.failures[0]?.error;
-    if (!(failure instanceof Error)) throw new Error('expected original drain error');
-    expect(failure.message).toContain('Queued request');
-    if (slotDamage) expect(failure.message).toContain('resource/slots/');
-    else expect(failure.message).toContain(damagedId);
-    expect(failure.cause).toBeInstanceOf(Error);
-    expect(await store.getWorkflowRun(damagedId)).toBeNull();
-    if (before !== undefined) expect(await readFile(path, 'utf8')).toBe(before);
-    else await expect(access(path)).rejects.toThrow();
-  });
+  );
 }

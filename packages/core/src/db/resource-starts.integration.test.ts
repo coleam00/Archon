@@ -1486,6 +1486,67 @@ for (const damage of ['missing', 'queued', 'skipped', 'withdrawn'] as const) {
 }
 
 for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
+  test(`SQL host drains valid predecessors before queued damage: ${damagedLaunch}`, async () => {
+    const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+    const { drainResourceStartHost, ResourceStartDrainError } = await import(
+      '../workflows/resource-start-host'
+    );
+    const host = createSqlWorkflowHost();
+    const queue: string[] = [];
+    const holders: string[] = [];
+    for (const resource of ['a', 'z']) {
+      for (let index = 0; index < (resource === 'a' ? 4 : 2); index++) {
+        const prepared = launch(crypto.randomUUID());
+        prepared.execution.cwd = `/${resource}`;
+        await host.deps.store.admitResourceStart({
+          resource,
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue',
+          launch: prepared,
+        });
+        if (index === 0) holders.push(prepared.run.id);
+        else queue.push(prepared.run.id);
+      }
+    }
+    for (const id of holders)
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+        [id]
+      );
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+      [
+        queue[1]!,
+        damagedLaunch === 'mismatched-id'
+          ? JSON.stringify(launch(crypto.randomUUID()))
+          : damagedLaunch,
+      ]
+    );
+    const started: string[] = [];
+    const error = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    }).catch((error: unknown) => error);
+    expect(started).toEqual([queue[0]!, queue[3]!]);
+    expect(error).toBeInstanceOf(ResourceStartDrainError);
+    expect(await getWorkflowRun(queue[1]!)).toBeNull();
+    expect(await getWorkflowRun(queue[2]!)).toBeNull();
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [queue[0]!]
+    );
+    expect(await host.deps.store.drainResourceStarts({ resource: 'a', hostId: 'host' })).toEqual(
+      []
+    );
+    expect(await getWorkflowRun(queue[2]!)).toBeNull();
+  });
+}
+
+for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
   test(`SQL host drains independent resources after queued launch corruption: ${damagedLaunch}`, async () => {
     const { createSqlWorkflowHost } = await import('../workflows/sql-host');
     const { drainResourceStartHost, ResourceStartDrainError } = await import(
@@ -1536,9 +1597,9 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
         receiptId,
       ]
     );
-    await expect(
-      host.deps.store.drainResourceStarts({ resource: 'a', hostId: 'host' })
-    ).rejects.toThrow();
+    expect(await host.deps.store.drainResourceStarts({ resource: 'a', hostId: 'host' })).toEqual(
+      []
+    );
     await expect(
       host.deps.store.admitResourceStart({
         resource: 'a',

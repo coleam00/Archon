@@ -23,6 +23,16 @@ export const slotMembershipSchema = z.object({
   admitted: z.array(z.string()).default([]),
 });
 
+export function hasReadableSlotMembership(raw: unknown, id: string): boolean {
+  const admitted = slotMembershipSchema.pick({ admitted: true }).safeParse(raw);
+  const holders = slotMembershipSchema.pick({ holders: true }).safeParse(raw);
+  return (
+    (admitted.success && admitted.data.admitted.includes(id)) ||
+    (holders.success &&
+      holders.data.holders.some(holder => holder.kind === 'run' && holder.id === id))
+  );
+}
+
 /** `source` names the slot document in a malformed attempt owner's error. */
 export const slotSchema = (source: string) =>
   slotMembershipSchema.extend({

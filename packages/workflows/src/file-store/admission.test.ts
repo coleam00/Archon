@@ -634,9 +634,7 @@ test.each([
     });
     if (!relationshipMismatch)
       await expect(store.getResourceStartRequest(corrupt.launch.run.id)).rejects.toThrow();
-    await expect(
-      store.drainResourceStarts({ resource: 'other', hostId: 'host' })
-    ).rejects.toThrow();
+    expect(await store.drainResourceStarts({ resource: 'other', hostId: 'host' })).toEqual([]);
     if (relationshipMismatch) {
       await expect(store.admitResourceStart({ ...intent(), resource: 'other' })).rejects.toThrow(
         'Queued resource request'
@@ -1036,9 +1034,14 @@ for (const corruption of queuedCorruptions) {
     expect(await store.getWorkflowRun(foreignHolder.launch.run.id)).toMatchObject({
       status: 'pending',
     });
-    await expect(
-      store.drainResourceStarts({ resource: 'foreign', hostId: 'foreign-host' })
-    ).rejects.toThrow();
+    if (corruption.startsWith('slot-'))
+      await expect(
+        store.drainResourceStarts({ resource: 'foreign', hostId: 'foreign-host' })
+      ).rejects.toThrow();
+    else
+      expect(
+        await store.drainResourceStarts({ resource: 'foreign', hostId: 'foreign-host' })
+      ).toEqual([]);
   });
 }
 
@@ -1560,3 +1563,68 @@ test('unreadable foreign membership remains relevant through a registered checko
   );
   expect(await reopened.getResourceStartRequest(contender.launch.run.id)).toBeNull();
 });
+
+test.each(
+  (['paused', 'failed'] as const).flatMap(status =>
+    (['admitted', 'holders'] as const).flatMap(membership =>
+      (['missing', 'queued', 'skipped', 'withdrawn'] as const).map(requestStatus => ({
+        status,
+        membership,
+        requestStatus,
+      }))
+    )
+  )
+)(
+  '$status resume refuses $requestStatus request with retained $membership membership without committing',
+  async ({ status, membership, requestStatus }) => {
+    const { root, store, holder, queued, path, slotPath, intact } = await releasedHolderFixture(
+      'retained',
+      'intact'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    if (status === 'failed')
+      await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+      }));
+    const membershipSlot = JSON.parse(await readFile(slotPath, 'utf8'));
+    if (membership === 'holders') {
+      membershipSlot.admitted = [];
+      membershipSlot.holders.push({ kind: 'run', id: holder.launch.run.id });
+      await writeFile(slotPath, JSON.stringify(membershipSlot));
+    }
+    if (requestStatus === 'missing') await unlink(path);
+    else await writeFile(path, JSON.stringify({ ...intact, status: requestStatus }));
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    const slot = await readFile(slotPath, 'utf8');
+    await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toThrow(
+      'has slot membership but no matching admitted request'
+    );
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    expect(await readFile(slotPath, 'utf8')).toBe(slot);
+    expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe(status);
+    await writeFile(path, JSON.stringify(intact));
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+  }
+);
+
+test.each(['paused', 'failed'] as const)(
+  'historical %s resume without request or slot membership keeps the manual-run exception',
+  async status => {
+    const { root, store, holder, path } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    if (status === 'failed')
+      await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+      }));
+    await unlink(path);
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+  }
+);
