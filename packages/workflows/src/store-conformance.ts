@@ -2713,7 +2713,7 @@ export function describeWorkflowStoreConformance(
       const reports = harness.terminalReports();
       expect(
         await store.failWorkflowRun(
-          state === 'missing' ? 'missing-run' : run.id,
+          state === 'missing' ? crypto.randomUUID() : run.id,
           'startup failed',
           {
             exitReason: 'launch_failed',

@@ -1,3 +1,4 @@
+import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
   getArchonHome,
@@ -25,11 +26,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
-import {
-  DETACHED_LAUNCH_TOKEN_ENV,
-  DETACHED_LAUNCH_METADATA_KEY,
-  DETACHED_RUN_OWNER_ENV,
-} from '../utils/detached-run-control';
+import { DETACHED_LAUNCH_TOKEN_ENV, DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,

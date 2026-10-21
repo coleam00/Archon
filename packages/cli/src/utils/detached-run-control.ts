@@ -1,18 +1,7 @@
-import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { RUN_JOB_ESCAPE_ENV, startRunJobEscapeBroker } from './run-job-escape';
 
 export const DETACHED_RUN_OWNER_ENV = 'ARCHON_DETACHED_RUN_OWNER';
 export const DETACHED_LAUNCH_TOKEN_ENV = 'ARCHON_DETACHED_LAUNCH_TOKEN';
-export { DETACHED_LAUNCH_METADATA_KEY };
-
-export function matchesDetachedLaunch(
-  metadata: Record<string, unknown> | null | undefined,
-  token: string | undefined
-): boolean {
-  return (
-    token !== undefined && token.length > 0 && metadata?.[DETACHED_LAUNCH_METADATA_KEY] === token
-  );
-}
 
 /**
  * Take the process container that active cancellation will stop, before the marked owner

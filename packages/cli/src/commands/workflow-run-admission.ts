@@ -31,7 +31,7 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { matchesDetachedLaunch } from '../utils/detached-run-control';
+import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import { loadWorkflows } from './workflow-list';
 import { resolveLaunchRunConfig } from './workflow-run-config';
 import { assertInheritedWorkflowCodebase, type WorkflowRunOptions } from './workflow-shared';
@@ -245,6 +245,15 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
       ? await resolveContinuationWorkflow(host.deps, continuationRun, cwd)
       : undefined;
   return { continuationRun, resumeLookupError, continuation };
+}
+
+function matchesDetachedLaunch(
+  metadata: Record<string, unknown> | null | undefined,
+  token: string | undefined
+): boolean {
+  return (
+    token !== undefined && token.length > 0 && metadata?.[DETACHED_LAUNCH_METADATA_KEY] === token
+  );
 }
 
 async function claimDetachedRunRow(request: OwnedRunRequest): Promise<WorkflowRun | undefined> {

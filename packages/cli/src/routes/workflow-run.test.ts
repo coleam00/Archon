@@ -5,7 +5,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
@@ -191,7 +191,7 @@ test('passes an available explicit source to the detached run command', async ()
   });
   expect(result.exitCode).toBe(0);
   expect(result.run).toHaveBeenCalledTimes(1);
-  expect(result.run.mock.calls[0]?.[4]?.discoveryCwd).toEndWith('/source');
+  expect(result.run.mock.calls[0]?.[4]?.discoveryCwd).toEndWith(`${sep}source`);
   expect(result.storedRun?.status).toBe('pending');
 });
 
