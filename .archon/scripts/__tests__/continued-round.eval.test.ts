@@ -48,11 +48,34 @@ for (const stale of [false, true]) {
       const bin = track(mkdtempSync(join(tmpdir(), 'archon-implement-eval-')));
       const reads = join(artifacts, 'forge-reads.jsonl');
       writeFileSync(reads, '');
+      const pr = {
+        headRefName: 'feature',
+        headRefOid: head,
+        isCrossRepository: false,
+        maintainerCanModify: null,
+      };
       writeFileSync(
         join(bin, 'gh'),
-        `#!${process.execPath}\nconst args = process.argv.slice(2);\nconst { appendFileSync } = await import('node:fs');\nappendFileSync(${JSON.stringify(reads)}, JSON.stringify(args) + '\\n');\nif (args[0] !== 'pr' || args[1] !== 'view' || args[2] !== '42' || !args.includes('${PR.repo.host}/${PR.repo.path}')) process.exit(1);\nconsole.log(${JSON.stringify(JSON.stringify({ headRefName: 'feature', headRefOid: head, isCrossRepository: false, maintainerCanModify: null }))});\n`,
+        `#!${process.execPath}
+const args = process.argv.slice(2);
+const { appendFileSync } = await import('node:fs');
+appendFileSync(${JSON.stringify(reads)}, JSON.stringify(args) + '\\n');
+if (args[0] !== 'pr' || args[1] !== 'view' || args[2] !== '42' || !args.includes('${PR.repo.host}/${PR.repo.path}')) process.exit(1);
+const pr = ${JSON.stringify(pr)};
+const jsonIndex = args.indexOf('--json');
+const fields = jsonIndex < 0 ? [] : (args[jsonIndex + 1] ?? '').split(',');
+console.log(JSON.stringify(Object.fromEntries(Object.entries(pr).filter(([field]) => fields.includes(field)))));
+`,
         { mode: 0o755 }
       );
+      const selected = spawnSync(
+        join(bin, 'gh'),
+        ['pr', 'view', '42', '--repo', `${PR.repo.host}/${PR.repo.path}`, '--json', 'headRefName'],
+        { encoding: 'utf8' }
+      );
+      expect(selected.status, selected.stderr).toBe(0);
+      expect(JSON.parse(selected.stdout)).toEqual({ headRefName: 'feature' });
+      writeFileSync(reads, '');
       const command = readFileSync(
         process.env.ARCHON_EVAL_IMPLEMENT_COMMAND ?? join(PACK, 'implement/commands/implement.md'),
         'utf8'
@@ -124,14 +147,24 @@ for (const stale of [false, true]) {
         );
       const result = final?.structured_output;
       expect(result).toMatchObject({ done: true, green: !stale });
-      const calls: unknown[] = readFileSync(reads, 'utf8')
+      const calls = readFileSync(reads, 'utf8')
         .trim()
         .split('\n')
         .filter(Boolean)
-        .map(line => JSON.parse(line));
+        .map((line): unknown => JSON.parse(line))
+        .filter(
+          (call): call is string[] =>
+            Array.isArray(call) && call.every(arg => typeof arg === 'string')
+        );
       expect(calls).toContainEqual(
         expect.arrayContaining(['pr', 'view', '42', '--repo', `${PR.repo.host}/${PR.repo.path}`])
       );
+      expect(
+        calls.map(call => {
+          const index = call.indexOf('--json');
+          return index < 0 ? [] : (call[index + 1] ?? '').split(',');
+        })
+      ).toContainEqual(expect.arrayContaining(Object.keys(pr)));
       expect(git(checkout, 'branch', '--show-current')).toBe(branch);
       expect(git(checkout, 'status', '--porcelain')).toBe('');
       if (stale) {
