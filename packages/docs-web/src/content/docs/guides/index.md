@@ -42,6 +42,18 @@ Archon ships the `sdlc` workflow pack, a software factory from an incoming issue
 
 To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
 
+If you edit the merge queue's `sweep.output_format`, regenerate its TypeScript
+contract with Bun from your project root:
+
+```sh
+bun run .archon/workflows/sdlc/.shared/generate-merge-sweep-contract.ts
+bun run .archon/workflows/sdlc/.shared/generate-merge-sweep-contract.ts --check
+```
+
+Add the `--check` command to your project's validation to reject a missing or stale
+contract. Both commands use the copied pack's own YAML and generated module and
+need no project dependencies. Adjust the path if you copy the pack elsewhere.
+
 ## Advanced
 
 - [Global Workflows](/guides/global-workflows/) — User-level workflows that apply to every project

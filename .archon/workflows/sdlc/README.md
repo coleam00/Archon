@@ -198,10 +198,21 @@ before them.
 ## Deterministic scripts
 
 The merge sweep contract is authored in `merge-queue/archon-merge-queue.yaml`,
-node `sweep.output_format`. After editing it in this repository, run
-`bun run generate:merge-sweep-contract` to update `.shared/merge-sweep.generated.ts`.
-The generated-files check enforces freshness. Pack adopters receive the generated
-module; the generator is not needed at runtime.
+node `sweep.output_format`. The pack includes its generator, so copied and customized
+packs can keep `.shared/merge-sweep.generated.ts` synchronized. With Bun installed,
+run these commands from the pack directory after editing the schema:
+
+```sh
+bun run .shared/generate-merge-sweep-contract.ts
+bun run .shared/generate-merge-sweep-contract.ts --check
+```
+
+Add the `--check` command to your project's validation to reject a missing or stale
+module. Paths resolve relative to the generator, so it can also be invoked by path
+from any working directory. The generator needs no project dependencies and is not
+needed at runtime. In this repository, `bun run generate:merge-sweep-contract` and
+`bun run check:merge-sweep-contract` wrap these commands; the generated-files check
+enforces freshness.
 
 Every `script:` node here is TypeScript on Bun, under its own component's
 `scripts/` directory. Logic more than one of them needs lives once in

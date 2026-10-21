@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -9,7 +9,7 @@ import {
   generateContract,
   sweepSchema,
   writeContract,
-} from './generate-merge-sweep-contract';
+} from '../.archon/workflows/sdlc/.shared/generate-merge-sweep-contract.ts';
 
 const track = trackTempRoots();
 
@@ -70,6 +70,38 @@ function fixture() {
 }
 
 describe('merge sweep contract generation', () => {
+  test('a copied pack checks and regenerates its own customized contract from any working directory', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'copied-sweep-')));
+    const pack = join(root, 'custom pack');
+    await cp(resolve(import.meta.dir, '../.archon/workflows/sdlc'), pack, { recursive: true });
+    const generator = join(pack, '.shared/generate-merge-sweep-contract.ts');
+    const output = join(pack, '.shared/merge-sweep.generated.ts');
+    const source = join(pack, 'merge-queue/archon-merge-queue.yaml');
+    const run = (...args: string[]) =>
+      Bun.spawnSync([process.execPath, generator, ...args], {
+        cwd: root,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+    expect(run('--check').exitCode).toBe(0);
+    await writeFile(
+      source,
+      Bun.YAML.stringify({
+        nodes: [{ id: 'sweep', output_format: fixture() }],
+      })
+    );
+    const stale = run('--check');
+    expect(stale.exitCode).not.toBe(0);
+    expect(stale.stderr.toString()).toContain('missing or stale');
+    expect(run().exitCode).toBe(0);
+    expect(await readFile(output, 'utf8')).toBe(generateContract(fixture()));
+    expect(run('--check').exitCode).toBe(0);
+    await writeFile(output, `${await readFile(output, 'utf8')}\n// manual edit\n`);
+    expect(run('--check').exitCode).not.toBe(0);
+    expect(run().exitCode).toBe(0);
+    expect(run('--check').exitCode).toBe(0);
+  });
+
   test('types required, optional, nullable and nested values, including readonly arrays and enums', () => {
     const declaration = emitType({
       type: 'object',

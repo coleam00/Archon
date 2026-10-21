@@ -1,5 +1,5 @@
-// Generated from .archon/workflows/sdlc/merge-queue/archon-merge-queue.yaml, node sweep.
-// Regenerate: bun run generate:merge-sweep-contract
+// Generated from merge-queue/archon-merge-queue.yaml, node sweep.
+// Regenerate: bun run .shared/generate-merge-sweep-contract.ts (from the pack directory)
 // Schema SHA-256: 5ec5b885ca1e9585d5c02a906f7401bfe3f7d77cc1d2ab8d2c386b3c78f28492
 import { nullableJson } from './io.ts';
 

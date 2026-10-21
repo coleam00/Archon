@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const SOURCE = '.archon/workflows/sdlc/merge-queue/archon-merge-queue.yaml';
-const OUTPUT = '.archon/workflows/sdlc/.shared/merge-sweep.generated.ts';
-const REGENERATE = 'bun run generate:merge-sweep-contract';
+const SOURCE = 'merge-queue/archon-merge-queue.yaml';
+const OUTPUT = '.shared/merge-sweep.generated.ts';
+const REGENERATE = 'bun run .shared/generate-merge-sweep-contract.ts (from the pack directory)';
 
 function object(value: unknown, path: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
