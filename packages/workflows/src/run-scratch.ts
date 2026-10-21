@@ -1,17 +1,23 @@
 /**
  * Remove a terminal run's scratch directory (`$ARTIFACTS_DIR/.archon/scratch`).
  *
- * Every store calls this after a terminal status write commits and only when it won
- * that transition, the same duty as terminal telemetry (see
- * `IWorkflowStore.completeWorkflowRun`). Hanging it on the store rather than on the
- * executor covers every terminal writer — cancel while paused, abandon after the owner
- * died, conversation reset — in whichever process made the write.
+ * Scratch is removed only where nothing of the run can still write into it:
+ * - Every store calls `releaseRunScratch` after a terminal status write commits and only
+ *   when it won that transition, the same duty as terminal telemetry (see
+ *   `IWorkflowStore.completeWorkflowRun`). That covers every terminal writer that has no
+ *   live executor behind it: cancel while paused, abandon after the owner died, a cancel
+ *   that stopped the owner first, conversation reset.
+ * - A cancel the executor only observes at its next status check leaves its nodes
+ *   writing after that commit, so the executor calls it again when it exits.
+ * - A container run is skipped by both: its container mounts the artifacts directory and
+ *   lives past the terminal write, and code in it could swap `.archon` for a link between
+ *   the check below and `rm`. The container backend calls `removeRunScratch` once the
+ *   container is removed.
  *
  * Only the scratch child is removed; the rest of the artifacts directory is the
  * workflow's evidence and is never inspected. The engine directory must be a real
- * directory: code in a container run can plant a `.archon` link in its mounted
- * artifacts directory, and `rm` would follow that parent link out of the run. A link
- * inside scratch is removed as a link.
+ * directory, so a link left behind in it is not followed out of the run. A link inside
+ * scratch is removed as a link.
  */
 
 import { lstat, rm } from 'node:fs/promises';
@@ -33,8 +39,12 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** Never throws: the status write is authoritative, and a failed removal is only logged. */
 export async function releaseRunScratch(
-  run: Pick<WorkflowRun, 'id' | 'output_root'>
+  run: Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>
 ): Promise<void> {
+  if (run.metadata.isolation === 'container') {
+    getLog().debug({ workflowRunId: run.id }, 'run_scratch.left_to_container_teardown');
+    return;
+  }
   // A row with no trusted output_root (created before the column existed, or on the
   // identity_unresolved path) has no locatable artifacts directory, so nothing is removed.
   const root = resolveRunStorageRoot(run, null);
@@ -42,7 +52,18 @@ export async function releaseRunScratch(
     getLog().debug({ workflowRunId: run.id }, 'run_scratch.no_storage_root');
     return;
   }
-  const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+  await removeRunScratch(getRunArtifactsDirForRoot(root, run.id), { workflowRunId: run.id });
+}
+
+/**
+ * Remove `artifactsDir`'s scratch child. The caller guarantees the run is terminal and
+ * nothing can still write into `artifactsDir`. Never throws; failures are logged with
+ * `logContext`.
+ */
+export async function removeRunScratch(
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<void> {
   const engineDir = join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR);
   const scratchDir = getRunScratchDir(artifactsDir);
   try {
@@ -52,16 +73,13 @@ export async function releaseRunScratch(
     });
     if (!entry) return;
     if (!entry.isDirectory()) {
-      getLog().warn(
-        { workflowRunId: run.id, path: engineDir },
-        'run_scratch.engine_dir_not_directory'
-      );
+      getLog().warn({ ...logContext, path: engineDir }, 'run_scratch.engine_dir_not_directory');
       return;
     }
     await rm(scratchDir, { recursive: true, force: true });
   } catch (error) {
     getLog().warn(
-      { err: error as Error, workflowRunId: run.id, path: scratchDir },
+      { ...logContext, err: error as Error, path: scratchDir },
       'run_scratch.remove_failed'
     );
   }

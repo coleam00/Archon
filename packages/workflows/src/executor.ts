@@ -58,6 +58,7 @@ import type {
 import {
   SUBRUN_METADATA_KEYS,
   isApprovalContext,
+  isTerminalRunStatus,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   type ContinuationMode,
@@ -67,6 +68,7 @@ import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-recor
 import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { releaseRunScratch } from './run-scratch';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
 
@@ -732,6 +734,20 @@ export async function executeWorkflow(
           { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
         );
       }
+      await releaseScratchOnExit(deps, runId);
     }
   }
+}
+
+/**
+ * A cancel this executor only observed at a status check committed while its nodes still
+ * ran, and the store's release at that commit could not see what they wrote afterwards.
+ * The nodes have stopped by now, so a terminal run's scratch goes again.
+ */
+async function releaseScratchOnExit(deps: WorkflowDeps, runId: string): Promise<void> {
+  const run = await deps.store.getWorkflowRun(runId).catch((err: unknown) => {
+    getLog().warn({ workflowRunId: runId, err }, 'executor.exit_scratch_lookup_failed');
+    return null;
+  });
+  if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
 }

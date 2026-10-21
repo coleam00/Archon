@@ -97,7 +97,10 @@ async function rejectingSource(operation: Rejection) {
       return { released: false };
     });
     if (operation === 'follow-up read') {
-      store.getWorkflowRun = mock(async id => {
+      // Only the follow-up read rejects; the executor's exit read sees the failed run.
+      store.getWorkflowRun = mock<IWorkflowStore['getWorkflowRun']>(
+        async () => run
+      ).mockImplementationOnce(async id => {
         expect(id).toBe(run.id);
         expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
         return reached();

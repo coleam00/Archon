@@ -1447,7 +1447,7 @@ export function describeWorkflowStoreConformance(
       expect(await types(store, run.id)).toContain('source_released');
     });
     describeSourceReleaseConformance(() => store);
-    describeRunScratchConformance(() => store);
+    describeRunScratchConformance(() => store, CONFORMANCE_CONVERSATION_ID);
     test('only stale running runs can resume; completed and cancelled runs refuse', async () => {
       const run = await running(store);
       expect(await rejection(store.resumeWorkflowRun(run.id))).toBeInstanceOf(
