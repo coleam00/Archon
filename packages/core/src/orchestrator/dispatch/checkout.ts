@@ -1,3 +1,4 @@
+import { CheckoutReleasedError } from '@archon/workflows/schemas/checkout-ownership';
 import * as sqlIsolation from '../../db/isolation-environments';
 import { clearConversationCheckout } from '../../db/conversations';
 import type { DispatchScope } from './scope';
@@ -10,6 +11,8 @@ export async function reconcileFreshCheckout(scope: DispatchScope): Promise<Disp
   const currentEnvironment = conversation.isolation_env_id
     ? await sqlIsolation.getById(conversation.isolation_env_id)
     : undefined;
+  if (currentEnvironment?.status === 'destroyed')
+    throw new CheckoutReleasedError(currentEnvironment.working_path);
   return {
     ...scope,
     conversation,

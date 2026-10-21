@@ -193,7 +193,7 @@ describe('workflow dispatch routing', () => {
     }
   );
 
-  test.each(['removed', 'replaced'] as const)(
+  test.each(['removed', 'replaced', 'absent-row', 'destroyed', 'removed-before-capture'] as const)(
     'fresh foreground captures reconciled source when its checkout was %s',
     async state => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-source-')));
@@ -228,28 +228,53 @@ describe('workflow dispatch routing', () => {
       );
       mockClearConversationCheckout.mockResolvedValueOnce({
         ...conversation,
-        isolation_env_id: state === 'replaced' ? 'new-env' : null,
-        cwd: state === 'replaced' ? replacementPath : retiredPath,
+        isolation_env_id: state === 'removed' ? null : 'new-env',
       });
-      if (state === 'replaced')
+      if (state !== 'removed')
         mockAdoptedEnvironment.mockResolvedValueOnce(
-          makeIsolationEnvironment({ id: 'new-env', working_path: replacementPath })
+          state === 'absent-row'
+            ? null
+            : makeIsolationEnvironment({
+                id: 'new-env',
+                working_path: replacementPath,
+                status: state === 'destroyed' ? 'destroyed' : 'active',
+              })
         );
+      if (state === 'destroyed') await rm(replacementPath, { recursive: true });
       const captureRoot = join(root, 'capture');
-      mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
-        const capture = await captureWorkflowSource({ ...options, captureRoot });
-        return { ...capture, runId: 'prepared-run-id', roots: capturedSourceRoots(capture.anchor) };
-      });
+      mockPrepareWorkflowSource.mockClear();
+      if (state !== 'destroyed')
+        mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
+          if (state === 'removed-before-capture') await rm(replacementPath, { recursive: true });
+          const capture = await captureWorkflowSource({ ...options, captureRoot });
+          return {
+            ...capture,
+            runId: 'prepared-run-id',
+            roots: capturedSourceRoots(capture.anchor),
+          };
+        });
       mockDiscoverWorkflowsWithConfig.mockImplementation((...args) =>
         realDiscoverWorkflowsWithConfig(...args)
       );
-      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      const platform = makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: operator,
       });
+      if (state === 'destroyed' || state === 'removed-before-capture') {
+        expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+        expect(platform.sendMessage.mock.calls.map(call => call[1]).join('\n')).toContain(
+          replacementPath
+        );
+        expect(mockPrepareWorkflowSource).toHaveBeenCalledTimes(Number(state !== 'destroyed'));
+        await expect(readFile(join(captureRoot, 'manifest.json'))).rejects.toThrow();
+        return;
+      }
       const expectedDescription = state === 'replaced' ? 'replacement source' : 'registered source';
       expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
       expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe(
-        state === 'replaced' ? 'new-env' : null
+        state === 'removed' ? null : 'new-env'
       );
       expect(
         await readFile(join(captureRoot, 'project/.archon/workflows/test-workflow.yaml'), 'utf8')
