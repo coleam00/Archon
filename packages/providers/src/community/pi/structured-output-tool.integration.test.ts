@@ -34,8 +34,8 @@ import { bridgeSession } from './event-bridge';
 import { createStructuredOutputTool } from './structured-output-tool';
 
 const scratch = mkdtempSync(join(tmpdir(), 'archon-pi-structured-output-'));
-afterAll(() => {
-  removeTempTree(scratch);
+afterAll(async () => {
+  await removeTempTree(scratch);
 });
 
 const faux = fauxProvider({ provider: 'faux', models: [{ id: 'faux-1', reasoning: true }] });
