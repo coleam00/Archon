@@ -7,6 +7,7 @@
  */
 import { describe, test, expect, mock } from 'bun:test';
 import type { WorkflowEventRow } from './workflow-events';
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -38,8 +39,13 @@ const {
   listEventsForRuns,
   persistWorkflowEventIfRunning,
   readWorkflowEventsAfter,
+  listActiveWorkflowNodeIds,
+  getDagResumeSnapshot,
+  listProviderEvents,
+  listAttentionNotices,
 } = await import('./workflow-events');
 const { cancelWorkflowRun } = await import('./workflows');
+const { insertTerminalWorkflowEvent } = await import('./workflow-terminal-event');
 
 // workflow_events.workflow_run_id has an enforced FK (PRAGMA foreign_keys = ON) — seed parents.
 await db.query(
@@ -195,4 +201,142 @@ describe('workflow events — real SQLite', () => {
     expect(bad).toBeDefined();
     expect(bad?.data).toEqual({});
   });
+});
+
+test.each(['events', 'active nodes', 'snapshot', 'terminal record'] as const)(
+  '%s follows durable lifecycle order when timestamps disagree',
+  async reader => {
+    const runId = `order-${reader}`;
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status)
+       VALUES ($1, 'wf', 'conv-1', 'msg', 'running')`,
+      [runId]
+    );
+    for (const [suffix, type, timestamp] of [
+      ['legacy-b', 'node_started', '2030-01-01 00:00:00'],
+      ['legacy-a', 'node_completed', '2030-01-01 00:00:00'],
+      ['legacy-old', 'node_started', '2029-01-01 00:00:00'],
+      ['started', 'node_started', '2026-01-02 00:00:00'],
+      ['completed', 'node_completed', '2026-01-01 00:00:00'],
+    ]) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events
+           (id, workflow_run_id, event_type, step_name, data, created_at)
+         VALUES ($1, $2, $3, 'build', $4, $5)`,
+        [`${runId}-${suffix}`, runId, type, JSON.stringify({ node_output: suffix }), timestamp]
+      );
+    }
+    await db.query(
+      `UPDATE remote_agent_workflow_events SET event_order = NULL
+       WHERE workflow_run_id = $1 AND created_at >= '2029-01-01'`,
+      [runId]
+    );
+    switch (reader) {
+      case 'events':
+        expect((await listWorkflowEvents(runId)).map(row => row.id)).toEqual(
+          ['legacy-old', 'legacy-a', 'legacy-b', 'started', 'completed'].map(
+            suffix => `${runId}-${suffix}`
+          )
+        );
+        break;
+      case 'active nodes':
+        expect((await listActiveWorkflowNodeIds([runId])).get(runId)).toEqual([]);
+        break;
+      case 'snapshot':
+        expect((await getDagResumeSnapshot(runId)).completedNodeOutputs.get('build')).toEqual({
+          output: 'completed',
+        });
+        break;
+      case 'terminal record': {
+        await db.query("UPDATE remote_agent_workflow_runs SET status = 'cancelled' WHERE id = $1", [
+          runId,
+        ]);
+        await insertTerminalWorkflowEvent(db.query.bind(db), {
+          workflow_run_id: runId,
+          event_type: 'workflow_cancelled',
+        });
+        const terminal = await db.query<WorkflowEventRow>(
+          "SELECT * FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_cancelled'",
+          [runId]
+        );
+        expect(getTerminalRecord('cancelled', terminal.rows)?.nodes).toEqual([
+          { node_id: 'build', state: 'completed' },
+        ]);
+      }
+    }
+  }
+);
+
+test.each(['provider events', 'attention notices'] as const)(
+  '%s places legacy rows first and sequenced rows in durable order',
+  async reader => {
+    const runId = `order-${reader}`;
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status)
+       VALUES ($1, 'wf', 'conv-1', 'msg', 'running')`,
+      [runId]
+    );
+    for (const [suffix, timestamp] of [
+      ['legacy-b', '2030-01-01 00:00:00'],
+      ['legacy-a', '2030-01-01 00:00:00'],
+      ['legacy-old', '2029-01-01 00:00:00'],
+      ['first', '2026-01-02 00:00:00'],
+      ['last', '2026-01-01 00:00:00'],
+    ]) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events
+           (id, workflow_run_id, event_type, step_name, data, created_at)
+         VALUES ($1, $2, $3, 'build', $4, $5)`,
+        [
+          `${runId}-${suffix}`,
+          runId,
+          reader === 'provider events' ? 'tool_called' : 'attention_notice_sent',
+          JSON.stringify(
+            reader === 'provider events'
+              ? { tool_name: 'Bash', tool_input: {}, tool_call_id: suffix }
+              : { destination: 'test', key: suffix }
+          ),
+          timestamp,
+        ]
+      );
+    }
+    await db.query(
+      `UPDATE remote_agent_workflow_events SET event_order = NULL
+       WHERE workflow_run_id = $1 AND created_at >= '2029-01-01'`,
+      [runId]
+    );
+    const values =
+      reader === 'provider events'
+        ? (await listProviderEvents(runId)).map(row =>
+            row.event.type === 'tool_call' ? row.event.toolCallId : undefined
+          )
+        : (await listAttentionNotices([runId])).map(row => row.data.key);
+    expect(values).toEqual(['legacy-old', 'legacy-a', 'legacy-b', 'first', 'last']);
+  }
+);
+
+test('dashboard reports the latest durable parallel-agent total rather than the latest timestamp', async () => {
+  const runId = 'order-dashboard';
+  await db.query(
+    `INSERT INTO remote_agent_workflow_runs
+       (id, workflow_name, conversation_id, user_message, status)
+     VALUES ($1, 'wf', 'conv-1', 'msg', 'running')`,
+    [runId]
+  );
+  for (const [id, timestamp, total] of [
+    ['old', '2030-01-01 00:00:00', 2],
+    ['new', '2026-01-01 00:00:00', 3],
+  ] as const) {
+    await db.query(
+      `INSERT INTO remote_agent_workflow_events
+         (id, workflow_run_id, event_type, data, created_at)
+       VALUES ($1, $2, 'parallel_agent_started', $3, $4)`,
+      [`${runId}-${id}`, runId, JSON.stringify({ totalAgents: total }), timestamp]
+    );
+  }
+  const { listDashboardRuns } = await import('./workflow-run-lists');
+  const dashboard = await listDashboardRuns();
+  expect(dashboard.runs.find(run => run.id === runId)?.agents_total).toBe(3);
 });
