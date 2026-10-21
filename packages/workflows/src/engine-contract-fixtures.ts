@@ -10,20 +10,6 @@ import type { WorkflowEngineSubmitInput, WorkflowResumeInput } from './engine-po
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
 
-export function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 export async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
   try {
     await promise;

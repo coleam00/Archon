@@ -34,7 +34,6 @@ interface RunExecution {
    * so a signal during the final progress drain does not destroy it.
    */
   containerPreserved: boolean;
-  ownsContainerCleanup: boolean;
 }
 
 /** The container this process tears down: one the folder seam prepared an env for. */
@@ -67,7 +66,6 @@ export async function executeOwnedRun(
     result: undefined,
     progress: undefined,
     containerPreserved: false,
-    ownsContainerCleanup: !defersContainerResume(launch),
   };
   let deregisterTermination: (() => void) | undefined;
   const registerTermination = (): void => {
@@ -83,7 +81,6 @@ export async function executeOwnedRun(
       detachedProcessOwner: request.detachedProcessOwner,
       teardown: signal => teardownOnSignal(launch, execution, signal),
     });
-    execution.ownsContainerCleanup = true;
   };
 
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
@@ -424,8 +421,7 @@ async function settleRun(
       container.envId
     );
   }
-  execution.containerPreserved =
-    !execution.ownsContainerCleanup || runPaused || unresolvedWriteback;
+  execution.containerPreserved = !deregisterTermination || runPaused || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
   // The signal handlers stay registered through it, so a Ctrl-C here still destroys

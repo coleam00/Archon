@@ -15,7 +15,6 @@ export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow } from './schemas';
 import {
   emptySnapshot,
-  deferred,
   captureRejection,
   makeRun,
   makeWorkflow,
@@ -222,8 +221,8 @@ export function runWorkflowEngineContractTests(
 
     it('prepares the admitted row before execution and uses its returned context', async () => {
       const resumed = makeRun({ status: 'running' });
-      const entered = deferred<void>();
-      const ready = deferred<void>();
+      const entered = Promise.withResolvers<void>();
+      const ready = Promise.withResolvers<void>();
       let executionCwd: string | undefined;
       let executionCodebase: string | undefined;
       const store = resumableStore({
@@ -315,7 +314,7 @@ export function runWorkflowEngineContractTests(
     );
 
     it('returns admission before execution settles', async () => {
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const resumed = makeRun({ id: 'accepted-run', status: 'running' });
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,
@@ -555,7 +554,7 @@ nodes:
 
     it('records a post-claim failure and preserves the execution error', async () => {
       const cause = new Error('config failed');
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const resumed = makeRun({ id: 'failed-run', status: 'running' });
       const failures: { id: string; message: string }[] = [];
       let durableStatus: import('./schemas').WorkflowRunStatus = 'running';
@@ -582,7 +581,7 @@ nodes:
     });
 
     it('does not retry a failed terminal compensation write', async () => {
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const writeError = new Error('database unavailable');
       const resumed = makeRun({ id: 'write-failed-run', status: 'running' });
       let writes = 0;
