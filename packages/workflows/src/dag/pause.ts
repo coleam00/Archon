@@ -26,16 +26,13 @@ export interface ContainerPauseReceipt {
   pause:
     | { kind: 'gate'; context: ApprovalContext }
     | { kind: 'wait'; context: WorkflowWaitContext };
-  postPublicationError?: { cause: unknown };
 }
 
 export async function readPublishedContainerPause(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRun'>,
-  runId: string,
-  receipt: ContainerPauseReceipt
+  runId: string
 ): Promise<WorkflowRun | null> {
   try {
-    if (receipt.postPublicationError) throw receipt.postPublicationError.cause;
     return await store.getWorkflowRun(runId);
   } catch (cause) {
     throw new WorkflowExecutionHandoffError(runId, cause);
@@ -103,23 +100,26 @@ export async function runOrStagePause<T extends NodeExecutionResult>(
 }
 
 export async function publishContainerPause(
+  runId: string,
   boundary: ContainerPauseBoundary,
   publish: () => Promise<unknown>,
   afterPublication?: () => Promise<void>
 ): Promise<ContainerPauseReceipt | undefined> {
+  let error: WorkflowExecutionHandoffError | undefined;
   try {
     await publish();
   } catch (cause) {
     if (boundary.receipt === undefined) throw cause;
-    boundary.receipt.postPublicationError = { cause };
+    error = new WorkflowExecutionHandoffError(runId, cause);
   }
   if (boundary.receipt !== undefined && afterPublication !== undefined) {
     try {
       await afterPublication();
     } catch (cause) {
-      boundary.receipt.postPublicationError ??= { cause };
+      error ??= new WorkflowExecutionHandoffError(runId, cause);
     }
   }
+  if (error !== undefined) throw error;
   return boundary.receipt;
 }
 

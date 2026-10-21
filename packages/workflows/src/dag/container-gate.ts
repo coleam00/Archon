@@ -424,6 +424,7 @@ async function raiseWriteBackGate(
   const outcome = await suspendContainerForPause(containerCtx);
   const boundary: ContainerPauseBoundary = {};
   const receipt = await publishContainerPause(
+    runId,
     boundary,
     async () => {
       const paused = await pauseGateRespectingExternalTransition(

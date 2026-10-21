@@ -527,7 +527,7 @@ export async function executeDagWorkflow(
   if (boundary?.publish !== undefined && execContext.kind === 'container' && containerCtx) {
     // Active Docker execs and required pass writes have settled; publication hands off ownership.
     const outcome = await suspendContainerForPause(containerCtx);
-    return publishContainerPause(boundary, boundary.publish, async () => {
+    return publishContainerPause(workflowRun.id, boundary, boundary.publish, async () => {
       await recordContainerSuspendWarning(deps, workflowRun.id, outcome);
       await reportContainerSuspension(
         deps,

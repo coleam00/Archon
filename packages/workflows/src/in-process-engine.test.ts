@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowExecutionHandoffError } from './engine-port';
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
@@ -216,10 +217,11 @@ describe('InProcessWorkflowEngine', () => {
               throw cause;
             });
         }
+        if (kind === 'post-publication')
+          throw new WorkflowExecutionHandoffError(workflowRun.id, cause);
         return {
           kind: 'container_pause',
           pause: { kind: 'gate', context },
-          ...(kind === 'post-publication' ? { postPublicationError: { cause } } : {}),
         };
       };
       try {

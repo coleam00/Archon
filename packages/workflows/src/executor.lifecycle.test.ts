@@ -268,10 +268,13 @@ describe('paused exit', () => {
     'surfaces a %s error after publication without failing the successor',
     async kind => {
       const error = new Error('required write/read failed');
-      mockExecuteDagWorkflow.mockResolvedValueOnce({
-        ...receipt,
-        ...(kind === 'post-publication' ? { postPublicationError: { cause: error } } : {}),
-      });
+      if (kind === 'post-publication') {
+        mockExecuteDagWorkflow.mockRejectedValueOnce(
+          new WorkflowExecutionHandoffError('run-123', error)
+        );
+      } else {
+        mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      }
       const store = makeStore({
         getWorkflowRun: mock(async () => {
           throw error;

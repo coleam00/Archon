@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowExecutionHandoffError } from '../engine-port';
 import * as nodeEventWrite from '../node-event-write';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { describe, it, expect, afterEach, mock, spyOn } from 'bun:test';
@@ -471,31 +472,45 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     );
   });
 
-  it('retains the published receipt when required derived work fails after a successor resumes', async () => {
-    const { options, store, run } = await realPauseFixture([reviewNode()]);
-    const pause = store.pauseWorkflowRun.bind(store);
-    store.pauseWorkflowRun = async (...args) => {
-      await pause(...args);
-      await store.resumeWorkflowRun(run.id);
-    };
-    const failure = new Error('transcript write failed');
-    const original = nodeEventWrite.recordDerivedExecution;
-    const derived = spyOn(nodeEventWrite, 'recordDerivedExecution').mockImplementation(
-      async (...args) => {
-        if ('lifecycle' in args[1] && args[1].lifecycle.status === 'suspended') throw failure;
-        return original(...args);
+  it.each([false, true])(
+    'surfaces a post-publication error and reports suspension failure=%s after resume',
+    async suspensionFails => {
+      const { options, store, run, backend } = await realPauseFixture([reviewNode()]);
+      if (suspensionFails) {
+        backend.suspend = mock(async () => {
+          throw new Error('stop failed');
+        });
       }
-    );
-    try {
-      expect(await executeDagWorkflow(options)).toMatchObject({
-        kind: 'container_pause',
-        postPublicationError: { cause: failure },
-      });
-      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
-    } finally {
-      derived.mockRestore();
+      const head = await store.getWorkflowEventHead();
+      const pause = store.pauseWorkflowRun.bind(store);
+      store.pauseWorkflowRun = async (...args) => {
+        await pause(...args);
+        await store.resumeWorkflowRun(run.id);
+      };
+      const failure = new Error('transcript write failed');
+      const original = nodeEventWrite.recordDerivedExecution;
+      const derived = spyOn(nodeEventWrite, 'recordDerivedExecution').mockImplementation(
+        async (...args) => {
+          if ('lifecycle' in args[1] && args[1].lifecycle.status === 'suspended') throw failure;
+          return original(...args);
+        }
+      );
+      try {
+        await expect(executeDagWorkflow(options)).rejects.toMatchObject({
+          name: WorkflowExecutionHandoffError.name,
+          workflowRunId: run.id,
+          cause: failure,
+        });
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+        const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+        expect(
+          page.events.filter(({ event }) => event.event_type === 'workflow_cleanup_warning')
+        ).toHaveLength(suspensionFails ? 1 : 0);
+      } finally {
+        derived.mockRestore();
+      }
     }
-  });
+  );
 
   it('does not expose a continued wait when its required suspended record cannot be written', async () => {
     const { options, store, run, backend } = await realPauseFixture([

@@ -1,3 +1,4 @@
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { containerPauseHandoff, readPublishedContainerPause } from './dag/pause';
 import {
   continueBlockedRun,
@@ -554,7 +555,7 @@ export async function executeWorkflow(
 
     const finalStatus =
       typeof dagResult === 'object' && dagResult.kind === 'container_pause'
-        ? await readPublishedContainerPause(deps.store, workflowRun.id, dagResult)
+        ? await readPublishedContainerPause(deps.store, workflowRun.id)
         : await deps.store.getWorkflowRun(workflowRun.id);
     const handoff =
       typeof dagResult === 'object' && dagResult.kind === 'container_pause'
@@ -604,6 +605,7 @@ export async function executeWorkflow(
       };
     }
   } catch (error) {
+    executionStopped ||= error instanceof WorkflowExecutionHandoffError;
     if (executionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
