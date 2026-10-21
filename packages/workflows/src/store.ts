@@ -934,9 +934,9 @@ export interface IWorkflowStore
    *
    * Every terminal writer (complete, fail, cancel, fan-out cancel, and the failure of a
    * paused attention wait) also owes, after its write commits and only when it won the
-   * status change, terminal telemetry (`buildRunTerminalTelemetry` over the run's row and
-   * event log) and `releaseRunScratch`. The engine sends no terminal event itself. The SQL
-   * store does both in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   * status change, terminal telemetry (`buildRunTerminalTelemetry`) and
+   * `releaseScratchAfterTerminalWrite` from the status it ended. The engine sends no terminal
+   * event itself. The SQL store does both in `packages/core/src/db/workflow-terminal-telemetry.ts`.
    */
   completeWorkflowRun(
     id: string,

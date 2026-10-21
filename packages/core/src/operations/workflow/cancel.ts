@@ -1,5 +1,7 @@
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
+import { runWritersStopped } from './abandon';
 import type { OperationContext } from './context';
 import {
   cancelByOperator,
@@ -126,6 +128,7 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
+  if (runWritersStopped(run, owner)) await releaseRunScratch(run);
   return { kind: 'stopped', pid: owner.pid, ...recorded };
 }
 

@@ -201,7 +201,7 @@ export async function resolveAndCancelApprovalGate(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
     throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
   }
-  if (outcome.resolved) await afterRunTerminalCommit(id);
+  if (outcome.resolved) await afterRunTerminalCommit(id, 'paused');
   return outcome;
 }
 

@@ -2,7 +2,16 @@
 import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
+import {
+  getArchonWorkspacesPath,
+  getRunArtifactsDirForRoot,
+  getRunScratchDir,
+} from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import type { IIsolationStore } from '@archon/isolation';
@@ -30,6 +39,8 @@ import {
   abandonWorkflow,
   abandonResumableRunsForConversation,
 } from './test-harness';
+
+const trackTempRoot = trackTempRoots();
 
 describe('abandonWorkflow', () => {
   beforeEach(() => {
@@ -557,6 +568,29 @@ describe('abandonWorkflow', () => {
       thisHost: hostname(),
       thisUid: process.getuid?.(),
     });
+  });
+
+  // A top-level run's owner on this host that no longer answers is gone. One on another
+  // host, or the root process a sub-run executes in, may still be writing its scratch.
+  test.skipIf(process.platform === 'win32').each([
+    ['a top-level run on this host', hostname(), null, false],
+    ['a top-level run on another host', 'other-host', null, true],
+    ['a sub-run on this host', hostname(), 'parent-run', true],
+  ] as const)('a silent owner of %s keeps its scratch: %p', async (_case, host, parent, kept) => {
+    const root = trackTempRoot(join(getArchonWorkspacesPath(), '_cwd', `abandon-${randomUUID()}`));
+    const run = makePausedRun({
+      status: 'running',
+      output_root: root,
+      parent_run_id: parent,
+      metadata: { execution_owner: { host, pid: 4242, uid: process.getuid?.() } },
+    });
+    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await abandonWorkflow(run.id, operator);
+
+    expect(existsSync(checkout)).toBe(kept);
   });
 
   for (const reason of ['not_detached', 'unproven', undefined] as const) {

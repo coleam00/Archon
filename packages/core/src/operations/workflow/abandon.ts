@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { readExecutionOwner, readOwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup-service';
@@ -88,6 +89,7 @@ export async function abandonWorkflow(
     owner.kind === 'stopped' ? owner.cleanupWarnings : undefined
   );
   const { warnings, releasedWorktrees } = await releaseAbandonedWorktrees(ctx, run, result, owner);
+  if (result.cancelled && runWritersStopped(run, owner)) await releaseRunScratch(run);
   return {
     run,
     cancelled: result.cancelled,
@@ -255,6 +257,20 @@ async function persistCleanupWarnings(
       `Could not persist cleanup warnings for run ${run.id}: ${(err as Error).message}. The run remains cancelled.`,
     ];
   }
+}
+
+/**
+ * Whether nothing of `run` can still write once abandon or cancel handled its owner: the
+ * owner was stopped and left no output holder running, or nothing answers for a top-level
+ * run whose recorded owner ran on this host as this user. A sub-run's silence proves
+ * nothing: it executes in its root run's process, which may still be running it.
+ */
+export function runWritersStopped(run: WorkflowRun, owner: AbandonOwnerOutcome): boolean {
+  if (owner.kind === 'stopped') return !owner.cleanupWarnings?.length;
+  return (
+    !run.parent_run_id &&
+    unreachableOwnerReason(run, readExecutionOwner(run.metadata), run, owner) === undefined
+  );
 }
 
 /** Why abandon cannot account for `row`'s execution owner from here, or undefined when it can. */

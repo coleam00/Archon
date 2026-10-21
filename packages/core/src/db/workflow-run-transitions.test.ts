@@ -478,6 +478,7 @@ describe('workflow run transitions', () => {
 
   describe('cancelWorkflowRun', () => {
     test('cancels a non-terminal run and reports { cancelled: true }', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('cancelled');
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
@@ -488,13 +489,13 @@ describe('workflow run transitions', () => {
       });
 
       expect(result).toEqual({ cancelled: true });
-      expect(mockQuery).toHaveBeenCalledTimes(5);
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(mockQuery).toHaveBeenCalledTimes(6);
+      const [query, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       // Must not re-cancel / re-stamp completed_at on an already-finished run.
       expect(query).toContain('status NOT IN ($2, $3)');
       expect(params).toEqual(['workflow-run-123', 'completed', 'cancelled']);
-      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [eventQuery, eventParams] = mockQuery.mock.calls[4] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams.slice(1, 5)).toEqual([
         'workflow-run-123',
@@ -509,6 +510,7 @@ describe('workflow run transitions', () => {
     });
 
     test('persists cancellation warnings without truncation', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('cancelled');
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
@@ -518,7 +520,7 @@ describe('workflow run transitions', () => {
         reason: warnings.join('\n'),
         warnings,
       });
-      const params = mockQuery.mock.calls[3]?.[1];
+      const params = mockQuery.mock.calls[4]?.[1];
       if (!Array.isArray(params)) throw new Error('Missing cancellation event');
       const data: Record<string, unknown> = JSON.parse(String(params[5]));
       expect(data.reason).toBe(warnings[0]);
@@ -528,10 +530,11 @@ describe('workflow run transitions', () => {
 
     test('reports { cancelled: false } when the run is already terminal (no throw)', async () => {
       // UPDATE matches nothing because the run is completed/cancelled
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'completed' }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(cancelWorkflowRun('workflow-run-123')).resolves.toEqual({ cancelled: false });
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
     test('throws on database error', async () => {
@@ -545,6 +548,7 @@ describe('workflow run transitions', () => {
 
   describe('cancelFanOutRun', () => {
     test('persists the engine reason and cancelled status in one update', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('cancelled');
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
@@ -553,8 +557,8 @@ describe('workflow run transitions', () => {
         cancelled: true,
       });
 
-      expect(mockQuery).toHaveBeenCalledTimes(5);
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(mockQuery).toHaveBeenCalledTimes(6);
+      const [query, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       expect(query).toContain('metadata =');
       expect(query).toContain('status NOT IN ($3, $4)');
@@ -564,7 +568,7 @@ describe('workflow run transitions', () => {
         'completed',
         'cancelled',
       ]);
-      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [eventQuery, eventParams] = mockQuery.mock.calls[4] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams.slice(1, 5)).toEqual([
         'workflow-run-123',
@@ -579,12 +583,13 @@ describe('workflow run transitions', () => {
     });
 
     test('does not tag an already-terminal run', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'completed' }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
       await expect(cancelFanOutRun('workflow-run-123', 'fan_out_orphan')).resolves.toEqual({
         cancelled: false,
       });
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
     });
 
     test('surfaces a failed atomic update', async () => {

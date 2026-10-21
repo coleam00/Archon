@@ -60,11 +60,18 @@ export function describeRunScratchConformance(
     }
 
     type Transition = (store: IWorkflowStore, id: string) => Promise<unknown>;
+    // A running run's nodes may still write after these commit; its executor removes
+    // scratch once they stop.
     const fromRunning = [
-      ['completed', (store, id) => store.completeWorkflowRun(id, { duration_ms: 1 })],
-      ['failed', (store, id) => store.failWorkflowRun(id, 'failure')],
-      ['cancelled', (store, id) => store.cancelWorkflowRun(id)],
-    ] as const satisfies readonly (readonly [WorkflowRunStatus, Transition])[];
+      ['completed', 'completed', (store, id) => store.completeWorkflowRun(id, { duration_ms: 1 })],
+      ['failed', 'failed', (store, id) => store.failWorkflowRun(id, 'failure')],
+      ['cancelled', 'cancelled', (store, id) => store.cancelWorkflowRun(id)],
+      [
+        'cancelled by its fan-out',
+        'cancelled',
+        (store, id) => store.cancelFanOutRun(id, 'fan_out_sibling'),
+      ],
+    ] as const satisfies readonly (readonly [string, WorkflowRunStatus, Transition])[];
     // Each SQL writer that ends a paused run releases scratch on its own commit path.
     const fromPaused = [
       ['an abandon', (store, id) => store.cancelWorkflowRun(id)],
@@ -76,33 +83,38 @@ export function describeRunScratchConformance(
       ['a fan-out cancel', (store, id) => store.cancelFanOutRun(id, 'fan_out_sibling')],
     ] as const satisfies readonly (readonly [string, Transition])[];
 
-    async function expectScratchReleased(
+    async function afterTransition(
       paused: boolean,
       transition: Transition,
       status: WorkflowRunStatus
-    ): Promise<void> {
+    ): Promise<{ released: boolean }> {
       const { id, root, artifactsDir } = await runWithScratch();
       try {
         if (paused) await getStore().pauseWorkflowRun(id, approval);
         await transition(getStore(), id);
         expect((await getStore().getWorkflowRun(id))?.status).toBe(status);
-        const names = segments(artifactsDir);
-        expect(names.has('node_modules')).toBe(false);
-        expect(names.has('.git')).toBe(false);
         for (const [path, content] of Object.entries(evidence))
           expect(readFileSync(join(artifactsDir, path), 'utf8')).toBe(content);
+        const names = segments(artifactsDir);
+        expect(names.has('.git')).toBe(names.has('node_modules'));
+        return { released: !names.has('node_modules') };
       } finally {
         await removeTempTree(root);
       }
     }
 
-    for (const [status, transition] of fromRunning) {
-      test(`a run that becomes ${status} keeps its evidence and loses its scratch checkout`, () =>
-        expectScratchReleased(false, transition, status));
+    for (const [ending, status, transition] of fromRunning) {
+      test(`a running run that becomes ${ending} keeps its scratch for its executor`, async () => {
+        expect(await afterTransition(false, transition, status)).toEqual({ released: false });
+      });
     }
     for (const [path, transition] of fromPaused) {
-      test(`a paused run cancelled by ${path} keeps its evidence and loses its scratch checkout`, () =>
-        expectScratchReleased(true, transition, 'cancelled'));
+      test.skipIf(process.platform === 'win32')(
+        `a paused run cancelled by ${path} keeps its evidence and loses its scratch checkout`,
+        async () => {
+          expect(await afterTransition(true, transition, 'cancelled')).toEqual({ released: true });
+        }
+      );
     }
 
     test('a paused run keeps its scratch', async () => {

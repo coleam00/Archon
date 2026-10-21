@@ -740,9 +740,9 @@ export async function executeWorkflow(
 }
 
 /**
- * A cancel this executor only observed at a status check committed while its nodes still
- * ran, and the store's release at that commit could not see what they wrote afterwards.
- * The nodes have stopped by now, so a terminal run's scratch goes again.
+ * The executor owns the scratch of every run it ends or sees ended while executing: a
+ * terminal write it did not make (a cooperative cancel, a fan-out cancel) commits while
+ * its nodes may still write, so the store leaves scratch alone. They have stopped now.
  */
 async function releaseScratchOnExit(deps: WorkflowDeps, runId: string): Promise<void> {
   const run = await deps.store.getWorkflowRun(runId).catch((err: unknown) => {

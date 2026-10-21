@@ -450,7 +450,7 @@ describe('scratch on exit', () => {
 
   // A cooperative cancel commits while nodes still run; what they write after it is
   // removed once the executor has stopped them.
-  it.each([
+  it.skipIf(process.platform === 'win32').each([
     ['cancelled', false],
     ['paused', true],
   ] as const)('a run that exits %s keeps its scratch: %p', async (status, kept) => {

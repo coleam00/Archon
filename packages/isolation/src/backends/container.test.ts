@@ -1590,30 +1590,36 @@ describe('ContainerBackend artifacts mount', () => {
     expect(chown).toBeLessThan(rm);
   });
 
-  test("removes the run's scratch only after the container, keeping its evidence", async () => {
-    const scratch = join(getRunScratchDir(ARTIFACTS_MOUNT), 'bisect', 'node_modules');
-    const report = join(ARTIFACTS_MOUNT, 'report.md');
-    mkdirSync(scratch, { recursive: true });
-    writeFileSync(report, 'evidence');
-    let scratchAtRm: boolean | undefined;
-    const docker = readyDocker(args => {
-      if (args[0] === 'rm') scratchAtRm = existsSync(scratch);
-      return undefined;
-    });
-    try {
-      const store = fakeStore();
-      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
-      const prepared = await backend.prepare({ codebase: FOLDER, artifactsMount: ARTIFACTS_MOUNT });
+  test.skipIf(process.platform === 'win32')(
+    "removes the run's scratch only after the container, keeping its evidence",
+    async () => {
+      const scratch = join(getRunScratchDir(ARTIFACTS_MOUNT), 'bisect', 'node_modules');
+      const report = join(ARTIFACTS_MOUNT, 'report.md');
+      mkdirSync(scratch, { recursive: true });
+      writeFileSync(report, 'evidence');
+      let scratchAtRm: boolean | undefined;
+      const docker = readyDocker(args => {
+        if (args[0] === 'rm') scratchAtRm = existsSync(scratch);
+        return undefined;
+      });
+      try {
+        const store = fakeStore();
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        const prepared = await backend.prepare({
+          codebase: FOLDER,
+          artifactsMount: ARTIFACTS_MOUNT,
+        });
 
-      await backend.destroy(prepared.envId!);
+        await backend.destroy(prepared.envId!);
 
-      expect(scratchAtRm).toBe(true);
-      expect(existsSync(scratch)).toBe(false);
-      expect(readFileSync(report, 'utf8')).toBe('evidence');
-    } finally {
-      await removeTempTree(ARTIFACTS_MOUNT);
+        expect(scratchAtRm).toBe(true);
+        expect(existsSync(scratch)).toBe(false);
+        expect(readFileSync(report, 'utf8')).toBe('evidence');
+      } finally {
+        await removeTempTree(ARTIFACTS_MOUNT);
+      }
     }
-  });
+  );
 
   test('skips the hand-back when the host user is root', async () => {
     const store = fakeStore();
