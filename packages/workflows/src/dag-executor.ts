@@ -96,7 +96,7 @@ export async function executeDagWorkflow(
   | string
   | undefined
   | { kind: 'source_release'; released: boolean }
-  | { kind: 'container_pause'; error?: string }
+  | { kind: 'pause'; error?: string }
 > {
   const {
     deps,
@@ -545,7 +545,7 @@ export async function executeDagWorkflow(
         pausePublished = true;
       });
     } catch (error) {
-      if (pausePublished && execContext.kind === 'container') throw error;
+      if (pausePublished) throw error;
       const recovery = await recoverLayerFailure(error);
       if (recovery === 'budget_refused') return;
       sourceUnreadable = recovery;
@@ -562,7 +562,7 @@ export async function executeDagWorkflow(
       };
     }
   } catch (error) {
-    if (!pausePublished || execContext.kind !== 'container') throw error;
+    if (!pausePublished) throw error;
     getLog().error(
       { err: error, workflowRunId: workflowRun.id },
       'dag.execution_error_after_pause'
@@ -583,23 +583,24 @@ export async function executeDagWorkflow(
 
   // Layers have drained all node work before stopping Docker, which would kill live execs.
   // Preserve an observed pause even if resume has advanced the row during cleanup.
-  if (execContext.kind === 'container' && containerCtx && layerStop === 'paused') {
-    await suspendContainerForPause(
-      deps,
-      platform,
-      conversationId,
-      containerCtx,
-      execContext,
-      workflowRun.id,
-      executionClaim(workflowRun.metadata)
-    );
+  if (layerStop === 'paused') {
+    if (execContext.kind === 'container' && containerCtx)
+      await suspendContainerForPause(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        workflowRun.id,
+        executionClaim(workflowRun.metadata)
+      );
     return {
-      kind: 'container_pause',
+      kind: 'pause',
       ...(pauseError !== undefined ? { error: pauseError } : {}),
     };
   }
 
-  if (claimLost) return { kind: 'container_pause', error: pauseError };
+  if (claimLost) return { kind: 'pause', error: pauseError };
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
 }

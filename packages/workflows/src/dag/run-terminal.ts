@@ -72,7 +72,7 @@ interface TerminalOutput {
  */
 export async function finishRun(
   ctx: RunTerminalContext
-): Promise<string | undefined | { kind: 'container_pause' }> {
+): Promise<string | undefined | { kind: 'pause' }> {
   const { deps, workflow, workflowRun, nodeOutputs } = ctx;
   const nodeCounts = countNodeStates(nodeOutputs, workflow.nodes.length);
   const anyCompleted = nodeCounts.completed > 0;
@@ -115,7 +115,7 @@ export async function finishRun(
       ctx.execContext,
       executionClaim(workflowRun.metadata)
     );
-    if (gate === 'paused') return { kind: 'container_pause' };
+    if (gate === 'paused') return { kind: 'pause' };
   }
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);

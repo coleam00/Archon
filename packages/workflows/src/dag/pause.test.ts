@@ -368,9 +368,10 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
         })
       );
       if (rejectWrite) {
-        await expect(execute).rejects.toThrow(
-          'Could not persist node_deferred_usage for group.review: usage storage offline'
-        );
+        await expect(execute).resolves.toEqual({
+          kind: 'pause',
+          error: 'Could not persist node_deferred_usage for group.review: usage storage offline',
+        });
       } else {
         await execute;
         const usage = persistedEvents(store).filter(

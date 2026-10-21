@@ -539,7 +539,7 @@ it('a same-owner container pause retains its deadline cursor and container slot'
   const paused = { ...run, status: 'paused' as const, metadata: { ...run.metadata, wait } };
   const releasePausedRunSlot = mock(async () => ({ released: true }));
   const store = makeStore({ getWorkflowRun: mock(async () => paused), releasePausedRunSlot });
-  mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'container_pause' });
+  mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'pause' });
   const result = await startWorkflow({
     store,
     options: {
