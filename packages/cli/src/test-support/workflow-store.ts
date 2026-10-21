@@ -149,6 +149,11 @@ export function createInMemoryWorkflowStore(
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
+  const afterTerminal = async (id: string): Promise<void> => {
+    const run = runs.get(id);
+    if (run) await releaseRunScratch(run);
+    onTerminal(id);
+  };
   // Unqueued: admission calls it from inside its own queued operation.
   const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
     const nextRuns = structuredClone(runs);
@@ -168,16 +173,12 @@ export function createInMemoryWorkflowStore(
     }
     runs = nextRuns;
     events = nextEvents;
-    for (const event of nextEvents) {
+    for (const event of nextEvents)
       if (
-        priorIds.has(event.id) ||
-        !TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
+        !priorIds.has(event.id) &&
+        TERMINAL_RUN_EVENT_TYPES.some(type => type === event.event_type)
       )
-        continue;
-      const run = nextRuns.get(event.workflow_run_id);
-      if (run) await releaseRunScratch(run);
-      onTerminal(event.workflow_run_id);
-    }
+        await afterTerminal(event.workflow_run_id);
     return result;
   };
   let queue: Promise<void> = Promise.resolve();
