@@ -1099,6 +1099,7 @@ test('an old released holder without admission evidence keeps manual read-only c
 });
 
 test.each([
+  undefined,
   null,
   {},
   { ...currentProcessOwner, host: 1 },
@@ -1120,6 +1121,9 @@ test.each([
     resuming.resource = 'resume';
     resuming.launch.execution.cwd = '/resume';
     for (const start of [foreign, holder, queued, resuming]) await store.admitResourceStart(start);
+    const guarded = { ...intent(), resource: 'guarded' };
+    guarded.launch.execution.cwd = '/foreign';
+    expect(await store.admitResourceStart(guarded)).toMatchObject({ status: 'queued' });
     await finishRun(root, holder.launch.run.id);
     await store.updateWorkflowRun(resuming.launch.run.id, { status: 'paused' });
     await store.updateWorkflowRun(foreign.launch.run.id, { status: 'paused' });
@@ -1142,6 +1146,13 @@ test.each([
     expect(await store.resumeWorkflowRun(resuming.launch.run.id)).toMatchObject({
       status: 'running',
     });
+    await store.updateWorkflowRun(resuming.launch.run.id, { status: 'paused' });
+    slot.admitted.push(resuming.launch.run.id);
+    await writeFile(path, JSON.stringify(slot));
+    await expect(store.resumeWorkflowRun(resuming.launch.run.id)).rejects.toThrow(
+      `Admitted resource request '${resuming.launch.run.id}' disagrees with its slot membership`
+    );
+    await writeFile(path, damaged);
     await expect(
       store.admitResourceStart({ ...intent(), resource: 'foreign' })
     ).rejects.toBeInstanceOf(ProcessOwnerRecordError);
@@ -1152,5 +1163,20 @@ test.each([
       ProcessOwnerRecordError
     );
     expect(await readFile(path, 'utf8')).toBe(damaged);
+    await corruptRequest(root, foreign.launch.run.id, 'missing');
+    for (const overlap of ['queue', 'skip'] as const) {
+      const start = { ...intent(), resource: crypto.randomUUID(), overlap };
+      start.launch.execution.cwd = '/foreign';
+      expect(await store.admitResourceStart(start)).toMatchObject({
+        status: overlap === 'queue' ? 'queued' : 'skipped',
+        blocker: { kind: 'run', id: foreign.launch.run.id },
+      });
+    }
+    expect(await store.drainResourceStarts({ resource: 'guarded', hostId: 'host' })).toEqual([]);
+    expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('paused');
+    await finishRun(root, foreign.launch.run.id);
+    expect(await store.drainResourceStarts({ resource: 'guarded', hostId: 'host' })).toMatchObject([
+      { runId: guarded.launch.run.id },
+    ]);
   }
 );

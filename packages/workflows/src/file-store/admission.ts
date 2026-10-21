@@ -57,7 +57,7 @@ const slotMembershipSchema = z.object({
   holders: z.array(
     z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('run'), id: z.string() }),
-      z.object({ kind: z.literal('attempt'), id: z.string(), owner: z.unknown() }),
+      z.object({ kind: z.literal('attempt'), id: z.string(), owner: z.unknown().optional() }),
     ])
   ),
   // Checkout membership survives giving back capacity while paused.
