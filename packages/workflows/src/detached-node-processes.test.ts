@@ -167,7 +167,9 @@ posixOnly(
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
       expect(settled).toBe(false);
-      expect(await prepared.ready).toEqual([]);
+      expect(await prepared.ready).toEqual([
+        expect.stringContaining('may have left untracked background work'),
+      ]);
       for (const options of [{ endTreeOnTimeout: true }, {}, { ownProcessGroup: true }] as const) {
         await expect(
           runSubprocess({ kind: 'host' }, '/bin/echo', ['blocked'], {
@@ -429,6 +431,40 @@ posixOnly.each(['timeout', 'abort', 'maxBuffer'] as const)(
       trees.release();
       await result;
       if (existsSync(ready)) killFixture(Number(readFileSync(ready, 'utf8')));
+    }
+  }
+);
+
+posixOnly(
+  'a live command with redirected escaped work reports uncertainty without signalling it',
+  async () => {
+    const dir = fixtureDir();
+    const ready = join(dir, 'child');
+    const wrapper = `const child = Bun.spawn(['/bin/sleep', '30'], {detached: true, stdio: ['ignore', 'ignore', 'ignore']}); require('fs').writeFileSync(${JSON.stringify(ready)}, String(child.pid)); await child.exited;`;
+    const trees = recordNodeProcessTrees({ mode: 'detached-posix' });
+    const node = failure(body(process.execPath, ['-e', wrapper]));
+    let survivor: number | undefined;
+    try {
+      await waitUntil(() => existsSync(ready) && readFileSync(ready, 'utf8').trim() !== '');
+      survivor = Number(readFileSync(ready, 'utf8'));
+      const signals = spyOn(process, 'kill');
+      try {
+        const prepared = trees.prepareTermination();
+        expect(await prepared.ready).toEqual([
+          expect.stringContaining('may have left untracked background work'),
+        ]);
+        expect(signals.mock.calls.filter(([pid]) => Math.abs(pid) === survivor)).toEqual([]);
+        expect(alive(survivor)).toBe(true);
+        prepared.release();
+      } finally {
+        signals.mockRestore();
+      }
+      expect(await node).toMatchObject({ signal: 'SIGKILL' });
+    } finally {
+      trees.prepareTermination().release();
+      trees.release();
+      if (survivor !== undefined) killFixture(survivor);
+      await node;
     }
   }
 );

@@ -19,7 +19,7 @@ export class DetachedNodeProcesses {
   readonly mode = 'detached-posix';
   ended = false;
   private readonly commands = new Map<number, RecordedCommand>();
-  private hasExitedCommands = false;
+  private hasStartedCommands = false;
   private preparation: { result: PreparedNodeTermination; settled: Promise<void> } | undefined;
 
   get held(): boolean {
@@ -28,12 +28,12 @@ export class DetachedNodeProcesses {
 
   record(child: ChildProcess): void {
     if (child.pid === undefined) return;
+    this.hasStartedCommands = true;
     const pid = child.pid;
     const command: RecordedCommand = { reaped: false, child };
     this.commands.set(pid, command);
     child.once('exit', () => {
       command.reaped = true;
-      this.hasExitedCommands = true;
     });
   }
 
@@ -72,8 +72,6 @@ export class DetachedNodeProcesses {
 
   prepareTermination(): PreparedNodeTermination {
     if (this.preparation) return this.preparation.result;
-    // Exits outlive forget; snapshot before our own signals cause more exits.
-    const hasExitedCommands = this.hasExitedCommands;
     let releaseHold!: () => void;
     const settled = new Promise<void>(resolve => {
       releaseHold = resolve;
@@ -88,7 +86,7 @@ export class DetachedNodeProcesses {
           : [
               "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
             ];
-        if (hasExitedCommands) {
+        if (this.hasStartedCommands) {
           warnings.push(COMPLETED_HOST_COMMAND_WARNING);
         }
         return warnings;

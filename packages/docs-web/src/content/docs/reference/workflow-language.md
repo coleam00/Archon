@@ -176,7 +176,13 @@ remain held after safe group signals, cancellation still ends the run and warns 
 cancel result and run event that some process outside the run's process group holds the
 output and was not signalled. Archon does not identify that holder. Use `lsof` on the run's
 checkout to find it before reusing or removing the checkout.
-Background jobs of already-completed nodes are excluded. Detached POSIX commands rely on
+Background jobs of already-completed nodes are excluded from automatic signalling.
+For POSIX host commands that started or completed, cancellation reports possible untracked
+background work in the cancel result and run event, including after continuation under a
+new detached owner. Neither a survivor nor cleanup is confirmed. Inspect checkout processes
+with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal.
+Owned checkouts are retained when cleanup warnings are reported.
+Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
 owner's Job Object, which also holds node processes whose parent already exited.
