@@ -75,9 +75,12 @@ export interface FakeTurnScript {
   ignoreInterrupt?: boolean;
   /** Keep running when stdin closes; only a signal ends the process. */
   ignoreStdinClose?: boolean;
+  /** Exit with this code when stdin closes (default 0). */
+  stdinCloseExitCode?: number;
   /**
-   * Exit cleanly this long after stdin closes, and let no signal end the process sooner,
-   * as a Codex still shutting down on a loaded machine does.
+   * Exit this long after stdin closes, and let no signal end the process sooner, as a
+   * Codex still shutting down on a loaded machine does. The exit is clean unless a
+   * SIGTERM arrived in that window, which makes a real Codex exit 1.
    */
   exitsAfterStdinCloseMs?: number;
   /** MCP server names the user's config defines, as `config/read` reports them. */
@@ -159,6 +162,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     };
     processes.push(record);
     let closed = false;
+    let terminatedWhileExiting = false;
     const close = (code: number | null, signal: string | null): void => {
       if (closed) return;
       closed = true;
@@ -174,6 +178,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       kill: (signal: string = 'SIGTERM') => {
         record.signals.push(signal);
         if (turn.exitsAfterStdinCloseMs === undefined) close(null, signal);
+        else terminatedWhileExiting = true;
         return true;
       },
     });
@@ -362,8 +367,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     stdin.on('finish', () => {
       record.stdinEnded = true;
       if (turn.exitsAfterStdinCloseMs !== undefined)
-        setTimeout(() => close(0, null), turn.exitsAfterStdinCloseMs);
-      else if (!turn.ignoreStdinClose) close(0, null);
+        setTimeout(() => close(terminatedWhileExiting ? 1 : 0, null), turn.exitsAfterStdinCloseMs);
+      else if (!turn.ignoreStdinClose) close(turn.stdinCloseExitCode ?? 0, null);
     });
     return child;
   }) as unknown as Spawner & { processes: FakeProcess[] };

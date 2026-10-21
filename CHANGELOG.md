@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message)` after its turn finished because Codex took more than a few seconds to exit. With many Codex nodes ending together, Codex processes often outlast the three seconds before SIGTERM and then exit cleanly; the node now waits after SIGTERM for as long as Codex takes to exit, logging `codex.app_server_still_exiting` every 30 seconds, instead of failing at a fixed deadline. Cancelling the run still ends the wait. (#4928)
+- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message): provider stream ended before settled` after its turn finished. With many Codex nodes ending together, Codex often took more than three seconds to exit after stdin closed, and the SIGTERM Archon then sent made it wait about 40 seconds and exit 1, which failed the node. After a turn, Archon now waits for Codex to exit without sending SIGTERM, logging `codex.app_server_still_exiting` every 30 seconds while it waits. Cancelling the run still interrupts Codex and sends SIGTERM if it does not exit. (#4928)
 
 ## [0.12.1] - 2026-10-17
 
