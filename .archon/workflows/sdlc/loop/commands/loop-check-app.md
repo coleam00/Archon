@@ -50,9 +50,13 @@ next depth. Do not go deeper for reassurance.
 
 **Retest after a send-back or a default-branch merge.** If an earlier `Loop review:` comment on this
 pull request reports an app check at an older head, and every commit since that head is a merge of
-the default branch or a change that review asked for, re-observe only what those commits can affect
-(`git diff --name-only <old head>..<new head>`) and carry the other lines over, with `carried_from`
-set to the old head. A line neither re-observed nor marked as carried is a FAIL.
+the default branch or a change that review asked for, re-observe only what those commits changed in
+this pull request's own files or code (the review's changes, and any conflict a merge resolved) can
+affect, and carry the other lines over, with `carried_from` set to the old head. What the default
+branch brought in is not this change's: the merge gate already lands a clean merge of it that
+touches none of this pull request's files, so it is no reason to measure again. When those commits
+change no code at all (only the pull request's text or a clean merge), re-observe nothing. A line
+neither re-observed nor marked as carried is a FAIL.
 
 ## Test what would merge
 
