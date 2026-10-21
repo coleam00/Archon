@@ -60,9 +60,16 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 ## How It Works
 
-1. **Substitute variables.** `$ARGUMENTS`, `$WORKFLOW_ID`, `$ARTIFACTS_DIR`,
-   `$BASE_BRANCH`, `$DOCS_DIR`, and upstream `$nodeId.output` references are
-   substituted into the `script` text before execution.
+1. **Substitute variables.** Non-user-controlled [workflow variables](/reference/variables/)
+   and upstream output references are substituted into the `script` text before
+   execution. User-controlled workflow variables like `$ARGUMENTS` and
+   `$USER_MESSAGE` are not substituted into a `script:` body: they arrive as
+   environment variables instead (`process.env.ARGUMENTS`, `process.env.USER_MESSAGE`
+   in bun; `os.environ['ARGUMENTS']`, `os.environ['USER_MESSAGE']` in uv/python), so
+   these workflow-variable values stay out of script source — see
+   [Environment and Isolation](#environment-and-isolation). Upstream output
+   references are still substituted as raw text into script source and may
+   contain user-influenced content.
 2. **Detect inline vs named.** If the `script` value contains a newline or any
    shell metacharacter (see [Inline vs Named Scripts](#inline-vs-named-scripts)
    below), it's treated as inline code. Otherwise it's treated as a named-script
@@ -355,7 +362,7 @@ literally embedded into the code string at execution time.
 ## Environment and Isolation
 
 :::note[Shell injection prevention]
-User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection. Script nodes receive these values the same way via `process.env`.
+User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection — read an environment-delivered value with `"$ARGUMENTS"`. `script:` nodes receive these values the same way (`process.env.USER_MESSAGE`, `process.env.ARGUMENTS` in bun; `os.environ['USER_MESSAGE']`, `os.environ['ARGUMENTS']` in uv/python). A `loop_group` body's `bash:` node is the exception: the loop scope splices the reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives already quoted. Read the spliced reply as an already-quoted value — assign it and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather than as `"$LOOP_USER_INPUT"`.
 :::
 
 Script subprocesses receive `process.env` merged with any codebase-scoped env
