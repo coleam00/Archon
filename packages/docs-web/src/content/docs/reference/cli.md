@@ -1448,6 +1448,8 @@ archon isolation list
 
 Groups by codebase, shows branch, workflow type, platform, and days since activity.
 
+Also lists active container environments; `run lookup failed` means ownership could not be determined, rather than that the container has no owning run (`no run (orphan)`).
+
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
 (branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`). They are tracked and cleaned
 up exactly like top-level run worktrees. Avoid `complete` on one while its run tree is still

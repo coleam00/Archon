@@ -7,6 +7,7 @@ import {
   readOwnedWorktree,
   type OwnedWorktree,
   type WorkflowRun,
+  type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
 import {
@@ -150,7 +151,7 @@ export interface ContainerEnvSummary {
   workingPath: string;
   ageDays: number;
   runId: string | null;
-  runStatus: string | null;
+  runStatus: WorkflowRunStatus | 'lookup-failed' | null;
 }
 
 export interface ContainerCleanupReport {
@@ -187,8 +188,7 @@ export async function listContainerEnvironments(): Promise<readonly ContainerEnv
   const rows = await isolationEnvDb.listActiveContainerEnvironments();
   const summaries: ContainerEnvSummary[] = [];
   for (const row of rows) {
-    // A lookup ERROR is reported as an explicit 'lookup-failed' status, NOT null — a
-    // null runId reads as "orphan" and would misrepresent an active run's container.
+    // Failed reads leave ownership unknown; null would misreport an orphan.
     let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null = null;
     let lookupFailed = false;
     try {

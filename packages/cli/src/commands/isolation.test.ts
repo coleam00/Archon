@@ -238,7 +238,9 @@ describe('isolationListCommand', () => {
     { runId: null, runStatus: 'lookup-failed', display: 'run lookup failed' },
     { runId: null, runStatus: null, display: 'no run (orphan)' },
     { runId: 'run-12345678', runStatus: 'paused', display: 'run run-1234 (paused)' },
-  ])('displays container run state: $display', async ({ runId, runStatus, display }) => {
+  ] satisfies (Pick<CleanupService.ContainerEnvSummary, 'runId' | 'runStatus'> & {
+    display: string;
+  })[])('displays container run state: $display', async ({ runId, runStatus, display }) => {
     const log = spyOn(console, 'log').mockImplementation(() => {});
     mockListContainerEnvironments.mockResolvedValue([
       {
