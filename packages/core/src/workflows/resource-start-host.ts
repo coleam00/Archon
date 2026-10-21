@@ -1,4 +1,7 @@
-import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
+import type {
+  ResourceStartDrainResult,
+  QueuedResourceStartInspection,
+} from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -361,7 +364,7 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
   const drain = async (resource: string): Promise<void> => {
-    let decisions: ResourceStartDisposition[];
+    let decisions: ResourceStartDrainResult[];
     try {
       decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
     } catch (error) {
@@ -380,12 +383,11 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       return;
     }
     for (const decision of decisions) {
-      if (decision.status === 'admitted') {
-        // A queued request names its receipt in the run metadata written at preparation.
-        const request = queued.find(item => item.id === decision.requestId);
-        const launch = request && !('error' in request) ? request.launch : undefined;
-        await start(decision.requestId, receiptIdOfLaunch(launch));
-      }
+      const request = queued.find(item => item.id === decision.requestId);
+      const launch = request && !('error' in request) ? request.launch : undefined;
+      const receiptId = receiptIdOfLaunch(launch);
+      if (decision.status === 'admitted') await start(decision.requestId, receiptId);
+      if (decision.status === 'failed') failures.push({ receiptId, error: decision.error });
     }
   };
   for (const resource of queuedDrainResources(queued, failures)) await drain(resource);

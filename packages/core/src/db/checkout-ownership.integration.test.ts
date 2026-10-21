@@ -1,16 +1,19 @@
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 // @archon-test-isolated
-import { afterAll, expect, mock, test } from 'bun:test';
+import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { toBranchName } from '@archon/git';
+import { IsolationResolver } from '@archon/isolation';
+import { toRepoPath, toBranchName } from '@archon/git';
 import { Database, SQLiteError } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { commit } from '@archon/workflows/file-store';
 import { WorktreeInUseError } from '@archon/isolation/types';
 import { createFileWorkflowHost } from '../workflows/file-host';
+import { createSqlWorkflowHost } from '../workflows/sql-host';
+import { drainResourceStartHost, ResourceStartDrainError } from '../workflows/resource-start-host';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 import type { IDatabase } from './adapters/types';
 
@@ -114,14 +117,10 @@ for (const kind of ['sql', 'files'] as const) {
         }
         let destroyed = false;
         await expect(
-          isolation.withWorktreeRegistration(
-            env,
-            async mark => {
-              destroyed = true;
-              await mark();
-            },
-            { runOwnership: {} }
-          )
+          isolation.withWorktreeRegistration(env, async mark => {
+            destroyed = true;
+            await mark();
+          })
         ).rejects.toBeInstanceOf(WorktreeInUseError);
         expect(destroyed).toBe(false);
         expect((await isolation.getById(env.id))?.status).toBe('active');
@@ -327,7 +326,9 @@ for (const kind of ['sql', 'files'] as const) {
       await isolation.withWorktreeRegistration(
         env,
         async mark => mark(),
-        state === 'failed' ? { runOwnership: { releaseFailed: { kind: 'settled' } } } : undefined
+        state === 'failed'
+          ? { runOwnership: { releaseFailed: { kind: 'settled' } } }
+          : { runOwnership: false }
       );
       const slots = async () => {
         if (kind === 'sql')
@@ -391,8 +392,12 @@ for (const kind of ['sql', 'files'] as const) {
         await store.admitResourceStart({ ...intent, launch: holder });
         expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'queued' });
         await store.cancelWorkflowRun(holder.run.id);
-        acquire = async () =>
-          (await store.drainResourceStarts({ resource, hostId: 'ownership' }))[0]!;
+        acquire = async () => {
+          const result = (await store.drainResourceStarts({ resource, hostId: 'ownership' }))[0]!;
+          expect(result).toMatchObject({ status: 'failed', requestId: launch.run.id });
+          if (result.status === 'failed') throw result.error;
+          return result;
+        };
       }
       if (operation === 'binding') {
         const receiptId = randomUUID();
@@ -442,6 +447,103 @@ for (const kind of ['sql', 'files'] as const) {
       expect(await store.getResourceStartRequest(launch.run.id)).toEqual(before);
     }
   );
+
+  test.each(['pending', 'running', 'paused'] as const)(
+    `${kind}: rollback retains a checkout acquired by a %s run`,
+    async status => {
+      const { env, create } = await fixture();
+      const run = await create({ working_path: env.working_path });
+      if (status !== 'pending') await store.claimPendingWorkflowRun(run.id);
+      if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      const destroy = mock(async () => ({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+      }));
+      const resolver = new IsolationResolver({
+        store: isolation,
+        provider: {
+          providerType: 'worktree',
+          destroy,
+          create: async () => {
+            throw new Error('unexpected create');
+          },
+          get: async () => null,
+          list: async () => [],
+          healthCheck: async () => true,
+        },
+      });
+      await resolver.releaseUnlinked({
+        status: 'resolved',
+        env,
+        cwd: env.working_path,
+        method: {
+          type: 'created',
+          creationId: randomUUID(),
+          canonicalRepoPath: toRepoPath(root),
+          branchCreated: true,
+        },
+      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect((await isolation.getById(env.id))?.status).toBe('active');
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+    }
+  );
+
+  test(`${kind}: a retired queued checkout leaves independent starts admissible`, async () => {
+    const { env } = await fixture();
+    const resource = randomUUID();
+    const launch = (path: string): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id: randomUUID(),
+        codebase_id: env.codebase_id,
+        workflow_name: 'queued',
+        user_message: '',
+        working_path: path,
+        metadata: {},
+      },
+      execution: { cwd: path, conversationId: 'queue', isolation: { kind: 'in-place' } },
+    });
+    const intent = { resource, capacity: 1, hostId: resource, overlap: 'queue' as const };
+    const holder = launch(join(root, randomUUID()));
+    const retired = launch(env.working_path);
+    const valid = launch(join(root, randomUUID()));
+    await store.admitResourceStart({ ...intent, launch: holder });
+    expect(await store.admitResourceStart({ ...intent, launch: retired })).toMatchObject({
+      status: 'queued',
+    });
+    expect(await store.admitResourceStart({ ...intent, launch: valid })).toMatchObject({
+      status: 'queued',
+    });
+    await store.cancelWorkflowRun(holder.run.id);
+    await isolation.withWorktreeRegistration(env, async mark => mark());
+    const before = await store.getResourceStartRequest(retired.run.id);
+    const host = kind === 'sql' ? createSqlWorkflowHost() : fileHost;
+    const started: string[] = [];
+    const failure = await drainResourceStartHost({
+      ...host,
+      hostId: resource,
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    }).catch((error: unknown) => error);
+    expect(started).toEqual([valid.run.id]);
+    expect(failure).toBeInstanceOf(ResourceStartDrainError);
+    if (!(failure instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+    expect(failure.failures).toMatchObject([
+      { error: { message: expect.stringContaining(env.working_path) } },
+    ]);
+    expect(await store.getResourceStartRequest(retired.run.id)).toEqual(before);
+    expect(await store.getWorkflowRun(retired.run.id)).toBeNull();
+    expect((await store.getWorkflowRun(valid.run.id))?.status).toBe('pending');
+    expect(await store.claimPendingWorkflowRun(valid.run.id)).not.toBeNull();
+  });
 
   async function independentStore() {
     if (kind === 'files')
@@ -516,10 +618,89 @@ for (const kind of ['sql', 'files'] as const) {
     }
   });
 
+  if (kind === 'sql')
+    test('SQL conversation linking waits behind retirement on a second connection', async () => {
+      const { env, create } = await fixture();
+      const conversationId = randomUUID();
+      await db.query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, 'cli', $2)`,
+        [conversationId, conversationId]
+      );
+      const run = await create({ origin: { conversationId } });
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      const { secondary } = await independentStore();
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const attempt = Promise.withResolvers<void>();
+      let linkerPid: number | undefined;
+      const transact = secondary!.withTransaction.bind(secondary);
+      const transactionSpy = spyOn(secondary!, 'withTransaction').mockImplementation(
+        (fn, options) =>
+          transact(async query => {
+            if (pgUrl)
+              linkerPid = (await query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!
+                .pid;
+            return fn(<U>(sql: string, params?: unknown[]) => {
+              const result = query<U>(sql, params);
+              attempt.resolve();
+              return result;
+            });
+          }, options)
+      );
+      const cleanup = isolation.withWorktreeRegistration(env, async mark => {
+        entered.resolve();
+        await finish.promise;
+        await mark();
+      });
+      await entered.promise;
+      transactionDb = secondary;
+      const linking = updateConversation(conversationId, { isolation_env_id: env.id });
+      const result = Promise.allSettled([linking]);
+      try {
+        await attempt.promise;
+        if (pgUrl) {
+          let blocked = false;
+          for (let i = 0; i < 100; i++) {
+            const state = await db.query<{ blocked: boolean }>(
+              'SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked',
+              [linkerPid]
+            );
+            if (state.rows[0]?.blocked) {
+              blocked = true;
+              break;
+            }
+            await Bun.sleep(10);
+          }
+          expect(blocked).toBe(true);
+        }
+        finish.resolve();
+        await cleanup;
+        await expect(linking).rejects.toThrow(env.working_path);
+        expect(
+          (
+            await db.query<{ isolation_env_id: string | null }>(
+              'SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $1',
+              [conversationId]
+            )
+          ).rows[0]?.isolation_env_id
+        ).toBeNull();
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+      } finally {
+        finish.resolve();
+        await cleanup;
+        await result;
+        transactionDb = undefined;
+        transactionSpy.mockRestore();
+        await secondary?.close();
+      }
+    });
+
   test(`${kind}: an explicit registration-only claim preserves the force override`, async () => {
     const { env, create } = await fixture();
     await create({ working_path: env.working_path });
-    await isolation.withWorktreeRegistration(env, async mark => mark());
+    await isolation.withWorktreeRegistration(env, async mark => mark(), { runOwnership: false });
     expect((await isolation.getById(env.id))?.status).toBe('destroyed');
   });
 }

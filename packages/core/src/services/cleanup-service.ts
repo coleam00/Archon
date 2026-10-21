@@ -384,9 +384,7 @@ export interface RemoveEnvironmentOptions {
 function registrationRunPolicy(
   options: RemoveEnvironmentOptions | undefined
 ): Parameters<IIsolationStore['withWorktreeRegistration']>[2] {
-  return options?.runOwnership === false
-    ? undefined
-    : { runOwnership: options?.runOwnership ?? {} };
+  return { runOwnership: options?.runOwnership ?? {} };
 }
 
 const NON_WORKTREE_CLEANUP_REASON =

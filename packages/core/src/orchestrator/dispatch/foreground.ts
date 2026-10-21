@@ -10,6 +10,8 @@ import {
   TerminalStatusWriteError,
   requireTerminalStatusWrite,
 } from '@archon/workflows/terminal-status-write';
+import * as sqlIsolation from '../../db/isolation-environments';
+import { updateConversation } from '../../db/conversations';
 import { startRunLiveOwner } from '../../services/run-live-owner';
 import { toError } from '../../utils/error';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
@@ -56,6 +58,11 @@ export async function dispatchForeground(
   let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
   let foregroundSubmitted = false;
   try {
+    if (!willContinueExistingRun && scope.conversation.isolation_env_id) {
+      const priorEnvironment = await sqlIsolation.getById(scope.conversation.isolation_env_id);
+      if (priorEnvironment?.provider === 'worktree' && priorEnvironment.status === 'destroyed')
+        await updateConversation(scope.conversation.id, { isolation_env_id: null });
+    }
     if (
       !willContinueExistingRun &&
       workflow.worktree?.enabled !== false &&

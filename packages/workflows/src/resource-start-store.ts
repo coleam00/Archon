@@ -365,12 +365,17 @@ export type QueuedResourceStartInspection =
   | ResourceStartRequestInspection
   | { id: string; resource?: string; receiptId?: string; error: unknown };
 
+/** Refused starts stay queued and inspectable; independent starts may still be admitted. */
+export type ResourceStartDrainResult =
+  | ResourceStartDisposition
+  | { status: 'failed'; requestId: string; error: Error };
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
     resource: string;
     hostId: string;
-  }): Promise<ResourceStartDisposition[]>;
+  }): Promise<ResourceStartDrainResult[]>;
   /**
    * Whether this source already holds a receipt for the delivery. Only a gate for checks that
    * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.

@@ -1,5 +1,11 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  CheckoutReleasedError,
+  introducesCheckout,
+  checkoutEnvironmentReferences,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
+export { introducesCheckout };
 import { getDatabaseType } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { normalizeMetadata } from './workflow-run-shared';
@@ -20,8 +26,7 @@ export async function releasedCheckout(
   query: TransactionQuery,
   run: CheckoutRun
 ): Promise<string | undefined> {
-  const owned = run.metadata.owned_worktree;
-  const ownedId = owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null;
+  const [environmentId, ownedId] = checkoutEnvironmentReferences(run.metadata);
   const result = await query<{ working_path: string }>(
     `SELECT e.working_path FROM remote_agent_isolation_environments e
       WHERE e.provider = 'worktree'
@@ -36,7 +41,7 @@ export async function releasedCheckout(
     [
       run.codebase_id,
       run.working_path,
-      typeof run.metadata.isolation_env_id === 'string' ? run.metadata.isolation_env_id : null,
+      typeof environmentId === 'string' ? environmentId : null,
       typeof ownedId === 'string' ? ownedId : null,
       run.conversation_id,
     ]
@@ -49,7 +54,7 @@ export async function assertCheckoutAvailable(
   run: CheckoutRun
 ): Promise<void> {
   const path = await releasedCheckout(query, run);
-  if (path !== undefined) throw new Error(`Checkout '${path}' was released; start a fresh run.`);
+  if (path !== undefined) throw new CheckoutReleasedError(path);
 }
 
 export async function assertNewRunCheckoutAvailable(
@@ -83,24 +88,6 @@ export async function assertRunCheckoutAvailable(
   if (run) await assertCheckoutAvailable(query, run);
 }
 
-function environmentReferences(metadata: Record<string, unknown>): readonly unknown[] {
-  const owned = metadata.owned_worktree;
-  return [
-    metadata.isolation_env_id,
-    owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null,
-  ];
-}
-
-export function introducesCheckout(prior: CheckoutRun | undefined, next: CheckoutRun): boolean {
-  const previous = environmentReferences(prior?.metadata ?? {});
-  return (
-    (next.working_path !== null && next.working_path !== prior?.working_path) ||
-    environmentReferences(next.metadata).some(
-      (id, index) => typeof id === 'string' && id !== previous[index]
-    )
-  );
-}
-
 export function associatesCheckout(metadata: Record<string, unknown> | undefined): boolean {
-  return metadata !== undefined && ('isolation_env_id' in metadata || 'owned_worktree' in metadata);
+  return introducesCheckout(undefined, { working_path: null, metadata: metadata ?? {} });
 }

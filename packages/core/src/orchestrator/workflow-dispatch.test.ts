@@ -61,6 +61,8 @@ import {
   makeResumableRun,
   resetDispatchMocks,
 } from '../test/orchestrator-agent-harness';
+import { SqliteAdapter } from '../db/adapters/sqlite';
+import { assertNewRunCheckoutAvailable } from '../db/checkout-ownership';
 import { handleMessage } from './orchestrator-agent';
 import { continueResolvedGateRun } from './workflow-dispatch';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
@@ -97,6 +99,93 @@ describe('workflow dispatch routing', () => {
   }
 
   beforeEach(resetDispatchMocks);
+
+  test.each(['fresh', 'checkout-branch'] as const)(
+    'a %s foreground setup clears a retired conversation checkout before insertion',
+    async lane => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-retired-')));
+      const database = new SqliteAdapter(join(root, 'db.sqlite'));
+      const codebase = makeCodebase();
+      const conversation = makeDispatchConversation({ isolation_env_id: 'retired-env' });
+      const retiredPath = join(root, 'retired');
+      try {
+        await database.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+          [codebase.id, codebase.name, root]
+        );
+        await database.query(
+          `INSERT INTO remote_agent_isolation_environments (id, codebase_id, workflow_type, workflow_id, working_path, branch_name, status)
+        VALUES ('retired-env', $1, 'task', 'prior', $2, 'prior', 'destroyed')`,
+          [codebase.id, retiredPath]
+        );
+        await database.query(
+          `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id)
+        VALUES ($1, 'cli', $1, 'retired-env')`,
+          [conversation.id]
+        );
+        const setupInput = {
+          workflow_name: 'test-workflow',
+          user_message: '',
+          origin: { conversationId: conversation.id },
+        };
+        await expect(
+          assertNewRunCheckoutAvailable(database.query.bind(database), setupInput)
+        ).rejects.toThrow(retiredPath);
+        mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+        mockGetCodebase.mockResolvedValueOnce(codebase);
+        mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+        mockAdoptedEnvironment.mockResolvedValueOnce(
+          makeIsolationEnvironment({
+            id: 'retired-env',
+            working_path: retiredPath,
+            status: 'destroyed',
+          })
+        );
+        mockUpdateConversation.mockImplementation(async (id, updates) => {
+          if (updates.isolation_env_id === undefined) return;
+          await database.query(
+            'UPDATE remote_agent_conversations SET isolation_env_id = $1 WHERE id = $2',
+            [updates.isolation_env_id, id]
+          );
+        });
+        if (lane === 'checkout-branch')
+          mockResolveWorkflowAdoption.mockResolvedValueOnce({
+            adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+            lane: {
+              kind: 'checkout-branch',
+              taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
+            },
+          });
+        mockCreateWorkflowRun.mockImplementationOnce(async data => {
+          await assertNewRunCheckoutAvailable(database.query.bind(database), data);
+          return makeRun({
+            id: data.id,
+            workflow_name: data.workflow_name,
+            status: 'pending',
+            metadata: data.metadata ?? {},
+          });
+        });
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          ...(lane === 'checkout-branch' ? { workflowAdoptRunId: 'prior-run' } : {}),
+        });
+        expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockFailPreparedRun).not.toHaveBeenCalled();
+        expect(
+          (
+            await database.query<{ isolation_env_id: string | null }>(
+              'SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $1',
+              [conversation.id]
+            )
+          ).rows[0]?.isolation_env_id
+        ).toBeNull();
+      } finally {
+        mockUpdateConversation.mockImplementation(async () => {});
+        await database.close();
+      }
+    }
+  );
 
   test('a terminal status write failure during worktree preparation is not retried', async () => {
     const { IsolationBlockedError } = await import('@archon/isolation');

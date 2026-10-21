@@ -52,12 +52,12 @@ export interface IIsolationStore {
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
   /**
    * Exclude replacement and acquisition until removal ends; retire using the supplied callback.
-   * Opt into a final run-ownership veto with runOwnership; omission preserves explicit overrides.
+   * Owners veto removal by default; only an explicit force operation may override them.
    */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
     remove: (markDestroyed: () => Promise<void>) => Promise<T>,
-    options?: { runOwnership?: { releaseFailed?: FailedRunRelease } }
+    options?: { runOwnership?: { releaseFailed?: FailedRunRelease } | false }
   ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }

@@ -14,7 +14,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowRun } from '../schemas/workflow-run';
+import {
+  CheckoutReleasedError,
+  introducesCheckout,
+  type WorkflowRun,
+} from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -50,7 +54,9 @@ export interface FileWorkflowStoreOptions {
   /** Called under the commit lock; must not enter store recovery or call this store. */
   listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   /** Return the retired managed path under the commit lock, without re-entering the store. */
-  releasedCheckout?: (run: WorkflowRun) => Promise<string | undefined>;
+  releasedCheckout?: (
+    run: Pick<WorkflowRun, 'working_path' | 'metadata' | 'codebase_id'>
+  ) => Promise<string | undefined>;
 }
 export async function createFileWorkflowStore(
   options: FileWorkflowStoreOptions
@@ -60,23 +66,11 @@ export async function createFileWorkflowStore(
   const getCodebase = options.getCodebase ?? (async (): Promise<null> => null);
   const getCodebaseEnvVars =
     options.getCodebaseEnvVars ?? (async (): Promise<Record<string, string>> => ({}));
-  async function assertCheckoutAvailable(run: WorkflowRun | null): Promise<void> {
+  async function assertCheckoutAvailable(
+    run: Pick<WorkflowRun, 'working_path' | 'metadata' | 'codebase_id'> | null
+  ): Promise<void> {
     const path = run && (await options.releasedCheckout?.(run));
-    if (path) throw new Error(`Checkout '${path}' was released; start a fresh run.`);
-  }
-  function introducesCheckout(prior: WorkflowRun | null, next: WorkflowRun): boolean {
-    const references = (run: WorkflowRun | null): readonly unknown[] => {
-      const owned = run?.metadata.owned_worktree;
-      return [
-        run?.metadata.isolation_env_id,
-        owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null,
-      ];
-    };
-    const previous = references(prior);
-    return (
-      (next.working_path !== null && next.working_path !== prior?.working_path) ||
-      references(next).some((id, index) => typeof id === 'string' && id !== previous[index])
-    );
+    if (path) throw new CheckoutReleasedError(path);
   }
   async function eventsFor(ids: readonly string[]): Promise<WorkflowEventRow[]> {
     const states = await Promise.all(ids.map(id => readRunState(root, id)));

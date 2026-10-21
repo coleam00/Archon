@@ -354,10 +354,10 @@ export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration
         [observed.id, ...predicate.params]
       );
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
-      if (options?.runOwnership) {
+      if (options?.runOwnership !== false) {
         const owner = await getLiveRunOwningEnv(
           observed.id,
-          options.runOwnership.releaseFailed,
+          options?.runOwnership?.releaseFailed,
           undefined,
           query
         );

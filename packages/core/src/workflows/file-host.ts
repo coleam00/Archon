@@ -333,8 +333,8 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           if (!row || row.status !== 'active' || !sameWorktreeRegistration(row, observed)) {
             throw new WorktreeRegistrationChangedError(observed.id);
           }
-          if (options?.runOwnership) {
-            const owner = liveOwner(runs.values(), row, options.runOwnership.releaseFailed);
+          if (options?.runOwnership !== false) {
+            const owner = liveOwner(runs.values(), row, options?.runOwnership?.releaseFailed);
             if (owner) throw new WorktreeInUseError(row.id, owner.id, owner.status);
           }
           const result = await remove(async () => {

@@ -268,8 +268,10 @@ archon isolation cleanup [days] (default: 7)
   │         └─ For each stale worktree:
   │              ├─ Skip environments owned by resumable runs
   │              ├─ Skip any with a commit on no remote (getCleanupRunLock)
-  │              └─ provider.destroy(path, options)
-  │                   └─ Mark destroyed only after complete removal
+  │              └─ Claim the observed registration, excluding replacement and acquisition
+  │                   ├─ Final owner veto under the claim (including pending/running/paused)
+  │                   └─ provider.destroy(path, options)
+  │                        └─ Mark destroyed only after complete removal
   │
   └─ cleanupContainerEnvironments(days), even when no worktrees are stale
        ├─ Skip containers owned by resumable runs
@@ -323,7 +325,9 @@ archon isolation cleanup [days] (default: 7)
 │ Guard checks: no uncommitted changes, no run lock (checkRemoval │
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
-│ provider.destroy() → remove worktree and local branch           │
+│ Claim registration, excluding replacement and acquisition       │
+│ → Final owner veto: pending/running/paused always block          │
+│ → provider.destroy() → remove worktree and local branch          │
 │ → commit registration retirement; retain remote branch         │
 └─────────────────────────────────────────────────────────────────┘
 ```

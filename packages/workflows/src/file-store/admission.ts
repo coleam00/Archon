@@ -23,7 +23,11 @@ import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import { createLogger } from '@archon/paths/logger';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
-import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
+import {
+  CheckoutReleasedError,
+  isTerminalRunStatus,
+  type WorkflowRun,
+} from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
   sourceReceiptAcceptanceSchema,
@@ -45,6 +49,7 @@ import {
   validateStartReceiptLimit,
   compareStartReceipts,
   compareCodeUnits,
+  type ResourceStartDrainResult,
   type IResourceStartStore,
   type StartBindingInspection,
   type ResourceStartRequestInspection,
@@ -475,7 +480,9 @@ export function createAdmissionTransaction(
 export function createFileAdmissionStore(
   root: string,
   listReusableCheckouts: (() => Promise<readonly ReusableCheckout[]>) | undefined,
-  assertCheckoutAvailable: (run: WorkflowRun) => Promise<void>
+  assertCheckoutAvailable: (
+    run: Pick<WorkflowRun, 'working_path' | 'metadata' | 'codebase_id'>
+  ) => Promise<void>
 ): IResourceStartStore {
   type Transaction = ReturnType<typeof createAdmissionTransaction>;
   const write = <T>(
@@ -590,8 +597,25 @@ export function createFileAdmissionStore(
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
-        const admitted: ResourceStartDisposition[] = [];
-        for (const start of drainableStarts(await tx.occupancy(options.resource), options.hostId)) {
+        const admitted: ResourceStartDrainResult[] = [];
+        const slot = await tx.occupancy(options.resource);
+        const available: QueuedStart[] = [];
+        for (const start of slot.queue) {
+          if (start.hostId === options.hostId) {
+            try {
+              await assertCheckoutAvailable({
+                ...start.launch.run,
+                working_path: start.launch.run.working_path ?? null,
+              });
+            } catch (error) {
+              if (!(error instanceof CheckoutReleasedError)) throw error;
+              admitted.push({ status: 'failed', requestId: start.id, error });
+              continue;
+            }
+          }
+          available.push(start);
+        }
+        for (const start of drainableStarts({ ...slot, queue: available }, options.hostId)) {
           const row = await tx.request(start.id);
           if (!row) throw new Error('Queued resource request missing');
           admitted.push(await tx.admitExisting(row, runs));
