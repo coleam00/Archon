@@ -140,7 +140,9 @@ describe('adopted run dir', () => {
 
   it('surfaces a rejected adoption failure write without retrying or announcing failure', async () => {
     const writeError = new Error('terminal store unavailable');
-    const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {
+    const failRun = mock<IWorkflowStore['failWorkflowRun']>(async id => {
+      expect(store.getWorkflowRunStatus).toHaveBeenCalledTimes(1);
+      expect(store.getWorkflowRunStatus).toHaveBeenCalledWith(id);
       throw writeError;
     });
     const store = makeStore({
@@ -153,7 +155,7 @@ describe('adopted run dir', () => {
       cause: writeError,
     });
     expect(failRun).toHaveBeenCalledTimes(1);
-    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    expect(store.getWorkflowRunStatus).toHaveBeenCalledTimes(1);
     expect(mockEmitter.emit).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'workflow_failed' })
     );
