@@ -432,6 +432,9 @@ Examples:
     const options = scopedHelpOptions(['workflow', 'reset-sessions']);
     expect(options).toContain('--scope');
     expect(options).toContain('--node');
+    expect(options).toContain(
+      'Limit the reset to one node in the selected scope, or every scope with --yes when --scope is omitted'
+    );
     expect(options).toContain('--yes');
     expect(options).toContain('Confirm cross-scope reset; refused without --scope or --yes');
     expect(options).not.toContain('prompt');

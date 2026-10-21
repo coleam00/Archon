@@ -343,7 +343,8 @@ const commandHelp: HelpEntry[] = [
       },
       {
         spec: '--node <id>',
-        description: 'Limit the reset to one node within the chosen scope',
+        description:
+          'Limit the reset to one node in the selected scope, or every scope with --yes when --scope is omitted',
       },
       {
         spec: '--yes',
