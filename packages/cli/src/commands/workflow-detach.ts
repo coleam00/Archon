@@ -1,3 +1,4 @@
+import { generatedTaskBranchName } from '@archon/isolation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
   getArchonHome,
@@ -596,18 +597,16 @@ function buildDetachedChildArgs(
   if (!launch.isContinuation && options.codebaseId && launch.codebase) {
     extraArgs.push('--project', launch.codebase.id);
   }
-  // Pin a generated branch only when isolating AND the caller didn't pass
-  // --branch (an explicit --branch is already in argv). Without this, the child
-  // would generate its own timestamped branch and fork a second worktree.
-  // Never pin a branch for folder projects — they run in place with no worktree.
   if (
+    launchedRunId !== undefined &&
     wantsIsolation &&
     !detachIsFolder &&
     options.branchName === undefined &&
     options.adoptRunId === undefined
   ) {
-    pinnedBranch = `${workflowName}-${String(Date.now())}`;
-    extraArgs.push('--branch', pinnedBranch);
+    const identifier = `${workflowName}-${String(Date.now())}`;
+    pinnedBranch = generatedTaskBranchName(identifier);
+    extraArgs.push('--internal-generated-identifier', identifier);
   }
   // A continued chat run retains its transport thread across the fork.
   if (options.conversationId === undefined && childDestination.kind === 'conversation') {

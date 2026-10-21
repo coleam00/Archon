@@ -249,6 +249,17 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
 
 async function claimDetachedRunRow(request: OwnedRunRequest): Promise<WorkflowRun | undefined> {
   const { host, options } = request;
+  if (
+    options.generatedIdentifier !== undefined &&
+    (options.detachedRunId === undefined ||
+      options.branchName !== undefined ||
+      options.resume ||
+      options.adoptRunId !== undefined)
+  ) {
+    throw new Error(
+      '--internal-generated-identifier requires a fresh authenticated detached launch without --branch or --adopt.'
+    );
+  }
   if (options.detachedRunId === undefined) return undefined;
   if (!request.detachedProcessOwner) {
     throw new Error(

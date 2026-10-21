@@ -580,7 +580,8 @@ async function provisionWorktree(
   const { request, admission, workspace } = launch;
   const { host, options } = request;
   // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
-  const branchIdentifier = options.branchName ?? `${request.workflowName}-${Date.now()}`;
+  const branchIdentifier =
+    options.branchName ?? options.generatedIdentifier ?? `${request.workflowName}-${Date.now()}`;
 
   // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();

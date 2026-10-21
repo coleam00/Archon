@@ -193,6 +193,7 @@ function buildRunOptions(
     configFromRun: values['config-from-run'] as string | undefined,
     detachedRunConfig,
     detachedRunId: values['internal-detached-run-id'] as string | undefined,
+    generatedIdentifier: values['internal-generated-identifier'] as string | undefined,
   };
 }
 

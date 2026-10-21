@@ -150,14 +150,14 @@ describe('workflowRunCommand — detach', () => {
         expect(spawnCmd).not.toContain('--project');
       }
       expect(spawnCmd).not.toContain('--detach');
-      expect(spawnCmd).toContain('--branch');
+      expect(spawnCmd).not.toContain('--branch');
       expect(spawnCmd).not.toContain('--conversation-id');
       expect(spawnCmd).toContain('--cwd');
       const cwdIdx = spawnCmd.indexOf('--cwd');
       expect(spawnCmd[cwdIdx + 1]).toBe('/test/path');
       expect(spawnOptions?.cwd).toBe('/test/path');
-      // Generated branch is `assist-<timestamp>`
-      const branchIdx = spawnCmd.indexOf('--branch');
+      const branchIdx = spawnCmd.indexOf('--internal-generated-identifier');
+      expect(branchIdx).toBeGreaterThan(-1);
       expect(spawnCmd[branchIdx + 1]).toMatch(/^assist-\d+$/);
       // executeWorkflow must NOT run in the detaching parent
       const execAfter = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
@@ -237,6 +237,44 @@ describe('workflowRunCommand — detach', () => {
   // #2872 — the launch printed `Started` and exited 0 while the child died on adoption
   // resolution, so no run row was ever created and the failure existed only inside the
   // detached child's log. The refusal has to reach the launching terminal.
+  it('forwards an explicit generated-looking branch without giving it generated identity', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    const branchName = 'archon/task-assist-123';
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = [
+      'bun',
+      '/abs/cli.ts',
+      'workflow',
+      'run',
+      'assist',
+      '--detach',
+      '--branch',
+      branchName,
+    ];
+    try {
+      const command = workflowRunCommand(
+        createTestWorkflowHost(),
+        '/test/path',
+        'assist',
+        'hello',
+        { detach: true, branchName }
+      );
+      await finishStartupWindow(command, spawnSpy);
+      const argv = firstDetachedSpawnOptions(spawnSpy).cmd;
+      expect(argv[argv.indexOf('--branch') + 1]).toBe(branchName);
+      expect(argv).not.toContain('--internal-generated-identifier');
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+  });
+
   it('refuses an unresolvable --adopt synchronously instead of acking Started (#2872)', async () => {
     // Real timers: pre-fix this path spawns and waits out the startup window, so the
     // assertions below must be reachable rather than parked on an unadvanced fake timer.
@@ -575,6 +613,10 @@ describe('workflowRunCommand — detach', () => {
         }
       );
       await finishStartupWindow(commandPromise, spawnSpy);
+      expect(firstDetachedSpawnOptions(spawnSpy).cmd).not.toContain(
+        '--internal-generated-identifier'
+      );
+      expect(firstDetachedSpawnOptions(spawnSpy).cmd).not.toContain('--branch');
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -631,6 +673,7 @@ describe('workflowRunCommand — detach', () => {
     // #2872: the ack hands back the row this launch created, and the child is told to
     // execute that row rather than creating a second one.
     expect(parsed.runId).toBe('run-detached-created');
+    expect(parsed.branch).toMatch(/^archon\/task-assist-\d+$/);
     expect(parsed.transcriptPath).toBe(
       join(tempHome, 'workspaces', 'test', 'repo', 'logs', 'run-detached-created.jsonl')
     );
@@ -1110,12 +1153,27 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
 
   // #2872 R3 — the flag names a row this process will execute AS. Both halves are
   // checked: that this really is a detached child, and that the row is claimable.
+  it.each([
+    {},
+    { detachedRunId: 'run-precreated', branchName: 'named' },
+    { detachedRunId: 'run-precreated', adoptRunId: 'old-run' },
+    { detachedRunId: 'run-precreated', resume: true },
+  ])('refuses a generated identifier outside a fresh generated handoff: %j', async options => {
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
+        ...options,
+        generatedIdentifier: 'plan-123',
+      })
+    ).rejects.toThrow('requires a fresh authenticated detached launch');
+  });
+
   it('refuses the flag outside a detached child', async () => {
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
         detachedRunId: 'run-precreated',
+        generatedIdentifier: 'plan-123',
       })
     ).rejects.toThrow(/set by a detached launch for its own child/);
   });
@@ -1133,6 +1191,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       await expect(
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {
           detachedRunId: preCreatedRow.id,
+          generatedIdentifier: 'plan-123',
         })
       ).rejects.toThrow('detached launch identity does not match');
       expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();

@@ -105,3 +105,5 @@ export type { WorktreeSetupExecutor, WorktreeSetupInput } from './types';
 export { WorktreePostCreateError } from './errors';
 
 export type { IsolationFailureKind } from './errors';
+
+export { generatedTaskBranchName } from './providers/worktree/branches';

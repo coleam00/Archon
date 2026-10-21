@@ -55,8 +55,12 @@ export function generateBranchName(request: IsolationRequest): string {
       if (request.taskBranch?.branch) {
         return request.taskBranch.branch;
       }
-      return `archon/task-${slugify(request.identifier)}`;
+      return generatedTaskBranchName(request.identifier);
   }
+}
+
+export function generatedTaskBranchName(identifier: string): string {
+  return `archon/task-${slugify(identifier)}`;
 }
 
 /**

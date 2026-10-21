@@ -230,10 +230,10 @@ mock.module('@archon/paths', () => ({
   markTierNoticeShown: mock(() => undefined),
 }));
 
-// Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
-const { worktreeRegistrationMetadata } = await import('@archon/isolation');
+const { worktreeRegistrationMetadata, generatedTaskBranchName } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
   worktreeRegistrationMetadata,
+  generatedTaskBranchName,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes
   // through the classifier, while what the real one produces is the isolation

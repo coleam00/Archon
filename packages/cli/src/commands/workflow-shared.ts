@@ -147,6 +147,8 @@ export interface WorkflowRunOptions {
    * exists. A continuation carries its own run and never sets it.
    */
   detachedRunId?: string;
+  /** @internal Process-only generated branch identity, authenticated by the detached row. */
+  generatedIdentifier?: string;
   /**
    * Between-run continuation (#2747): adopt a terminal run's estate — its
    * worktree/branch plus read access to its artifacts via `$ADOPTED_RUN_DIR`.
