@@ -616,7 +616,7 @@ archon workflow runs --limit 50        # cap rows (default 20)
 archon workflow runs --all             # without explicit chat scope: list across all projects
 ```
 
-Without explicit chat scope, if `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
+Without explicit chat scope, if `cwd` is an unregistered Git checkout, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 After a separate-clone launch, use `archon workflow get <full-run-id>` to inspect the run directly, or run `archon workflow runs` from the registered checkout for a project-scoped list. The global list defaults to 20 rows and may omit the run.
 

@@ -11,6 +11,7 @@ import {
   mockGetActiveWorkflowRun,
   mockListDashboardRuns,
   mockGetWorkflowRun,
+  mockFindWorkflowRunsByIdPrefix,
   spyDiscoverWorkflows,
   restoreSpies,
   stubWorkflowCodebase,
@@ -365,21 +366,22 @@ describe('CommandHandler', () => {
         { args: 'respond parent-stuck approve', redirect: 'approve child-77' },
       ]) {
         test(`/workflow ${args} on a parent blocked on a sub-run`, async () => {
-          mockGetWorkflowRun.mockResolvedValueOnce(
-            makeWorkflowRun({
-              id: 'parent-stuck',
-              status: 'paused' as const,
-              user_message: 'x',
-              metadata: {
-                approval: {
-                  nodeId: 'sub',
-                  message: 'waiting on sub-run',
-                  type: 'child_workflow',
-                  childRunId: 'child-77',
-                },
+          const parent = makeWorkflowRun({
+            id: 'parent-stuck',
+            codebase_id: projectConversation.codebase_id,
+            status: 'paused' as const,
+            user_message: 'x',
+            metadata: {
+              approval: {
+                nodeId: 'sub',
+                message: 'waiting on sub-run',
+                type: 'child_workflow',
+                childRunId: 'child-77',
               },
-            })
-          );
+            },
+          });
+          mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([parent]);
+          mockGetWorkflowRun.mockResolvedValueOnce(parent);
           const result = await handleCommand(
             projectConversation,
             `/workflow ${args}`,
@@ -387,6 +389,10 @@ describe('CommandHandler', () => {
             slack
           );
           expect(result.success).toBe(false);
+          expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith(
+            parent.id,
+            projectConversation.codebase_id
+          );
           expect(result.message).toContain(`/archon-workflow ${redirect}`);
           expectSlackSpelling(result.message);
         });
