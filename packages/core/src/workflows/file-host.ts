@@ -40,6 +40,17 @@ import { runOwnerLossWatch } from '../services/run-attention-watch';
 import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+
+function ownsWorktree(run: WorkflowRun, env: IsolationEnvironmentRow): boolean {
+  return (
+    (!isTerminalRunStatus(run.status) || RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) &&
+    (run.metadata.isolation_env_id === env.id ||
+      worktreeReferenceSchema.safeParse(run.metadata.owned_worktree).data?.envId === env.id ||
+      (run.codebase_id === env.codebase_id && run.working_path === env.working_path))
+  );
+}
+
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
 const codebasesSchema = z.array(
   codebaseRowSchema.extend({
@@ -109,6 +120,23 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     throw new FileStoreUnsupportedError(capability);
   };
   const records: IWorkflowHostStore = {
+    attachWorktree: (runId, observed) =>
+      commit(root, [runId], async runs => {
+        const env = (await environments()).find(row => row.id === observed.id);
+        if (!env || env.status !== 'active' || !sameWorktreeRegistration(env, observed))
+          throw new WorktreeRegistrationChangedError(observed.id);
+        const run = runs.get(runId);
+        if (
+          !run ||
+          run.codebase_id !== observed.codebase_id ||
+          (run.working_path !== null && run.working_path !== observed.working_path) ||
+          (isTerminalRunStatus(run.status) && !RESUMABLE_WORKFLOW_STATUSES.includes(run.status))
+        )
+          throw new Error(`Cannot attach checkout to run ${runId}`);
+        run.working_path = observed.working_path;
+        run.metadata.isolation_env_id = observed.id;
+        return { result: undefined, changes: { runs: [{ run }] } };
+      }),
     codebases: {
       getCodebase: async id => (await readPublicCodebases()).find(row => row.id === id) ?? null,
       listCodebases: async () =>
@@ -293,13 +321,28 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           row.status = 'destroyed';
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
-      withWorktreeRegistration: (observed, remove) =>
-        commit(root, 'all', async () => {
+      withWorktreeRegistration: (observed, remove, releaseFailed) =>
+        commit(root, 'all', async runs => {
           const rows = await environments();
           const row = rows.find(row => row.id === observed.id);
           if (!row || row.status !== 'active' || !sameWorktreeRegistration(row, observed)) {
             throw new WorktreeRegistrationChangedError(observed.id);
           }
+          const owner = [...runs.values()].find(run => {
+            if (
+              releaseFailed &&
+              isTerminalRunStatus(run.status) &&
+              RESUMABLE_WORKFLOW_STATUSES.includes(run.status)
+            ) {
+              if (releaseFailed.kind === 'settled') return false;
+              const activeAt = run.completed_at ?? run.last_activity_at ?? run.started_at;
+              if (activeAt && activeAt.getTime() < Date.now() - releaseFailed.staleDays * 86400000)
+                return false;
+            }
+            return ownsWorktree(run, row);
+          });
+          if (owner)
+            throw new Error(`claimable run ${owner.id} (${owner.status}) also uses this checkout`);
           const result = await remove(async () => {
             row.status = 'destroyed';
           });
@@ -350,15 +393,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       return (
         runs
           .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-          .find(
-            row =>
-              row.id !== excludeRunId &&
-              (!isTerminalRunStatus(row.status) ||
-                RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-              (row.metadata.isolation_env_id === id ||
-                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
-          ) ?? null
+          .find(row => row.id !== excludeRunId && env !== null && ownsWorktree(row, env)) ?? null
       );
     },
   };

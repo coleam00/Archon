@@ -1,3 +1,5 @@
+import { lockRunWorktree } from './isolation-environments';
+import type { TransactionQuery } from './resource-slots';
 /**
  * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
@@ -152,6 +154,10 @@ export async function findResumableRunByParentConversation(
   }
 }
 
+async function requireRunWorktree(query: TransactionQuery, id: string): Promise<void> {
+  if (!(await lockRunWorktree(query, id))) throw new Error(`Worktree was released for run ${id}`);
+}
+
 export async function resumeWorkflowRun(
   id: string,
   cursor?: WorkflowResumeCursor
@@ -199,6 +205,7 @@ export async function resumeWorkflowRun(
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
+      await requireRunWorktree(query, id);
       // Acquire the SQLite writer lock before taking a snapshot. Without this,
       // another process can commit between the SELECT and our first UPDATE and
       // make the deferred transaction fail its read-to-write upgrade.

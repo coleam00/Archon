@@ -20,6 +20,8 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'postgresql' as const,
 }));
 
+mock.module('./isolation-environments', () => ({ lockRunWorktree: async () => true }));
+
 import { WorkflowNotResumableError } from '@archon/workflows/store';
 import {
   findResumableRun,

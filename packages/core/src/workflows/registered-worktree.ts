@@ -3,6 +3,7 @@ import {
   getIsolationProvider,
   registerWorktree,
   type IIsolationStore,
+  type IsolationEnvironmentRow,
   type TaskIsolationRequest,
   type WorktreeCreationEnvironment,
   type WorktreeSetupExecutor,
@@ -23,6 +24,7 @@ export interface RegisteredWorktreeInput {
 export interface RegisteredWorktree {
   env: WorktreeCreationEnvironment;
   envId: string;
+  registration: IsolationEnvironmentRow;
   /** Present when this call created the worktree, so the run may remove it. */
   ownedWorktree?: OwnedWorktree;
   /** The commit a newly cut branch started from. */
@@ -67,6 +69,7 @@ export async function createRegisteredWorktree(
   return {
     env,
     envId: record.id,
+    registration: record,
     ...(created ? { ownedWorktree: { envId: record.id, creationId: created.creationId } } : {}),
     ...(created?.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
   };

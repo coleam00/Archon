@@ -34,6 +34,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
   const users = new Map<string, User>();
   const identities = new Map<string, string>();
   return {
+    attachWorktree: unsupported,
     codebases: {
       getCodebase: async id => codebases.get(id) ?? null,
       listCodebases: async () => [...codebases.values()],

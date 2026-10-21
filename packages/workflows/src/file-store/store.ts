@@ -212,6 +212,8 @@ export async function createFileWorkflowStore(
       // Repeated waiting refusals must also commit restored historical admission membership.
       const outcome = await write([id], async (view, admission) => {
         const run = view.resumableRun(id, cursor);
+        if (await options.isCheckoutReleased?.(run))
+          throw new Error(`Worktree was released for run ${id}`);
         const blocker = await admission.resume(run);
         if (!blocker) return await view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));

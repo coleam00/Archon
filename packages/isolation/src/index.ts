@@ -63,7 +63,7 @@ export { dockerCli, dockerPreflight, extractDockerError } from './container/dock
 export type { DockerRunner, DockerExecOptions, DockerExecResult } from './container/docker-exec';
 
 // --- Store ---
-export type { IIsolationStore } from './store';
+export type { IIsolationStore, FailedWorktreeRunRelease } from './store';
 export { recordWorktreeAdoption, registerWorktree } from './store';
 
 // --- Errors ---

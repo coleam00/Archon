@@ -6,6 +6,7 @@
  */
 import { setPlatformPolicies } from '../platforms/registry';
 import * as gitModule from '@archon/git';
+import * as isolationModule from '@archon/isolation';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
   chmod,
@@ -1021,6 +1022,9 @@ test('merged cleanup retires locally and reports the retained published branch',
   expect(await status()).toBe('destroyed');
   expect(existsSync(env.working_path)).toBe(false);
   expect(await git(repo, 'ls-remote', 'origin', ref)).toBe(published);
+  expect(await gitModule.localBranchExists(toRepoPath(repo), toBranchName(env.branch_name))).toBe(
+    false
+  );
 });
 
 test.each([false, true].flatMap(force => [false, true].map(split => ({ force, split }))))(
@@ -1510,3 +1514,39 @@ describe('cleanup retires only the registration it observed', () => {
     expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
   });
 });
+
+test.each(['none', 'failed', 'paused', 'running'] as const)(
+  'closed PR cleanup respects a %s owner and removes only local checkout and branch',
+  async owner => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    await writeFile(join(env.working_path, 'file'), 'closed PR change');
+    await git(env.working_path, 'add', 'file');
+    await git(env.working_path, 'commit', '-qm', 'closed change');
+    await git(repo, 'push', '-q', 'origin', env.branch_name);
+    const headSha = await git(env.working_path, 'rev-parse', 'HEAD');
+    const remoteRef = await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`);
+    await db.query(
+      'UPDATE remote_agent_isolation_environments SET workflow_id = branch_name WHERE id = $1',
+      [env.id]
+    );
+    if (owner !== 'none') await seedRunAt(env.working_path, owner);
+    const pr = spyOn(isolationModule, 'getPrState').mockResolvedValue({ state: 'CLOSED', headSha });
+    try {
+      const result = await cleanupMergedWorktrees(codebaseId, repo, { includeClosed: true });
+      const removed = owner === 'none' || owner === 'failed';
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(removed ? [env.branch_name] : []);
+      expect(existsSync(env.working_path)).toBe(!removed);
+      expect(
+        await gitModule.localBranchExists(toRepoPath(repo), toBranchName(env.branch_name))
+      ).toBe(!removed);
+      expect(await status()).toBe(removed ? 'destroyed' : 'active');
+      expect(await git(repo, 'ls-remote', 'origin', `refs/heads/${env.branch_name}`)).toBe(
+        remoteRef
+      );
+    } finally {
+      pr.mockRestore();
+    }
+  }
+);

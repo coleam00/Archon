@@ -185,6 +185,7 @@ type RunConversation = Extract<RunDestination, { kind: 'conversation' }>['conver
 export interface RunWorkspace {
   workingCwd: string;
   isolationEnvId: string | undefined;
+  worktreeRegistration?: IsolationEnvironmentRow;
   /** Set only when this invocation created the run's branch (#3305). */
   cutFromCommit: string | undefined;
   ownedWorktree: OwnedWorktree | undefined;
@@ -382,6 +383,7 @@ async function bindAdoptionLane(
     );
     workspace.workingCwd = env.working_path;
     workspace.isolationEnvId = env.id;
+    workspace.worktreeRegistration = env;
     continuation.runsIsolatedCheckout = true;
     // The reuse lane IS the isolation: run in the inherited worktree as-is.
     // Leaving wantsIsolation set would fall through to worktree creation
@@ -451,6 +453,7 @@ async function bindResumableRun(
       );
     }
     workspace.isolationEnvId = matchingEnv.id;
+    if (matchingEnv.provider === 'worktree') workspace.worktreeRegistration = matchingEnv;
     getLog().info(
       { envId: workspace.isolationEnvId, workingPath: workspace.workingCwd },
       'workflow.resume_env_found'
@@ -543,6 +546,18 @@ export async function provisionWorkspace(
     }
   );
 
+  if (workspace.worktreeRegistration && codebase) {
+    const run =
+      launch.resumable ??
+      admission.preCreatedRun ??
+      (await createSetupRun(launch, codebase, requirePreparedRunId(admission)));
+    if (!launch.resumable) {
+      admission.preCreatedRun = run;
+      lease.setupRun = run;
+    }
+    await request.host.records.attachWorktree(run.id, workspace.worktreeRegistration);
+  }
+
   const { preparedSource } = admission;
   if (
     launch.continuation.runsIsolatedCheckout &&
@@ -554,6 +569,11 @@ export async function provisionWorkspace(
       await recordSetupRunSource(request.host.deps, lease.setupRun, admission.preparedSource);
     }
   }
+}
+
+function requirePreparedRunId(admission: OwnedRunAdmission): string {
+  if (!admission.preparedSource) throw new Error('Worktree attachment requires captured source');
+  return admission.preparedSource.runId;
 }
 
 async function provisionFolder(launch: ForegroundLaunch, codebase: Codebase): Promise<void> {
@@ -600,7 +620,11 @@ async function provisionWorktree(
       admission.flagBase,
       launch.codebaseDefaultBranch
     );
-    await recordWorktreeAdoption(host.records.isolation, existingEnv, codebase.default_cwd);
+    workspace.worktreeRegistration = await recordWorktreeAdoption(
+      host.records.isolation,
+      existingEnv,
+      codebase.default_cwd
+    );
     workspace.workingCwd = existingEnv.working_path;
     workspace.isolationEnvId = existingEnv.id;
     return;
@@ -616,6 +640,7 @@ async function provisionWorktree(
   }
   workspace.workingCwd = created.env.workingPath;
   workspace.isolationEnvId = created.envId;
+  workspace.worktreeRegistration = created.registration;
   workspace.ownedWorktree = created.ownedWorktree;
   workspace.cutFromCommit = created.cutFromCommit;
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');

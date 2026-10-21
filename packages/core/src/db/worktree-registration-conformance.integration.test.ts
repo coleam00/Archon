@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { commit } from '@archon/workflows/file-store';
+import { toBranchName } from '@archon/git';
 import { sameWorktreeRegistration, type IsolationEnvironmentRow } from '@archon/isolation/types';
 import type { IIsolationStore } from '@archon/isolation';
 import { createFileWorkflowHost } from '../workflows/file-host';
@@ -241,4 +242,189 @@ async function checkOperation(
   expect(persisted?.metadata).toEqual(
     accepts && operation === 'metadata' ? { ...current.metadata, adopted: true } : current.metadata
   );
+}
+
+const sqlRuns = await import('./workflows');
+const fileHost = await createFileWorkflowHost(fileRoot);
+for (const [name, records, runs] of [
+  ['sql', { isolation: sql.createIsolationStore(), attachWorktree: sql.attachWorktree }, sqlRuns],
+  ['files', fileHost.records, fileHost.deps.store],
+] as const) {
+  async function unattached(envCodebaseId = codebase) {
+    const env = await records.isolation.create({
+      codebase_id: envCodebaseId,
+      workflow_type: 'task',
+      workflow_id: randomUUID(),
+      working_path: join(root, randomUUID()),
+      branch_name: toBranchName('item'),
+    });
+    const run = await runs.createWorkflowRun({
+      codebase_id: codebase,
+      workflow_name: 'attachment',
+      user_message: '',
+    });
+    return { env, run };
+  }
+
+  test.each(['pending', 'running', 'paused', 'failed'] as const)(
+    `${name}: attachment excludes removal while %s`,
+    async status => {
+      const { env, run } = await unattached();
+      await records.attachWorktree(run.id, env);
+      if (status === 'failed') await runs.failWorkflowRun(run.id, 'resumable');
+      else if (status !== 'pending') await runs.updateWorkflowRun(run.id, { status });
+      let removed = false;
+      await expect(
+        records.isolation.withWorktreeRegistration(env, async mark => {
+          removed = true;
+          await mark();
+        })
+      ).rejects.toThrow('claimable run');
+      expect(removed).toBe(false);
+      expect((await records.isolation.getById(env.id))?.status).toBe('active');
+      expect((await runs.getWorkflowRun(run.id))?.working_path).toBe(env.working_path);
+    }
+  );
+
+  test.each(['other-codebase', 'other-path', 'completed', 'cancelled'] as const)(
+    `${name}: attachment preserves a run with %s state`,
+    async state => {
+      const { env, run } = await unattached(
+        state === 'other-codebase' ? replacementCodebase : codebase
+      );
+      if (state === 'other-path')
+        await runs.updateWorkflowRun(run.id, { working_path: join(root, 'other') });
+      if (state === 'completed') {
+        await runs.claimPendingWorkflowRun(run.id);
+        await runs.completeWorkflowRun(run.id, { duration_ms: 0 });
+      }
+      if (state === 'cancelled') await runs.cancelWorkflowRun(run.id);
+      const before = await runs.getWorkflowRun(run.id);
+      await expect(records.attachWorktree(run.id, env)).rejects.toThrow('Cannot attach checkout');
+      expect(await runs.getWorkflowRun(run.id)).toEqual(before);
+    }
+  );
+
+  test(`${name}: removal excludes attachment to the selected registration`, async () => {
+    const { env, run } = await unattached();
+    let entered!: () => void;
+    let finish!: () => void;
+    const locked = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const removal = records.isolation.withWorktreeRegistration(env, async mark => {
+      entered();
+      await gate;
+      await mark();
+    });
+    await locked;
+    const attachment = records.attachWorktree(run.id, env);
+    void attachment.catch(() => undefined);
+    const attachmentState = await Promise.race([
+      attachment.then(
+        () => 'attached',
+        () => 'refused'
+      ),
+      Bun.sleep(20).then(() => 'locked'),
+    ]);
+    finish();
+    await removal;
+    expect(attachmentState).toBe('locked');
+    await expect(attachment).rejects.toThrow('changed during cleanup');
+    expect((await runs.getWorkflowRun(run.id))?.working_path).toBeNull();
+  });
+
+  test(`${name}: a replaced selected registration cannot attach`, async () => {
+    const { env, run } = await unattached();
+    await records.isolation.updateMetadata(env.id, { worktree_registration_id: randomUUID() });
+    await expect(records.attachWorktree(run.id, env)).rejects.toThrow('changed during cleanup');
+    expect((await runs.getWorkflowRun(run.id))?.working_path).toBeNull();
+  });
+
+  test(`${name}: claim wins before removal and pins the checkout`, async () => {
+    const { env, run } = await unattached();
+    expect(await runs.claimPendingWorkflowRun(run.id, env.working_path)).not.toBeNull();
+    await expect(
+      records.isolation.withWorktreeRegistration(env, async mark => mark())
+    ).rejects.toThrow('claimable run');
+  });
+
+  test(`${name}: removal excludes a concurrent execution claim`, async () => {
+    const { env, run } = await unattached();
+    let entered!: () => void;
+    let finish!: () => void;
+    const locked = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const removal = records.isolation.withWorktreeRegistration(env, async mark => {
+      entered();
+      await gate;
+      await mark();
+    });
+    await locked;
+    const claim = runs.claimPendingWorkflowRun(run.id, env.working_path);
+    const claimState = await Promise.race([
+      claim.then(() => 'claimed'),
+      Bun.sleep(20).then(() => 'locked'),
+    ]);
+    finish();
+    await removal;
+    expect(claimState).toBe('locked');
+    expect(await claim).toBeNull();
+    expect((await runs.getWorkflowRun(run.id))?.status).toBe('pending');
+  });
+
+  test(`${name}: resume wins before settlement cleanup and pins the checkout`, async () => {
+    const { env, run } = await unattached();
+    await records.attachWorktree(run.id, env);
+    await runs.failWorkflowRun(run.id, 'resumable');
+    expect((await runs.resumeWorkflowRun(run.id)).status).toBe('running');
+    await expect(
+      records.isolation.withWorktreeRegistration(env, async mark => mark(), { kind: 'settled' })
+    ).rejects.toThrow('claimable run');
+  });
+
+  test(`${name}: settlement cleanup wins and refuses a late failed resume`, async () => {
+    const { env, run } = await unattached();
+    await records.attachWorktree(run.id, env);
+    await runs.failWorkflowRun(run.id, 'resumable');
+    let entered!: () => void;
+    let finish!: () => void;
+    const locked = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const removal = records.isolation.withWorktreeRegistration(
+      env,
+      async mark => {
+        entered();
+        await gate;
+        await mark();
+      },
+      { kind: 'settled' }
+    );
+    await locked;
+    const resume = runs.resumeWorkflowRun(run.id);
+    void resume.catch(() => undefined);
+    const resumeState = await Promise.race([
+      resume.then(
+        () => 'resumed',
+        () => 'refused'
+      ),
+      Bun.sleep(20).then(() => 'locked'),
+    ]);
+    finish();
+    await removal;
+    expect(resumeState).toBe('locked');
+    await expect(resume).rejects.toThrow('Worktree was released');
+    expect((await runs.getWorkflowRun(run.id))?.status).toBe('failed');
+  });
 }

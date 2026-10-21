@@ -10,6 +10,8 @@ import type { MergedConfig } from '../config/config-types';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 
 export interface IWorkflowHostStore {
+  /** Validate the selected active registration and pin the run under removal's exclusion. */
+  attachWorktree(runId: string, observed: IsolationEnvironmentRow): Promise<void>;
   codebases: {
     getCodebase(id: string): Promise<Codebase | null>;
     findCodebaseByDefaultCwd(cwd: string): Promise<Codebase | null>;

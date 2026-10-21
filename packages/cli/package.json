@@ -280,6 +280,9 @@
     ],
     [
       "src/commands/workflow-file-store.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-checkout-lifetime.integration.spec.ts"
     ]
   ]
 }

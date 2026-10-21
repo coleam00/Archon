@@ -22,6 +22,7 @@ import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-li
 
 export function createWorkflowHostStore(): IWorkflowHostStore {
   return {
+    attachWorktree: isolationDb.attachWorktree,
     codebases,
     users,
     conversations,

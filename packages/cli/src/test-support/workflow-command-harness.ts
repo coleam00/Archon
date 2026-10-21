@@ -71,6 +71,8 @@ let inheritedDocker: string | undefined;
 let inheritedWorkspace: string | undefined;
 
 beforeEach(async () => {
+  mockAttachWorktree.mockReset();
+  mockAttachWorktree.mockResolvedValue(undefined);
   testHome = mkdtempSync(join(tmpdir(), 'archon-workflow-test-home-'));
   inheritedHome = process.env.ARCHON_HOME;
   inheritedDocker = process.env.ARCHON_DOCKER;
@@ -208,7 +210,6 @@ const mockExpandTilde = (path: string): string =>
 // Identity by default: fixture paths are fake and must keep their spelling on Windows.
 export const mockCanonicalizeProjectPath = mock(async (path: string) => path);
 
-// Mock @archon/paths (createLogger moved here from @archon/core)
 mock.module('@archon/paths', () => ({
   canonicalizeProjectPath: mockCanonicalizeProjectPath,
   captureApprovalResolved: () => undefined,
@@ -261,7 +262,6 @@ mock.module('@archon/isolation', () => ({
   resolveFolderBackend: mockResolveFolderBackend,
 }));
 
-// Mock the @archon/core modules
 mock.module('@archon/core', () => ({
   registerRepository: mock(() =>
     Promise.resolve({
@@ -406,7 +406,6 @@ mock.module('@archon/workflows/run-source', () => ({
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
   resolveContinuationWorkflow: mockResolveContinuationWorkflow,
-  // Stub capture so routing tests do not freeze real source trees.
   prepareWorkflowSource: mock(() =>
     Promise.resolve({
       runId: 'test-run-id',
@@ -446,8 +445,6 @@ mock.module('@archon/workflows/run-source', () => ({
   }),
 }));
 mock.module('@archon/workflows/run-paths', () => ({
-  // The container dispatch resolves the run's artifacts directory to bind it into the
-  // container and creates it on the host first, so hand it a real, reclaimed temp path.
   resolveProjectPaths: mock(() =>
     Promise.resolve({
       artifactsDir: join(mockArtifactsRoot, 'artifacts', 'runs', 'test-run-id'),
@@ -855,8 +852,11 @@ mock.module('@archon/core/workflows/sql-host', () => ({
 const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
 const coreCapabilities = await import('@archon/core');
 const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql-host');
+export const mockAttachWorktree = mock(async () => undefined);
+
 export function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
+  host.records.attachWorktree = mockAttachWorktree;
   host.deps.store.pruneStateRevisions = mock(async () => ({ count: 0 }));
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;

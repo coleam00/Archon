@@ -3,6 +3,7 @@
  * run, and the terminal completed, failed and cancelled writes with their
  * durable events. Re-exported from the `./workflows` entry.
  */
+import { lockRunWorktree } from './isolation-environments';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   sourceReleaseMetadata,
@@ -146,6 +147,7 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    if (!(await lockRunWorktree(query, id, workingPath))) return null;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},

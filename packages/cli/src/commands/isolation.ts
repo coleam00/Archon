@@ -168,26 +168,30 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
         continue;
       }
 
-      const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
-        const result = await provider.destroy(env.working_path, {
-          // A stale environment's branch is deleted only when the environment created it;
-          // an existing branch it checked out may hold commits that exist nowhere else.
-          branchName:
-            env.branch_name && readWorktreeBranchCreated(env.metadata)
-              ? toBranchName(env.branch_name)
-              : undefined,
-          canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
-          creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-        });
+      const result = await isolationDb.withWorktreeRegistration(
+        env,
+        async markDestroyed => {
+          const result = await provider.destroy(env.working_path, {
+            // A stale environment's branch is deleted only when the environment created it;
+            // an existing branch it checked out may hold commits that exist nowhere else.
+            branchName:
+              env.branch_name && readWorktreeBranchCreated(env.metadata)
+                ? toBranchName(env.branch_name)
+                : undefined,
+            canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+            creationId: readWorktreeCreationId(env.metadata) ?? undefined,
+          });
 
-        if (!result.worktreeRemoved || !result.directoryClean) {
-          throw new Error(
-            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
-          );
-        }
-        await markDestroyed();
-        return result;
-      });
+          if (!result.worktreeRemoved || !result.directoryClean) {
+            throw new Error(
+              `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+            );
+          }
+          await markDestroyed();
+          return result;
+        },
+        { kind: 'stale', staleDays: daysStale }
+      );
       for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
       console.log(
         lock.kind === 'released'

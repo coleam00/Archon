@@ -1335,7 +1335,10 @@ describe('isolationCleanupCommand', () => {
       new WorktreeRegistrationChangedError(mockEnv.id)
     );
     expect(await cleanupRoute()).toBe(1);
-    expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function));
+    expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function), {
+      kind: 'stale',
+      staleDays: 7,
+    });
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('changed during cleanup'));
@@ -1485,6 +1488,10 @@ describe('isolationCleanupCommand', () => {
     await isolationCleanupCommand(7);
 
     expect(mockDestroyWorktree).toHaveBeenCalled();
+    expect(mockWithWorktreeRegistration).toHaveBeenCalledWith(mockEnv, expect.any(Function), {
+      kind: 'stale',
+      staleDays: 7,
+    });
     expect(consoleLogSpy).toHaveBeenCalledWith(
       '  Status: Cleaned (failed run run-fail released: stale)'
     );

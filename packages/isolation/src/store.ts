@@ -20,6 +20,8 @@ import type {
   WorktreeCreationEnvironment,
 } from './types';
 
+export type FailedWorktreeRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
+
 export interface IIsolationStore {
   getById(id: string): Promise<IsolationEnvironmentRow | null>;
   findActiveByWorkflow(
@@ -47,10 +49,14 @@ export interface IIsolationStore {
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
-  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  /**
+   * Exclude replacement and execution claims; refuse live owners before removal.
+   * The callback must use the supplied retirement writer, never re-enter the store.
+   */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
-    remove: (markDestroyed: () => Promise<void>) => Promise<T>
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>,
+    releaseFailed?: FailedWorktreeRunRelease
   ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }

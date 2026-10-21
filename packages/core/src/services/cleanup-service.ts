@@ -384,6 +384,7 @@ export async function onConversationClosed(
 
 export interface RemoveEnvironmentOptions {
   force?: boolean;
+  releaseFailed?: isolationEnvDb.FailedRunRelease;
   /** Requests finished local-branch cleanup; remote refs are always retained. */
   deleteRemoteBranch?: boolean;
 }
@@ -445,18 +446,15 @@ export async function removeEnvironment(
   const reason = unknownPlatformReason(env.created_by_platform);
   if (reason) return { ...noopResult, skippedReason: reason };
 
-  // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
   }
 
-  // Check if directory exists before attempting removal
   const pathExists = await worktreeExists(toWorktreePath(env.working_path));
 
   try {
-    // If path exists, check for uncommitted changes (unless force)
     if (pathExists && !options?.force) {
       const hasChanges = await hasUncommittedChangesStrict(toWorktreePath(env.working_path));
       if (hasChanges) {
@@ -469,10 +467,7 @@ export async function removeEnvironment(
       env,
       async markDestroyed => {
         const provider = getIsolationProvider();
-        // A branch this environment did not create (an existing branch it checked out)
-        // may hold the only copy of someone's commits, so local deletion requires a
-        // request for remote cleanup. Callers request that only when the branch is finished:
-        // merged, or an operator's explicit `--include-closed` or `archon complete`.
+        // Existing branches need an explicit finished-branch cleanup request.
         const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
         const destroyResult = await provider.destroy(env.working_path, {
           force: options?.force,
@@ -483,7 +478,8 @@ export async function removeEnvironment(
 
         if (destroyResult.worktreeRemoved && destroyResult.directoryClean) await markDestroyed();
         return destroyResult;
-      }
+      },
+      options?.releaseFailed
     );
 
     const removed = destroyResult.worktreeRemoved && destroyResult.directoryClean;
@@ -919,6 +915,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           const mergedResult = await removeEnvironment(env, {
             force: false,
             deleteRemoteBranch: true,
+            releaseFailed: { kind: 'settled' },
           });
           recordRemoval(env.id, mergedResult, 'merged', check.released);
           continue;
@@ -972,6 +969,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
           const staleResult = await removeEnvironment(env, {
             force: false,
+            releaseFailed: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS },
           });
           recordRemoval(env.id, staleResult, 'stale', check.released);
         }
@@ -1194,7 +1192,9 @@ export async function cleanupStaleWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env);
+      const removeResult = await removeEnvironment(env, {
+        releaseFailed: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS },
+      });
       recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
       const err = error as Error;
@@ -1274,6 +1274,7 @@ export async function cleanupMergedWorktrees(
       }
       const removeResult = await removeEnvironment(env, {
         deleteRemoteBranch: true,
+        releaseFailed: { kind: 'settled' },
       });
       recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
@@ -1498,17 +1499,19 @@ async function reclaimOwnedWorktree(
       return false;
     }
   };
-  if (!(await pathExists())) {
+  if (env.status === 'destroyed') {
+    if (await pathExists()) return refuse('a path exists for an already destroyed environment');
     if (await isWorktreeRegistered(repo, path))
       return refuse('checkout is absent but still registered with Git');
-    if (env.status !== 'destroyed') await store.markWorktreeDestroyed(env);
     return { warnings: [] };
   }
-  if (env.status === 'destroyed')
-    return refuse('a path exists for an already destroyed environment');
-  const user = await readers.getLiveRunOwningEnv(env.id);
-  if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
   return store.withWorktreeRegistration(env, async markDestroyed => {
+    if (!(await pathExists())) {
+      if (await isWorktreeRegistered(repo, path))
+        return refuse('checkout is absent but still registered with Git');
+      await markDestroyed();
+      return { warnings: [] };
+    }
     const result = await getIsolationProvider().destroy(path, {
       canonicalRepoPath: repo,
       guardedRemoval: {
@@ -1525,10 +1528,7 @@ async function reclaimOwnedWorktree(
   });
 }
 
-/**
- * Remove the worktree an abandoned run created, discarding uncommitted work.
- * The branch is kept, so committed work stays recoverable.
- */
+/** Abandonment discards uncommitted work but keeps the branch for recovery. */
 export async function reclaimRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
