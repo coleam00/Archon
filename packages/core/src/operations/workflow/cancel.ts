@@ -1,3 +1,4 @@
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
 import type { OperationContext } from './context';
@@ -126,6 +127,8 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
+  // An output holder the stop left running may still write scratch.
+  if (!owner.cleanupWarnings?.length) await releaseRunScratch(run);
   return { kind: 'stopped', pid: owner.pid, ...recorded };
 }
 

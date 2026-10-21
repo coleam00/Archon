@@ -30,7 +30,7 @@ When a prior report is provided, treat its claims like any inherited analysis: v
 
 Design calls are judged against the project's own guidance. For each design call, open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on the call, such as design rules for a language, API, or configuration surface, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, not by your preference.
 
-When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
+When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout or a dependency install to spike against? Put it under `$ARTIFACTS_DIR/.archon/scratch/plan/`, never in `spike/`, and remove a worktree with `git worktree remove` when you are done; the engine deletes that directory when the run ends. Never spike in this checkout.
 
 ## Decide, don't defer
 

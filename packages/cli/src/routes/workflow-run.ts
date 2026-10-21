@@ -74,18 +74,16 @@ function workflowSourceConflict(values: Record<string, unknown>): string | undef
 }
 
 /** Resolves `--workflow-source`, or returns the exit code of its refusal. */
-async function resolveWorkflowSource({
-  values,
-  json,
-}: WorkflowRoute): Promise<string | undefined | 1> {
+async function resolveWorkflowSource(route: WorkflowRoute): Promise<string | undefined | 1> {
+  const { values, json } = route;
   const workflowSourceFlag = values['workflow-source'] as string | undefined;
   if (workflowSourceFlag === undefined) return undefined;
   const conflict = workflowSourceConflict(values);
   if (conflict) return await fail(json, conflict);
   const workflowSource = resolve(workflowSourceFlag);
   if (!(await isPathDirectory(workflowSource))) {
-    return await fail(
-      json,
+    return await refuseRunStartup(
+      route,
       `Error: --workflow-source is not a directory: ${workflowSource}\n` +
         '  Point it at the checkout holding .archon/workflows/.'
     );
@@ -93,26 +91,28 @@ async function resolveWorkflowSource({
   return workflowSource;
 }
 
-async function resolveRunProject({
-  values,
-  json,
-  host,
-}: WorkflowRoute): Promise<string | undefined | 1> {
+async function refuseRunStartup(
+  { host, values, json }: WorkflowRoute,
+  message: string
+): Promise<1> {
+  const { recordDetachedChildStartupFailure } = await import('../commands/workflow-detach');
+  await recordDetachedChildStartupFailure(
+    host,
+    {
+      detachedRunId: values['internal-detached-run-id'] as string | undefined,
+      detachedProcessOwner: process.env[DETACHED_RUN_OWNER_ENV] === '1',
+      launchToken: process.env[DETACHED_LAUNCH_TOKEN_ENV],
+    },
+    new Error(message)
+  );
+  return await fail(json, message);
+}
+
+async function resolveRunProject(route: WorkflowRoute): Promise<string | undefined | 1> {
+  const { values, host } = route;
   const project = values.project as string | undefined;
   if (project === undefined) return undefined;
-  async function refuse(message: string): Promise<1> {
-    const { recordDetachedChildStartupFailure } = await import('../commands/workflow-detach');
-    await recordDetachedChildStartupFailure(
-      host,
-      {
-        detachedRunId: values['internal-detached-run-id'] as string | undefined,
-        detachedProcessOwner: process.env[DETACHED_RUN_OWNER_ENV] === '1',
-        launchToken: process.env[DETACHED_LAUNCH_TOKEN_ENV],
-      },
-      new Error(message)
-    );
-    return await fail(json, message);
-  }
+  const refuse = (message: string): Promise<1> => refuseRunStartup(route, message);
   for (const flag of RUN_PROJECT_CONFLICT_FLAGS) {
     if (values[flag] !== undefined && values[flag] !== false) {
       return await refuse(`Error: --project cannot be combined with --${flag}.`);

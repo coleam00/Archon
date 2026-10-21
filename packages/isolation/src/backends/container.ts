@@ -11,9 +11,9 @@
  * `{ kind: 'container', containerId }` execution context; the engine threads
  * that to the Claude provider (spawns its CLI via `docker exec`) and to
  * `bash:`/`script:` nodes (also `docker exec`), so isolation has no host-escape
- * hole. `destroy()` removes the container + volume. The approval-gated
- * write-back of the overlay diff to the live root is Phase C — until then a
- * container run's changes stay in the overlay and are discarded on `destroy()`.
+ * hole. `destroy()` removes the container + volume, then the run's scratch. The
+ * approval-gated write-back of the overlay diff to the live root is Phase C — until then
+ * a container run's changes stay in the overlay and are discarded on `destroy()`.
  *
  * Only Claude runs in-container in v1; the engine fails fast pre-dispatch for
  * any node whose provider lacks the `containerExec` capability.
@@ -29,6 +29,7 @@ import {
   type WriteBackFinalizeResult,
   type WriteBackApplySummary,
 } from '@archon/workflows/container-context';
+import { removeRunScratch } from '@archon/workflows/run-scratch';
 import type {
   BackendPrepareRequest,
   ContainerBackendConfig,
@@ -111,7 +112,8 @@ type ContainerEnvMetadata = {
   /**
    * Host path of the run's artifacts directory, bind-mounted read-write at the SAME
    * absolute path. Persisted for the same reason as `sourceMount`, and so the ownership
-   * hand-back on suspend and destroy knows which host tree the container wrote into.
+   * hand-back on suspend and destroy knows which host tree the container wrote into, and
+   * destroy which run's scratch to remove.
    */
   artifactsMount?: string;
 };
@@ -293,6 +295,12 @@ export class ContainerBackend implements IIsolationBackend {
       throw new Error(
         `Failed to remove the isolation container/volume for env '${envId}': ` + failures.join('; ')
       );
+    }
+
+    // The run's scratch waits for this point: until the container is gone, code in it can
+    // still write into, or plant links in, the artifacts directory it mounts.
+    if (meta.artifactsMount !== undefined) {
+      await removeRunScratch(meta.artifactsMount, { envId });
     }
 
     await this.store.updateStatus(envId, 'destroyed');

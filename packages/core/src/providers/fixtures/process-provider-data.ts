@@ -71,3 +71,16 @@ export const chunks: ProviderChunk[] = [
   { type: 'subtask', taskId: 'background', status: 'completed' },
   { type: 'settled' },
 ];
+
+// Plugin lines the host must reject without recording any of their text.
+export const invalidMessages = {
+  json: '{"jsonrpc":"2.0","method":"_archon/chunk","params":private-line-secret}',
+  payload: JSON.stringify({
+    jsonrpc: '2.0',
+    method: '_archon/chunk',
+    params: {
+      sessionId: 'private-line-secret',
+      chunk: { type: 'tool_call', toolCallId: 'private-line-secret', name: 5 },
+    },
+  }),
+};

@@ -5,7 +5,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import * as commands from '../commands/workflow';
 import { captureWorkflowCommand } from '../test-support/command';
@@ -41,6 +41,8 @@ type InvocationOptions = {
   wrongToken?: boolean;
   missingToken?: boolean;
   explicitSource?: boolean;
+  sourceFile?: boolean;
+  claimBeforeFailure?: boolean;
 };
 
 async function createDetachedRows(host: WorkflowHost, options: InvocationOptions) {
@@ -78,6 +80,7 @@ async function invoke(
 ) {
   const home = mkdtempSync(join(tmpdir(), 'archon-project-route-'));
   roots.push(home);
+  if (options.sourceFile) writeFileSync(join(home, 'source'), 'not a directory');
   if (options.workflowNames) {
     const workflows = join(
       home,
@@ -106,6 +109,13 @@ async function invoke(
     process.env.ARCHON_DETACHED_RUN_OWNER = options.detachedOwner === false ? '' : '1';
     process.env.ARCHON_DETACHED_LAUNCH_TOKEN = options.missingToken ? '' : 'launch-token';
     const { otherLaunch, handedOver } = await createDetachedRows(host, options);
+    if (options.claimBeforeFailure) {
+      const fail = host.deps.store.failWorkflowRun.bind(host.deps.store);
+      spyOn(host.deps.store, 'failWorkflowRun').mockImplementation(async (id, error, options) => {
+        await host.deps.store.claimPendingWorkflowRun(id);
+        return fail(id, error, options);
+      });
+    }
     const list = spyOn(host.records.codebases, 'listCodebaseClaims').mockImplementation(
       async () => {
         if (options.lookupError) throw new Error('registry unavailable');
@@ -148,6 +158,67 @@ async function invoke(
   expect(result.status, result.output).toBe(0);
   return { run, exitCode, output: result.output, stderr: result.stderr, stdout, storedRun };
 }
+
+test.each([false, true])(
+  'records an authorized detached source-directory refusal (file: %s)',
+  async sourceFile => {
+    const result = await invoke({}, [repo], {
+      explicitSource: true,
+      sourceFile,
+      detachedStatus: 'pending',
+      json: true,
+    });
+    const { error } = JSON.parse(result.stdout);
+    expect(error).toContain('Error: --workflow-source is not a directory:');
+    expect(error).toContain('Point it at the checkout holding .archon/workflows/.');
+    expect(result.exitCode).toBe(1);
+    expect(result.run).not.toHaveBeenCalled();
+    expect(result.storedRun).toMatchObject({
+      status: 'failed',
+      metadata: {
+        error: `Detached run failed to start: ${error}`,
+        stop_reason: { reason: 'launch_failed' },
+      },
+    });
+  }
+);
+
+test('passes an available explicit source to the detached run command', async () => {
+  const result = await invoke({}, [repo], {
+    explicitSource: true,
+    workflowNames: ['probe'],
+    detachedStatus: 'pending',
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.run).toHaveBeenCalledTimes(1);
+  expect(result.run.mock.calls[0]?.[4]?.discoveryCwd).toEndWith(`${sep}source`);
+  expect(result.storedRun?.status).toBe('pending');
+});
+
+test.each([
+  { name: 'unowned invocation', detachedOwner: false },
+  { name: 'different launch', wrongToken: true },
+  { name: 'missing token', missingToken: true },
+  { name: 'ordinary invocation', detachedStatus: undefined },
+  ...(['running', 'completed', 'failed'] as const).map(detachedStatus => ({
+    name: detachedStatus,
+    detachedStatus,
+  })),
+])('source refusal preserves runs outside startup ownership: $name', async options => {
+  const result = await invoke({}, [repo], {
+    detachedStatus: 'pending',
+    ...options,
+    explicitSource: true,
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('--workflow-source is not a directory:');
+  expect(result.run).not.toHaveBeenCalled();
+  const expectedStatus = 'detachedStatus' in options ? options.detachedStatus : 'pending';
+  expect(result.storedRun?.status).toBe(expectedStatus);
+  expect(result.storedRun?.metadata?.error).toBe(
+    options.name === 'failed' ? 'original failure' : undefined
+  );
+});
 
 for (const flag of ['config', 'config-from-run']) {
   test.each([false, true])(`refuses --${flag} on run --resume (json: %s)`, async json => {
@@ -370,5 +441,21 @@ test.each([false, true])(
       status: 'failed',
       metadata: { stop_reason: { reason: 'launch_failed' } },
     });
+  }
+);
+
+test.each(['source', 'project'])(
+  'startup %s refusal preserves a concurrent execution claim',
+  async refusal => {
+    const result = await invoke(refusal === 'project' ? { project: 'missing' } : {}, [], {
+      explicitSource: refusal === 'source',
+      detachedStatus: 'pending',
+      claimBeforeFailure: true,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.run).not.toHaveBeenCalled();
+    expect(result.storedRun?.status).toBe('running');
+    expect(result.storedRun?.metadata.error).toBeUndefined();
+    expect(result.storedRun?.metadata.stop_reason).toBeUndefined();
   }
 );

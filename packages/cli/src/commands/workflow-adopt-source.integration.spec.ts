@@ -12,7 +12,10 @@ import { capturedSourceRoots, loadWorkflowSource } from '@archon/workflows/workf
 import { loadCommandPrompt } from '@archon/workflows/load-command-prompt';
 import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
-import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  DetachedRunOwnerUnavailableError,
+  requestDetachedRunStop,
+} from '@archon/core/services/run-owner-stop';
 
 mock.module('@archon/core/services/title-generator', () => ({
   generateAndSetTitle: async (): Promise<void> => undefined,
@@ -25,16 +28,23 @@ const observers = new Map<string, Database>();
 
 afterEach(async () => {
   for (const id of activeRuns) {
-    if (await canConnectToRunLiveOwner(runLiveOwnerPath(id))) {
-      const owner = await requestDetachedRunStop(id);
-      await owner.stop();
-    }
+    await stopOwnerIfLive(id);
   }
   activeRuns.clear();
   for (const db of observers.values()) db.close();
   observers.clear();
   for (const root of roots.splice(0)) await removeTempTree(root);
 });
+
+/** A finished run's owner exits on its own, so it may be gone by the time it is asked to stop. */
+async function stopOwnerIfLive(runId: string): Promise<void> {
+  try {
+    await (await requestDetachedRunStop(runId)).stop();
+  } catch (error) {
+    if (error instanceof DetachedRunOwnerUnavailableError && error.reason === 'unreachable') return;
+    throw error;
+  }
+}
 
 interface Fixture {
   root: string;

@@ -3,6 +3,7 @@ import * as binaryResolver from './binary-resolver';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
+import { existsSync } from 'fs';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -710,6 +711,15 @@ describe('CodexProvider', () => {
       expect(server.processes[0].stdinEnded).toBe(true);
     });
 
+    test('a Codex still exiting after SIGTERM settles once it exits cleanly', async () => {
+      // Codex shutting down on a loaded machine outlasts the stdin-close grace; SIGTERM
+      // does not hurry it, and it exits 0 on its own schedule.
+      const server = createFakeAppServer(() => ({ exitsAfterStdinCloseMs: 100 }));
+      const chunks = await run(new CodexProvider(server, 20));
+      expect(server.processes[0].signals).toEqual(['SIGTERM']);
+      expect(chunks.map(c => c.type)).toEqual(['result', 'settled']);
+    });
+
     test('an abnormal process exit after the final notification is not a settle', async () => {
       const { provider, server } = providerWith({
         notifications: [turnCompleted('completed')],
@@ -1366,7 +1376,12 @@ describe('CodexProvider', () => {
           threadId: THREAD_ID,
           config: TOOL_FREE_THREAD_CONFIG,
         });
-        expect(server.processes[1].args).toEqual(['app-server']);
+        const [, catalogFlag, catalogArg] = server.processes[1].args;
+        expect(catalogFlag).toBe('-c');
+        expect(catalogArg).toStartWith('model_catalog_json=');
+        // The final turn's catalog file lives only as long as the call.
+        const catalogPath = JSON.parse(catalogArg.slice('model_catalog_json='.length)) as string;
+        expect(existsSync(catalogPath)).toBe(false);
         expect(second('turn/start')).toMatchObject({
           outputSchema: { required: ['summary'], additionalProperties: false },
         });

@@ -6,6 +6,7 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   sourceReleaseMetadata,
+  DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
   type FanOutCancelReason,
@@ -14,7 +15,6 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
-import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
@@ -325,9 +325,9 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: { exitReason?: RunExitReason; signal?: RunStopSignal } = {}
+  options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): Promise<{ failed: boolean }> {
-  const { exitReason, signal } = options;
+  const { exitReason, signal, pendingLaunchToken } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -349,7 +349,11 @@ export async function failWorkflowRun(
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutPriorFailure, 2)}
-         WHERE id = $1 AND status IN ('running', 'pending')`,
+         WHERE id = $1 AND ${
+           pendingLaunchToken !== undefined
+             ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
+             : "status IN ('running', 'pending')"
+         }`,
         [
           id,
           JSON.stringify({
@@ -363,6 +367,7 @@ export async function failWorkflowRun(
                 }
               : {}),
           }),
+          ...(pendingLaunchToken !== undefined ? [pendingLaunchToken] : []),
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
@@ -380,6 +385,7 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
+    if (pendingLaunchToken !== undefined) return { failed: false };
     const status = await getWorkflowRunStatus(id);
     if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return { failed: false };
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');

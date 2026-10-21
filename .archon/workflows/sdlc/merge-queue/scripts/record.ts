@@ -17,9 +17,12 @@
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
- * rest of the batch from being recorded.
+ * rest of the batch from being recorded. If facts could not read the default branch,
+ * record settlements without further forge reads, leaving open companions untouched,
+ * then fail with the original diagnostic.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED and INPUTS_BASE from facts; INPUTS_SWEEP,
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
+ * from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
  */
 
@@ -244,12 +247,30 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   });
 }
 
+function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
+  for (const done of settled) {
+    const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
+    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+      withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
+    );
+  }
+}
+
+function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
+  recordSettled(writes, settled);
+  throw new Error([baseError, ...writes.failed, 'every other decision is recorded'].join('; '));
+}
+
 function main(): void {
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const sweep = readSweep(process.env.INPUTS_SWEEP);
+  const baseError = text(process.env.INPUTS_BASE_ERROR);
+  const runId = text(process.env.WORKFLOW_ID);
+  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
+  if (baseError !== '') recordBaseFailure(writes, settled, baseError);
   if (path === 'idle') {
     emit({
       merged: [],
@@ -261,6 +282,7 @@ function main(): void {
     });
     return;
   }
+  const sweep = readSweep(process.env.INPUTS_SWEEP);
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const { decisions, refused } = decide(items, sweep);
   const base = nullableJson(process.env.INPUTS_BASE) as Base | null;
@@ -288,9 +310,6 @@ function main(): void {
         ? renderAttention('Merge queue: the default branch is red', raised.attention)
         : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
 
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
   // Every read and check happens before the first write, so a check that refuses writes nothing.
@@ -313,12 +332,7 @@ function main(): void {
     const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
     if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
   }
-  for (const done of settled) {
-    const entry = { at: writes.at, run_id: runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
-    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
-      withMerge(doc, { at: writes.at, run_id: runId, entry, status: done.status, pr: done.pr, release: true })
-    );
-  }
+  recordSettled(writes, settled);
   if (contradictions.length > 0) {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
