@@ -514,10 +514,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
   When `retriage_as` names a maintainer login, a run that names no item also revisits
-  the blocked items, beside the item it builds. `facts` lists the unclaimed blocked
-  items not revisited in the last six hours, so a scheduled queue does not judge the
-  same items every run. One `revisit` agent reads each issue, what it waits on and the
-  default branch, and names the items that no longer look blocked. `retriage` adds
+  the blocked items, beside the item it builds. `blocked` lists the unclaimed blocked
+  items not revisited in the last six hours, independently of item pickup and PR
+  resolution. An unresolved PR create refuses the item's continuation without
+  suppressing these revisits. A scheduled queue does not judge the same items every
+  run. One `revisit` agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. `retriage` adds
   `archon-triage` to each and starts `archon-intake` detached with that label event,
   recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
   that login is on the maintainer list, and its verdict decides whether the item now

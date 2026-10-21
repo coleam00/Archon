@@ -91,11 +91,7 @@ nodes:
         # The branch the round opens its pull request from when it continues none: a new
         # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
         branch: { type: string }
-        # The blocked items due a revisit; empty unless retriage_as is set and no item
-        # is named.
-        blocked: { type: array, items: { type: object } }
-        blocked_count: { type: integer }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch, blocked, blocked_count]
+      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -287,16 +283,26 @@ nodes:
         summary: { type: string }
       required: [decision, section, summary]
 
-  # Intake's blocked verdict can go stale while work lands in parallel. The revisit
-  # runs beside the item's path and changes nothing on it.
+  # Revisit pickup is independent of item pickup: an unresolved PR create must
+  # not suppress revisits of other items.
+  - id: blocked
+    script: blocked
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        blocked: { type: array, items: { type: object } }
+        blocked_count: { type: integer }
+      required: [blocked, blocked_count]
+
   - id: revisit
     command: revisit
-    depends_on: [facts]
-    when: "$facts.output.blocked_count > 0"
+    depends_on: [blocked]
+    when: "$blocked.output.blocked_count > 0"
     model: medium
     mutates_checkout: false
     with:
-      blocked: { from: "$facts.output.blocked" }
+      blocked: { from: "$blocked.output.blocked" }
     output_format:
       type: object
       properties:
@@ -314,9 +320,9 @@ nodes:
   - id: retriage
     script: retriage
     runtime: bun
-    depends_on: [facts, revisit]
+    depends_on: [blocked, revisit]
     with:
-      blocked: { from: "$facts.output.blocked" }
+      blocked: { from: "$blocked.output.blocked" }
       retriage: { from: "$revisit.output.retriage" }
     output_format:
       type: object
