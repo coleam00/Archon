@@ -276,7 +276,11 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
         deferredEvents.some(event => ['node_completed', 'node_failed'].includes(event.event_type))
       ).toBe(false);
       expect(deferredEvents.some(event => event.event_type === 'node_suspended')).toBe(
-        kind !== 'loop_group'
+        kind === 'loop' ||
+          deferredEvents.some(
+            event =>
+              event.step_name === `${deferredId}.check` && event.event_type === 'node_started'
+          )
       );
       const usageEvents = deferredEvents.filter(
         event => event.event_type === 'node_deferred_usage'

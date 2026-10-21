@@ -208,6 +208,7 @@ describe('container pause segment ownership through the executor', () => {
           await mkdir(join(f.root, '.archon', 'commands'), { recursive: true });
           await writeFile(join(f.root, '.archon', 'commands', 'review.md'), 'Review');
           const published = Promise.withResolvers<void>();
+          const attempted = Promise.withResolvers<void>();
           try {
             const result = await f.execute({
               persistWorkflowEvent: async event => {
@@ -220,11 +221,18 @@ describe('container pause segment ownership through the executor', () => {
                 await f.store.persistWorkflowEvent(event);
               },
               pauseWorkflowRun: async (...args) => {
-                if (args[1].nodeId !== 'review') await published.promise;
-                await f.store.pauseWorkflowRun(...args);
-                published.resolve();
+                if (args[1].nodeId === 'review') {
+                  await attempted.promise;
+                  await f.store.pauseWorkflowRun(...args);
+                  published.resolve();
+                } else {
+                  attempted.resolve();
+                  await published.promise;
+                  await f.store.pauseWorkflowRun(...args);
+                }
               },
               pauseWorkflowRunForWait: async (...args) => {
+                attempted.resolve();
                 await published.promise;
                 await f.store.pauseWorkflowRunForWait(...args);
               },
