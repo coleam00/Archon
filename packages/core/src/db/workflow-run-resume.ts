@@ -1,3 +1,9 @@
+import {
+  prepareResumedRun,
+  resumePreparationUndo,
+  restoreResumePreparation,
+  type ResumePreparationUndo,
+} from '@archon/workflows/resume-preparation';
 /**
  * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
@@ -152,16 +158,47 @@ export async function findResumableRunByParentConversation(
   }
 }
 
+function resumeMetadata(prior: Pick<WorkflowRunRow, 'status' | 'metadata'> | undefined) {
+  const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
+  const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
+  // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
+  const usageLimitWait =
+    prior?.status === 'paused' &&
+    pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
+      undefined;
+  const metadataPatch = {
+    ...(usageLimitWait ? { wait: null } : {}),
+    [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
+    error: null,
+    [RUN_STOP_REASON_METADATA_KEY]: null,
+    continuation_retry_at: null,
+    [CAPACITY_WAIT_METADATA_KEY]: null,
+    [SOURCE_RELEASE_METADATA_KEY]: null,
+    [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
+    ...(scheduled !== null && triggeredAt !== null
+      ? { scheduled_resume: { ...scheduled, triggeredAt } }
+      : {}),
+  };
+
+  return { metadataPatch, scheduled, triggeredAt };
+}
+
 export async function resumeWorkflowRun(
   id: string,
-  cursor?: WorkflowResumeCursor
+  cursor?: WorkflowResumeCursor,
+  prepare?: (admitted: WorkflowRun) => Promise<void>
 ): Promise<WorkflowRun> {
   const dialect = getDialect();
 
-  // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
-  // (SQLite does not support RETURNING on UPDATE statements)
-  // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: { rowCount: number } | { busy: WorkflowResourceBusyError };
+  let updateResult:
+    | { rowCount: 0 }
+    | { busy: WorkflowResourceBusyError }
+    | {
+        admitted: WorkflowRun;
+        undo: ResumePreparationUndo | undefined;
+        eventIds: string[];
+        acquiredResource: string | undefined;
+      };
   try {
     // Refresh started_at to NOW so the resumed row competes fairly with
     // currently-active rows in getActiveWorkflowRunByPath's older-wins
@@ -205,12 +242,8 @@ export async function resumeWorkflowRun(
       if (getDatabaseType() === 'sqlite') {
         await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
       }
-      const priorRows = await query<{
-        status: string;
-        metadata: unknown;
-        resource_key?: string | null;
-      }>(
-        `SELECT w.status, w.metadata, q.resource_key
+      const priorRows = await query<WorkflowRunRow & { resource_key?: string | null }>(
+        `SELECT w.*, CAST(w.origin AS TEXT) AS origin, q.resource_key
            FROM remote_agent_workflow_runs w
            LEFT JOIN remote_agent_resource_start_requests q
              ON q.id = w.id AND q.status = 'admitted'
@@ -230,15 +263,14 @@ export async function resumeWorkflowRun(
           ))
       )
         return { rowCount: 0 };
+      let acquiredResource: string | undefined;
       const resourceKey = prior?.resource_key ?? undefined;
       const status = prior?.status;
       if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
         const { capacity } = await lockResourceSlot(query, resourceKey);
         const metadata = normalizeMetadata(prior?.metadata);
-        const blocker = resourceResumeBlocker(
-          await resourceStartOccupancy(query, resourceKey, capacity),
-          { id, status, metadata }
-        );
+        const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
+        const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
         if (blocker) {
           const busy = new WorkflowResourceBusyError(
             id,
@@ -259,29 +291,11 @@ export async function resumeWorkflowRun(
             );
           return { busy };
         }
+        if (!occupancy.holders.some(holder => holder.id === id)) acquiredResource = resourceKey;
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
       const clearedError = readMetadataError(prior?.metadata);
-      const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
-      const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
-      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-      const usageLimitWait =
-        prior?.status === 'paused' &&
-        pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
-          undefined;
-      const metadataPatch = {
-        ...(usageLimitWait ? { wait: null } : {}),
-        [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
-        error: null,
-        [RUN_STOP_REASON_METADATA_KEY]: null,
-        continuation_retry_at: null,
-        [CAPACITY_WAIT_METADATA_KEY]: null,
-        [SOURCE_RELEASE_METADATA_KEY]: null,
-        [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
-        ...(scheduled !== null && triggeredAt !== null
-          ? { scheduled_resume: { ...scheduled, triggeredAt } }
-          : {}),
-      };
+      const { metadataPatch, scheduled, triggeredAt } = resumeMetadata(prior);
 
       const result = await query(
         `UPDATE remote_agent_workflow_runs
@@ -302,27 +316,47 @@ export async function resumeWorkflowRun(
         [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify(metadataPatch)]
       );
 
-      const rowCount = result.rowCount;
-      if (rowCount > 0 && (prior?.status === 'failed' || clearedError !== null)) {
+      if (result.rowCount === 0) return { rowCount: 0 as const };
+      const eventIds: string[] = [];
+      if (prior?.status === 'failed' || clearedError !== null) {
         // Same `{ error }` payload shape workflow_failed uses, so every consumer
         // that already reads an error off a workflow_* event keeps working.
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_resumed',
-          data: clearedError === null ? {} : { error: clearedError },
-        });
+        eventIds.push(
+          await insertWorkflowEvent(query, {
+            workflow_run_id: id,
+            event_type: 'workflow_resumed',
+            data: clearedError === null ? {} : { error: clearedError },
+          })
+        );
       }
-      if (rowCount > 0 && prior?.status === 'paused') {
-        await insertWorkflowEvent(query, workflowUnpausedEvent(id));
+      if (prior?.status === 'paused') {
+        eventIds.push(await insertWorkflowEvent(query, workflowUnpausedEvent(id)));
       }
-      if (rowCount > 0 && scheduled !== null && triggeredAt !== null) {
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'quota_resume_triggered',
-          data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-        });
+      if (scheduled !== null && triggeredAt !== null) {
+        eventIds.push(
+          await insertWorkflowEvent(query, {
+            workflow_run_id: id,
+            event_type: 'quota_resume_triggered',
+            data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
+          })
+        );
       }
-      return { rowCount };
+      const selected = await query<WorkflowRunRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      );
+      const row = selected.rows[0];
+      if (!row) throw new Error(`Workflow run vanished after update (id: ${id})`);
+      const admitted = normalizeWorkflowRun(row);
+      return {
+        admitted,
+        undo:
+          prepare && prior
+            ? resumePreparationUndo(normalizeWorkflowRun(prior), admitted)
+            : undefined,
+        eventIds,
+        acquiredResource,
+      };
     });
   } catch (error) {
     const err = error as Error;
@@ -331,7 +365,7 @@ export async function resumeWorkflowRun(
   }
   if ('busy' in updateResult) throw updateResult.busy;
 
-  if (updateResult.rowCount === 0) {
+  if ('rowCount' in updateResult) {
     // CAS miss: the row is no longer resumable — deleted, terminal, or already
     // activated by another caller. Refuse rather than double-claim the worktree.
     // Probe the current status for an actionable error (informational only; the
@@ -357,24 +391,48 @@ export async function resumeWorkflowRun(
     throw new WorkflowNotResumableError(id, currentStatus);
   }
 
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRunRow>>>;
-  try {
-    selectResult = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_select_failed');
-    throw new Error(`Failed to read workflow run after update: ${err.message}`);
-  }
-
-  const row = selectResult.rows[0];
-  if (!row) {
-    getLog().error({ workflowRunId: id }, 'db.workflow_run_resume_vanished');
-    throw new Error(`Workflow run vanished after update (id: ${id})`);
-  }
-  return normalizeWorkflowRun(row);
+  const { admitted, undo, eventIds, acquiredResource } = updateResult;
+  if (!prepare) return admitted;
+  if (!undo) throw new Error(`Resume admission has no preparation inverse: ${id}`);
+  return prepareResumedRun(admitted, prepare, async () => {
+    await getDatabase().withTransaction(async query => {
+      if (getDatabaseType() === 'sqlite')
+        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+      const selected = await query<WorkflowRunRow>(
+        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
+          WHERE id = $1${dialect.rowLock()}`,
+        [id]
+      );
+      const current = selected.rows[0];
+      if (!current) throw new Error(`Resume preparation run disappeared: ${id}`);
+      const restored = restoreResumePreparation(normalizeWorkflowRun(current), undo);
+      if (acquiredResource) await lockResourceSlot(query, acquiredResource);
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+          SET status = $2, started_at = $3, completed_at = $4, last_activity_at = $5, metadata = $6
+          WHERE id = $1 AND status = 'running'
+            AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} = $7`,
+        [
+          id,
+          restored.status,
+          restored.started_at.toISOString(),
+          restored.completed_at?.toISOString() ?? null,
+          restored.last_activity_at?.toISOString() ?? null,
+          JSON.stringify(restored.metadata),
+          undo.claim,
+        ]
+      );
+      if (result.rowCount === 0)
+        throw new Error(`Resume preparation lost execution ownership: ${id}`);
+      if (acquiredResource)
+        await removeResourceSlotHolder(query, acquiredResource, { kind: 'run', id });
+      for (const eventId of eventIds)
+        await query(
+          'DELETE FROM remote_agent_workflow_events WHERE id = $1 AND workflow_run_id = $2',
+          [eventId, id]
+        );
+    });
+  });
 }
 
 export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {

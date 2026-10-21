@@ -168,7 +168,7 @@ describe('workflow run resume', () => {
       expect(result.completed_at).toBeNull();
       // First call: the row-pinning read of the error the CAS is about to clear.
       const [priorQuery, priorParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(priorQuery).toContain('SELECT w.status, w.metadata, q.resource_key');
+      expect(priorQuery).toContain('SELECT w.*, CAST(w.origin AS TEXT) AS origin, q.resource_key');
       // Postgres row lock — without it the value read is not guaranteed to be the
       // value the CAS clears, so the preserved error could be stale (#2348).
       expect(priorQuery).toContain('FOR UPDATE');
@@ -417,7 +417,7 @@ describe('workflow run resume', () => {
       mockQuery.mockRejectedValueOnce(new Error('Connection lost'));
 
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
-        'Failed to read workflow run after update: Connection lost'
+        'Failed to resume workflow run: Connection lost'
       );
     });
 

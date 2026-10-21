@@ -142,11 +142,7 @@ export type WorkflowResumeCursor =
 /** How long an unaccepted continuation, or a run released for unreadable source, waits before the next claim. */
 export const CONTINUATION_RETRY_MS = 60_000;
 
-/**
- * True when `run` is still at the exact occurrence `cursor` names. Every store's resume
- * claim and continuation deferral judge this one way, so a host that read an older wait,
- * schedule or answer changes nothing.
- */
+/** Resume claims and deferrals share this cursor check, so an older occurrence changes nothing. */
 export function resumeCursorMatches(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
   cursor: WorkflowResumeCursor
@@ -887,13 +883,17 @@ export interface IWorkflowStore
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
   /**
-   * A resume of a run admitted through a resource start takes a slot or throws
-   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
-   * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
-   * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
-   * while the host retries (`resumeRefusal`).
+   * Resource resumes take a slot or throw `WorkflowResourceBusyError`; ready paused refusals
+   * record their first `CAPACITY_WAIT_METADATA_KEY` (`resourceResumeBlocker`, `resumeRefusal`).
+   * Preparation runs once after committed admission, outside store exclusion. On rejection,
+   * undo only that claim's transition, events and newly acquired slot, retaining unrelated
+   * metadata. Surface setup/undo failures; never restore over a successor or terminal state.
    */
-  resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
+  resumeWorkflowRun(
+    id: string,
+    cursor?: WorkflowResumeCursor,
+    prepare?: (admitted: WorkflowRun) => Promise<void>
+  ): Promise<WorkflowRun>;
   /**
    * Give back the resource slot of a run admitted through a resource start, while it is
    * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once

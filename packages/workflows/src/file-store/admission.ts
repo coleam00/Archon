@@ -103,7 +103,7 @@ interface AdmissionTransaction {
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
-  resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
+  resume(run: WorkflowRun): Promise<{ blocker: ResourceBlocker | null; acquired: boolean }>;
   /** Remove the run holder of an admitted run; whether one was removed. */
   release(id: string): Promise<boolean>;
 }
@@ -412,12 +412,14 @@ export function createAdmissionTransaction(
       (await slot(row.resource)).holders.some(h => h.kind === 'run' && h.id === id)
     );
   }
-  async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
+  async function resume(
+    run: WorkflowRun
+  ): Promise<{ blocker: ResourceBlocker | null; acquired: boolean }> {
     const row = await request(run.id);
     if (row?.status !== 'admitted') {
       if (await hasSlotMembership(run.id))
         throw new Error(`Run '${run.id}' has slot membership but no matching admitted request`);
-      return null;
+      return { blocker: null, acquired: false };
     }
     if (row.id !== run.id || row.launch.run.id !== run.id)
       throw new Error(`Admitted resource request '${run.id}' does not identify the resumed run`);
@@ -431,10 +433,10 @@ export function createAdmissionTransaction(
       ...run,
       status: run.status,
     });
-    if (blocker) return blocker;
-    if (!resource.holders.some(h => h.kind === 'run' && h.id === run.id))
-      resource.holders.push({ kind: 'run', id: run.id });
-    return null;
+    if (blocker) return { blocker, acquired: false };
+    const acquired = !resource.holders.some(h => h.kind === 'run' && h.id === run.id);
+    if (acquired) resource.holders.push({ kind: 'run', id: run.id });
+    return { blocker: null, acquired };
   }
   async function release(id: string): Promise<boolean> {
     const row = await request(id);
