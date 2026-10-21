@@ -23,6 +23,7 @@ import {
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { resolveRunExecutionMode } from './container-context';
 
 function rejectOptions(
   options: ExecuteWorkflowOptions | undefined,
@@ -83,7 +84,16 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       ? async (run: WorkflowResumeInput['run']): Promise<void> => {
           const prepared = await prepare(run);
           rejectOptions(prepared.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
-          context = { cwd: prepared.cwd, options: { ...input.options, ...prepared.options } };
+          const options = { ...input.options, ...prepared.options };
+          if (
+            prepared.options &&
+            ('execContext' in prepared.options || 'container' in prepared.options)
+          ) {
+            options.execContext = prepared.options.execContext;
+            options.container = prepared.options.container;
+          }
+          resolveRunExecutionMode(options.execContext, options.container, run.metadata);
+          context = { cwd: prepared.cwd, options };
         }
       : undefined;
     const hydrated = prepareExecution

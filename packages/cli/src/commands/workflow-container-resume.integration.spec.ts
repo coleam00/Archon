@@ -347,6 +347,74 @@ test.each([false, true])(
   }
 );
 
+test.each(['execContext', 'container', 'both'] as const)(
+  'preparation replaces container isolation as a unit (%s)',
+  async field => {
+    await fixture(async f => {
+      const candidate = await f.paused();
+      const events = await f.store.listWorkflowEvents(candidate.id);
+      const container = {
+        envId: f.envId,
+        writeBack: 'auto' as const,
+        backend: {
+          suspend: f.suspend,
+          prepareSuspend: async () => async () => undefined,
+          finalize: async () => ({ requiresApproval: false }),
+          applyChanges: f.apply,
+          discardChanges: f.discard,
+        },
+      };
+      const pending = f.host.engine.resume({
+        platform: new CLIAdapter(),
+        conversationId: 'resume-proof',
+        cwd: f.cwd,
+        userMessage: '',
+        run: candidate,
+        legacyWorkflow: makeTestResolvedWorkflow({
+          name: 'resume',
+          nodes: [{ id: 'second', bash: 'echo second' }],
+        }),
+        options: {
+          execContext: { kind: 'container', containerId: 'old-container' },
+          container,
+        },
+        prepareExecution: async () => ({
+          cwd: f.cwd,
+          options: {
+            ...(field !== 'container'
+              ? { execContext: { kind: 'container' as const, containerId: 'restarted' } }
+              : {}),
+            ...(field !== 'execContext' ? { container } : {}),
+          },
+        }),
+      });
+      if (field === 'both') {
+        const admission = await pending;
+        if (!admission.accepted) throw new Error('Expected admission');
+        expect(await admission.settled).toMatchObject({ success: true });
+        expect(f.execute).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(
+          pending.then(async admission => {
+            if (admission.accepted) await admission.settled;
+            return admission;
+          })
+        ).rejects.toThrow(
+          field === 'execContext'
+            ? 'Container execution requires a container backend context'
+            : 'Container backend requires a container execution context'
+        );
+        expect(await f.store.getWorkflowRun(candidate.id)).toEqual(candidate);
+        expect(await f.store.listWorkflowEvents(candidate.id)).toEqual(events);
+        expect(f.execute).not.toHaveBeenCalled();
+      }
+      expect(f.apply).not.toHaveBeenCalled();
+      expect(f.discard).not.toHaveBeenCalled();
+      expect(f.suspend).not.toHaveBeenCalled();
+    });
+  }
+);
+
 for (const stage of ['notice', 'announcement', 'subscription', 'lease'] as const) {
   test.each(['SIGINT', 'SIGTERM'] as const)(
     `fresh container cleanup during ${stage} on %s`,
