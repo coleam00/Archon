@@ -152,8 +152,8 @@ result without starting delivery.
 
 ## Public writes belong to a script
 
-An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
+An agent judges and authors; one node owns the public writes and
+proves they landed. `publish-pr` pushes the branch and opens or reuses the pull
 request; on a pull request the run continues it pushes and opens nothing, and
 `prepare` writes no body for it when the caller named the PR or selected no branch. If the caller
 selected a branch without naming a PR, prepare writes a body even if it found an
@@ -162,7 +162,11 @@ used only when opening a PR. In delivery, content the work requires in the
 description is written during the round that prepared it, before that round's
 review reads the pull request: `prepare` copies it to `pr-description.md`, and
 `publish-pr` writes it between `archon-delivery-description` markers, keeps the
-rest of the description as it is, and reads it back. `update-pr-body` corrects the
+rest of the description as it is, and reads it back. Markers in Markdown code
+examples are literal text; raw markers are reserved for the managed section and
+are refused in prepared content before pushing. If creation succeeds but a later
+description edit fails, the failure report still names the created PR from its
+verified creation record. `update-pr-body` corrects the
 description's stale claims and links the issue once the rounds end. A standalone
 `archon-pr` leaves a continued pull request's description as its author left it:
 its `publish_description` input defaults off. `publish-review` upserts the one marked review
@@ -184,8 +188,9 @@ head that was left behind before it judges anything, ending `other` if it cannot
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
 draft around its CI wait. The last two act through the source the `forge` node
-certified, bound to them as a typed input. No script reads an
-agent-written file to find out what to write.
+certified, bound to them as a typed input. PR publication reads the agent-authored
+`pr-body.md` and `pr-description.md` content through certified artifact pointers;
+the publisher owns the writes and verifies the description edit.
 
 Which remote holds a repository is decided by its configured URL, never by the
 remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork

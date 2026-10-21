@@ -1,6 +1,6 @@
 # Prepare the Pull Request
 
-Prepare a clear, reviewer-friendly pull request for the committed work on the current branch. You never modify source files, and you never push, create, edit, or comment on the pull request yourself: your only writes are the body file and the description file below. The node that follows pushes the branch and performs the one public write, through whichever forge source the run selected. You do not merge the base: a conflict with it is found by CI and resolved by the implementer.
+Prepare a clear, reviewer-friendly pull request for the committed work on the current branch. You never modify source files, and you never push, create, edit, or comment on the pull request yourself: your only writes are the body file and the description file below. The node that follows owns the branch push and PR writes, and verifies the description edit through whichever forge source the run selected. You do not merge the base: a conflict with it is found by CI and resolved by the implementer.
 
 Draft mode: **$INPUTS.draft** — `true` opens as a draft; anything else, ready for review. A pull request that already exists keeps the draft state its author gave it.
 
@@ -35,7 +35,7 @@ You do not look up whether this branch already has a pull request. The publishin
 - Never add AI attribution, generated-by footers, or robot emoji.
 - Write no body only when `existing` is a number and either the caller named a pull request or selected no branch. A named pull request means `$INPUTS.pull_request` is neither empty nor `null`; no selected branch means `$INPUTS.branch` is empty. In that case, the description stays as its author left it, apart from the section the last bullet below prepares, and inside delivery `update-pr-body` brings it up to date once the rounds end. Skip the rest of this section except the title and the description file below.
 - Otherwise, write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository — with your file-writing tool or a quoted heredoc, not by redirecting a command's output: a pipeline whose first command fails can leave the file empty and still exit 0. When the caller selected a branch without naming a pull request, write the body even if `existing` is a number: publish may need it to open a new pull request from that branch. It is published only when a new pull request opens. Then read the file back. It must hold the whole body, with the template's required sections. If you cannot produce that body, stop and report why; never declare the pointer below for a file you have not read back.
-- When the description section is `true` and the run's artifacts (normally `implementation.md`) carry content the work requires in the pull request's description — evidence, measurements, results — write that content, complete and not summarized, to `$ARTIFACTS_DIR/pr-description.md` with your file-writing tool, then read it back. Never put it in `pr-body.md` as well: the publishing node places it in its own marked section of the description, on a pull request this run opens or continues, and leaves the rest of the description as it is. Otherwise write no such file.
+- When the description section is `true` and the run's artifacts (normally `implementation.md`) carry content the work requires in the pull request's description — evidence, measurements, results — write that content, complete and not summarized, to `$ARTIFACTS_DIR/pr-description.md` with your file-writing tool, then read it back. Never put it in `pr-body.md` as well: the publishing node places it in its own marked section of the description, on a pull request this run opens or continues, and leaves the rest of the description as it is. Raw delivery markers are reserved; put literal marker examples in Markdown code. Otherwise write no such file.
 
 ## 4. Declare the target
 
@@ -48,5 +48,12 @@ You do not look up whether this branch already has a pull request. The publishin
 - `body`: `null` only when `existing` is a number and either the caller named a pull request or selected no branch, as in section 3; otherwise `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body.md"}`, copied exactly.
 - `description`: `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-description.md"}`, copied exactly, when you wrote and read back that file; otherwise `null`.
 - `summary`: the target in one sentence.
+
+Before declaring, check every required field, including `description`. Writing
+`pr-description.md` without its non-null pointer does not publish anything. For a
+continued PR, `body: null` skips only the opening body; it never skips required
+description content. When the work requires live publication evidence, include
+the tested commit and results in that content. The publisher performs the live
+write and read-back before review judges it.
 
 Declare no credential and no raw remote URL.
