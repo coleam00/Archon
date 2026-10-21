@@ -159,10 +159,21 @@ export function describeSqlStatusReadConformance(
             ]);
           } else {
             const message = `Unsupported workflow run status for run ${runId}: ${JSON.stringify(status)}`;
-            await expect(store.getResourceStartRequest(requestId)).rejects.toThrow(message);
+            const read = store.getResourceStartRequest(requestId);
+            await expect(read).rejects.toBeInstanceOf(WorkflowStatusReadError);
+            await expect(read).rejects.toMatchObject({
+              workflowRunId: runId,
+              storedStatus: status,
+              message,
+            });
             const queued = await store.listQueuedResourceStartsForHost('host');
             expect(queued).toHaveLength(1);
-            expect(queued[0]).toMatchObject({ id: requestId, error: { message } });
+            expect(queued[0]).toMatchObject({
+              id: requestId,
+              error: { workflowRunId: runId, storedStatus: status, message },
+            });
+            if (!queued[0] || !('error' in queued[0])) throw new Error('Expected inspection error');
+            expect(queued[0].error).toBeInstanceOf(WorkflowStatusReadError);
           }
           expect(await snapshot()).toEqual(before);
         }

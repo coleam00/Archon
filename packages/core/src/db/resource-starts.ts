@@ -39,6 +39,7 @@ import {
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
+import { WorkflowStatusReadError } from './workflow-run-reads';
 
 interface RequestRow {
   id: string;
@@ -410,18 +411,21 @@ export async function listPendingStartBindings(options: {
   return result.rows.map(inspectBinding);
 }
 
-function inspectJoinedRunStatus(runId: string, storedStatus: unknown) {
+function inspectJoinedRunStatus(runId: string, storedStatus: string | null) {
   if (storedStatus === null) return null;
   const status = workflowRunStatusSchema.safeParse(storedStatus);
   if (!status.success) {
-    throw new Error(
-      `Unsupported workflow run status for run ${runId}: ${JSON.stringify(storedStatus)}`
-    );
+    throw new WorkflowStatusReadError(runId, storedStatus);
   }
   return status.data;
 }
 
-function inspectRequest(row: Record<string, unknown>): ResourceStartRequestInspection {
+interface RequestInspectionRow extends Record<string, unknown> {
+  run_status: string | null;
+  blocker_run_status: string | null;
+}
+
+function inspectRequest(row: RequestInspectionRow): ResourceStartRequestInspection {
   return {
     id: String(row.id),
     resource: String(row.resource_key),
@@ -448,7 +452,7 @@ const requestInspectionSelect = `SELECT r.*, own.status AS run_status, w.status 
 export async function getResourceStartRequest(
   id: string
 ): Promise<ResourceStartRequestInspection | null> {
-  const result = await getDatabase().query<Record<string, unknown>>(
+  const result = await getDatabase().query<RequestInspectionRow>(
     `${requestInspectionSelect} WHERE r.id = $1`,
     [id]
   );
@@ -458,7 +462,7 @@ export async function getResourceStartRequest(
 export async function listQueuedResourceStartsForHost(
   hostId: string
 ): Promise<QueuedResourceStartInspection[]> {
-  const result = await getDatabase().query<Record<string, unknown>>(
+  const result = await getDatabase().query<RequestInspectionRow>(
     `${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
       ORDER BY r.resource_key, r.queue_position`,
