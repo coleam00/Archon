@@ -493,6 +493,104 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   });
 });
 
+const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
+const START = '<!-- archon-delivery-description -->';
+const END = '<!-- /archon-delivery-description -->';
+
+/** publish-pr continuing pull request 42, with a prepared description section. */
+function publishSection(options: Parameters<typeof publishPr>[0] & { live?: string; allowed?: boolean } = {}) {
+  const { live = 'Written by hand.', allowed = true, ...rest } = options;
+  return publishPr({
+    target: { existing: 42 },
+    prepareBody: false,
+    ...rest,
+    gh: { ...rest.gh, pr: { headRefName: 'feature', body: live, ...rest.gh?.pr } },
+    inputs: {
+      INPUTS_DESCRIPTION: JSON.stringify(DESCRIPTION),
+      ...(allowed ? { INPUTS_PUBLISH_DESCRIPTION: 'true' } : {}),
+      ...rest.inputs,
+    },
+    artifacts: { [DESCRIPTION.path]: '| case | ms |\n| a | 12 |\n', ...rest.artifacts },
+  });
+}
+
+describe('publish-pr writes the description section a delivery round prepared', () => {
+  it('appends the section to a hand-written description and reads it back', () => {
+    const result = publishSection();
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
+    expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`]);
+  });
+
+  it('replaces only the content between its markers', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\nold\n${END}\n\nAfter.` });
+    expect(result.code).toBe(0);
+    expect(result.bodies).toEqual([`Before.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n\nAfter.`]);
+  });
+
+  it('writes nothing when the section is already current', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n` });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
+  });
+
+  it('writes through the plugin, never gh, on the forge source', () => {
+    const result = publishSection({
+      source: 'forge',
+      forgeAt: head => {
+        const view = forgeOperation('pr.view', {
+          pr: forgePrRecord({ head_revision: head }),
+          title: 'A title',
+          body: 'Written by hand.',
+        });
+        return {
+          kind: 'fake',
+          response: [
+            view,
+            view,
+            view,
+            forgeOperation('pr.edit-body', {
+              target: PR,
+              outcome: 'applied',
+              changed: true,
+              pr: forgePrRecord({ head_revision: head }),
+              bodyDigest: 'digest',
+            }),
+          ],
+        };
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge[3]).toContain('forge pr.edit-body --json --data-file');
+    expect(JSON.parse(result.forgeRequests[3])).toEqual({
+      ref: { repo: PR.repo, number: 42 },
+      body: `Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`,
+    });
+  });
+
+  it('refuses a prepared section before pushing when the caller did not allow one', () => {
+    const result = publishSection({ allowed: false });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller did not allow publishing one');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('refuses rather than guessing at an unpaired marker', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\nold` });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('unpaired or repeated archon-delivery-description marker');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('fails when the written description does not read back', () => {
+    const result = publishSection({ gh: { writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('does not read back the written description');
+  });
+});
+
 /** The commit the `upstream` remote holds for a branch, or empty when it has none. */
 function remoteHead(cwd: string, branch: string): string {
   const remote = spawnSync('git', ['ls-remote', 'upstream', `refs/heads/${branch}`], { cwd, encoding: 'utf8' });

@@ -269,6 +269,35 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
 }
 
 /**
+ * Replace a pull request's whole description and return the record read back from
+ * the forge. Neither source has a conditional body write, so an edit saved between
+ * the caller's read and this write is lost.
+ */
+export function editPrBody(ref: QualifiedPr, body: string, source: ForgeSource): PrRecord {
+  if (source === 'forge') {
+    const value = forgeResult('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body });
+    return parsePrRecord(value.pr);
+  }
+  const directory = mkdtempSync(join(tmpdir(), 'archon-pr-body-'));
+  let written: Ran;
+  try {
+    const path = join(directory, 'body.md');
+    writeFileSync(path, body, { mode: 0o600 });
+    written = gh('pr', 'edit', String(ref.number), '--repo', ghRepo(ref.repo), '--body-file', path);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  if (!written.ok) throw new Error(`gh pr edit ${String(ref.number)} failed: ${written.stderr}`);
+  const view = viewPr(ref, source);
+  if (view.body !== body) {
+    throw new Error(
+      `pull request ${String(ref.number)} does not read back the written description; it may have been written`
+    );
+  }
+  return view.pr;
+}
+
+/**
  * Put an open pull request into draft (`draft: true`) or take it out of draft, and
  * return the record read back from the forge. A pull request already in the wanted
  * state is not written.

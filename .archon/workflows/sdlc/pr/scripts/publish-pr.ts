@@ -2,8 +2,10 @@
  * Push the branch, then publish the pull request and record its verified identity.
  *
  * The preceding nodes judged the target and the text and proved the merged tree; this
- * node owns the two writes and proves each landed, through whichever source the run
- * selected. The push comes first and refuses on any failure (./.shared/push.ts), so a
+ * node owns the two writes, the push and the pull request, and proves each landed,
+ * through whichever source the run selected. When its caller allows it, it also
+ * writes the description section the run prepared: between its own markers, keeping
+ * every other byte of the description, and read back like every other write. The push comes first and refuses on any failure (./.shared/push.ts), so a
  * pull request is never created for a head the remote does not have.
  *
  * Whether this work already has a pull request is decided here, not in a prompt: an
@@ -24,15 +26,19 @@
  * - INPUTS_TITLE: the title.
  * - INPUTS_BODY: the certified body pointer, or null; prepare writes none for a pull request it continues.
  * - INPUTS_DRAFT: `true` opens a draft.
+ * - INPUTS_DESCRIPTION: the certified description-section pointer, or null.
+ * - INPUTS_PUBLISH_DESCRIPTION: `true` lets the run write that section; anything else
+ *   refuses a declared one before pushing.
  */
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
   record,
+  type ForgeSource,
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
@@ -40,6 +46,67 @@ import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '.
 import { pushHead } from '../../.shared/push.ts';
 
 type Repo = QualifiedPr['repo'];
+
+const SECTION_START = '<!-- archon-delivery-description -->';
+const SECTION_END = '<!-- /archon-delivery-description -->';
+
+function occurrences(haystack: string, needle: string): number[] {
+  const found: number[] = [];
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) found.push(at);
+  return found;
+}
+
+/**
+ * The description with `section` between the delivery markers: replacing what lies
+ * between an existing pair, or appended as a new pair. Text outside the markers is
+ * never changed, and a marker that does not pair is refused rather than guessed at.
+ */
+function withDescriptionSection(live: string, section: string): string {
+  const block = `${SECTION_START}\n${section.trim()}\n${SECTION_END}`;
+  const starts = occurrences(live, SECTION_START);
+  const ends = occurrences(live, SECTION_END);
+  if (starts.length === 0 && ends.length === 0) {
+    return live.trim() === '' ? `${block}\n` : `${live.trimEnd()}\n\n${block}\n`;
+  }
+  const [start] = starts;
+  const [end] = ends;
+  if (starts.length !== 1 || ends.length !== 1 || start === undefined || end === undefined || end < start) {
+    throw new Error(
+      'the description has an unpaired or repeated archon-delivery-description marker; fix it by hand'
+    );
+  }
+  return live.slice(0, start) + block + live.slice(end + SECTION_END.length);
+}
+
+/** The prepared section's content, or undefined when prepare declared none. */
+function preparedSection(artifacts: string): string | undefined {
+  const pointer = record(nullableJson(process.env.INPUTS_DESCRIPTION));
+  if (pointer === undefined) return undefined;
+  if (trimmed(process.env.INPUTS_PUBLISH_DESCRIPTION) !== 'true') {
+    throw new Error('prepare declared a description section, but the caller did not allow publishing one');
+  }
+  if (
+    pointer.type !== 'archon_artifact' ||
+    pointer.run_id !== process.env.WORKFLOW_ID ||
+    pointer.path !== 'pr-description.md'
+  ) {
+    throw new Error('prepare must declare the pr-description.md artifact from this run');
+  }
+  const section = readFileSync(join(artifacts, pointer.path), 'utf8');
+  if (section.trim() === '') throw new Error('prepare declared an empty pr-description.md');
+  return section;
+}
+
+function applyDescription(pr: PrRecord, section: string, source: ForgeSource): void {
+  const ref = { repo: pr.repo, number: pr.number };
+  const live = viewPr(ref, source).body;
+  const body = withDescriptionSection(live, section);
+  if (body === live) {
+    note(`publish-pr: ${pr.url}'s description section is already current.`);
+    return;
+  }
+  editPrBody(ref, body, source);
+}
 
 /**
  * Read an existing pull request back until it reports the commit just pushed.
@@ -68,6 +135,20 @@ function publish(): PrRecord {
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
   const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
   const artifacts = artifactsDir();
+  const section = preparedSection(artifacts);
+  const pr = openOrContinue(source, repo, headRepo, existing, artifacts);
+  // The edit does not move the head, so the head-verified record stays the output.
+  if (section !== undefined) applyDescription(pr, section, source);
+  return pr;
+}
+
+function openOrContinue(
+  source: ForgeSource,
+  repo: Repo,
+  headRepo: Repo,
+  existing: number | null,
+  artifacts: string
+): PrRecord {
 
   const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;
   if (named !== null && existing !== named) {
@@ -92,7 +173,8 @@ function publish(): PrRecord {
       throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
     }
     const pushed = pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
-    // The run continues a named pull request: its draft state and description belong to its author.
+    // The run continues a named pull request: its draft state belongs to its author,
+    // and its description changes only by the section publish() applies when allowed.
     return awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
   }
 

@@ -154,13 +154,18 @@ result without starting delivery.
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request; on a pull request the run continues it only pushes, and `prepare` writes no
-body for it when the caller named the PR or selected no branch. If the caller
+request; on a pull request the run continues it pushes and opens nothing, and
+`prepare` writes no body for it when the caller named the PR or selected no branch. If the caller
 selected a branch without naming a PR, prepare writes a body even if it found an
 existing PR: publish may need to open one from the selected branch. That body is
-used only when opening a PR. The description of a continued pull request belongs to `update-pr-body`
-in delivery, which brings it up to date once the rounds end; a standalone `archon-pr`
-leaves it as its author left it. `publish-review` upserts the one marked review
+used only when opening a PR. In delivery, content the work requires in the
+description is written during the round that prepared it, before that round's
+review reads the pull request: `prepare` copies it to `pr-description.md`, and
+`publish-pr` writes it between `archon-delivery-description` markers, keeps the
+rest of the description as it is, and reads it back. `update-pr-body` corrects the
+description's stale claims and links the issue once the rounds end. A standalone
+`archon-pr` leaves a continued pull request's description as its author left it:
+its `publish_description` input defaults off. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
