@@ -1407,9 +1407,56 @@ test.each(
   }
 );
 
-test.each(['paused', 'failed'] as const)(
-  'historical %s resume drains independently of unreadable foreign membership',
-  async status => {
+test.each(
+  (['paused', 'failed'] as const).flatMap(status =>
+    (['admitted', 'holders'] as const).map(damage => ({ status, damage }))
+  )
+)(
+  'historical $status resume rejects surviving contradictory membership with malformed $damage',
+  async ({ status, damage }) => {
+    const { root, store, holder, queued, path, intact, slotPath } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'resource-mismatch'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    if (status === 'failed')
+      await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+      }));
+    const slot = JSON.parse(await readFile(slotPath, 'utf8'));
+    const damagedSlot = JSON.stringify({
+      ...slot,
+      admitted: [holder.launch.run.id],
+      holders: [{ kind: 'run', id: holder.launch.run.id }],
+      [damage]: 42,
+    });
+    await writeFile(slotPath, damagedSlot);
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    const request = await readFile(path, 'utf8');
+    await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
+      message: `Invalid resource slot membership 'resource/slots/${createHash('sha256').update(holder.resource).digest('hex')}.json'`,
+      cause: expect.any(ZodError),
+    });
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    expect(await readFile(slotPath, 'utf8')).toBe(damagedSlot);
+    expect(await readFile(path, 'utf8')).toBe(request);
+    expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe(status);
+    await writeFile(slotPath, JSON.stringify(slot));
+    await writeFile(path, JSON.stringify(intact));
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+  }
+);
+
+test.each(
+  (['paused', 'failed'] as const).flatMap(status =>
+    (['admitted', 'holders', 'json'] as const).map(damage => ({ status, damage }))
+  )
+)(
+  'historical $status resume drains independently of unreadable foreign $damage membership',
+  async ({ status, damage }) => {
     const { root, store, holder, queued } = await releasedHolderFixture(
       'released-before-upgrade',
       'intact'
@@ -1428,11 +1475,13 @@ test.each(['paused', 'failed'] as const)(
       'resource/slots',
       `${createHash('sha256').update('foreign').digest('hex')}.json`
     );
-    await writeFile(path, '{');
+    const slot = JSON.parse(await readFile(path, 'utf8'));
+    const damagedSlot = damage === 'json' ? '{' : JSON.stringify({ ...slot, [damage]: 42 });
+    await writeFile(path, damagedSlot);
     expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
       status: 'running',
     });
-    expect(await readFile(path, 'utf8')).toBe('{');
+    expect(await readFile(path, 'utf8')).toBe(damagedSlot);
     expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('pending');
   }
 );

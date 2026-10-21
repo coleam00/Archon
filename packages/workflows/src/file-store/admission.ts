@@ -80,6 +80,16 @@ function disposition(row: Request): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
+function hasReadableSlotMembership(raw: unknown, id: string): boolean {
+  const admitted = slotMembershipSchema.pick({ admitted: true }).safeParse(raw);
+  const holders = slotMembershipSchema.pick({ holders: true }).safeParse(raw);
+  return (
+    (admitted.success && admitted.data.admitted.includes(id)) ||
+    (holders.success &&
+      holders.data.holders.some(holder => holder.kind === 'run' && holder.id === id))
+  );
+}
+
 interface BindingIdentity {
   receiptId: string;
   bindingId: string;
@@ -160,18 +170,14 @@ export function createAdmissionTransaction(
   ): Promise<boolean> {
     for (const path of await documentPaths(root, 'slots')) {
       if (path === pathFor('slots', resource)) continue;
+      let raw: unknown;
       try {
-        const row = await read(path, slotMembershipSchema);
-        if (
-          row?.admitted.includes(id) ||
-          row?.holders.some(holder => holder.kind === 'run' && holder.id === id)
-        )
-          return true;
+        raw = path in documents ? documents[path] : await readJson(join(root, path));
+        const row = raw === undefined ? null : slotMembershipSchema.parse(raw);
+        if (hasReadableSlotMembership(row, id)) return true;
       } catch (error) {
-        // Resume trusts its validated request when historical membership is absent.
-        // Readable contradictions still refuse it; occupancy reports unreadable foreign
-        // membership when that holder's checkout could affect the resume.
-        if (associationKnown) continue;
+        // A damaged component cannot erase contradictory membership in the other component.
+        if (associationKnown && !hasReadableSlotMembership(raw, id)) continue;
         throw new Error(`Invalid resource slot membership '${path}'`, { cause: error });
       }
     }
