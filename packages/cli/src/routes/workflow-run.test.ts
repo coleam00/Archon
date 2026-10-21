@@ -146,7 +146,25 @@ async function invoke(
   });
   write.mockRestore();
   expect(result.status, result.output).toBe(0);
-  return { run, exitCode, output: result.output, stdout, storedRun };
+  return { run, exitCode, output: result.output, stderr: result.stderr, stdout, storedRun };
+}
+
+for (const flag of ['config', 'config-from-run']) {
+  test.each([false, true])(`refuses --${flag} on run --resume (json: %s)`, async json => {
+    const result = await invoke({ resume: true, [flag]: 'unused-config' }, [repo], { json });
+    const message =
+      `Error: --${flag} cannot be used when continuing an existing workflow run. ` +
+      'The run keeps the config it started with.';
+    expect(result.exitCode).toBe(1);
+    expect(result.run).not.toHaveBeenCalled();
+    if (json) {
+      expect(JSON.parse(result.stdout)).toEqual({ ok: false, error: message });
+      expect(result.stderr).not.toContain(message);
+    } else {
+      expect(result.stdout).toBe('');
+      expect(result.stderr.endsWith(`${message}\n`)).toBe(true);
+    }
+  });
 }
 
 test.each(['acme/app', 'registered-id'])(
