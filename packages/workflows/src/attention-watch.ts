@@ -237,7 +237,8 @@ function terminalOutcome(
 
 /**
  * Start a watch: snapshot the open items in scope, emit `ready`, then follow the feed.
- * Resolves once the snapshot and `ready` were delivered. Rejects with
+ * Resolves once the snapshot and `ready` were accepted by the listener; an initial
+ * listener failure rejects startup with its cause before background watches start. Rejects with
  * `WorkflowEventCursorError` before any line when `after` cannot be read; a tail that
  * later cannot read its cursor ends the stream with an `error` line.
  */
@@ -354,10 +355,9 @@ export async function watchAttentionQueue(
   });
   for (const item of snapshot) {
     open.set(item.runId, item);
-    emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
+    await emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
   }
-  emit({ type: 'ready', cursor: start });
-  await chain;
+  await emit({ type: 'ready', cursor: start });
 
   // 2. Arm liveness for every run already running in scope.
   const armRunning = async (): Promise<void> => {
