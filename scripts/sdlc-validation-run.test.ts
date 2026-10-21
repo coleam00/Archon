@@ -6,6 +6,7 @@ import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
+import { inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
 import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
 import { getRunScratchDir } from '../packages/paths/src/run-paths';
 import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
@@ -242,11 +243,20 @@ describe("the gate's environment", () => {
     const f = checkout();
     mkdirSync(f.artifacts, { recursive: true });
     const seen = join(f.artifacts, 'seen.json');
+    const bindings = Object.fromEntries(
+      ['plan', 'base-branch', 'foo_bar', 'MixedCase', 'revision2'].map(name => [
+        inputEnvKey(name),
+        'bound value',
+      ])
+    );
     const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
       cwd: f.cwd,
       env: env(f.artifacts, {
+        ...bindings,
         WORKFLOW_ID: 'run-123',
         PROJECT_SETTING: 'kept',
+        INPUTS: 'project setting without the binding prefix',
+        PROJECT_INPUTS_SETTING: 'project setting containing the binding prefix',
         INPUTS_DISCOVERY: JSON.stringify({
           checks: [
             {
@@ -268,9 +278,12 @@ describe("the gate's environment", () => {
     expect(result.exitCode).toBe(0);
     const gate = JSON.parse(readFileSync(seen, 'utf8')) as Record<string, string>;
     expect(gate.PROJECT_SETTING).toBe('kept');
+    expect(gate.INPUTS).toBe('project setting without the binding prefix');
+    expect(gate.PROJECT_INPUTS_SETTING).toBe('project setting containing the binding prefix');
     expect(gate.WORKFLOW_ID).toBeUndefined();
     expect(gate.ARTIFACTS_DIR).toBeUndefined();
     expect(gate.INPUTS_DISCOVERY).toBeUndefined();
+    for (const key of Object.keys(bindings)) expect(gate[key]).toBeUndefined();
   });
 });
 
