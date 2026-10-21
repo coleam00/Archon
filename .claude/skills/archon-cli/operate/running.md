@@ -84,7 +84,17 @@ archon workflow run <workflow> --no-worktree "<message>"
 
 # First run for a registered non-git folder project (runs in place; no branch flags)
 archon workflow run <workflow> --folder "<message>"
+
+# From another clone of a registered repo: the run belongs to that project
+archon workflow run <workflow> --project <owner/repo> --branch <name> "<message>" --detach
 ```
+
+`--project <id|name>` takes a name or ID from `archon project list`. The run uses the
+project's identity, env, artifacts and logs, and never registers the clone you launch
+from. Workflow source and config come from the launch directory. A worktree is cut from
+the registered checkout, so a branch that exists only in your clone is not there; add
+`--no-worktree` to execute in the launch directory instead. It cannot be combined with
+`--folder`, `--base-branch`, `--resume` or `--dry-run`.
 
 Rules:
 
@@ -171,7 +181,7 @@ files nothing; `archon-discoveries` decides and files them (see `queues.md`).
 ```bash
 archon workflow runs --open                                 # find the prior run id
 archon workflow run docs --adopt <run-id> "Now also update the docs"  # new run on the adopted worktree/branch
-archon complete fix/issue-42                                # remove worktree + branches
+archon complete fix/issue-42                                # remove worktree + local branch; keeps the remote branch
 archon isolation cleanup                                    # prune stale environments (7d)
 archon isolation cleanup --merged                           # prune merged ones now
 ```
