@@ -163,9 +163,10 @@ and mid-run permission requests remain unsupported. A dynamic catalog is rejecte
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts
 an `onLog` callback. Log metadata only, never credentials, tokens, or message text.
 The process host logs a fixed `provider.plugin.log` event at the supplied severity
-through `provider.<id>`, using its own descriptor id. The only plugin value it forwards
-is `bindings.failureClass`, and only when it is one of the contract's failure classes;
-the host drops a record without one. Plugin `msg`, module identity, and all other
+through `provider.<id>`, using its own descriptor id. The only plugin values it forwards
+are `bindings.failureClass`, when it is one of the contract's failure classes, and
+`bindings.lifecycle`, when it is one of the contract's lifecycle events
+(`providerLifecycleEventSchema`); the host drops a record with neither. Plugin `msg`, module identity, and all other
 bindings are withheld: any plugin-chosen string, even one that looks like a machine
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin

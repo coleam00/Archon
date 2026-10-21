@@ -12,6 +12,7 @@ import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
+import type { ProviderLifecycleEvent } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -277,7 +278,13 @@ export class AppServerConnection {
     if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
     if (!(await this.exitsWithin(TERM_EXIT_GRACE_MS))) {
-      getLog().warn({ pid: this.child.pid }, 'codex.app_server_ignored_sigterm');
+      getLog().warn(
+        {
+          pid: this.child.pid,
+          lifecycle: 'process_ignored_sigterm' satisfies ProviderLifecycleEvent,
+        },
+        'codex.app_server_ignored_sigterm'
+      );
     }
     return this.endedWith;
   }

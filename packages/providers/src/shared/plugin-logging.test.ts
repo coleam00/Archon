@@ -23,9 +23,11 @@ test('RPC logging redirects existing loggers and strips SDK payloads, credential
       count: 2,
       resultReported: false,
       failureClass: 'auth',
+      lifecycle: 'process_ignored_sigterm',
     },
     'provider.fixture_failed'
   );
+  logger.warn({ lifecycle: 'credential-secret' }, 'provider.fixture_warned');
   await Promise.resolve();
   expect(records).toEqual([
     {
@@ -36,7 +38,9 @@ test('RPC logging redirects existing loggers and strips SDK payloads, credential
         count: 2,
         resultReported: false,
         failureClass: 'auth',
+        lifecycle: 'process_ignored_sigterm',
       },
     },
+    { level: 'warn', msg: 'provider.fixture_warned', bindings: { module: 'provider.fixture' } },
   ]);
 });

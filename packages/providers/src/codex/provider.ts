@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
-import type { CredentialStatus, ProviderDiagnostics } from '@archon/provider-contract';
+import type {
+  CredentialStatus,
+  ProviderDiagnostics,
+  ProviderLifecycleEvent,
+} from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -512,7 +516,15 @@ export class CodexProvider implements IAgentProvider {
     await connection.finishToolCalls();
     const end = await connection.shutdown(this.shutdownGraceMs);
     if (end?.kind === 'exited' && end.code === 0 && end.signal === null) return true;
-    if (end) getLog().error({ err: connection.closedError(end) }, 'codex.app_server_abnormal_exit');
+    if (end) {
+      getLog().error(
+        {
+          err: connection.closedError(end),
+          lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
+        },
+        'codex.app_server_abnormal_exit'
+      );
+    }
     return false;
   }
 
