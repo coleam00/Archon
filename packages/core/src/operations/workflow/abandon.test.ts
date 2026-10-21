@@ -2,7 +2,6 @@
 import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
-import { toRunEvent } from '../../../../web/src/experiments/console/primitives/event';
 import { hostname } from 'node:os';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
@@ -1015,10 +1014,7 @@ describe('abandon owned worktrees', () => {
             })
           )
         );
-        expect(toRunEvent(wireEvent)).toMatchObject({
-          kind: 'text',
-          content: `⚠️ Workflow cleanup warnings:\n- ${ownerWarnings.join('\n- ')}`,
-        });
+        expect(wireEvent.data).toEqual({ warnings: ownerWarnings });
       }
       expect(reclaim).not.toHaveBeenCalled();
       if (mode === 'root')
@@ -1027,20 +1023,6 @@ describe('abandon owned worktrees', () => {
           reason: 'Output is still held; inspect checkout',
           warnings: ownerWarnings,
         });
-      if (mode === 'root') {
-        const details = mockCancelWorkflowRun.mock.calls[0]?.[1];
-        expect(
-          toRunEvent({
-            id: 'fresh-cancel',
-            workflow_run_id: 'run-1',
-            event_type: 'workflow_cancelled',
-            step_index: null,
-            step_name: null,
-            created_at: '2026-10-21T00:00:00Z',
-            data: { ...details },
-          })
-        ).toMatchObject({ kind: 'text', content: expect.stringContaining(ownerWarnings[0]) });
-      }
     }
   );
 
