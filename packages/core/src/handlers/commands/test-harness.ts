@@ -337,6 +337,7 @@ mock.module('../../db/workflows', () => ({
 }));
 
 mock.module('../../db/workflow-events', () => ({
+  listWorkflowEvents: mock<typeof WorkflowEventDb.listWorkflowEvents>(async () => []),
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
 

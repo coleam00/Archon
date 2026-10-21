@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll, mock } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
@@ -241,6 +241,18 @@ describe('CommandHandler', () => {
             mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
             mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
             mockRequestDetachedRunStop.mockClear();
+            const eventDb = await import('../../db/workflow-events');
+            (eventDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+              {
+                id: 'completed-command',
+                created_at: new Date().toISOString(),
+                step_index: null,
+                workflow_run_id: runId,
+                step_name: 'completed',
+                event_type: 'node_completed',
+                data: { type: 'bash' },
+              },
+            ]);
 
             const result = await handleCommand(
               { ...conversationWithCodebase, codebase_id: codebaseId },
@@ -249,10 +261,11 @@ describe('CommandHandler', () => {
             );
 
             expect(result.success).toBe(true);
-            expect(result.message).toBe('Cancelled workflow: `test-workflow`');
-            expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
-              cancel_reason: 'operator',
-            });
+            expect(result.message).toContain('Cancelled workflow: `test-workflow`');
+            expect(result.message).toContain('untracked background work');
+            expect(mockCancelWorkflowRun.mock.calls.at(-1)?.[1]?.warnings).toEqual([
+              expect.stringContaining('untracked background work'),
+            ]);
             expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
           } finally {
             await owner.close();
