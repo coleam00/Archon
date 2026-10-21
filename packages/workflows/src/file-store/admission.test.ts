@@ -672,6 +672,20 @@ test.each([
 
 const occupancyUnrelatedFields = ['hostId', 'id', 'overlap', 'blocker', 'position'] as const;
 
+function damagedHolderRequest(intact: Record<string, unknown>, corruption: string): string {
+  const row = structuredClone(intact);
+  for (const field of occupancyUnrelatedFields) {
+    if (corruption === `missing-${field}`) delete row[field];
+    if (corruption === `invalid-${field}`) row[field] = {};
+  }
+  if (corruption === 'missing-resource') delete row.resource;
+  if (corruption === 'invalid-resource') row.resource = 42;
+  if (corruption === 'resource-mismatch') row.resource = 'wrong-resource';
+  if (corruption === 'missing-status') delete row.status;
+  if (corruption === 'invalid-status') row.status = 'unsupported';
+  return corruption === 'json' ? '{' : JSON.stringify(corruption === 'null' ? null : row);
+}
+
 async function releasedHolderFixture(
   membership: 'retained' | 'upgrade-before-release' | 'released-before-upgrade',
   corruption: string
@@ -730,17 +744,7 @@ async function releasedHolderFixture(
     `${createHash('sha256').update(holder.launch.run.id).digest('hex')}.json`
   );
   const intact = JSON.parse(await readFile(path, 'utf8'));
-  const row = structuredClone(intact);
-  for (const field of occupancyUnrelatedFields) {
-    if (corruption === `missing-${field}`) delete row[field];
-    if (corruption === `invalid-${field}`) row[field] = {};
-  }
-  if (corruption === 'missing-resource') delete row.resource;
-  if (corruption === 'invalid-resource') row.resource = 42;
-  if (corruption === 'resource-mismatch') row.resource = 'wrong-resource';
-  if (corruption === 'missing-status') delete row.status;
-  if (corruption === 'invalid-status') row.status = 'unsupported';
-  const damaged = corruption === 'json' ? '{' : JSON.stringify(corruption === 'null' ? null : row);
+  const damaged = damagedHolderRequest(intact, corruption);
   await writeFile(path, damaged);
   store = await createFileWorkflowStore({ root });
   const unknownMembership = membership === 'released-before-upgrade';
