@@ -887,11 +887,11 @@ export interface IWorkflowStore
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
   /**
-   * A resume of a run admitted through a resource start takes a slot or throws
-   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
-   * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
-   * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
-   * while the host retries (`resumeRefusal`).
+   * Refuse a retired managed checkout before admission or mutation; preserve state and audit,
+   * name the checkout and request a fresh run. Resource starts take a slot or throw
+   * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run ready to continue
+   * (answered, due, signaled or claimed with a `cursor`) records its first capacity refusal
+   * (`CAPACITY_WAIT_METADATA_KEY`) before throwing, preserving its place during retries (`resumeRefusal`).
    */
   resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
   /**

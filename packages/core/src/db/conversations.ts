@@ -1,3 +1,4 @@
+import { lockCheckoutOwnership, assertCheckoutAvailable } from './checkout-ownership';
 import { noDefaultProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import type { UpdateConversationInput } from '../schemas/conversation';
@@ -175,10 +176,19 @@ export async function updateConversation(
   fields.push(`updated_at = ${dialect.now()}`);
   values.push(id);
 
-  const result = await pool.query(
-    `UPDATE remote_agent_conversations SET ${fields.join(', ')} WHERE id = $${String(i)}`,
-    values
-  );
+  const sql = `UPDATE remote_agent_conversations SET ${fields.join(', ')} WHERE id = $${String(i)}`;
+  const result = updates.isolation_env_id
+    ? await getDatabase().withTransaction(async query => {
+        await lockCheckoutOwnership(query);
+        await assertCheckoutAvailable(query, {
+          codebase_id: null,
+          working_path: null,
+          conversation_id: null,
+          metadata: { isolation_env_id: updates.isolation_env_id },
+        });
+        return query(sql, values);
+      })
+    : await pool.query(sql, values);
 
   if (result.rowCount === 0) {
     getLog().error({ conversationId: id, fields, updates }, 'db.conversation_update_not_found');

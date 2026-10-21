@@ -125,13 +125,13 @@ test('file host records persist across hosts and released worktrees fence pendin
     metadata: { worktree_creation_id: 'proof', worktree_branch_created: true, adopted: true },
   });
   expect(await reopened.records.isolation.countActiveByCodebase(codebase.id)).toBe(1);
-  await reopened.records.isolation.updateStatus(env.id, 'destroyed');
   const run = await reopened.deps.store.createWorkflowRun({
     workflow_name: 'test',
     user_message: '',
     codebase_id: codebase.id,
     working_path: env.working_path,
   });
+  await reopened.records.isolation.updateStatus(env.id, 'destroyed');
   expect(await reopened.deps.store.claimPendingWorkflowRun(run.id)).toBeNull();
   const recreated = await reopened.records.isolation.create({
     ...env,

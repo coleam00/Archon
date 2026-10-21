@@ -474,7 +474,8 @@ export function createAdmissionTransaction(
 
 export function createFileAdmissionStore(
   root: string,
-  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts: (() => Promise<readonly ReusableCheckout[]>) | undefined,
+  assertCheckoutAvailable: (run: WorkflowRun) => Promise<void>
 ): IResourceStartStore {
   type Transaction = ReturnType<typeof createAdmissionTransaction>;
   const write = <T>(
@@ -483,6 +484,7 @@ export function createFileAdmissionStore(
     commit(root, [], async runs => {
       const tx = createAdmissionTransaction(root, listReusableCheckouts);
       const result = await call(tx, runs);
+      for (const run of runs.values()) await assertCheckoutAvailable(run);
       return {
         result,
         changes: {

@@ -1,6 +1,8 @@
 /**
  * Database operations for isolation environments
  */
+import { lockCheckoutOwnership } from './checkout-ownership';
+import type { FailedRunRelease } from '@archon/isolation';
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
@@ -10,6 +12,7 @@ import {
 import {
   WORKTREE_REGISTRATION_ID,
   WorktreeRegistrationChangedError,
+  WorktreeInUseError,
 } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
@@ -21,6 +24,8 @@ import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
+
+export type { FailedRunRelease } from '@archon/isolation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -336,17 +341,28 @@ export async function markWorktreeDestroyed(
  */
 export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
   observed,
-  remove
+  remove,
+  options
 ) => {
   const predicate = observedRegistrationPredicate(observed, 2);
   return getDatabase().withTransaction(
     async query => {
+      await lockCheckoutOwnership(query);
       const locked = await query(
         `UPDATE remote_agent_isolation_environments SET status = status
        WHERE id = $1 AND status = 'active'${predicate.sql}`,
         [observed.id, ...predicate.params]
       );
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
+      if (options?.runOwnership) {
+        const owner = await getLiveRunOwningEnv(
+          observed.id,
+          options.runOwnership.releaseFailed,
+          undefined,
+          query
+        );
+        if (owner) throw new WorktreeInUseError(observed.id, owner.id, owner.status);
+      }
       return remove(() => markWorktreeDestroyed(observed, query));
     },
     { retryOnBusy: 'first-statement' }
@@ -413,13 +429,6 @@ export function isSettleableRunStatus(status: string): boolean {
 }
 
 /**
- * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled (the branch merged or its PR closed), or once the run has been inactive
- * longer than the sweep's stale window. The run row itself is never touched.
- */
-export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
-
-/**
  * Find a workflow run that still owns an environment — the one signal that pins an
  * env for cleanup. Historical conversation rows are data, not locks: every
  * CLI-launched run leaves one behind, so counting references pinned every
@@ -438,7 +447,8 @@ export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays:
 export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
-  excludeRunId?: string
+  excludeRunId?: string,
+  query: typeof pool.query = pool.query.bind(pool)
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
@@ -473,7 +483,7 @@ export async function getLiveRunOwningEnv(
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
   const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
-  const result = await pool.query<{ id: string; status: string }>(
+  const result = await query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id

@@ -1,0 +1,106 @@
+import type { IWorkflowStore } from '@archon/workflows/store';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { getDatabaseType } from './connection';
+import type { TransactionQuery } from './resource-slots';
+import { normalizeMetadata } from './workflow-run-shared';
+
+/** Take before row locks: resource admission and local checkout retirement share this exclusion. */
+export async function lockCheckoutOwnership(query: TransactionQuery): Promise<void> {
+  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
+  // Even an empty write reserves SQLite's writer before any snapshot reads.
+  else await query('UPDATE remote_agent_isolation_environments SET status = status WHERE 1 = 0');
+}
+
+type CheckoutRun = Pick<
+  WorkflowRun,
+  'codebase_id' | 'working_path' | 'metadata' | 'conversation_id'
+>;
+
+export async function releasedCheckout(
+  query: TransactionQuery,
+  run: CheckoutRun
+): Promise<string | undefined> {
+  const owned = run.metadata.owned_worktree;
+  const ownedId = owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null;
+  const result = await query<{ working_path: string }>(
+    `SELECT e.working_path FROM remote_agent_isolation_environments e
+      WHERE e.provider = 'worktree'
+        AND ((e.codebase_id = $1 AND e.working_path = $2)
+          OR CAST(e.id AS TEXT) = $3 OR CAST(e.id AS TEXT) = $4
+          OR e.id = (SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $5))
+        AND NOT EXISTS (
+          SELECT 1 FROM remote_agent_isolation_environments active
+          WHERE active.provider = 'worktree' AND active.status = 'active'
+            AND active.codebase_id = e.codebase_id AND active.working_path = e.working_path
+        ) LIMIT 1`,
+    [
+      run.codebase_id,
+      run.working_path,
+      typeof run.metadata.isolation_env_id === 'string' ? run.metadata.isolation_env_id : null,
+      typeof ownedId === 'string' ? ownedId : null,
+      run.conversation_id,
+    ]
+  );
+  return result.rows[0]?.working_path;
+}
+
+export async function assertCheckoutAvailable(
+  query: TransactionQuery,
+  run: CheckoutRun
+): Promise<void> {
+  const path = await releasedCheckout(query, run);
+  if (path !== undefined) throw new Error(`Checkout '${path}' was released; start a fresh run.`);
+}
+
+export async function assertNewRunCheckoutAvailable(
+  query: TransactionQuery,
+  data: Parameters<IWorkflowStore['createWorkflowRun']>[0]
+): Promise<void> {
+  await assertCheckoutAvailable(query, {
+    codebase_id: data.codebase_id ?? null,
+    working_path: data.working_path ?? null,
+    metadata: data.metadata ?? {},
+    conversation_id: data.origin?.conversationId ?? null,
+  });
+}
+
+export async function readRunCheckout(query: TransactionQuery, id: string) {
+  const result = await query<
+    Omit<CheckoutRun, 'metadata'> & { status: WorkflowRun['status']; metadata: unknown }
+  >(
+    'SELECT codebase_id, working_path, metadata, conversation_id, status FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  const run = result.rows[0];
+  return run && { ...run, metadata: normalizeMetadata(run.metadata) };
+}
+
+export async function assertRunCheckoutAvailable(
+  query: TransactionQuery,
+  id: string
+): Promise<void> {
+  const run = await readRunCheckout(query, id);
+  if (run) await assertCheckoutAvailable(query, run);
+}
+
+function environmentReferences(metadata: Record<string, unknown>): readonly unknown[] {
+  const owned = metadata.owned_worktree;
+  return [
+    metadata.isolation_env_id,
+    owned && typeof owned === 'object' && 'envId' in owned ? owned.envId : null,
+  ];
+}
+
+export function introducesCheckout(prior: CheckoutRun | undefined, next: CheckoutRun): boolean {
+  const previous = environmentReferences(prior?.metadata ?? {});
+  return (
+    (next.working_path !== null && next.working_path !== prior?.working_path) ||
+    environmentReferences(next.metadata).some(
+      (id, index) => typeof id === 'string' && id !== previous[index]
+    )
+  );
+}
+
+export function associatesCheckout(metadata: Record<string, unknown> | undefined): boolean {
+  return metadata !== undefined && ('isolation_env_id' in metadata || 'owned_worktree' in metadata);
+}

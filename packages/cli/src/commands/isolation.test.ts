@@ -301,6 +301,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockRemoveEnvironment).toHaveBeenCalledTimes(1);
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: true,
+      runOwnership: false,
       deleteRemoteBranch: true,
     });
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
@@ -365,7 +366,7 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(
       { ...row, codebase_default_cwd },
-      { force: undefined, deleteRemoteBranch: true }
+      { force: undefined, runOwnership: {}, deleteRemoteBranch: true }
     );
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
   });
@@ -467,6 +468,7 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: true });
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: true,
+      runOwnership: false,
       deleteRemoteBranch: true,
     });
   });
@@ -538,6 +540,7 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: false,
+      runOwnership: {},
       deleteRemoteBranch: true,
     });
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
@@ -898,6 +901,7 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: false,
+      runOwnership: {},
       deleteRemoteBranch: true,
     });
     expect(consoleErrorSpy).not.toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -1005,6 +1009,7 @@ describe('isolationCompleteCommand', () => {
       expect(mockRemoveEnvironment).toHaveBeenCalledTimes(2);
       expect(mockRemoveEnvironment).toHaveBeenCalledWith(later, {
         force: false,
+        runOwnership: {},
         deleteRemoteBranch: true,
       });
       expect(consoleWarnSpy).toHaveBeenCalledWith(
@@ -1050,6 +1055,7 @@ describe('isolationCompleteCommand', () => {
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: true,
+      runOwnership: false,
       deleteRemoteBranch: true,
     });
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: dirty-branch');
@@ -1335,7 +1341,9 @@ describe('isolationCleanupCommand', () => {
       new WorktreeRegistrationChangedError(mockEnv.id)
     );
     expect(await cleanupRoute()).toBe(1);
-    expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function));
+    expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function), {
+      runOwnership: { releaseFailed: { kind: 'stale', staleDays: 7 } },
+    });
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('changed during cleanup'));

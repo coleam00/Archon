@@ -4,6 +4,13 @@
  * write-back claim, and deleting terminal runs. Re-exported from the
  * `./workflows` entry.
  */
+import {
+  lockCheckoutOwnership,
+  assertCheckoutAvailable,
+  readRunCheckout,
+  introducesCheckout,
+  associatesCheckout,
+} from './checkout-ownership';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 import {
@@ -150,10 +157,26 @@ export async function updateWorkflowRun(
   const idParam = `$${values.length}`;
 
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}`,
-      values
-    );
+    const sql = `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}`;
+    const acquires =
+      updates.working_path !== undefined ||
+      updates.status !== undefined ||
+      associatesCheckout(updates.metadata);
+    const result = acquires
+      ? await getDatabase().withTransaction(async query => {
+          await lockCheckoutOwnership(query);
+          const prior = await readRunCheckout(query, id);
+          const result = await query(sql, values);
+          const next = await readRunCheckout(query, id);
+          if (
+            next &&
+            (introducesCheckout(prior, next) ||
+              (updates.status !== undefined && updates.status !== prior?.status))
+          )
+            await assertCheckoutAvailable(query, next);
+          return result;
+        })
+      : await pool.query(sql, values);
     if (result.rowCount === 0) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_update_no_match');
       throw new Error(`Workflow run not found (id: ${id})`);
@@ -171,12 +194,21 @@ export async function updateWorkflowRunMetadataIfRunning(
   metadata: WorkflowRun['metadata']
 ): Promise<boolean> {
   validateWorkflowWaitMetadata(metadata);
-  const result = await pool.query(
-    `UPDATE remote_agent_workflow_runs
+  const sql = `UPDATE remote_agent_workflow_runs
      SET metadata = ${getDialect().jsonMerge('metadata', 2)}
-     WHERE id = $1 AND status = 'running'`,
-    [id, JSON.stringify(metadata)]
-  );
+     WHERE id = $1 AND status = 'running'`;
+  const values = [id, JSON.stringify(metadata)];
+  const result = associatesCheckout(metadata)
+    ? await getDatabase().withTransaction(async query => {
+        await lockCheckoutOwnership(query);
+        const prior = await readRunCheckout(query, id);
+        const result = await query(sql, values);
+        const next = await readRunCheckout(query, id);
+        if (result.rowCount && next && introducesCheckout(prior, next))
+          await assertCheckoutAvailable(query, next);
+        return result;
+      })
+    : await pool.query(sql, values);
   return (result.rowCount ?? 0) > 0;
 }
 

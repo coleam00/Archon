@@ -20,6 +20,9 @@ import type {
   WorktreeCreationEnvironment,
 } from './types';
 
+/** Failed resumable runs release only after settlement or their inactivity window; other owners still pin. */
+export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
+
 export interface IIsolationStore {
   getById(id: string): Promise<IsolationEnvironmentRow | null>;
   findActiveByWorkflow(
@@ -47,10 +50,14 @@ export interface IIsolationStore {
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
-  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  /**
+   * Exclude replacement and acquisition until removal ends; retire using the supplied callback.
+   * Opt into a final run-ownership veto with runOwnership; omission preserves explicit overrides.
+   */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
-    remove: (markDestroyed: () => Promise<void>) => Promise<T>
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>,
+    options?: { runOwnership?: { releaseFailed?: FailedRunRelease } }
   ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }

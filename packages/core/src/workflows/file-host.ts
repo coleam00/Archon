@@ -1,3 +1,5 @@
+import type { FailedRunRelease } from '@archon/isolation';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -19,6 +21,7 @@ import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
   WORKTREE_REGISTRATION_ID,
   WorktreeRegistrationChangedError,
+  WorktreeInUseError,
   sameWorktreeRegistration,
   type IsolationEnvironmentRow,
 } from '@archon/isolation/types';
@@ -41,6 +44,36 @@ import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
+function liveOwner(
+  runs: Iterable<WorkflowRun>,
+  env: IsolationEnvironmentRow,
+  release?: FailedRunRelease,
+  excludeRunId?: string
+): WorkflowRun | undefined {
+  return [...runs]
+    .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
+    .find(run => {
+      if (
+        run.id === excludeRunId ||
+        (isTerminalRunStatus(run.status) && !RESUMABLE_WORKFLOW_STATUSES.includes(run.status))
+      )
+        return false;
+      if (
+        release &&
+        isTerminalRunStatus(run.status) &&
+        RESUMABLE_WORKFLOW_STATUSES.includes(run.status)
+      ) {
+        if (release.kind === 'settled') return false;
+        const time = run.completed_at ?? run.last_activity_at ?? run.started_at;
+        if (time && time.getTime() < Date.now() - release.staleDays * 86_400_000) return false;
+      }
+      return (
+        run.metadata.isolation_env_id === env.id ||
+        worktreeReferenceSchema.safeParse(run.metadata.owned_worktree).data?.envId === env.id ||
+        (run.codebase_id === env.codebase_id && run.working_path === env.working_path)
+      );
+    });
+}
 const codebasesSchema = z.array(
   codebaseRowSchema.extend({
     created_at: z.coerce.date(),
@@ -293,12 +326,16 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           row.status = 'destroyed';
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
-      withWorktreeRegistration: (observed, remove) =>
-        commit(root, 'all', async () => {
+      withWorktreeRegistration: (observed, remove, options) =>
+        commit(root, 'all', async runs => {
           const rows = await environments();
           const row = rows.find(row => row.id === observed.id);
           if (!row || row.status !== 'active' || !sameWorktreeRegistration(row, observed)) {
             throw new WorktreeRegistrationChangedError(observed.id);
+          }
+          if (options?.runOwnership) {
+            const owner = liveOwner(runs.values(), row, options.runOwnership.releaseFailed);
+            if (owner) throw new WorktreeInUseError(row.id, owner.id, owner.status);
           }
           const result = await remove(async () => {
             row.status = 'destroyed';
@@ -330,36 +367,30 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           branch: row.workflow_id,
           workingPath: row.working_path,
         })),
-    isCheckoutReleased: async (run, path) => {
-      const matching = (await environments()).filter(
+    releasedCheckout: async run => {
+      const rows = (await environments()).filter(row => row.provider === 'worktree');
+      const ownedId = worktreeReferenceSchema.safeParse(run.metadata.owned_worktree).data?.envId;
+      return rows.find(
         row =>
-          row.provider === 'worktree' &&
-          row.codebase_id === run.codebase_id &&
-          row.working_path === (run.working_path ?? path)
-      );
-      return matching.length > 0 && matching.every(row => row.status !== 'active');
+          ((row.codebase_id === run.codebase_id && row.working_path === run.working_path) ||
+            row.id === run.metadata.isolation_env_id ||
+            row.id === ownedId) &&
+          !rows.some(
+            active =>
+              active.status === 'active' &&
+              active.codebase_id === row.codebase_id &&
+              active.working_path === row.working_path
+          )
+      )?.working_path;
     },
     getCodebaseEnvVars: async id =>
       (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
   });
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
-    getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
+    getLiveRunOwningEnv: async (id, release, excludeRunId) => {
       const env = await records.isolation.getById(id);
-      const runs = await listRuns(root);
-      return (
-        runs
-          .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-          .find(
-            row =>
-              row.id !== excludeRunId &&
-              (!isTerminalRunStatus(row.status) ||
-                RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-              (row.metadata.isolation_env_id === id ||
-                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
-          ) ?? null
-      );
+      return env ? (liveOwner(await listRuns(root), env, release, excludeRunId) ?? null) : null;
     },
   };
   const deps: ReturnType<typeof createWorkflowDeps> = {

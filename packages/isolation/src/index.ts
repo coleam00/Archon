@@ -49,6 +49,7 @@ export {
   readWorktreeCreationId,
   readWorktreeBranchCreated,
   WorktreeRegistrationChangedError,
+  WorktreeInUseError,
 } from './types';
 
 // --- Backend seam (folder projects) ---
@@ -63,7 +64,7 @@ export { dockerCli, dockerPreflight, extractDockerError } from './container/dock
 export type { DockerRunner, DockerExecOptions, DockerExecResult } from './container/docker-exec';
 
 // --- Store ---
-export type { IIsolationStore } from './store';
+export type { IIsolationStore, FailedRunRelease } from './store';
 export { recordWorktreeAdoption, registerWorktree } from './store';
 
 // --- Errors ---

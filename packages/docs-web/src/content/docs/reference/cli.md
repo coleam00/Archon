@@ -1121,7 +1121,7 @@ archon workflow reject <run-id> --json
 
 ### `workflow resume`
 
-Resume a failed or paused run by id. Nodes that completed in the earlier attempt are skipped.
+Resume a failed or paused run by id. Nodes that completed in the earlier attempt are skipped. If cleanup released the run's managed checkout, resume refuses before execution and preserves its state and audit. The error names the checkout; start a fresh run. Archon does not reconstruct released checkouts.
 
 ```bash
 archon workflow resume <run-id>

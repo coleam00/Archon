@@ -401,7 +401,8 @@ describe('CommandHandler', () => {
             );
             expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(
               featXEnv,
-              expect.any(Function)
+              expect.any(Function),
+              { runOwnership: {} }
             );
             expect(result.success).toBe(false);
             expect(result.message).toContain('changed during cleanup');

@@ -5,16 +5,28 @@ import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
 
+// Checkout exclusion and retired-registration decisions use real stores in checkout-ownership.integration.test.ts.
+const queryWithCheckout = (sql: string, params?: unknown[]) => {
+  if (
+    sql === 'SELECT pg_advisory_xact_lock(1797)' ||
+    sql.startsWith('SELECT e.working_path FROM remote_agent_isolation_environments e') ||
+    sql.startsWith(
+      'SELECT codebase_id, working_path, metadata, conversation_id, status FROM remote_agent_workflow_runs'
+    )
+  )
+    return Promise.resolve(createQueryResult([]));
+  return mockQuery(sql, params);
+};
+
 // Mock the connection module before importing the module under test.
-// `getDatabase().withTransaction` runs its callback against the SAME mockQuery,
-// so a transactional function's statements land in mockQuery.mock.calls in
-// order, exactly like the non-transactional ones.
+// Transactional state and event writes use the same mock as pooled writes.
 mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
   getDatabase: () => ({
-    withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
+    withTransaction: <T>(fn: (query: typeof queryWithCheckout) => Promise<T>): Promise<T> =>
+      fn(queryWithCheckout),
   }),
   getDialect: () => mockPostgresDialect,
   getDatabaseType: () => 'postgresql' as const,
