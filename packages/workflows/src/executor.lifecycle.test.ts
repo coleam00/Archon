@@ -26,7 +26,7 @@ import { noExecutorCanWrite } from './run-scratch';
 import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
-import { EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
+import { workflowRunStatusSchema, EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -167,7 +167,8 @@ it.each(['This is the workflow summary', undefined])(
   async summary => {
     mockExecuteDagWorkflow.mockResolvedValueOnce(summary);
     const result = await startWorkflow();
-    if (!result.success || 'paused' in result) throw new Error('Expected completed result');
+    if (!result.success || 'paused' in result || 'handedOff' in result)
+      throw new Error('Expected completed result');
     expect(result.summary).toBe(summary);
   }
 );
@@ -185,7 +186,7 @@ describe('paused exit', () => {
     },
   };
 
-  it.each(['running', 'paused'] as const)(
+  it.each([...workflowRunStatusSchema.options, null])(
     'does not finalize a successor that is %s after a container pause',
     async status => {
       mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
@@ -194,22 +195,31 @@ describe('paused exit', () => {
       }));
       const store = makeStore({
         getWorkflowRun: mock(async () =>
-          makeRun({
-            status,
-            metadata: {
-              approval: {
-                type: 'approval',
-                nodeId: 'review',
-                message: '',
-                pauseId: 'successor-pause',
-              },
-            },
-          })
+          status === null
+            ? null
+            : makeRun({
+                status,
+                metadata: {
+                  approval: {
+                    type: 'approval',
+                    nodeId: 'review',
+                    message: '',
+                    pauseId: 'successor-pause',
+                  },
+                },
+              })
         ),
         getWorkflowRunStatus: mock(async () => status),
         releasePausedRunSlot,
       });
-      expect(await run(store)).toMatchObject({ success: true, paused: true });
+      const result = await run(store);
+      expect(result).toMatchObject({
+        success: status !== 'failed' && status !== 'cancelled',
+        handedOff: true,
+        observedStatus: status,
+      });
+      expect(result).not.toHaveProperty('paused');
+      expect(result).not.toHaveProperty('waitCursor');
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
       expect(releasePausedRunSlot).not.toHaveBeenCalled();
@@ -236,7 +246,7 @@ describe('paused exit', () => {
       ),
     });
     const result = await run(store);
-    expect(result).toMatchObject({ success: true, paused: true });
+    expect(result).toMatchObject({ success: true, handedOff: true, observedStatus: 'paused' });
     expect(result).not.toHaveProperty('waitCursor');
     expect(store.releasePausedRunSlot).not.toHaveBeenCalled();
   });

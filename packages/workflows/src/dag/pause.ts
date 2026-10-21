@@ -3,14 +3,20 @@ import { randomUUID } from 'node:crypto';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { safeSendMessage } from '../platform-messages';
-import type { ApprovalContext, WorkflowWaitContext, WorkflowRunStatus } from '../schemas';
+import type {
+  ApprovalContext,
+  WorkflowWaitContext,
+  WorkflowRunStatus,
+  WorkflowExecutionResult,
+  WorkflowRun,
+} from '../schemas';
 import {
   isApprovalContext,
   isWorkflowWaitContext,
   type BodySessionCursorAncestry,
 } from '../schemas';
 import type { GatePauseEventInput } from '../store';
-import { WorkflowRunPauseConflictError } from '../store';
+import { executionClaim, WorkflowRunPauseConflictError } from '../store';
 import { getLog } from './log';
 import { type RunLayersContext } from './run-context';
 
@@ -20,6 +26,44 @@ export interface ContainerPauseReceipt {
     | { kind: 'gate'; context: ApprovalContext }
     | { kind: 'wait'; context: WorkflowWaitContext };
   postPublicationError?: { cause: unknown };
+}
+
+export function containerPauseHandoff(
+  currentRun: WorkflowRun | null,
+  executedRun: WorkflowRun,
+  receipt: ContainerPauseReceipt
+): Extract<WorkflowExecutionResult, { handedOff: true }> | undefined {
+  if (sameContainerPause(currentRun, executedRun, receipt)) return undefined;
+  const observedStatus = currentRun?.status ?? null;
+  if (observedStatus === 'failed' || observedStatus === 'cancelled') {
+    return {
+      success: false,
+      handedOff: true,
+      workflowRunId: executedRun.id,
+      observedStatus,
+      error: `Workflow ${observedStatus} after execution ownership changed`,
+    };
+  }
+  return { success: true, handedOff: true, workflowRunId: executedRun.id, observedStatus };
+}
+
+function sameContainerPause(
+  currentRun: WorkflowRun | null,
+  executedRun: WorkflowRun,
+  receipt: ContainerPauseReceipt
+): boolean {
+  if (
+    currentRun?.status !== 'paused' ||
+    executionClaim(currentRun.metadata) !== executionClaim(executedRun.metadata)
+  )
+    return false;
+  const { pause } = receipt;
+  if (pause.kind === 'gate') {
+    const current = currentRun.metadata.approval;
+    return isApprovalContext(current) && current.pauseId === pause.context.pauseId;
+  }
+  const current = currentRun.metadata.wait;
+  return isWorkflowWaitContext(current) && current.pauseId === pause.context.pauseId;
 }
 
 /** Shared by one DAG pass and its nested bodies; never persisted. */

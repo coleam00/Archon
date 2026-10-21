@@ -706,9 +706,8 @@ async function dispatchBackgroundWorkflowOwned(
           });
           await closeRunLiveOwner();
           // Surface workflow output to parent conversation as a result card
-          if ('paused' in result) {
-            // Paused workflows (approval gates) — no result card yet
-          } else if (result.success && result.summary) {
+          if ('handedOff' in result) return;
+          if ('summary' in result && result.summary) {
             try {
               await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
                 category: 'workflow_result',

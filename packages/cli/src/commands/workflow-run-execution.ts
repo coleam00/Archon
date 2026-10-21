@@ -24,7 +24,7 @@ interface RunExecution {
   result: RunResult | undefined;
   progress: WorkflowRunSubscription | undefined;
   /**
-   * Set once the settled run's container is kept (paused, or an un-applied write-back),
+   * Set once container ownership passes on (a pause, handoff, or un-applied write-back),
    * so a signal during the final progress drain does not destroy it.
    */
   containerPreserved: boolean;
@@ -365,7 +365,8 @@ function submitRun(
  * BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
  * can't orphan a privileged container+volume. A PAUSED run keeps its (already
  * suspended, by the engine) container + volume for resume — destroying it would
- * discard the overlay the resume needs. Every OTHER outcome (completed / failed /
+ * discard the overlay the resume needs. A handoff leaves teardown to the successor.
+ * Every OTHER outcome (completed / failed /
  * cancelled, or a pre-result throw) is terminal for this process → destroy. The
  * write-back apply already ran inside the engine before completion, so a
  * completed run's live-root changes are safe before this teardown removes the
@@ -380,7 +381,9 @@ async function settleRun(
   const { result } = execution;
   const store = launch.request.host.deps.store;
   const container = ownedContainer(launch.workspace);
-  const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
+  const keepContainer = Boolean(
+    result && ('handedOff' in result || (result.success && 'paused' in result && result.paused))
+  );
   // H2 — preserve the container+volume whenever the un-applied overlay is still the
   // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
   // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
@@ -391,14 +394,14 @@ async function settleRun(
   // Kept until the lookup below proves it may go: a signal mid-lookup must not
   // destroy an overlay that may be the only copy of the changes.
   execution.containerPreserved = true;
-  if (container && !runPaused && result?.workflowRunId) {
+  if (container && !keepContainer && result?.workflowRunId) {
     unresolvedWriteback = await readUnresolvedWriteback(
       store,
       result.workflowRunId,
       container.envId
     );
   }
-  execution.containerPreserved = runPaused || unresolvedWriteback;
+  execution.containerPreserved = keepContainer || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
   // The signal handlers stay registered through it, so a Ctrl-C here still destroys

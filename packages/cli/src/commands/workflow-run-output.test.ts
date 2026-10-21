@@ -11,6 +11,11 @@ import {
   resetCommittedTestEvents,
 } from '../test-support/workflow-command-harness';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import type { WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
+import {
+  workflowRunStatusSchema,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ProviderEvent } from '@archon/provider-contract';
 import { resolveWorkflow } from '@archon/workflows/graph-plan';
 import {
@@ -27,10 +32,6 @@ import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-ex
 describe('workflowRunCommand — progress rendering', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
   let stderrSpy: ReturnType<typeof spyOn>;
-
-  type OutcomeExecutionResult =
-    | { success: true; workflowRunId: string; paused?: true }
-    | { success: false; workflowRunId: string; error: string };
 
   function setupWorkflowMocks(withAuthoredOutcome = false): void {
     // These need to be set up for each test since workflowRunCommand has many dependencies
@@ -79,7 +80,7 @@ describe('workflowRunCommand — progress rendering', () => {
   }
 
   async function runOutcomeFixture(
-    execution: OutcomeExecutionResult,
+    execution: WorkflowExecutionResult,
     status: 'completed' | 'failed' | 'paused',
     outcome: 'succeeded' | 'failed' | null
   ): Promise<unknown> {
@@ -87,12 +88,14 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     const workflowDb = require('@archon/core/db/workflows');
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce(execution);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: execution.workflowRunId,
-      status,
-      outcome,
-      metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
-    });
+    if (!('handedOff' in execution)) {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: execution.workflowRunId,
+        status,
+        outcome,
+        metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      });
+    }
 
     const readsBefore = workflowDb.getWorkflowRun.mock.calls.length;
     try {
@@ -101,7 +104,9 @@ describe('workflowRunCommand — progress rendering', () => {
     } catch (error) {
       return error;
     } finally {
-      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(1);
+      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(
+        'handedOff' in execution ? 0 : 1
+      );
     }
   }
 
@@ -123,6 +128,31 @@ describe('workflowRunCommand — progress rendering', () => {
     consoleSpy.mockRestore();
     stderrSpy.mockRestore();
   });
+
+  it.each([...workflowRunStatusSchema.options, null])(
+    'reports ownership handoff with observed status %s without claiming approval or completion',
+    async observedStatus => {
+      const result: WorkflowExecutionResult =
+        observedStatus === 'failed' || observedStatus === 'cancelled'
+          ? {
+              success: false,
+              handedOff: true,
+              observedStatus,
+              workflowRunId: 'run-1',
+              error: `Workflow ${observedStatus} after execution ownership changed`,
+            }
+          : { success: true, handedOff: true, observedStatus, workflowRunId: 'run-1' };
+      const error = await runOutcomeFixture(result, 'completed', 'succeeded');
+      expect(error instanceof WorkflowRunFailedError).toBe(!result.success);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        `\nWorkflow execution handed off. Observed status: ${observedStatus ?? 'run removed'}.`
+      );
+      const text = consoleSpy.mock.calls.map((args: unknown[]) => args.join(' ')).join('\n');
+      expect(text).not.toContain('waiting for approval');
+      expect(text).not.toContain('Workflow completed successfully');
+      expect(text).not.toContain('Authored outcome:');
+    }
+  );
 
   it('renders aligned completed execution and succeeded authored outcome', async () => {
     await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
@@ -610,7 +640,8 @@ describe('workflowRunCommand — progress rendering', () => {
    */
   async function signalDuringContainerDrain(
     end: ContainerRunEnd,
-    signalAt: 'drain' | 'lookup' = 'drain'
+    signalAt: 'drain' | 'lookup' = 'drain',
+    handoffStatus?: WorkflowRunStatus | null
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -629,6 +660,22 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       runSettled = true;
+      if (handoffStatus !== undefined) {
+        return handoffStatus === 'failed' || handoffStatus === 'cancelled'
+          ? {
+              success: false,
+              handedOff: true,
+              observedStatus: handoffStatus,
+              workflowRunId: OWNED_RUN,
+              error: `Workflow ${handoffStatus} after execution ownership changed`,
+            }
+          : {
+              success: true,
+              handedOff: true,
+              observedStatus: handoffStatus,
+              workflowRunId: OWNED_RUN,
+            };
+      }
       return end === 'paused'
         ? { success: true, workflowRunId: OWNED_RUN, paused: true }
         : { success: true, workflowRunId: OWNED_RUN };
@@ -680,12 +727,25 @@ describe('workflowRunCommand — progress rendering', () => {
     };
 
     try {
-      await workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      const execution = workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
+      if (handoffStatus === 'failed' || handoffStatus === 'cancelled') {
+        await expect(execution).rejects.toBeInstanceOf(WorkflowRunFailedError);
+      } else {
+        await execution;
+      }
+      if (handoffStatus !== undefined) expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
     } finally {
       exitSpy.mockRestore();
     }
     return destroyedAtSignal;
   }
+
+  it.each([...workflowRunStatusSchema.options, null])(
+    'leaves container cleanup to the successor after handoff (status=%s), including on a signal',
+    async status => {
+      expect(await signalDuringContainerDrain('settled', 'drain', status)).toBe(0);
+    }
+  );
 
   it('a signal during the final drain keeps a paused run its container', async () => {
     expect(await signalDuringContainerDrain('paused')).toBe(0);

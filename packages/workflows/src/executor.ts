@@ -1,4 +1,4 @@
-import type { ContainerPauseReceipt } from './dag/pause';
+import { containerPauseHandoff } from './dag/pause';
 import {
   continueBlockedRun,
   isFanOutParentReleased,
@@ -59,7 +59,6 @@ import type {
 import {
   SUBRUN_METADATA_KEYS,
   isApprovalContext,
-  isWorkflowWaitContext,
   isTerminalRunStatus,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
@@ -67,12 +66,7 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import {
-  executionClaim,
-  deadlineWaitCursor,
-  type PersistedNodeOutput,
-  type PriorFailedNode,
-} from './store';
+import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
@@ -551,13 +545,11 @@ export async function executeWorkflow(
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
     const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
-    if (
-      typeof dagResult === 'object' &&
-      dagResult.kind === 'container_pause' &&
-      !sameContainerPause(finalStatus, workflowRun, dagResult)
-    ) {
-      return { success: true, paused: true, workflowRunId: workflowRun.id };
-    }
+    const handoff =
+      typeof dagResult === 'object' && dagResult.kind === 'container_pause'
+        ? containerPauseHandoff(finalStatus, workflowRun, dagResult)
+        : undefined;
+    if (handoff !== undefined) return handoff;
     if (
       finalStatus?.parent_run_id &&
       (finalStatus.status === 'completed' ||
@@ -679,25 +671,6 @@ export async function executeWorkflow(
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
   }
-}
-
-function sameContainerPause(
-  currentRun: WorkflowRun | null,
-  executedRun: WorkflowRun,
-  receipt: ContainerPauseReceipt
-): boolean {
-  if (
-    currentRun?.status !== 'paused' ||
-    executionClaim(currentRun.metadata) !== executionClaim(executedRun.metadata)
-  )
-    return false;
-  const { pause } = receipt;
-  if (pause.kind === 'gate') {
-    const current = currentRun.metadata.approval;
-    return isApprovalContext(current) && current.pauseId === pause.context.pauseId;
-  }
-  const current = currentRun.metadata.wait;
-  return isWorkflowWaitContext(current) && current.pauseId === pause.context.pauseId;
 }
 
 // A child can finish between the parent's child lookup and its pause publication.
