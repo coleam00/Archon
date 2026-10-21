@@ -572,7 +572,11 @@ test.each([
     'invalid payload (chunk.name: invalid_type, expected string)',
     '_archon/chunk',
   ],
-  ['invalid-message-after-exit', 'json', 'malformed JSON', 'unknown'],
+  // On Windows the line never reaches the host once the fixture plugin exits (CI saw EOF
+  // without it), so the post-exit case runs only where the inheriting process keeps stdout open.
+  ...(process.platform === 'win32'
+    ? []
+    : ([['invalid-message-after-exit', 'json', 'malformed JSON', 'unknown']] as const)),
 ] as const)(
   '%s: an invalid %s plugin message surfaces content-free evidence in the error and log',
   async (mode, variant, detail, message) => {
