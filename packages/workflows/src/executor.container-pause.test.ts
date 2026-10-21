@@ -41,6 +41,29 @@ const summary = {
 const paths = ['ordinary', 'writeback', 'unresolved'] as const;
 type PausePath = (typeof paths)[number];
 
+const stalePublicationCases = [
+  ...paths.map(path => ({ path, nodes: undefined, name: path })),
+  {
+    path: 'ordinary' as const,
+    nodes: [{ id: 'wait', wait: { duration_ms: 1000 } }],
+    name: 'wait',
+  },
+  ...[{ approval: { message: 'Review' } }, { wait: { duration_ms: 1000 } }].map(node => ({
+    path: 'ordinary' as const,
+    nodes: [
+      {
+        id: 'group',
+        loop_group: {
+          max_iterations: 2,
+          until_bash: 'echo done',
+          nodes: [{ id: 'interaction', ...node }],
+        },
+      },
+    ],
+    name: `nested ${'approval' in node ? 'gate' : 'wait'}`,
+  })),
+];
+
 async function setup(
   path: PausePath,
   ordinaryNodes?: unknown[],
@@ -881,28 +904,7 @@ describe('container pause segment ownership through the executor', () => {
     );
   }
 
-  for (const { path, nodes, name } of [
-    ...paths.map(path => ({ path, nodes: undefined, name: path })),
-    {
-      path: 'ordinary' as const,
-      nodes: [{ id: 'wait', wait: { duration_ms: 1000 } }],
-      name: 'wait',
-    },
-    ...[{ approval: { message: 'Review' } }, { wait: { duration_ms: 1000 } }].map(node => ({
-      path: 'ordinary' as const,
-      nodes: [
-        {
-          id: 'group',
-          loop_group: {
-            max_iterations: 2,
-            until_bash: 'echo done',
-            nodes: [{ id: 'interaction', ...node }],
-          },
-        },
-      ],
-      name: `nested ${'approval' in node ? 'gate' : 'wait'}`,
-    })),
-  ]) {
+  for (const { path, nodes, name } of stalePublicationCases) {
     it(`${name}: stale publication preserves a running successor`, async () => {
       const f = await setup(path, nodes);
       let successor: WorkflowRun | undefined;
