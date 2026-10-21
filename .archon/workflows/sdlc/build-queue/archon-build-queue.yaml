@@ -291,7 +291,14 @@ nodes:
     output_format:
       type: object
       properties:
-        blocked: { type: array, items: { type: object } }
+        blocked:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer, minimum: 1 }
+              summary: { type: string }
+            required: [number, summary]
         blocked_count: { type: integer }
       required: [blocked, blocked_count]
 
