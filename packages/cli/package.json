@@ -126,6 +126,9 @@
       "src/commands/isolation.test.ts"
     ],
     [
+      "src/commands/isolation-completion-registration.test.ts"
+    ],
+    [
       "src/commands/chat.test.ts"
     ],
     [

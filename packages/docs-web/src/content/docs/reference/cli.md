@@ -760,7 +760,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; `isolation cleanup --merged` removes it after its PR merges |
+| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch, retaining the remote branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1566,6 +1566,9 @@ Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active conta
 environments remain. The error lists their environment IDs and the cleanup command.
 Clean them up explicitly, then retry deletion.
 
+Cleanup continues after individual errors and exits with status `1` if any removal fails;
+protected skips exit with status `0`.
+
 Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
 the plugins. A receipt supersedes a bundled chat policy with the same platform id.
@@ -1584,12 +1587,16 @@ checkout sets `adopted: true` while preserving its creation proof, so that check
 can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
-Cleanup deletes an environment's local branch only when Archon created that branch.
-A branch that already existed when the run started (see `--branch` above) is kept,
-since it may hold commits that exist nowhere else. It is deleted only together with
-its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
-finished, or by `archon complete`.
-Records created before Archon tracked this are treated the same way, keeping their branch.
+Ordinary age-based cleanup deletes an environment's local branch only when Archon
+created that branch. It keeps pre-existing local branches and branches on legacy
+records that lack branch-creation tracking. Merged cleanup (`--merged`, including
+`--include-closed`) and `archon complete` can delete those local branches after
+their checks. Completion with `--force` bypasses commit-safety checks, so it can
+delete a branch with unmerged commits. Merged cleanup and completion retain
+remote branches and warn after local removal. A remote commit ID cannot prove which
+registration owns a branch: a replacement may publish the same commit after the
+selected registration retires. This refusal also applies with `--force` and with
+separate fetch/push URLs. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
@@ -1601,7 +1608,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into the base branch (also deletes remote branches)
+# Remove environments with branches merged into the base branch (retains remote refs for operator inspection)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -1659,10 +1666,118 @@ the branch Archon created for it holds such a commit.
 A completed run removes the worktree it created when it completes, if the checkout is
 clean, every commit on its HEAD and branch is on a remote, and the configured remote
 does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which also deletes it. When
-the remote cannot be read, the worktree stays and the record says `check_failed`. The
+adopted. A branch that was published waits for `--merged`, which removes the local
+branch and retains the remote branch with a warning. When the remote cannot be read, the worktree stays and the record says `check_failed`. The
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
+
+#### Recovering remote branch cleanup
+
+Cleanup and completion retain remote refs because ownership cannot be proved after
+registration retirement. Retrying either command cannot delete a retired
+registration's remote branch. On GitHub, enable **Automatically delete head branches**
+in the repository settings if you want merged pull requests' branches removed automatically.
+
+If the ref belongs to a replacement registration or ownership is uncertain, leave
+it alone. To remove a ref manually, first ensure no one is reusing or publishing
+that branch. From the surviving primary checkout, verify that the branch still
+belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`).
+The branch reported by cleanup is the local branch; a published remote ref can have
+a different name. Cleanup may already have deleted the local branch and does not
+report its tip OID. If available, establish the completed tip from a surviving local
+branch, a commit recorded in the run's artifacts or logs, the pull request's head
+commit history, or a surviving Git reflog. Verify that the commit belongs to the
+completed work; a squash or merge commit is not necessarily its original tip.
+If that evidence is unavailable, use the candidate-ref inspection below with the
+repository owner instead. First check for service overrides or a transport helper:
+
+```bash
+remote='<remote>'
+git config --get-all "remote.$remote.uploadpack"
+git config --get-all "remote.$remote.receivepack"
+git config --get-all "remote.$remote.vcs"
+```
+
+Either service override or a transport helper can redirect Git to a repository
+other than the URL. Before manual cleanup, verify the actual receiving repository
+with the service or helper owner.
+Use an endpoint whose upload and receive services you have verified target that
+repository; do not infer absence from the configured URL or upload service.
+The URL procedure below applies only when no service override or transport helper
+is configured and the endpoint is known to match the receiver.
+
+Inspect the push destinations:
+
+```bash
+git remote get-url --push --all <remote>
+```
+
+For each destination you intend to clean, copy its exact URL, including any
+leading or trailing spaces, into `push_url`. Run these commands in Bash:
+
+```bash
+push_url='<push-url>'
+endpoint="archon-cleanup-$$-$RANDOM:"
+git_at_endpoint() (
+    config_index=${GIT_CONFIG_COUNT:-0}
+    export "GIT_CONFIG_KEY_${config_index}=url.${push_url}.insteadOf"
+    export "GIT_CONFIG_VALUE_${config_index}=$endpoint"
+    export "GIT_CONFIG_KEY_$((config_index + 1))=url.${push_url}.pushInsteadOf"
+    export "GIT_CONFIG_VALUE_$((config_index + 1))=$endpoint"
+    export GIT_CONFIG_COUNT=$((config_index + 2))
+    git "$@"
+)
+git_at_endpoint ls-remote --symref -- "$endpoint" HEAD 'refs/heads/*'
+```
+
+Inspect all advertised branch names and OIDs. Start with the reported local branch's
+name; when the completed tip is known, also check differently named non-default refs
+containing it. For example,
+local `topic` may have been published as `refs/heads/review-name`; an empty query
+for `refs/heads/topic` proves only that exact ref is absent. The default branch
+normally contains merged work and is not a cleanup target merely for containing
+the completed tip.
+
+When the completed tip is known, verify each candidate's ancestry with
+`git merge-base --is-ancestor <completed-tip-oid> <advertised-oid>`
+(exit 0 means it contains the completed tip; exit 1 means it does not). If commits
+are missing, fetch the candidate from the same verified endpoint with
+`git_at_endpoint fetch --no-tags -- "$endpoint" '<full-remote-ref>'`, re-read the
+advertisement and repeat the check. A failed inspection or unknown ancestry does
+not prove absence. Ancestry alone does not prove ownership: confirm that the ref
+belongs to the completed work and is no longer in use before deleting it.
+
+If the completed tip cannot be established, do not guess a differently named ref
+or treat it as absent. Inspect candidate refs with the repository owner: match the
+receiving repository's pull request head-ref and commit history to the completed
+run and review the candidate's commits. Fetch candidates from the verified endpoint
+with the command above as needed, then inspect their advertised OIDs with
+`git show <advertised-oid>` and `git log <advertised-oid>`. A same-name ref can be
+inspected this way too; recovering the deleted local tip is not required. Confirm
+the candidate's provenance, current ownership, and that no replacement registration
+or other user is using or publishing it. If the evidence cannot identify a ref
+confidently, retain it. Once verified, re-read the advertisement and use that ref's
+current OID for the leased delete below.
+
+Keep the same `push_url` and `endpoint`. Enter the verified full remote ref name
+and its advertised OID, independently of the local branch name:
+
+```bash
+remote_ref='refs/heads/<verified-remote-branch>'
+verified_oid='<verified-oid>'
+git_at_endpoint push --force-with-lease="$remote_ref:$verified_oid" -- "$endpoint" ":$remote_ref"
+```
+
+The temporary alias maps directly to the resolved URL for both commands, preventing
+another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
+Separate config keys and values preserve URLs containing `=`. The destination
+listing is line-delimited; if a configured URL contains a newline,
+do not split it into destinations. Inspect the NUL-delimited configuration with
+`git config --null --list` and verify the exact destination before proceeding.
+
+The explicit lease refuses deletion if the tip changes after inspection. It cannot
+detect a same-commit republish, so delete only while no one is reusing or publishing
+that branch. If ownership is uncertain, leave the remote branch in place.
 
 ### `validate workflows [name]`
 
@@ -1704,7 +1819,10 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 
 ### `complete <branch> [branch2 ...]`
 
-Remove a branch's worktree, local branch, and remote branch, and mark its isolation environment as destroyed.
+Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
+Remote branches are retained with a warning because registration ownership cannot
+be proved after local removal. This also applies with `--force`; follow
+[recovering remote branch cleanup](#recovering-remote-branch-cleanup) for manual cleanup.
 
 ```bash
 archon complete feature-auth
@@ -1721,7 +1839,8 @@ Without `--force`, completion refuses an environment a workflow run can still cl
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
 failed run that can still be resumed. Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
-refuses rather than skipping the check.
+refuses rather than skipping the check. A failed open-PR query warns and skips that
+check; it does not bypass the other safety checks.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

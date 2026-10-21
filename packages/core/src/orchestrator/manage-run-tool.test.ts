@@ -1325,6 +1325,9 @@ describe('manage_run authorization refusal', () => {
             listActive: unexpected,
             create: unexpected,
             updateStatus: unexpected,
+            withWorktreeRegistration: async () => {
+              throw new Error('Unexpected worktree removal');
+            },
             markWorktreeDestroyed: unexpected,
             updateMetadata: unexpected,
             countActiveByCodebase: unexpected,

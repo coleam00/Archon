@@ -108,6 +108,9 @@ export const isolationStore: IIsolationStore = {
   updateStatus: () => {
     throw new Error('Unexpected isolation update');
   },
+  withWorktreeRegistration: async () => {
+    throw new Error('Unexpected worktree removal');
+  },
   markWorktreeDestroyed: () => {
     throw new Error('Unexpected isolation update');
   },
