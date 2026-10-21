@@ -112,8 +112,8 @@ Work through these questions in order, with the user where marked:
    archon workflow test <name>                         # every declared fixture
    ```
 
-   `--stubs-init` writes a stub scaffold to fill in. Keep it outside `fixtures/`: a
-   dry-run stub file is not a fixture. A fixture file declares a `fixture:` block, and
+   `--stubs-init` writes a block-style YAML stub scaffold to fill in. Keep it outside
+   `fixtures/`: a dry-run stub file is not a fixture. A fixture file declares a `fixture:` block, and
    `--stubs` refuses it ("this is a fixture file; run it with 'workflow test'"). Copy
    the stub values you need into a fixture and run it with `workflow test`. A dry run
    walks the graph with stubbed node outputs and prints each node's resolved provider

@@ -85,7 +85,10 @@ Route by intent:
   contends for the database.
 - **Stop work only when you mean to end it.** `archon workflow cancel` stops the run
   mid-node, and that node's provider session and unsaved work are lost. Let a run reach
-  its next pause or end when you only want to stop launching more.
+  its next pause or end when you only want to stop launching more. When one turn is
+  stuck on a tool or background command that never finishes, `archon workflow
+  end-turn <run-id>` ends that turn and keeps the run (`operate/managing-runs.md`,
+  "A stalled turn").
 - **Merge only what was reviewed.** When you merge a pull request by hand, pin the
   merge to the reviewed head (`gh pr merge <n> --match-head-commit <sha>`), read the
   open review threads first, and sync your checkout afterwards.
@@ -100,6 +103,8 @@ Route by intent:
   that project; add `--all` for the whole install. For a git project, run from the
   repo root. Register a non-git folder with `workflow run --folder`. A full run ID
   works from any directory.
+- Attention items are paused runs. A running run stuck on a stalled tool call is
+  not an item: `workflow wait <run-id>` and `workflow status` show it.
 - `workflow status` and `workflow runs` set `scopeFallback: true` in JSON when an
   unregistered project produced an install-wide result.
 - Prefer `--json` whenever you will parse output.

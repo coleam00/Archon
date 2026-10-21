@@ -84,7 +84,12 @@ Session context is explicit when it matters:
   bash: bun run test
   timeout: 300000            # ms; stdout captured as $test-gate.output
 ```
-Exit code decides pass/fail. The same node shape verifies non-code work:
+Exit code decides pass/fail. On `timeout`, Archon signals the node's process tree, so
+work behind `bun run` or another wrapper stops too. A process that leaves the node's
+process group (`setsid`) escapes. In a detached run on macOS or Linux, a timeout whose
+cleanup cannot be confirmed fails the node, even with `on_timeout: skip`.
+
+The same node shape verifies non-code work:
 `bash: python3 scripts/reconcile.py --period 2026-08` (totals must balance),
 or a script that checks every imported row has an owner. One-or-two-line glue
 only; anything with branching is a script node.

@@ -65,6 +65,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
+| End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
@@ -197,13 +198,42 @@ Choose deliberately after reading what the gate produced — not by reflex.
   cancelling server executes itself, and a `workflow:` sub-run with no owner of
   its own (it runs inside its root), is marked `cancelled` and stops at its
   executor's next status check. Otherwise it refuses and changes nothing when no
-  owner answers. Use this to kill real work.
+  owner answers. Use this to kill real work. When a process outside the run's
+  process group still holds a node's output, cancel still ends the run and prints
+  a warning (`cleanupWarnings` in `--json`). Archon does not signal or name that
+  process: find it with `lsof` on the run's checkout before you reuse or remove
+  the checkout.
 - `abandon` is for paused or failed runs, or a "running" row whose owner is gone
   (crashed host). If an owner still answers on this host, it stops it first, like
   `cancel`. If none answers, it records `cancelled` and prints the host and pid the
   run recorded; when that host is another machine, check there before abandoning.
   It also removes the worktree the run created, uncommitted files included, and keeps
   the branch. Commit or copy anything you need from the worktree first.
+
+## A stalled turn: end-turn, cancel or resume
+
+An agent or loop node can sit open on a provider tool call or reported background
+command that never finishes, such as a `while true; do ...; sleep 30; done` poll. The
+idle watchdog does not fire while that work is open. After
+`workflows.toolCallAttentionMs` without progress (30 minutes by default), the run raises
+`stalled_tool_calls` attention. The run stays `running`, so it is not an attention-queue
+item and the `--watch` stream does not report it. `workflow wait <run-id>`
+returns it as `attention.kind: "stalled_tool_calls"`, and `workflow status` prints it
+under the run.
+
+- **`archon workflow end-turn <run-id>`** when the stalled work is done or useless and
+  the rest of the run is worth keeping. It records a request; the live owner checks
+  about every ten seconds and ends that turn if the same stall is still there. The
+  attempt fails as `timeout`, and the node's retry policy decides what happens next.
+  By default that is a fresh attempt, which can stall the same way. Exit `0` means the
+  request was recorded, not acted on: follow with `workflow wait <run-id>`. It refuses
+  a run that is not `running` or has nothing stalled.
+- **`cancel`** when the whole run should stop.
+- **`resume`** refuses a running run. Use it once the run has failed or paused, for
+  example after an ended turn exhausts its retries.
+
+A silent turn with no open tool or background work is a different case: its node's
+`idle_timeout` fails it as before, with no request needed.
 
 ## Respond: gates beyond approve/reject
 
