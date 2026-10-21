@@ -1582,7 +1582,11 @@ warning naming the path and what removing it would lose, and the run's
 `terminal_record.worktree_disposition` records the reason and path (see
 [`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
 when its run ends: `--merged` removes it after its pull request merges (or closes, with
-`--include-closed`). A failed run keeps its worktree so it can resume.
+`--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a
+pull request rather than to one run; the merged and age-based cleanups remove it. A
+workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
+and completion removes it the same way. A failed run keeps its worktree so it
+can resume.
 
 #### Recovering remote branch cleanup
 
