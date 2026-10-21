@@ -23,7 +23,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
+import { checkAttention, CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -974,14 +974,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(prepared.choices.map(choice => choice.id)).toEqual(returnOnly ? ['other'] : ['merge', 'park', 'other']);
     expect(prepared.choices.find(choice => choice.id === 'other')).toMatchObject({ effect: 'park' });
     expect(output.options).toEqual(prepared.choices.map(({ id, label }) => ({ id, label })));
-    expect(prepared.recommendation).toEqual({ ...attention.recommendation, why: prepared.recommendation.why });
+    expect(() => checkAttention(prepared)).not.toThrow();
     expect(prepared.recommendation.why).toContain(attention.recommendation.why);
-    if (returnOnly) expect(prepared.recommendation.why).toContain('unavailable without a brief');
-    else expect(prepared.recommendation).toEqual(attention.recommendation);
+    if (returnOnly) {
+      expect(prepared.recommendation.choice).toBe('other');
+      expect(prepared.recommendation.why).toContain(rework.id);
+    } else expect(prepared.recommendation).toEqual(attention.recommendation);
     for (const part of [attention.what, attention.why, attention.recommendation.evidence, PR_URL, 'no build brief']) {
       expect(output.attention).toContain(part);
     }
-    if (returnOnly) expect(output.attention).toContain('unavailable without a brief');
+    if (returnOnly) expect(output.attention).toContain('Recommendation: `other`');
     expect(output.attention).not.toContain('`revise-scope` (Rework it)');
     expect(output.attention).toContain('until the build queue readies the item again');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
@@ -1003,12 +1005,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(launchOf(calls)).toBeUndefined();
   }, 60_000);
 
-  test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {
+  test.each(['merge', 'return'])("an own pull request's ask recommending %s offers no return and its other parks", recommended => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]);
-    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { asked: { attention: { choices: { id: string; effect: string }[] } } };
+    const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention })]);
+    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { attention: string; asked: { attention: MergeAttention } };
+    expect(() => checkAttention(asked.asked.attention)).not.toThrow();
+    expect(asked.asked.attention.recommendation.choice).toBe(recommended === 'return' ? 'other' : recommended);
+    if (recommended === 'return') {
+      expect(asked.asked.attention.recommendation.why).toContain(attention.recommendation.why);
+      expect(asked.attention).toContain('Recommendation: `other`');
+    } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
   }, 60_000);

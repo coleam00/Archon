@@ -49,23 +49,28 @@ const OWN_PR_OTHER =
   `Do what the answer text says. The text is recorded as the ruling on this pull request. ${OWN_PR_PARK} Nothing goes to the build queue.`;
 
 function withQueueOther(attention: MergeAttention, item: Item, brief: string): MergeAttention {
-  if (item.own_pr === true) {
-    const choices = attention.choices
-      .filter(choice => choice.effect !== 'return')
-      .map(choice => choice.effect === 'park' ? { ...choice, does: OWN_PR_PARK } : choice);
-    return withOther({ ...attention, choices }, 'park', OWN_PR_OTHER);
-  }
-  if (brief.trim() !== '') return withOther(attention, 'return');
-  const choices = attention.choices.filter(choice => choice.effect !== 'return');
-  const removedRecommendation = attention.choices.some(choice => choice.id === attention.recommendation.choice && choice.effect === 'return');
-  return withOther({
+  const ownPr = item.own_pr === true;
+  if (!ownPr && brief.trim() !== '') return withOther(attention, 'return');
+  const unavailable = ownPr
+    ? 'Return is unavailable because no build round owns this pull request.'
+    : 'Return is unavailable because the sweep supplied no build brief.';
+  const choices = attention.choices
+    .filter(choice => choice.effect !== 'return')
+    .map(choice => ownPr && choice.effect === 'park' ? { ...choice, does: OWN_PR_PARK } : choice);
+  const prepared = withOther({
     ...attention,
-    why: `${attention.why} Return is unavailable because the sweep supplied no build brief.`,
+    why: `${attention.why} ${unavailable}`,
     choices,
-    recommendation: removedRecommendation
-      ? { ...attention.recommendation, why: `${attention.recommendation.why} This recommendation is unavailable without a brief; choose a remaining option.` }
-      : attention.recommendation,
-  }, 'park', 'Records the answer text as the ruling. Stops queue work until the build queue readies the item again; no build round starts.');
+  }, 'park', ownPr ? OWN_PR_OTHER : 'Records the answer text as the ruling. Stops queue work until the build queue readies the item again; no build round starts.');
+  if (prepared.choices.some(choice => choice.id === attention.recommendation.choice)) return prepared;
+  return {
+    ...prepared,
+    recommendation: {
+      ...attention.recommendation,
+      choice: 'other',
+      why: `The sweep originally recommended \`${attention.recommendation.choice}\`: ${attention.recommendation.why} ${unavailable} Choose \`other\` to record your ruling without starting a build round.`,
+    },
+  };
 }
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
