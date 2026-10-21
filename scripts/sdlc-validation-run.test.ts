@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
+import { getRunScratchDir } from '../packages/paths/src/run-paths';
+import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
 import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';
 
 /**
@@ -212,6 +214,12 @@ function result(bindings: { run?: unknown; classification?: unknown }): {
   const stdout = out.stdout.toString().trim();
   return { exitCode: out.exitCode, output: stdout === '' ? null : JSON.parse(stdout) };
 }
+
+describe("the pack's scratch directory", () => {
+  it('is the run scratch directory the engine removes when the run ends', () => {
+    expect(scratchDir('/artifacts', '')).toBe(getRunScratchDir('/artifacts'));
+  });
+});
 
 describe("the gate's environment", () => {
   it("names exactly the engine's exec-node contract", () => {

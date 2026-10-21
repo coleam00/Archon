@@ -79,7 +79,8 @@ describe('prune-scratch', () => {
     const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
     writeFileSync(join(target, 'keep.txt'), 'kept');
     // A junction needs no privilege on Windows; elsewhere the type is ignored.
-    symlinkSync(target, join(artifacts, 'scratch'), 'junction');
+    mkdirSync(join(artifacts, '.archon'));
+    symlinkSync(target, join(artifacts, '.archon', 'scratch'), 'junction');
 
     const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
@@ -87,14 +88,14 @@ describe('prune-scratch', () => {
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
-    expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
+    expect(existsSync(join(artifacts, '.archon', 'scratch'))).toBe(false);
     expect(existsSync(join(target, 'keep.txt'))).toBe(true);
   });
 
   it("removes the run's scratch worktrees and nothing else", () => {
     const cwd = gitCheckout({}, track);
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const scratch = join(artifacts, 'scratch', 'code');
+    const scratch = join(artifacts, '.archon', 'scratch', 'code');
     mkdirSync(scratch, { recursive: true });
     git(cwd, 'worktree', 'add', '-q', '--detach', join(scratch, 'one'), 'HEAD');
     const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
@@ -120,7 +121,7 @@ describe('prune-scratch', () => {
       .map(line => slashes(line.slice('worktree '.length)));
     expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
     expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
-    expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
+    expect(existsSync(join(artifacts, '.archon', 'scratch'))).toBe(false);
     expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });
 });
