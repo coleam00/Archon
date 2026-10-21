@@ -398,7 +398,7 @@ export function createFileAdmissionStore(
     await recoverBeforeRead(root);
     return call(createAdmissionTransaction(root, listReusableCheckouts));
   }
-  async function list<S extends z.ZodType>(kind: string, schema: S): Promise<z.output<S>[]> {
+  async function documentPaths(kind: string): Promise<string[]> {
     let names: string[];
     try {
       names = await readdir(join(root, 'resource', kind));
@@ -406,10 +406,27 @@ export function createFileAdmissionStore(
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
       throw error;
     }
+    return names.filter(name => name.endsWith('.json')).map(name => join('resource', kind, name));
+  }
+  async function list<S extends z.ZodType>(kind: string, schema: S): Promise<z.output<S>[]> {
     const rows: z.output<S>[] = [];
-    for (const name of names.filter(name => name.endsWith('.json')))
-      rows.push(schema.parse(await readJson(join(root, 'resource', kind, name))));
+    for (const path of await documentPaths(kind))
+      rows.push(schema.parse(await readJson(join(root, path))));
     return rows;
+  }
+  async function queueCandidate<S extends z.ZodType>(
+    path: string,
+    schema: S
+  ): Promise<z.output<S> | null> {
+    try {
+      return schema.parse(await readJson(join(root, path)));
+    } catch (error) {
+      if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      // An unreadable queue entry cannot identify its host. Keep it stored for repair,
+      // and report its document path without blocking independent hosts.
+      log.error({ document: path }, 'queued_start_document_invalid_listing_omitted');
+      return null;
+    }
   }
   async function inspect(row: Request): Promise<ResourceStartRequestInspection> {
     return {
@@ -573,18 +590,19 @@ export function createFileAdmissionStore(
     listQueuedResourceStartsForHost: hostId =>
       query(async tx => {
         const queued: Request[] = [];
-        // Slot queues select candidates without decoding unrelated admitted requests.
-        const slots = await list('slots', z.object({ queue: z.array(z.string()) }));
-        for (const id of slots.flatMap(slot => slot.queue)) {
-          const envelope = await tx.read(
-            pathFor('requests', id),
-            requestSchema.pick({ hostId: true, status: true })
-          );
-          if (!envelope) throw new Error('Queued resource request missing');
-          if (envelope.hostId !== hostId || envelope.status !== 'queued') continue;
-          const row = await tx.request(id);
-          if (!row) throw new Error('Queued resource request missing');
-          queued.push(row);
+        for (const path of await documentPaths('slots')) {
+          const slot = await queueCandidate(path, slotSchema(path).pick({ queue: true }));
+          if (!slot) continue;
+          for (const id of slot.queue) {
+            const envelope = await queueCandidate(
+              pathFor('requests', id),
+              requestSchema.pick({ hostId: true, status: true })
+            );
+            if (!envelope || envelope.hostId !== hostId || envelope.status !== 'queued') continue;
+            const row = await tx.request(id);
+            if (!row) throw new Error('Queued resource request missing');
+            queued.push(row);
+          }
         }
         queued.sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position);
         return Promise.all(queued.map(inspect));

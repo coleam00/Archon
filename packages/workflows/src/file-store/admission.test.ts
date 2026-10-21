@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { setLogSink } from '@archon/paths/logger';
 import { WorkflowResourceBusyError, WorkflowNotResumableError } from '../store';
 import type { ResourceStartIntent } from '../schemas/resource-start';
 import { createFileWorkflowStore } from './store';
@@ -563,13 +564,126 @@ test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn'] as const)
   }
 );
 
-for (const corruption of ['launch', 'json', 'null'] as const) {
-  test(`host queued listing validates its own indexed request (${corruption})`, async () => {
+test('host queued listing fully validates a request with its own host envelope', async () => {
+  const { root, store } = await fixture();
+  await store.admitResourceStart(intent());
+  const queued = intent();
+  await store.admitResourceStart(queued);
+  await corruptRequest(root, queued.launch.run.id, 'launch');
+  await expect(store.listQueuedResourceStartsForHost('host')).rejects.toThrow();
+});
+
+const queuedCorruptions = [
+  'json',
+  'null',
+  'missing-host',
+  'invalid-host',
+  'missing-status',
+  'invalid-status',
+  'missing-request',
+  'slot-json',
+  'slot-null',
+  'slot-queue',
+  'launch',
+] as const;
+async function corruptQueuedDocument(
+  root: string,
+  id: string,
+  corruption: (typeof queuedCorruptions)[number]
+): Promise<string> {
+  const slot = corruption.startsWith('slot-');
+  const key = slot ? 'foreign' : id;
+  const path = join(
+    'resource',
+    slot ? 'slots' : 'requests',
+    `${createHash('sha256').update(key).digest('hex')}.json`
+  );
+  const target = join(root, path);
+  const row = JSON.parse(await readFile(target, 'utf8'));
+  switch (corruption) {
+    case 'missing-request':
+      await unlink(target);
+      return path;
+    case 'json':
+    case 'slot-json':
+      await writeFile(target, '{');
+      return path;
+    case 'null':
+    case 'slot-null':
+      await writeFile(target, 'null');
+      return path;
+    case 'missing-host':
+      delete row.hostId;
+      break;
+    case 'invalid-host':
+      row.hostId = 42;
+      break;
+    case 'missing-status':
+      delete row.status;
+      break;
+    case 'invalid-status':
+      row.status = 'unsupported';
+      break;
+    case 'slot-queue':
+      row.queue = 42;
+      break;
+    case 'launch':
+      row.launch = {};
+      break;
+  }
+  await writeFile(target, JSON.stringify(row));
+  return path;
+}
+
+for (const corruption of queuedCorruptions) {
+  test(`host listing and drain isolate another host's queued ${corruption} corruption`, async () => {
     const { root, store } = await fixture();
-    await store.admitResourceStart(intent());
-    const queued = intent();
+    const holder = intent(),
+      queued = intent();
+    const foreignHolder = intent(),
+      foreignQueued = intent();
+    for (const start of [foreignHolder, foreignQueued]) {
+      start.resource = 'foreign';
+      start.hostId = 'foreign-host';
+      start.launch.execution.cwd = '/foreign';
+    }
+    await store.admitResourceStart(holder);
     await store.admitResourceStart(queued);
-    await corruptRequest(root, queued.launch.run.id, corruption);
-    await expect(store.listQueuedResourceStartsForHost('host')).rejects.toThrow();
+    await store.admitResourceStart(foreignHolder);
+    await store.admitResourceStart(foreignQueued);
+    const path = await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
+    const logs: string[] = [];
+    setLogSink(line => logs.push(line));
+    try {
+      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual([
+        queued.launch.run.id,
+      ]);
+      await finishRun(root, holder.launch.run.id);
+      const listed = await store.listQueuedResourceStartsForHost('host');
+      expect(listed.map(row => row.id)).toEqual([queued.launch.run.id]);
+      for (const resource of new Set(listed.map(row => row.resource))) {
+        expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
+          { status: 'admitted', runId: queued.launch.run.id },
+        ]);
+      }
+      if (corruption !== 'launch') {
+        expect(logs.map(line => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            document: path,
+            msg: 'queued_start_document_invalid_listing_omitted',
+          })
+        );
+        expect(await store.listQueuedResourceStartsForHost('foreign-host')).toEqual([]);
+      }
+    } finally {
+      setLogSink(undefined);
+    }
+    expect(await store.getWorkflowRun(foreignQueued.launch.run.id)).toBeNull();
+    expect(await store.getWorkflowRun(foreignHolder.launch.run.id)).toMatchObject({
+      status: 'pending',
+    });
+    await expect(
+      store.drainResourceStarts({ resource: 'foreign', hostId: 'foreign-host' })
+    ).rejects.toThrow();
   });
 }
