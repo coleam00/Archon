@@ -1,5 +1,7 @@
 import { getTerminalRecord, type TerminalRecordEvent } from '@archon/workflows/terminal-record';
-import { expect, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
+import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 import { Database } from 'bun:sqlite';
 import {
   existsSync,
@@ -11,9 +13,36 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree } from '@archon/paths/test-utils';
 
-const roots = trackTempRoots();
+const roots: string[] = [];
+const fixtures: ReturnType<typeof fixture>[] = [];
+afterEach(async () => {
+  const priorHome = process.env.ARCHON_HOME;
+  try {
+    for (const f of fixtures.splice(0)) {
+      process.env.ARCHON_HOME = f.home;
+      if (existsSync(join(f.home, 'archon.db'))) {
+        for (const run of f.runs()) {
+          const endpoint = runLiveOwnerPath(run.id);
+          await waitFor(async () => {
+            const status = f.runs().find(row => row.id === run.id)?.status;
+            return (
+              (status !== 'pending' && status !== 'running') ||
+              (await canConnectToRunLiveOwner(endpoint))
+            );
+          });
+          if (await canConnectToRunLiveOwner(endpoint))
+            await (await requestDetachedRunStop(run.id)).stop();
+        }
+      }
+    }
+    for (const root of roots.splice(0)) await removeTempTree(root);
+  } finally {
+    if (priorHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = priorHome;
+  }
+});
 const entry = join(import.meta.dir, 'fixtures/workflow-cli-without-title.ts');
 interface RunRow {
   id: string;
@@ -37,7 +66,8 @@ function fixture(race = false) {
   const selectedEntry = race
     ? join(import.meta.dir, 'fixtures/workflow-cli-with-cleanup-race.ts')
     : entry;
-  const root = roots(realpathSync(mkdtempSync(join(tmpdir(), 'checkout-lifetime-'))));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'checkout-lifetime-')));
+  roots.push(root);
   const repo = join(root, 'repo'),
     home = join(root, 'home');
   mkdirSync(join(repo, '.archon/workflows'), { recursive: true });
@@ -113,6 +143,7 @@ function fixture(race = false) {
   function read<T>(query: string, ...params: string[]): T[] {
     const db = new Database(join(home, 'archon.db'), { readonly: true });
     try {
+      db.run('PRAGMA busy_timeout = 5000');
       return db.query<T, string[]>(query).all(...params);
     } finally {
       db.close();
@@ -120,11 +151,13 @@ function fixture(race = false) {
   }
   const runs = () => read<RunRow>('SELECT * FROM remote_agent_workflow_runs ORDER BY rowid');
   const environments = () => read<EnvRow>('SELECT * FROM remote_agent_isolation_environments');
-  return { repo, home, cli, read, runs, environments };
+  const f = { root, repo, home, cli, read, runs, environments };
+  fixtures.push(f);
+  return f;
 }
-async function waitFor(check: () => boolean): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 15000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > deadline) throw new Error('Detached checkout cleanup did not settle');
     await Bun.sleep(25);
   }
