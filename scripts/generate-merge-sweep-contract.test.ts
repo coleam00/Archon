@@ -77,6 +77,10 @@ describe('merge sweep contract generation', () => {
     const generator = join(pack, '.shared/generate-merge-sweep-contract.ts');
     const output = join(pack, '.shared/merge-sweep.generated.ts');
     const source = join(pack, 'merge-queue/archon-merge-queue.yaml');
+    for (const file of [source, output]) {
+      const contents = await readFile(file, 'utf8');
+      await writeFile(file, contents.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'));
+    }
     const run = (...args: string[]) =>
       Bun.spawnSync([process.execPath, generator, ...args], {
         cwd: root,
@@ -223,6 +227,23 @@ const nested: BaseAttention = { choices: [{ effect: 'other' }] };
       expect(() => sweepSchema(workflow)).toThrow();
     }
   });
+
+  test.each(['\n', '\r\n'])(
+    'freshness accepts %j line endings but rejects content edits',
+    async lineEnding => {
+      const output = join(track(await mkdtemp(join(tmpdir(), 'merge-contract-'))), 'contract.ts');
+      const contents = generateContract(fixture());
+      const checkedOut = contents.replaceAll('\n', lineEnding);
+      await writeFile(output, checkedOut);
+      await writeContract(output, contents, true);
+      expect(await readFile(output, 'utf8')).toBe(checkedOut);
+      await writeFile(output, checkedOut.replace('"wait"', '"return"'));
+      await expect(writeContract(output, contents, true)).rejects.toThrow('missing or stale');
+      await writeContract(output, contents, false);
+      expect(await readFile(output, 'utf8')).toBe(contents);
+      await writeContract(output, contents, true);
+    }
+  );
 
   test('schema-only mutations fail freshness, regenerate deterministically and change consumer types', async () => {
     const output = join(track(await mkdtemp(join(tmpdir(), 'merge-contract-'))), 'contract.ts');

@@ -173,7 +173,7 @@ export async function writeContract(
   }
   let existing: string | undefined;
   try {
-    existing = await readFile(output, 'utf8');
+    existing = (await readFile(output, 'utf8')).replaceAll('\r\n', '\n');
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
   }
