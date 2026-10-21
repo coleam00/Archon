@@ -516,8 +516,9 @@ describe('removeEnvironment', () => {
       });
       expect(result.worktreeRemoved).toBe(true);
       expect(result.warnings.join(' ')).toContain('Remote branch retained');
-      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
-        true
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
       );
       expect(mockMarkWorktreeDestroyed).toHaveBeenCalled();
     }
@@ -673,8 +674,9 @@ describe('runScheduledCleanup', () => {
         branchName: 'pr-99',
         canonicalRepoPath: '/workspace/repo',
       });
-      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
-        true
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
       );
     }
   );
@@ -1279,7 +1281,10 @@ describe('cleanupMergedWorktrees', () => {
       '/workspace/repo/worktrees/merged-branch',
       expect.objectContaining({ branchName: 'merged-branch' })
     );
-    expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(true);
+    expect(mockDestroy).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ deleteRemoteBranch: true })
+    );
   });
 
   // Git proves the branch merged, but the worktree's HEAD (detached, or a branch
@@ -1594,8 +1599,9 @@ describe('onConversationClosed', () => {
       );
 
       await onConversationClosed('github', 'owner/repo#100', options);
-      expect(mockDestroy.mock.calls.every(([, options]) => !options?.deleteRemoteBranch)).toBe(
-        true
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
       );
 
       expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-100', {
