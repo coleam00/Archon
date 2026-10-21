@@ -168,7 +168,8 @@ function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read(
   return pr;
 }
 
-function recordPublishedPr(claimPath: string, pr: PrRecord): void {
+function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): void {
+  if (!required) return;
   try {
     writeFileSync(claimPath, encodePrPublicationRecord({ pr }), { mode: 0o600 });
   } catch (error) {
@@ -220,7 +221,7 @@ function publish(hasDescription: boolean): PrRecord {
     // The run continues a named pull request: its draft state belongs to its author,
     // and its description changes only by the section publish() applies when allowed.
     const pr = awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
-    if (hasDescription) recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
     return pr;
   }
 
@@ -231,7 +232,7 @@ function publish(hasDescription: boolean): PrRecord {
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
     const pr = awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
-    if (hasDescription) recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr);
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
     return pr;
   }
 
@@ -277,7 +278,7 @@ function publish(hasDescription: boolean): PrRecord {
       },
       source
     );
-    recordPublishedPr(claimPath, pr);
+    recordPublishedPr(claimPath, pr, true);
     return pr;
   } catch (error) {
     // A forge refusal is definite: no write was sent, so the claim would only block
