@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The one-time warnings for repo-local `.archon/state/`, `.archon/artifacts/`, `.archon/logs/` and the old home workflow directory are gone. These locations are neither read nor migrated automatically. To move old state, set `STATE_DIR` in your shell to the destination used by your workflow, then run `mkdir -p "$STATE_DIR"` and `mv .archon/state/* "$STATE_DIR"/` from the repository; update workflows to use `$STATE_DIR`. The glob moves non-hidden entries; inspect hidden entries and destination conflicts before moving them. For home workflows, with `ARCHON_HOME` set to your Archon home (default `~/.archon`), run `mv "$ARCHON_HOME/.archon/workflows" "$ARCHON_HOME/workflows"` if the destination does not exist; otherwise merge the files manually. Old artifacts and logs remain where they were; inspect them manually, since run-scoped destinations make a bulk move unsafe. The separate notice for legacy `_cwd/<basename>` storage remains. (#4174)
 - The `script:` node no longer warns when a body still uses a literal `$ARGUMENTS`, `$USER_MESSAGE` or `$CONTEXT`. The one-release migration warning from #2115 is gone. A literal user-controlled variable in a `script:` body is not substituted: the text stays in the source. Read it from the environment instead: `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). (#4597)
 
+### Fixed
+
+- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message)` after its turn finished because Codex took more than a few seconds to exit. With many Codex nodes ending together, Codex processes often outlast the three seconds before SIGTERM and then exit cleanly; the node now waits up to 30 seconds after SIGTERM for that clean exit before it treats the process as not ended. (#4928)
+
 ## [0.12.1] - 2026-10-17
 
 Release binaries no longer hand a target repository's `.env` to providers.
