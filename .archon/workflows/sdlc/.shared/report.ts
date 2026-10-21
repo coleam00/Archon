@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
+import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -235,7 +235,7 @@ export function failedPublication(
   if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
     return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
   }
-  return { reason: 'failed', pr_url: url };
+  return { reason: RUN_FAILED, pr_url: url };
 }
 
 /**

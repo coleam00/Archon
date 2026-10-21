@@ -55,8 +55,8 @@ inputs:
 # A composed caller reads the report: ready with the pull request's URL, or not
 # ready with the reason the rounds ended. Not ready is a valid completion, like
 # `delivered: false` in the callers. A delivery that broke still completes the
-# report, not ready with reason `failed`, and the run still fails, naming the node
-# that failed.
+# report, not ready with reason `failed` (`pr_create_unresolved` when a PR create
+# ended unresolved), and the run still fails, naming the node that failed.
 returns: report
 outcome_field: ready
 
@@ -381,7 +381,8 @@ nodes:
       type: object
       properties:
         ready: { type: boolean }
-        # The last round's reason, or `failed` when a node failure ended the run.
+        # The last round's reason, or `failed` (`pr_create_unresolved` after an
+        # unresolved PR create) when a node failure ended the run.
         reason: { type: string }
         # The pull request, ready or not; '' when no round opened one.
         pr_url: { type: string }

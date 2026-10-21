@@ -27,6 +27,13 @@ import {
 } from './forge.ts';
 
 export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
+/** The reason a tail's report gives when a node failure ended the run. */
+export const RUN_FAILED = 'failed';
+
+/** Whether a report's reason means the run broke rather than reaching an outcome. */
+export function isFailureReason(reason: unknown): boolean {
+  return reason === RUN_FAILED || reason === PR_CREATE_UNRESOLVED;
+}
 export const PR_CREATE_RECORD = 'pr-create-started';
 
 export type PrPublicationRecord =
