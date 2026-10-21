@@ -87,6 +87,7 @@ const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(
   return Promise.resolve({
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
+    registerTerminationPreparation: () => () => undefined,
   });
 });
 mock.module('../services/run-live-owner', () => ({

@@ -10,6 +10,7 @@ import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflow
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { CLIAdapter } from '../adapters/cli-adapter';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
+import { formatRunUsage } from './workflow-usage';
 import { formatSkipCause } from './workflow-node-summaries';
 import { getLog, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
@@ -149,7 +150,7 @@ export async function presentRunResult(
 ): Promise<PendingWaitContinuation | undefined> {
   const { host, workflow, result, adapter, conversationId, destination, detachedProcessOwner } =
     input;
-  const presentRunFacts = await readRunFactsPresenter(host, workflow, result);
+  const run = await readRunForPresentation(host, workflow, result);
 
   // Check result and exit appropriately
   if (result.success && 'paused' in result && result.paused) {
@@ -158,7 +159,7 @@ export async function presentRunResult(
     if (result.waitCursor !== undefined) {
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
-    if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
+    if (!printRunFacts(workflow, run, '\nWorkflow paused — waiting for approval.', 'paused')) {
       console.log('\nWorkflow paused — waiting for approval.');
     }
   } else if (result.success) {
@@ -173,52 +174,60 @@ export async function presentRunResult(
         result.summary
       );
     }
-    if (!presentRunFacts('\nWorkflow finished.', 'completed')) {
+    if (!printRunFacts(workflow, run, '\nWorkflow finished.', 'completed')) {
       console.log('\nWorkflow completed successfully.');
     }
+    printRunUsage(run);
   } else {
-    presentRunFacts('\nWorkflow finished.', 'failed');
+    if (result.workflowRunId !== undefined)
+      printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
+    printRunUsage(run);
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   }
   return undefined;
 }
 
-/**
- * Read the persisted run when the workflow authors an outcome, and return the printer
- * for its status and outcome. The printer returns false when it printed nothing.
- */
-async function readRunFactsPresenter(
+async function readRunForPresentation(
   host: WorkflowHost,
   workflow: ResolvedWorkflow,
   result: WorkflowExecutionResult
-): Promise<(lead: string, executionStatus: WorkflowRunStatus) => boolean> {
-  let presentedRun: WorkflowRun | null = null;
-  let outcomeReadUnavailable = false;
-  if (workflow.outcome_field !== undefined && result.workflowRunId !== undefined) {
-    try {
-      presentedRun = await host.deps.store.getWorkflowRun(result.workflowRunId);
-      outcomeReadUnavailable = presentedRun === null;
-    } catch (error) {
-      outcomeReadUnavailable = true;
-      getLog().warn(
-        { err: error as Error, workflowRunId: result.workflowRunId },
-        'cli.workflow_outcome_lookup_failed'
-      );
-    }
+): Promise<WorkflowRun | null> {
+  if (result.success && 'paused' in result && result.paused && workflow.outcome_field === undefined)
+    return null;
+  const { workflowRunId } = result;
+  if (workflowRunId === undefined) return null;
+  try {
+    return await host.deps.store.getWorkflowRun(workflowRunId);
+  } catch (error) {
+    getLog().warn({ err: error as Error, workflowRunId }, 'cli.workflow_summary_lookup_failed');
+    return null;
   }
-  return (lead: string, executionStatus: WorkflowRunStatus): boolean => {
-    if (outcomeReadUnavailable) {
-      console.log(
-        `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
-      );
-      return true;
-    }
-    if (presentedRun?.outcome == null) return false;
+}
+
+function printRunFacts(
+  workflow: ResolvedWorkflow,
+  run: WorkflowRun | null,
+  lead: string,
+  executionStatus: WorkflowRunStatus
+): boolean {
+  if (workflow.outcome_field === undefined) return false;
+  if (run === null) {
     console.log(
-      `${lead}\n  Status: ${presentedRun.status}\n  Authored outcome: ${presentedRun.outcome}`
+      `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
     );
     return true;
-  };
+  }
+  if (run.outcome == null) return false;
+  console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.outcome}`);
+  return true;
+}
+
+function printRunUsage(run: WorkflowRun | null): void {
+  const lines =
+    run === null
+      ? ['  Usage: unavailable (persisted run unavailable)']
+      : formatRunUsage(run.metadata);
+  for (const line of lines) console.log(line);
 }
 
 async function presentDurableWait(

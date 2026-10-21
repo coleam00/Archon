@@ -256,7 +256,7 @@ Commands:
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  complete <branch> [...]    Remove worktree and local branch; retain remote branch
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill add [path]           Add archon-cli into .claude/skills and .agents/skills
   provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)

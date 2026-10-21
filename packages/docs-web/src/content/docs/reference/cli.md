@@ -288,6 +288,24 @@ With `--json`, outputs `{ "workflows": [...], "errors": [...] }`. Each workflow 
 
 Run a workflow with an optional user message.
 
+Foreground completion and failure output includes the run's recorded cost and input/output
+tokens, even with `--quiet`. These are stored figures, not a certified complete bill:
+
+```text
+  Usage (recorded totals; completeness unknown):
+    Cost: $0.024
+    Input tokens: 8420
+    Output tokens: 2180
+```
+
+Provider usage metadata is optional. Missing or malformed values print `unknown`;
+a recorded zero prints `0` (or `$0` for cost). An unknown or malformed token-uncertainty
+marker makes both token counts unknown. Every summary carries the completeness warning,
+even when all values are numeric, because stored totals cannot certify that every
+contribution was recorded. If the persisted run cannot be read, output shows
+`Usage: unavailable (persisted run unavailable)` without changing the execution result.
+Paused runs can be inspected with [`workflow get`](#workflow-get).
+
 ```bash
 # Basic usage
 archon workflow run investigate --cwd /path/to/repo "Why does the export job time out?"
@@ -633,6 +651,11 @@ archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
 
+The text view includes the same [recorded usage summary](#workflow-run-name-message)
+for any run status. It reads stored totals without recalculating them or certifying
+completeness. `--json` retains the raw usage values in `metadata`, including nulls or
+malformed historical values; it adds no formatted usage text.
+
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
 for each choice. JSON exposes these choices in `metadata.approval.decisions`.
@@ -731,13 +754,13 @@ checkout and is logged. Otherwise it is
 
 | Reason | Meaning |
 |---|---|
-| `resumable` | The run failed and can resume; `workflow abandon` or the stale sweep releases it |
-| `cancelled` | The run was cancelled; `workflow abandon` releases it |
+| `resumable` | The run failed and can resume; `workflow abandon` attempts release, retaining owner warnings for inspection, or the stale sweep can release eligible checkouts |
+| `cancelled` | The run was cancelled; `workflow abandon` attempts release, retaining checkouts with owner warnings for inspection and retry |
 | `workspace_retained` | The originating platform keeps its workspaces |
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; `isolation cleanup --merged` removes it after its PR merges |
+| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch, retaining the remote branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1141,8 +1164,15 @@ who owns the run:
   from that server): the run is marked `cancelled` and its executor stops at its next
   status check.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
-  contacts that process, terminates its host process tree, confirms termination, and
-  only then records the run as `cancelled`.
+  contacts that process and stops its owner before recording the run as `cancelled`.
+  On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
+  then confirms those groups and the owner group are gone. A group whose leader was already
+  reaped is never signalled. If a node's output pipes remain held, cancellation still ends
+  the run and reports in `cleanupWarnings` and the run's cancellation event that some
+  process outside the run's process group holds the output and was not signalled.
+  Archon does not identify it; use `lsof` on the run's checkout before reusing or removing
+  that checkout. Background jobs left by completed nodes are excluded. Windows uses
+  the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
   activity) and points you at `abandon`. A foreground `archon workflow run` or a run
@@ -1203,7 +1233,8 @@ Once cancellation is recorded, further managed container reclamation is best-eff
 the run stays `cancelled`, but container resources may remain allocated. Every cancel
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
-`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+`cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
+and output pipes still held by an unsignalled process; the field is omitted
 when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
 
 ### `workflow abandon`
@@ -1213,7 +1244,15 @@ worktree lock and resource slot, so abandon first asks the run's live-owner endp
 this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
-  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+  (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
+  The output-holder warning and `lsof` action described above apply here too; inspect
+  warnings before reusing or removing the checkout. Abandon retains owned checkouts
+  when owner-stop warnings report held output, including descendant checkouts and
+  their root. Warnings learned after cancellation during descendant cleanup or
+  conversation reset are appended to that run as `workflow_cleanup_warning` events.
+  If writing a warning event fails, cleanup continues and the command reports the
+  persistence failure with the cleanup warnings. Keep that command result: those
+  warnings may be missing from the run history.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:
@@ -1235,8 +1274,10 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
-Abandon also removes the worktree Archon created for this run, and for each cancelled
-`workflow:` sub-run. Abandon is final for that checkout: removal is forced, so
+Abandon also attempts to remove the worktree Archon created for this run, and for each
+cancelled `workflow:` sub-run. Owner warnings retain affected checkouts for inspection;
+use `lsof` on the checkout when output is still held, then retry abandonment after
+resolving the warning. When removal proceeds, it is forced, so
 uncommitted, untracked, and ignored files (including copied `.env` files) and
 initialized submodules are deleted with it. The branch is kept, so committed work,
 pushed or not, stays recoverable. The result lists each removed worktree and its
@@ -1256,7 +1297,8 @@ Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
 Successful `--json` responses include an optional `cleanupWarnings` array of warning
-strings when reclamation fails; the field is omitted when there are no cleanup
+strings for container reclamation failures, owner-stop cleanup failures, and output pipes
+still held by an unsignalled process; the field is omitted when there are no cleanup
 warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs attempts to cancel discovered descendants except completed and cancelled runs, within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count). Completed and cancelled runs are left alone, but the walk still inspects beneath them. These are database transitions, not process termination; an in-flight host command can continue until it returns. The command reports cascade failures for failed child cancellations, failed lookups, or unresolved subtrees beyond the bound, so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
@@ -1507,11 +1549,12 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 ### `isolation cleanup [days]`
 
-To explicitly discard a resumable run and remove the worktree it created, use
+To explicitly discard a resumable run and attempt removal of the worktree it created, use
 `archon workflow abandon <run-id>`. Ordinary cleanup follows the run-lock rule at the end
 of this section. Abandon removes a checkout only when the run holds its matching creation
-proof, even if the checkout has since been adopted. It deletes uncommitted work there and
-keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
+proof, even if the checkout has since been adopted. Owner warnings retain the checkout:
+inspect it (`lsof` when output is still held), resolve the warning, then retry abandonment.
+When removal proceeds, it deletes uncommitted work there and keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 Remove stale environments. Worktree cleanup only handles worktree records. Container
 cleanup removes eligible containers and their volumes through the container backend,
@@ -1522,6 +1565,9 @@ run `archon isolation cleanup 0`; containers owned by resumable runs remain prot
 Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active container
 environments remain. The error lists their environment IDs and the cleanup command.
 Clean them up explicitly, then retry deletion.
+
+Cleanup continues after individual errors and exits with status `1` if any removal fails;
+protected skips exit with status `0`.
 
 Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
@@ -1541,12 +1587,16 @@ checkout sets `adopted: true` while preserving its creation proof, so that check
 can remain eligible for cleanup. If Git removal leaves a directory behind, cleanup reports it
 and keeps the environment active; inspect that path before removing it manually.
 
-Cleanup deletes an environment's local branch only when Archon created that branch.
-A branch that already existed when the run started (see `--branch` above) is kept,
-since it may hold commits that exist nowhere else. It is deleted only together with
-its remote branch: by `--merged` (and `--include-closed`) once its PR or branch is
-finished, or by `archon complete`.
-Records created before Archon tracked this are treated the same way, keeping their branch.
+Ordinary age-based cleanup deletes an environment's local branch only when Archon
+created that branch. It keeps pre-existing local branches and branches on legacy
+records that lack branch-creation tracking. Merged cleanup (`--merged`, including
+`--include-closed`) and `archon complete` can delete those local branches after
+their checks. Completion with `--force` bypasses commit-safety checks, so it can
+delete a branch with unmerged commits. Merged cleanup and completion retain
+remote branches and warn after local removal. A remote commit ID cannot prove which
+registration owns a branch: a replacement may publish the same commit after the
+selected registration retires. This refusal also applies with `--force` and with
+separate fetch/push URLs. See [recovering remote branch cleanup](#recovering-remote-branch-cleanup).
 
 These ownership checks also apply to `/worktree remove` and `archon complete`;
 `--force` never bypasses them.
@@ -1558,7 +1608,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into the base branch (also deletes remote branches)
+# Remove environments with branches merged into the base branch (retains remote refs for operator inspection)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -1616,10 +1666,118 @@ the branch Archon created for it holds such a commit.
 A completed run removes the worktree it created when it completes, if the checkout is
 clean, every commit on its HEAD and branch is on a remote, and the configured remote
 does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which also deletes it. When
-the remote cannot be read, the worktree stays and the record says `check_failed`. The
+adopted. A branch that was published waits for `--merged`, which removes the local
+branch and retains the remote branch with a warning. When the remote cannot be read, the worktree stays and the record says `check_failed`. The
 run's `terminal_record.worktree_disposition` says what happened and why (see
 [`workflow get`](#workflow-get)).
+
+#### Recovering remote branch cleanup
+
+Cleanup and completion retain remote refs because ownership cannot be proved after
+registration retirement. Retrying either command cannot delete a retired
+registration's remote branch. On GitHub, enable **Automatically delete head branches**
+in the repository settings if you want merged pull requests' branches removed automatically.
+
+If the ref belongs to a replacement registration or ownership is uncertain, leave
+it alone. To remove a ref manually, first ensure no one is reusing or publishing
+that branch. From the surviving primary checkout, verify that the branch still
+belongs to the completed work and is no longer in use. Use `worktree.remote` (default: `origin`).
+The branch reported by cleanup is the local branch; a published remote ref can have
+a different name. Cleanup may already have deleted the local branch and does not
+report its tip OID. If available, establish the completed tip from a surviving local
+branch, a commit recorded in the run's artifacts or logs, the pull request's head
+commit history, or a surviving Git reflog. Verify that the commit belongs to the
+completed work; a squash or merge commit is not necessarily its original tip.
+If that evidence is unavailable, use the candidate-ref inspection below with the
+repository owner instead. First check for service overrides or a transport helper:
+
+```bash
+remote='<remote>'
+git config --get-all "remote.$remote.uploadpack"
+git config --get-all "remote.$remote.receivepack"
+git config --get-all "remote.$remote.vcs"
+```
+
+Either service override or a transport helper can redirect Git to a repository
+other than the URL. Before manual cleanup, verify the actual receiving repository
+with the service or helper owner.
+Use an endpoint whose upload and receive services you have verified target that
+repository; do not infer absence from the configured URL or upload service.
+The URL procedure below applies only when no service override or transport helper
+is configured and the endpoint is known to match the receiver.
+
+Inspect the push destinations:
+
+```bash
+git remote get-url --push --all <remote>
+```
+
+For each destination you intend to clean, copy its exact URL, including any
+leading or trailing spaces, into `push_url`. Run these commands in Bash:
+
+```bash
+push_url='<push-url>'
+endpoint="archon-cleanup-$$-$RANDOM:"
+git_at_endpoint() (
+    config_index=${GIT_CONFIG_COUNT:-0}
+    export "GIT_CONFIG_KEY_${config_index}=url.${push_url}.insteadOf"
+    export "GIT_CONFIG_VALUE_${config_index}=$endpoint"
+    export "GIT_CONFIG_KEY_$((config_index + 1))=url.${push_url}.pushInsteadOf"
+    export "GIT_CONFIG_VALUE_$((config_index + 1))=$endpoint"
+    export GIT_CONFIG_COUNT=$((config_index + 2))
+    git "$@"
+)
+git_at_endpoint ls-remote --symref -- "$endpoint" HEAD 'refs/heads/*'
+```
+
+Inspect all advertised branch names and OIDs. Start with the reported local branch's
+name; when the completed tip is known, also check differently named non-default refs
+containing it. For example,
+local `topic` may have been published as `refs/heads/review-name`; an empty query
+for `refs/heads/topic` proves only that exact ref is absent. The default branch
+normally contains merged work and is not a cleanup target merely for containing
+the completed tip.
+
+When the completed tip is known, verify each candidate's ancestry with
+`git merge-base --is-ancestor <completed-tip-oid> <advertised-oid>`
+(exit 0 means it contains the completed tip; exit 1 means it does not). If commits
+are missing, fetch the candidate from the same verified endpoint with
+`git_at_endpoint fetch --no-tags -- "$endpoint" '<full-remote-ref>'`, re-read the
+advertisement and repeat the check. A failed inspection or unknown ancestry does
+not prove absence. Ancestry alone does not prove ownership: confirm that the ref
+belongs to the completed work and is no longer in use before deleting it.
+
+If the completed tip cannot be established, do not guess a differently named ref
+or treat it as absent. Inspect candidate refs with the repository owner: match the
+receiving repository's pull request head-ref and commit history to the completed
+run and review the candidate's commits. Fetch candidates from the verified endpoint
+with the command above as needed, then inspect their advertised OIDs with
+`git show <advertised-oid>` and `git log <advertised-oid>`. A same-name ref can be
+inspected this way too; recovering the deleted local tip is not required. Confirm
+the candidate's provenance, current ownership, and that no replacement registration
+or other user is using or publishing it. If the evidence cannot identify a ref
+confidently, retain it. Once verified, re-read the advertisement and use that ref's
+current OID for the leased delete below.
+
+Keep the same `push_url` and `endpoint`. Enter the verified full remote ref name
+and its advertised OID, independently of the local branch name:
+
+```bash
+remote_ref='refs/heads/<verified-remote-branch>'
+verified_oid='<verified-oid>'
+git_at_endpoint push --force-with-lease="$remote_ref:$verified_oid" -- "$endpoint" ":$remote_ref"
+```
+
+The temporary alias maps directly to the resolved URL for both commands, preventing
+another `insteadOf` or `pushInsteadOf` rewrite from changing the destination.
+Separate config keys and values preserve URLs containing `=`. The destination
+listing is line-delimited; if a configured URL contains a newline,
+do not split it into destinations. Inspect the NUL-delimited configuration with
+`git config --null --list` and verify the exact destination before proceeding.
+
+The explicit lease refuses deletion if the tip changes after inspection. It cannot
+detect a same-commit republish, so delete only while no one is reusing or publishing
+that branch. If ownership is uncertain, leave the remote branch in place.
 
 ### `validate workflows [name]`
 
@@ -1661,7 +1819,10 @@ archon workflow run archon-ship --adopt <run-id> "resolve the remaining review f
 
 ### `complete <branch> [branch2 ...]`
 
-Remove a branch's worktree, local branch, and remote branch, and mark its isolation environment as destroyed.
+Remove a branch's worktree and local branch, and mark its isolation environment as destroyed.
+Remote branches are retained with a warning because registration ownership cannot
+be proved after local removal. This also applies with `--force`; follow
+[recovering remote branch cleanup](#recovering-remote-branch-cleanup) for manual cleanup.
 
 ```bash
 archon complete feature-auth
@@ -1678,7 +1839,8 @@ Without `--force`, completion refuses an environment a workflow run can still cl
 same live-run lock `/worktree remove` applies: a running, pending or paused run, or a
 failed run that can still be resumed. Unlike `isolation cleanup`, completion never
 releases a failed run's lock by merge state or age. If that lookup fails, completion
-refuses rather than skipping the check.
+refuses rather than skipping the check. A failed open-PR query warns and skips that
+check; it does not bypass the other safety checks.
 
 Use this after a PR is merged and you no longer need the worktree or branches. If GitHub
 has deleted a squash-merged branch, first prune its remote-tracking ref so the local clone

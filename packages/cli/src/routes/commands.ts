@@ -263,14 +263,13 @@ export async function runIsolation({
 
     case 'cleanup': {
       if (values.merged) {
-        await isolationCleanupMergedCommand({
+        return await isolationCleanupMergedCommand({
           includeClosed: Boolean(values['include-closed']),
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);
-        await isolationCleanupCommand(days);
+        return await isolationCleanupCommand(days);
       }
-      return 0;
     }
 
     default: {

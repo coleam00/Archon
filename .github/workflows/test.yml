@@ -429,6 +429,11 @@ jobs:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
 
+      - name: Run Postgres worktree registration conformance
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun test packages/core/src/db/worktree-registration-conformance.integration.test.ts
+
       - name: Run Postgres resource-slot test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres

@@ -6,7 +6,7 @@
  * event schema so RunStream rendering can switch on `kind` only.
  */
 
-import type { components } from '@/lib/api.generated';
+import type { components } from '../../../lib/api.generated';
 
 export type RunEventKind =
   | 'text'
@@ -160,11 +160,14 @@ const NODE_TRANSITION_BY_EVENT = new Map<string, NodeTransitionEvent['transition
   ['node_skipped_prior_success', 'skipped'],
 ]);
 
-/**
- * Best-effort normalizer from a raw workflow_events row to a typed RunEvent.
- * Unknown event types fall through as text events with the raw payload —
- * the spike surfaces them rather than silently dropping.
- */
+function isCleanupWarning(eventType: string, warnings: unknown): boolean {
+  return (
+    eventType === 'workflow_cleanup_warning' ||
+    (eventType === 'workflow_cancelled' && warnings !== undefined)
+  );
+}
+
+/** Normalize stored events; unknown payloads remain available behind the System toggle. */
 export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
   const base = {
     id: raw.id,
@@ -357,22 +360,35 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  if (isCleanupWarning(et, data.warnings)) {
+    if (
+      !Array.isArray(data.warnings) ||
+      data.warnings.length === 0 ||
+      !data.warnings.every(warning => typeof warning === 'string')
+    ) {
+      return {
+        ...base,
+        kind: 'text',
+        content: `Invalid ${et} payload: expected a nonempty string array in warnings. Inspect the stored run event before removing its checkout.`,
+      };
+    }
+    return {
+      ...base,
+      kind: 'text',
+      content: warningText(data.warnings, '⚠️ Workflow cleanup warnings'),
+    };
+  }
+
   // Keys the engine dropped from this run's YAML (#2213). Mapped explicitly —
   // the fallback below would render the raw `{"warnings":[…]}` payload. Rendered
   // as `text`, NOT `system`: system rows sit behind the System toggle (off by
   // default), and a silently dropped `interactive:` gate is exactly what the
   // author needs to see without opting in.
   if (et === 'workflow_parse_warnings') {
-    const warnings = Array.isArray(data.warnings)
-      ? data.warnings.filter((w): w is string => typeof w === 'string')
-      : [];
     return {
       ...base,
       kind: 'text',
-      content:
-        warnings.length > 0
-          ? `⚠️ This workflow declares keys the engine ignores:\n${warnings.map(w => `- ${w}`).join('\n')}`
-          : '⚠️ This workflow declares keys the engine ignores.',
+      content: warningText(data.warnings, '⚠️ This workflow declares keys the engine ignores'),
     };
   }
 
@@ -517,4 +533,13 @@ export function countTerminalNodes(nodes: readonly RunNodeState[]): {
     if (node.state === 'completed') completed += 1;
   }
   return { completed, total };
+}
+
+function warningText(value: unknown, heading: string): string {
+  const warnings = Array.isArray(value)
+    ? value.filter((warning): warning is string => typeof warning === 'string')
+    : [];
+  return warnings.length > 0
+    ? `${heading}:\n${warnings.map(warning => `- ${warning}`).join('\n')}`
+    : `${heading}.`;
 }

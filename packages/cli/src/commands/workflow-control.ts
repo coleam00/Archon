@@ -296,7 +296,7 @@ export async function workflowCancelCommand(
   }
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
-  console.log('Host process tree stopped before run state was changed.');
+  console.log('Run owner stopped before run state was changed.');
   for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
   return 0;

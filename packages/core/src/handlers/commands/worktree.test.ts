@@ -21,6 +21,7 @@ import {
   mockIsolationEnvDbCreate,
   mockIsolationEnvDbGet,
   mockMarkWorktreeDestroyed,
+  mockWithWorktreeRegistration,
   mockCountActiveByCodebase,
   mockIsolationCreate,
   mockIsolationDestroy,
@@ -378,32 +379,36 @@ describe('CommandHandler', () => {
           });
           const result = await handleCommand(conversation, '/worktree remove', operator);
           expect(result.success).toBe(true);
-          expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(destroyed);
+          expect(mockIsolationDestroy).not.toHaveBeenCalled();
+          expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
           expect(mockUpdateConversation).toHaveBeenCalledWith(conversation.id, {
             isolation_env_id: null,
             cwd: '/workspace/my-repo',
           });
         });
 
-        test('keeps the conversation on a registration recreated during removal', async () => {
-          mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
-          mockGetActiveSession.mockResolvedValue(null);
-          mockMarkWorktreeDestroyed.mockRejectedValueOnce(
-            new WorktreeRegistrationChangedError(featXEnv.id)
-          );
-
-          const result = await handleCommand(
-            makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
-            '/worktree remove',
-            operator
-          );
-
-          expect(result).toEqual({
-            success: false,
-            message: expect.stringContaining('changed during cleanup'),
-          });
-          expect(mockUpdateConversation).not.toHaveBeenCalled();
-        });
+        test.each([false, true])(
+          'refuses a changed registration before destruction (force=%s)',
+          async force => {
+            mockIsolationEnvDbGet.mockResolvedValue(featXEnv);
+            mockWithWorktreeRegistration.mockRejectedValueOnce(
+              new WorktreeRegistrationChangedError(featXEnv.id)
+            );
+            const result = await handleCommand(
+              makeConversation({ ...conversationWithCodebase, isolation_env_id: featXEnv.id }),
+              `/worktree remove${force ? ' --force' : ''}`,
+              operator
+            );
+            expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(
+              featXEnv,
+              expect.any(Function)
+            );
+            expect(result.success).toBe(false);
+            expect(result.message).toContain('changed during cleanup');
+            expect(mockIsolationDestroy).not.toHaveBeenCalled();
+            expect(mockUpdateConversation).not.toHaveBeenCalled();
+          }
+        );
 
         test('should deactivate session with worktree-removed reason', async () => {
           const convWithWorktree = makeConversation({
@@ -534,9 +539,29 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Usage');
         });
 
+        test.each(['merged', 'stale'] as const)('reports %s removal failures', async type => {
+          const cleanup =
+            type === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
+          cleanup.mockResolvedValueOnce({
+            ...emptyCleanup(),
+            removed: ['done'],
+            errors: [{ branchName: 'kept', error: 'registration changed' }],
+          });
+          const result = await handleCommand(
+            conversationWithCodebase,
+            `/worktree cleanup ${type}`,
+            operator
+          );
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('done');
+          expect(result.message).toContain('Failed: kept (registration changed)');
+        });
+
         test('should report merged worktree cleanup results', async () => {
           mockCleanupMergedWorktrees.mockResolvedValueOnce({
+            errors: [],
             removed: ['feat-old', 'feat-done'],
+            warnings: [{ branchName: 'feat-done', message: "Remote branch retained 'feat-done'" }],
             skipped: [{ branchName: 'feat-protected', reason: 'has uncommitted changes' }],
             releasedFailedRuns: [
               { branchName: 'feat-done', runId: 'run-failed-1', reason: 'merged' },
@@ -552,6 +577,9 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(true);
           expect(result.message).toContain('Cleaned up 2 merged worktree(s)');
+          expect(result.message).toContain(
+            "Warning: feat-done: Remote branch retained 'feat-done'"
+          );
           expect(result.message).toContain('feat-old');
           expect(result.message).toContain('feat-done');
           expect(result.message).toContain('Released failed run run-fail (merged): feat-done');
@@ -559,6 +587,34 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('feat-protected');
           expect(result.message).toContain('Active worktrees: 3');
         });
+
+        test.each(['merged', 'stale'] as const)(
+          'preserves completed %s cleanup warnings when the count query fails',
+          async cleanupType => {
+            const cleanup =
+              cleanupType === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
+            cleanup.mockResolvedValueOnce({
+              ...emptyCleanup(),
+              removed: ['feat-done'],
+              warnings: [
+                { branchName: 'feat-done', message: "Remote branch retained 'feat-done'" },
+              ],
+            });
+            mockCountActiveByCodebase.mockRejectedValueOnce(new Error('count query failed'));
+            const result = await handleCommand(
+              conversationWithCodebase,
+              `/worktree cleanup ${cleanupType}`,
+              operator
+            );
+            expect(result.success).toBe(true);
+            expect(result.message).toContain(`Cleaned up 1 ${cleanupType} worktree(s)`);
+            expect(result.message).toContain(
+              "Warning: feat-done: Remote branch retained 'feat-done'"
+            );
+            expect(result.message).toContain('Active worktrees: unavailable');
+            expect(result.message).toContain('count query failed');
+          }
+        );
 
         test('should report when no stale worktrees to clean up', async () => {
           mockCleanupStaleWorktrees.mockResolvedValueOnce(emptyCleanup());

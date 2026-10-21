@@ -31,6 +31,7 @@ export interface WorkflowOperationsDeps {
     | 'getWorkflowRun'
     | 'findChildRuns'
     | 'getRunAncestry'
+    | 'persistWorkflowEvent'
     | 'cancelWorkflowRun'
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'

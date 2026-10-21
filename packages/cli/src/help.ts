@@ -386,7 +386,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'complete',
     spec: 'complete <branch> [...]',
-    description: 'Complete branch lifecycle (remove worktree + branches)',
+    description: 'Remove worktree and local branch; retain remote branch',
   },
   {
     command: 'serve',
