@@ -171,9 +171,11 @@ A blank line separates the closing delimiter from prepared content, including te
 legacy sections whose closing delimiter follows a table row remain replaceable.
 If creation succeeds but a later description edit fails, the failure report still
 names the created PR from its verified creation record. If writing that record
-fails, publication fails and the verified identity is saved independently in
-`pr-create-verified.json`, which the failure report reads before the original claim.
-The node error also names the verified PR URL for explicit continuation. `update-pr-body` corrects the
+fails, publication fails and attempts to save the verified identity independently in
+`pr-create-verified.json`. The failure report selects the latest verified publication
+by artifact write time across the typed output and both creation records, and reports
+unreadable creation records. Even if both record writes fail, the node error names
+the verified PR URL and both recording errors for explicit continuation. `update-pr-body` corrects the
 description's stale claims and links the issue once the rounds end. A standalone
 `archon-pr` leaves a continued pull request's description as its author left it:
 its `publish_description` input defaults off. `publish-review` upserts the one marked review

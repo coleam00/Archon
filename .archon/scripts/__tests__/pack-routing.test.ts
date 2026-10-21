@@ -216,6 +216,69 @@ describe("deliver's report after a node failure", () => {
     expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
+  it.each(['pr-create-started', 'pr-create-verified.json'])('selects the latest publication across typed output and %s', record => {
+    for (const recoveryIsLatest of [true, false]) {
+      const run = runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+        artifacts: {
+          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+          'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+          [record]: JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+        },
+        preload: `import { utimesSync } from 'node:fs';
+          utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${recoveryIsLatest ? 100 : 300});
+          utimesSync('{ARTIFACTS}/${record}', 200, 200);`,
+      });
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.stdout)).toMatchObject({
+        reason: 'failed', pr_url: recoveryIsLatest ? 'https://ghe.example.com/example/repo/pull/43' : PR_URL,
+      });
+    }
+  });
+
+  it.each([true, false])('orders the two creation records by write time (recovery latest: %s)', recoveryIsLatest => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: {
+        'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }),
+        'pr-create-verified.json': JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/pr-create-started', 100, ${recoveryIsLatest ? 100 : 300});
+        utimesSync('{ARTIFACTS}/pr-create-verified.json', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).pr_url).toBe(recoveryIsLatest ? 'https://ghe.example.com/example/repo/pull/43' : PR_URL);
+  });
+
+  it('keeps the timestamp with the readable typed publication when a later artifact is missing', () => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }, { path: 'nodes/missing.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ pr: { url: 'https://ghe.example.com/example/repo/pull/43' } }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 300, 300);
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).pr_url).toBe(PR_URL);
+  });
+
+  it('retains a verified creation record and diagnostics from an unreadable one', () => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: {
+        'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }),
+        'pr-create-verified.json': 'invalid JSON',
+      },
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({ pr_url: PR_URL, summary: expect.stringContaining('pr-create-verified.json') });
+  });
+
   it('does not claim an unverified create and names an unreadable creation record', () => {
     expect(failedReport({ artifactsByType: {} }, {
       'pr-create-started': JSON.stringify({ repo: PR.repo, head: 'feature' }),

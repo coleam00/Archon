@@ -200,35 +200,42 @@ export function caveats(
 }
 
 /** A create verified before a later description edit failed has no typed output. */
-function creationRecord(path: string): { url: string; problem?: string } {
+function creationRecord(path: string): { url: string; at?: number; problem?: string } {
   try {
     const claim: unknown = JSON.parse(readFileSync(path, 'utf8'));
     const pr = isObject(claim) ? claim.pr : undefined;
-    return { url: isObject(pr) && typeof pr.url === 'string' ? pr.url : '' };
+    return { url: isObject(pr) && typeof pr.url === 'string' ? pr.url : '', at: modified(path) };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
     return { url: '', problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-function createdPr(artifacts: string): { url: string; problem?: string } {
-  const verified = creationRecord(join(artifacts, PR_CREATE_VERIFIED_RECORD));
-  if (verified.url !== '' || verified.problem !== undefined) return verified;
-  return creationRecord(join(artifacts, PR_CREATE_RECORD));
+function createdPr(artifacts: string): { url: string; at?: number; problem?: string } {
+  const records = [PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD].map(name => creationRecord(join(artifacts, name)));
+  const latest = records.filter(record => record.url !== '').sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).at(-1);
+  const problems = records.flatMap(record => record.problem === undefined ? [] : [record.problem]);
+  return { url: latest?.url ?? '', at: latest?.at, problem: problems.length === 0 ? undefined : problems.join('\n\n') };
 }
 
 /**
  * The URL of the pull request this run last published, from the engine's
- * typed-artifact listing or its verified creation records; empty when it published none. A tail that failed after
- * publishing still names its pull request, so the next run continues that one
+ * typed-artifact listing or its verified creation records, ordered by artifact write
+ * time; empty when it published none. A tail that failed after publishing still names its pull request, so the next run continues that one
  * instead of opening another. An unreadable listing is named by `failed`'s summary.
  */
 export function publishedPrUrl(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
 ): string {
-  const latest = readTyped<unknown>(options.listingFile, artifacts, 'pull-request').values.at(-1);
-  return isObject(latest) && typeof latest.url === 'string' ? latest.url : createdPr(artifacts).url;
+  const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
+  const latest = read.values.at(-1);
+  const entry = read.entries?.at(-1);
+  const created = createdPr(artifacts);
+  const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
+  if (isObject(latest) && typeof latest.url === 'string' &&
+    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))) return latest.url;
+  return created.url;
 }
 
 /**

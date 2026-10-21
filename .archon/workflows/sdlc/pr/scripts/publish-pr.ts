@@ -49,8 +49,6 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
-// Table cells can contain a legacy closing delimiter emitted without a block separator.
-// Other rendered containers keep literal marker examples out of the managed pair.
 async function descriptionMarkers(markdown: string): Promise<{ marker: string; at: number }[]> {
   const candidates: { marker: string; at: number; token: string }[] = [];
   const tagged = markdown.replace(
@@ -58,22 +56,20 @@ async function descriptionMarkers(markdown: string): Promise<{ marker: string; a
     (marker: string, at: number) => {
       const token = ` archon-description-position-${at} `;
       candidates.push({ marker, at, token });
-      return `<!--${token}-->`;
+      // Legacy sections put the closing delimiter directly after a Markdown table.
+      // Separate it for recognition only; raw HTML containers still own their comments.
+      const separator = marker === SECTION_END && (at === 0 || markdown[at - 1] === '\n') ? '\n\n' : '';
+      return `${separator}<!--${token}-->`;
     }
   );
   const comments = new Set<string>();
   const nested = new Set<string>();
-  const tables = new Set<string>();
   await new HTMLRewriter()
-    .on('*:not(table):not(thead):not(tbody):not(tr):not(th):not(td)', { comments: comment => { nested.add(comment.text); } })
-    .on('table', { comments: comment => { tables.add(comment.text); } })
+    .on('*', { comments: comment => { nested.add(comment.text); } })
     .onDocument({ comments: comment => { comments.add(comment.text); } })
     .transform(new Response(Bun.markdown.html(tagged)))
     .text();
-  return candidates.filter(candidate =>
-    comments.has(candidate.token) && !nested.has(candidate.token) &&
-    (!tables.has(candidate.token) || (candidate.marker === SECTION_END && (candidate.at === 0 || markdown[candidate.at - 1] === '\n')))
-  );
+  return candidates.filter(candidate => comments.has(candidate.token) && !nested.has(candidate.token));
 }
 
 function blockSeparator(value: string): string {
@@ -176,10 +172,17 @@ function recordCreatedPr(claimPath: string, pr: PrRecord): void {
   try {
     writeFileSync(claimPath, JSON.stringify({ repo: pr.repo, headRepo: pr.head_repo, head: pr.head, pr }), { mode: 0o600 });
   } catch (error) {
-    writeFileSync(join(artifactsDir(), PR_CREATE_VERIFIED_RECORD), JSON.stringify({ pr }), { mode: 0o600 });
+    const recoveryPath = join(artifactsDir(), PR_CREATE_VERIFIED_RECORD);
+    let recoveryError: unknown;
+    try {
+      writeFileSync(recoveryPath, JSON.stringify({ pr }), { mode: 0o600 });
+    } catch (failure) {
+      recoveryError = failure;
+    }
     throw new Error(
-      `created and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
+      `created and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}` +
+      (recoveryError === undefined ? '' : `; recovery record ${recoveryPath} also failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`),
+      { cause: recoveryError === undefined ? error : new AggregateError([error, recoveryError]) }
     );
   }
 }

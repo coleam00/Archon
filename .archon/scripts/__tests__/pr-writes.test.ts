@@ -575,7 +575,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
 
   it.each([
     `    ${START}\n    literal\n    ${END}\n`,
-    ...['pre', 'code', 'script', 'style', 'textarea'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
+    ...['pre', 'code', 'script', 'style', 'textarea', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
   ])('preserves literal marker containers in both ingresses and can publish again: %s', section => {
     const live = `Authored.\n\n${section}\n\n`;
     const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
@@ -586,7 +586,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(again.bodies).toEqual([]);
   });
 
-  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>'])(
+  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>', '<table>'])(
     'refuses a composed pair swallowed by an unclosed %s in either ingress', opening => {
       for (const options of [
         { artifacts: { [DESCRIPTION.path]: `${opening}\nunfinished` } },
@@ -679,6 +679,33 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const ending = JSON.parse(report.stdout);
     expect(ending).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
     expect(itemPullRequest([{ ...ending, run_id: 'run', at: '', delivered: false, artifacts: '' }], undefined, PR.repo)).toEqual(PR);
+  });
+
+  it.each(['gh', 'forge'] as const)('retains both recording errors and the verified URL when both writes fail through %s', source => {
+    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', null),
+        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
+      ] }),
+      preload: `import { unlinkSync, mkdirSync } from 'node:fs';
+        const spawn = Bun.spawnSync.bind(Bun);
+        Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+          const result = spawn(argv, settings);
+          if ((argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') || argv.includes('pr.create')) {
+            unlinkSync('{ARTIFACTS}/pr-create-started');
+            mkdirSync('{ARTIFACTS}/pr-create-started');
+            mkdirSync('{ARTIFACTS}/pr-create-verified.json');
+          }
+          return result;
+        } });`,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(PR_URL);
+    expect(result.stderr).toContain('pr-create-started');
+    expect(result.stderr).toContain('pr-create-verified.json');
+    expect(result.stderr.match(/EISDIR/g)?.length).toBe(2);
+    expect(result.bodies).toEqual([]);
   });
 
   it.each([
