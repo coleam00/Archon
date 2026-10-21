@@ -242,10 +242,19 @@ test.each([
   expect(formatted.rendered).toContain(`## [${scenario.next}]`);
   expect(formatted.rendered).toContain(draft.summary);
   expect(entry(result, 'review-changelog').resolvedText).toContain(formatted.rendered);
-  for (const node of workflow.nodes.filter(node =>
-    node.when?.includes('$parse-args.output.dryRun')
-  )) {
-    expect(entry(result, node.id).state).toBe(scenario.dryRun === 'true' ? 'skipped' : 'stubbed');
+  for (const id of [
+    'write-files',
+    'commit-and-push',
+    'create-pr',
+    'wait-for-merge',
+    'tag-and-release',
+    'sync-dev-with-main',
+    'wait-for-binaries',
+    'fetch-and-update-formula',
+    'commit-formula',
+    'sync-tap',
+  ]) {
+    expect(entry(result, id).state).toBe(scenario.dryRun === 'true' ? 'skipped' : 'stubbed');
   }
   expect(entry(result, 'final-summary').state).toBe('stubbed');
 });
