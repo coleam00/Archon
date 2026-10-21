@@ -22,9 +22,11 @@ to touch. A claim is live until it is edited to `Loop claim released` or `Loop c
 or until it is more than $INPUTS.claim_hours hours old.
 
 - Never choose an item with a live claim, or an open pull request whose work item has one.
-- Avoid an item whose change would land in the same files or module as a live claim's area:
-  two runs editing one area produce merge conflicts and undo each other's work. Choose
-  independent work instead, and say in `reason` which claim you stayed clear of. When every
+- Avoid an item whose change would rewrite the same code files as a live claim's area: two runs
+  rewriting one file produce merge conflicts and undo each other's work. Choose independent work
+  instead, and say in `reason` which claim you stayed clear of. Files every change only adds a
+  line or a section to (a README, a changelog, a docs index, a list of checks) and a shared module
+  the two changes touch in different places do not count: the default branch merges in cleanly. When every
   actionable item is claimed or overlaps a claimed area, the route is `none`.
 - A pull request still open from an earlier run whose claim was released is ordinary work for rule 1.
 
@@ -35,7 +37,7 @@ yourself.
 ## Choose (finish before you start)
 
 1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, is approved but unmerged, or whose latest `Loop review:` says `not merged` (the merge gate refused it). A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
-2. Otherwise **start** the next open issue whose dependencies are closed, lowest number first unless the product document's build order says otherwise. Never start an issue that already has an open pull request (search `gh pr list --search "<issue number>"` and the issue's linked pull requests): continue that pull request instead, or skip it if it is not this loop's.
+2. Otherwise **start** the open issue whose dependencies are closed that unblocks the most other open work (count the issues whose `Depends on` chains run through it), then the lowest number, unless the product document's build order says otherwise. Work the product needs comes before follow-ups the loop filed about its own tooling, unless one of them blocks product work. Never start an issue that already has an open pull request (search `gh pr list --search "<issue number>"` and the issue's linked pull requests): continue that pull request instead, or skip it if it is not this loop's.
 3. Skip anything labeled `needs-owner`.
 
 **Bookkeeping is not an owner decision.** `needs-owner` is for what only the owner can decide: product direction, scope, look and feel, contradictory requirements, or an item that hit the caps below. Resolve bookkeeping yourself instead: close an open issue that a merged pull request already delivered (link the pull request and the review that confirmed its criteria; if part is missing, say what and leave it open), and close an exact duplicate pointing at the original. If an open `needs-owner` item is really bookkeeping like this, or its park no longer holds under these rules (for example it was held only for a failure the default branch already has and the change did not cause), and other work waits on it, resolve it the same way and remove the label, saying why. Never lift a park that asks the owner a product question.
@@ -62,7 +64,7 @@ Choose the depth of the black-box app check from the work item's risk, not from 
 - `normal`: the default, for an ordinary feature or fix a user can see.
 - `deep`: a new system, a change across the core of the product, authentication, security, data or migrations, or an item a `normal` check already let a defect through on.
 
-Checking costs every other change its turn, so `deep` is the exception, not the safe choice.
+Checking costs every other change its turn, so `deep` is the exception, not the safe choice. A `continue` whose last review or merge-gate refusal asked for no code change (only the record, the evidence, or merging the default branch) is `light`.
 
 ## Contract first
 

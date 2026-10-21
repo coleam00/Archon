@@ -308,6 +308,16 @@ describe('loop wiring', () => {
     expect(prompt).toContain('QUESTION');
   });
 
+  it('a lap that changes no code checks nothing again, and pick follows the critical path', () => {
+    const work = readFileSync(resolve(pack, 'loop/commands/loop-work.md'), 'utf8');
+    expect(work).toContain('A run that changes no code runs no checks either');
+    expect(work).toContain('a green CI run on the commit you push is that full run');
+    const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
+    expect(pick).toContain('that unblocks the most other open work');
+    expect(pick).toContain('asked for no code change (only the record, the evidence, or merging the default branch) is `light`');
+    expect(pick).not.toContain('lowest number first unless');
+  });
+
   it('the merge goes through the gate: review decides, land merges, deploy follows land', () => {
     expect(node('evidence')).toContain('script: evidence');
     expect(node('land')).toContain('script: land');
