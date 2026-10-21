@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '@archon/core/utils/command-args';
 
 const track = trackTempRoots();
 
@@ -16,7 +17,7 @@ test.each([false, true])(
     const alpha = join(root, 'alpha');
     const beta = join(root, 'beta');
     for (const path of [home, alpha, beta]) mkdirSync(path);
-    const registerAlpha = `/register-project --folder alpha "${alpha}"`;
+    const registerAlpha = `/register-project --folder alpha ${quoteCommandArg(alpha)}`;
     const args = [join(import.meta.dir, '..', 'cli.ts'), 'chat'];
     if (initial) args.push(registerAlpha);
     const result = spawnSync(process.execPath, args, {
@@ -32,7 +33,7 @@ test.each([false, true])(
         ...(initial ? [] : [registerAlpha]),
         '/setproject alpha',
         '/status',
-        `/register-project --folder beta "${beta}"`,
+        `/register-project --folder beta ${quoteCommandArg(beta)}`,
         '/setproject beta',
         '/status',
         ...(initial ? [] : ['/exit', '/setproject alpha']),
