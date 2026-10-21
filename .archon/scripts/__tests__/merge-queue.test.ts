@@ -21,7 +21,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { withOther } from '../../workflows/sdlc/.shared/queue';
+import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -963,7 +963,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     for (const [declared, refusal] of [
       [decision({ action: 'return', brief: ' ', reason: 'CI red in its test' }), 'the sweep returned pull request 42 with no brief'],
       [decision({ action: 'ask', class: 'unclear', attention: null, brief: 'rework PR 42' }), 'the sweep asked about pull request 42 with no question'],
-      [decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: '' }), 'the sweep asked about pull request 42 with no brief for a return'],
     ] as const) {
       seed(at, item(BUILT, undefined, CLAIMED));
       const refused = run(at, 'record', recordInputs([declared]));
@@ -1033,12 +1032,97 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
-  test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {
+  test.each([
+    { name: 'empty', brief: '', returnOnly: false },
+    { name: 'whitespace-only', brief: ' \n ', returnOnly: true },
+  ])('an ask with an $name brief raises its question without return effects and other parks', ({ brief, returnOnly }) => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
+    const rework = { id: 'revise-scope', label: 'Rework it', does: 'sends it back', effect: 'return', ruling: '' } as const;
+    const attention: MergeAttention = {
+      ...ATTENTION,
+      recommendation: { ...ATTENTION.recommendation, choice: returnOnly ? rework.id : 'merge' },
+      choices: [...(returnOnly ? [] : ATTENTION.choices), rework],
+    };
+    const output = ok(run(at, 'record', {
+      ...recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief }), decision({ number: 43 })]),
+      INPUTS_ITEMS: BOTH_ITEMS,
+    }, { pr: { merged: [43] } })) as {
+      attention: string;
+      options: { id: string; label: string }[];
+      asked: { attention: MergeAttention };
+    };
+    expect(output).toMatchObject({ merged: [43], class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief } });
+    const prepared = output.asked.attention;
+    expect(prepared.choices.map(choice => choice.effect)).not.toContain('return');
+    expect(prepared.choices.map(choice => choice.id)).toEqual(returnOnly ? ['other'] : ['merge', 'park', 'other']);
+    expect(prepared.choices.find(choice => choice.id === 'other')).toMatchObject({ effect: 'park' });
+    expect(output.options).toEqual(prepared.choices.map(({ id, label }) => ({ id, label })));
+    expect(() => checkAttention(prepared)).not.toThrow();
+    if (returnOnly) {
+      expect(prepared.recommendation.choice).toBe('other');
+      expect(prepared.recommendation).toMatchObject({
+        evidence: 'Return is unavailable because the sweep supplied no build brief.',
+        confidence: 'high',
+        would_change: 'A nonblank build brief would make return available.',
+      });
+      expect(output.attention).toContain(prepared.why);
+      expect(output.attention).toContain('Recommendation: `other`** (high confidence)');
+      expect(output.attention).toContain('Evidence: Return is unavailable because the sweep supplied no build brief.');
+      expect(output.attention).toContain('What would change it: A nonblank build brief would make return available.');
+    } else expect(prepared.recommendation).toEqual(attention.recommendation);
+    for (const part of [attention.what, attention.why, PR_URL, 'no build brief']) {
+      expect(output.attention).toContain(part);
+    }
+    if (returnOnly) expect(output.attention).toContain('Recommendation: `other`');
+    expect(output.attention).not.toContain('`revise-scope` (Rework it)');
+    expect(output.attention).toContain('until the build queue readies the item again');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+
+    const calls = join(at.checkout, 'calls.jsonl');
+    const words = 'Hold this while I reconsider the scope.';
+    const ruled = run(at, 'ruling', {
+      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: 'other', INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
+    });
+    expect(ok(ruled).decision).toBe('park');
+    expect(ruled.bodies[0]).toContain(words);
+    expect(stored(at).value).toMatchObject({
+      claim: null,
+      facts: { build: { status: 'ready' }, merge: { status: 'parked', decisions: expect.arrayContaining([
+        expect.objectContaining({ answer: expect.objectContaining({ choice: 'other', text: words }) }),
+      ]) } },
+    });
+    expect(launchOf(calls)).toBeUndefined();
+  }, 60_000);
+
+  test.each([
+    { recommended: 'merge', brief: '', name: 'merge with an empty brief' },
+    { recommended: 'return', brief: '', name: 'return with an empty brief' },
+    { recommended: 'return', brief: ' \n ', name: 'return with a whitespace-only brief' },
+    { recommended: 'return', brief: 'Rework PR 42.', name: 'return with a nonblank brief' },
+  ])("an own pull request's ask recommending $name offers no return and its other parks", ({ recommended, brief }) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]);
-    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { asked: { attention: { choices: { id: string; effect: string }[] } } };
+    const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief })]);
+    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { attention: string; asked: { attention: MergeAttention } };
+    expect(() => checkAttention(asked.asked.attention)).not.toThrow();
+    expect(asked.asked.attention.recommendation.choice).toBe(recommended === 'return' ? 'other' : recommended);
+    if (recommended === 'return') {
+      const prepared = asked.asked.attention;
+      expect(prepared.recommendation).toMatchObject({
+        evidence: 'Return is unavailable because no build round owns this pull request.',
+        confidence: 'high',
+        would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
+      });
+      expect(asked.attention).toContain(prepared.why);
+      expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
+      expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
+      expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
+    } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
   }, 60_000);

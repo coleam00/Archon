@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { createEscalationStore } from '../../pause-test-utils';
+import { createEscalationStore, seedPreviousLoopGroupPass } from '../../pause-test-utils';
 import { describe, it, expect, beforeEach, afterEach, spyOn, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -523,6 +523,16 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       message: 'windows tests failed Re-run the check, then resume.',
     };
     const store = createEscalationStore('run-attention-unbounded');
+    seedPreviousLoopGroupPass(
+      store,
+      'run-attention-unbounded',
+      'grp',
+      12,
+      new Map([
+        ['grp.probe', { output: '{"state":"red","detail":"windows tests failed"}' }],
+        ['grp.pause', { output: '{"status":"satisfied"}' }],
+      ])
+    );
 
     await executeDagWorkflow(
       dagOptions({
@@ -1064,6 +1074,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         { output: JSON.stringify(approvedDecision), structuredOutput: approvedDecision },
       ],
     ]);
+    seedPreviousLoopGroupPass(store, 'run-escalation-retention', 'grp', 1, priorCompletedNodes);
     const workflowRun = makeWorkflowRun('run-escalation-retention', {
       metadata: {
         approval: {
