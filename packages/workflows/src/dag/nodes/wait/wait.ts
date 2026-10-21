@@ -271,18 +271,16 @@ export async function executeWaitNode(
         attentionNotification(platform, workflowRun.id, context, discarded)
       );
     }
-    return execution === undefined
-      ? { state: 'running', output: '' }
-      : !paused
-        ? serializeNodeOutput(execution)
-        : recordNodeState(
-            { store: deps.store, logDir },
-            finishNodeExecution(
-              execution,
-              { status: 'suspended', point: 'wait' },
-              { output: { text: '' } }
-            )
-          );
+    if (execution === undefined) return { state: 'running', output: '' };
+    const suspended = await recordNodeState(
+      { store: deps.store, logDir },
+      finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'wait' },
+        { output: { text: '' } }
+      )
+    );
+    return paused ? suspended : serializeNodeOutput(execution);
   }
 
   const status = context.kind === 'event' && !isSignaled ? 'expired' : 'satisfied';

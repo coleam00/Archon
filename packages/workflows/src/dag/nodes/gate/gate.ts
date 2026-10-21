@@ -213,7 +213,10 @@ export async function executeApprovalNode(
     approvalContext,
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) return { ...serializeNodeOutput(execution), ...reworkUsage };
+  if (!paused) {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, suspended);
+    return { ...serializeNodeOutput(execution), ...reworkUsage };
+  }
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +

@@ -1135,6 +1135,14 @@ With `--json` the command validates that the run is resumable, reports its state
 
 Prefer this exact-id form when you hold a run id. `workflow run <name> --resume` answers a different question: the newest resumable run of that workflow in the current checkout, which is a failed or paused run or a `running` run with no activity for over a day. From another worktree it finds nothing.
 
+A paused host or container run can refuse resume with "no durable completion or suspension record" for a leaf node. This means its invocation started but Archon cannot prove that it settled; replay could repeat side effects. Deliberately deferred gates, waits, and interactive loops record suspension and remain resumable.
+
+To recover:
+
+1. Inspect `archon workflow get <run-id> --json --verbose` and `archon workflow logs <run-id>` for the named node and the original write error. If the executor is still settling, let it finish, then retry resume.
+2. If the executor exited with a failed write, reconcile the node's effects against the checkout and external systems. Establish what completed, what needs compensation, and what is safe to repeat. Preserve needed artifacts, including container overlay changes, before cancellation or cleanup.
+3. There is no supported in-place repair command for missing node-state records. Do not synthesize lifecycle events with `workflow event emit`. After reconciliation, use `archon workflow cancel <run-id>`, then `archon workflow run <workflow-name> "<remaining work and reconciled effects>"`. The fresh run inherits no completed-node state, so its input and workflow must account for work already done.
+
 ### `workflow cancel`
 
 Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in
@@ -1398,6 +1406,8 @@ archon workflow event emit --run-id <run-id> --type <event-type> [--data <json>]
 ```
 
 `--run-id` takes the full run ID, or an unambiguous prefix when you run the command from the run's registered project directory or one of its worktrees. `--data` is a JSON string attached to the event; invalid JSON prints a warning and the event is emitted without it.
+
+This is not a repair command for a refused resume. Do not invent lifecycle events to bypass missing durable node state; follow [resume recovery](#workflow-resume) to reconcile effects and start fresh when necessary.
 
 Node-state events, including completion, failure, skip, and resume-cache changes, and
 `workflow.checkout_shared` events print `Event persisted` only after the database write

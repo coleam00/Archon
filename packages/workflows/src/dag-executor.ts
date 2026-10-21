@@ -182,6 +182,7 @@ export async function executeDagWorkflow(
   // fail; and the unwind backstop covers a fatal throw while aggregating that layer.
   // A same-value write is skipped, but a genuine re-execution may replace the
   // prior verdict.
+  let pauseError: string | undefined;
   let persistedOutcome: WorkflowRunOutcome | null = workflowRun.outcome;
   const persistAuthoredOutcome = async (): Promise<void> => {
     const field = workflow.outcome_field;
@@ -203,7 +204,12 @@ export async function executeDagWorkflow(
     }
     const outcome: WorkflowRunOutcome = resolution.value ? 'succeeded' : 'failed';
     if (outcome === persistedOutcome) return;
-    await deps.store.updateWorkflowRun(workflowRun.id, { outcome });
+    try {
+      await deps.store.updateWorkflowRun(workflowRun.id, { outcome });
+    } catch (error) {
+      pauseError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
     persistedOutcome = outcome;
   };
 
@@ -504,7 +510,6 @@ export async function executeDagWorkflow(
   };
 
   await persistAuthoredOutcome();
-  let pauseError: string | undefined;
   // Publication belongs to this segment even when a nested walker or later hook throws.
   let pausePublished = false;
   let layerStop: Awaited<ReturnType<typeof runLayers>>;

@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { describe, expect, it, mock, spyOn } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -16,10 +16,12 @@ import {
 import { createFileWorkflowStore } from './file-store/store';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
+import { finishNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
 import { resolveWorkflow } from './graph-plan';
 import { workflowDefinitionSchema, type WorkflowRun } from './schemas';
 import { approvalContextSchema } from './schemas/workflow-run';
-import { executionClaim, type IWorkflowStore } from './store';
+import { executionClaim, type IWorkflowStore, type PersistedNodeOutput } from './store';
 import type { ContainerWriteBackBackend } from './container-context';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 
@@ -97,7 +99,13 @@ async function setup(
     pendingEvents.push(pending);
     return pending;
   };
-  const execute = async (overrides: Partial<IWorkflowStore> = {}, executionRun = run) => {
+  const execute = async (
+    overrides: Partial<IWorkflowStore> = {},
+    executionRun = run,
+    priorCompletedNodes = new Map<string, PersistedNodeOutput>(
+      path === 'ordinary' ? [] : [['work', { output: 'done' }]]
+    )
+  ) => {
     const result = await executeWorkflow(
       createMockDeps({ ...store, createWorkflowEvent, ...overrides }),
       platform,
@@ -108,7 +116,7 @@ async function setup(
       undefined,
       {
         preCreatedRun: executionRun,
-        priorCompletedNodes: new Map(path === 'ordinary' ? [] : [['work', { output: 'done' }]]),
+        priorCompletedNodes,
         execContext: { kind: 'container', containerId: 'cid' },
         container: { envId: 'env', writeBack: 'approve', backend },
         resolvedBaseBranch: 'main',
@@ -117,7 +125,7 @@ async function setup(
     await Promise.all(pendingEvents);
     return result;
   };
-  return { store, run, backend, stop, platform, live, unsubscribe, execute };
+  return { root, store, run, backend, stop, platform, live, unsubscribe, execute };
 }
 
 function stopped(live: WorkflowEmitterEvent[]) {
@@ -154,6 +162,135 @@ describe('container pause segment ownership through the executor', () => {
       }
     }
   );
+  for (const leaf of [
+    { approval: { message: 'Deferred approval' } },
+    { wait: { duration_ms: 3_600_000 } },
+    { wait: { until: '2099-01-01T00:00:00Z' } },
+    { wait: { event: 'signal', deadline_ms: 3_600_000 } },
+    { wait: { attention: 'Deferred attention' } },
+    {
+      loop: {
+        prompt: 'Review',
+        until: 'COMPLETE',
+        interactive: true,
+        gate_message: 'Feedback?',
+        max_iterations: 2,
+      },
+    },
+    {
+      loop: {
+        command: 'review',
+        until: 'COMPLETE',
+        interactive: true,
+        gate_message: 'Feedback?',
+        max_iterations: 2,
+      },
+    },
+  ]) {
+    for (const nested of [false, true]) {
+      it.each([false, true])(
+        `deferred ${JSON.stringify(leaf)} (nested=${nested}, write rejected=%s) resumes only after settlement`,
+        async rejectWrite => {
+          const sibling = nested
+            ? {
+                id: 'group',
+                loop_group: {
+                  max_iterations: 2,
+                  until_bash: 'true',
+                  nodes: [{ id: 'deferred', ...leaf }],
+                },
+              }
+            : { id: 'deferred', ...leaf };
+          const f = await setup('ordinary', [
+            { id: 'review', approval: { message: 'First' } },
+            sibling,
+          ]);
+          await mkdir(join(f.root, '.archon', 'commands'), { recursive: true });
+          await writeFile(join(f.root, '.archon', 'commands', 'review.md'), 'Review');
+          const published = Promise.withResolvers<void>();
+          try {
+            const result = await f.execute({
+              persistWorkflowEvent: async event => {
+                if (
+                  rejectWrite &&
+                  event.event_type === 'node_suspended' &&
+                  event.step_name?.endsWith('deferred')
+                )
+                  throw new Error('Deferred suspension write rejected');
+                await f.store.persistWorkflowEvent(event);
+              },
+              pauseWorkflowRun: async (...args) => {
+                if (args[1].nodeId !== 'review') await published.promise;
+                await f.store.pauseWorkflowRun(...args);
+                published.resolve();
+              },
+              pauseWorkflowRunForWait: async (...args) => {
+                await published.promise;
+                await f.store.pauseWorkflowRunForWait(...args);
+              },
+            });
+            expect(result).toMatchObject(
+              rejectWrite
+                ? {
+                    success: false,
+                    error: expect.stringContaining('Deferred suspension write rejected'),
+                  }
+                : { success: true, paused: true }
+            );
+            const paused = await f.store.getWorkflowRun(f.run.id);
+            if (!paused) throw new Error('Missing pause');
+            const active = approvalContextSchema.parse(paused.metadata.approval);
+            if (!active.execution) throw new Error('Missing gate execution');
+            const completion = serializeNodeStateRecord(
+              finishNodeExecution(
+                active.execution,
+                { status: 'completed' },
+                { output: { text: '' } }
+              )
+            );
+            expect(
+              await f.store.resolveApprovalGate(
+                f.run.id,
+                { approval: { ...active, resolved: 'approved' } },
+                [completion]
+              )
+            ).toEqual({ resolved: true });
+            const resolved = await f.store.getWorkflowRun(f.run.id);
+            if (!resolved) throw new Error('Missing resolved pause');
+            if (rejectWrite) {
+              await expect(hydrateResumableRun({ store: f.store }, resolved)).rejects.toThrow(
+                'no durable completion or suspension record'
+              );
+              expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe('paused');
+            } else {
+              const hydrated = await hydrateResumableRun({ store: f.store }, resolved);
+              if (!hydrated) throw new Error('Missing hydrated run');
+              expect(
+                await f.execute({}, hydrated.preCreatedRun, hydrated.priorCompletedNodes)
+              ).toMatchObject({ success: true, paused: true });
+              const next = await f.store.getWorkflowRun(f.run.id);
+              expect(next?.status).toBe('paused');
+              expect(next?.metadata.approval ?? next?.metadata.wait).toMatchObject({
+                nodeId: nested && !('loop' in leaf) ? 'group' : 'deferred',
+              });
+            }
+            const events = await f.store.listWorkflowEvents(f.run.id);
+            expect(
+              events.some(
+                event =>
+                  event.step_name === (nested ? 'group.deferred' : 'deferred') &&
+                  event.event_type === 'node_suspended'
+              )
+            ).toBe(!rejectWrite);
+          } finally {
+            published.resolve();
+            f.unsubscribe();
+          }
+        }
+      );
+    }
+  }
+
   for (const suspension of [
     { approval: { message: 'Review' } },
     { wait: { duration_ms: 3_600_000 } },
@@ -311,7 +448,11 @@ describe('container pause segment ownership through the executor', () => {
           expect(executionClaim(row?.metadata ?? {})).toBe(
             executionClaim((successor ?? f.run).metadata)
           );
-          expect(result).toMatchObject({ success: true, paused: true });
+          expect(result).toMatchObject({
+            success: false,
+            error: error.message,
+          });
+          expect(row?.outcome).toBeNull();
           expect(f.stop).toHaveBeenCalledTimes(resume ? 0 : 1);
           expect(
             mockLogFn.mock.calls.some(

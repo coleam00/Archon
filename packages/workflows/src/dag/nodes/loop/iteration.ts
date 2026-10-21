@@ -599,6 +599,7 @@ async function pauseAtLoopGate(
     if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
       await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
     }
+    await recordNodeState({ store: deps.store, logDir }, suspended);
     return deferredLoopOutput;
   }
   await recordDerivedExecution({ logDir }, suspended);

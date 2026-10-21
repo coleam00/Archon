@@ -273,10 +273,11 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
       );
       expect(deferredEvents.some(event => event.event_type === 'node_started')).toBe(true);
       expect(
-        deferredEvents.some(event =>
-          ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
-        )
+        deferredEvents.some(event => ['node_completed', 'node_failed'].includes(event.event_type))
       ).toBe(false);
+      expect(deferredEvents.some(event => event.event_type === 'node_suspended')).toBe(
+        kind !== 'loop_group'
+      );
       const usageEvents = deferredEvents.filter(
         event => event.event_type === 'node_deferred_usage'
       );
@@ -372,6 +373,11 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
           event => event.event_type === 'node_deferred_usage'
         );
         expect(usage).toHaveLength(1);
+        expect(
+          persistedEvents(store).some(
+            event => event.step_name === 'group.review' && event.event_type === 'node_suspended'
+          )
+        ).toBe(true);
         expect(usage[0]).toMatchObject({
           step_name: 'group.review',
           data: { accounting: 'node', cost_usd: 0.25 },
@@ -380,7 +386,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
           persistedEvents(store).some(
             event =>
               event.step_name === 'group.review' &&
-              ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
+              ['node_completed', 'node_failed'].includes(event.event_type)
           )
         ).toBe(false);
       }
