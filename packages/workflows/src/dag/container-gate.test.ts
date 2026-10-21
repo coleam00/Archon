@@ -26,6 +26,12 @@ import type { IWorkflowStore } from '../store';
 import { finishNodeExecution } from '../node-execution';
 import { serializeNodeStateRecord } from '../node-record-serialization';
 import { createFileWorkflowStore } from '../file-store/store';
+import * as sourceLoader from '../workflow-source/load';
+import {
+  captureWorkflowSource,
+  capturedSourceRoots,
+  WorkflowSourceUnavailableError,
+} from '../workflow-source';
 
 // ---------------------------------------------------------------------------
 // Container write-back gate + suspend-on-pause (Phase C)
@@ -204,6 +210,40 @@ describe('executeDagWorkflow -- container write-back gate', () => {
 
   const reviewNode = (id = 'review') =>
     dagNodeSchema.parse({ id, approval: { message: 'Review' } });
+
+  it('releases unreadable source instead of publishing a same-layer approval', async () => {
+    const { options, backend, store, run } = await realPauseFixture([
+      reviewNode(),
+      dagNodeSchema.parse({ id: 'check', runtime: 'bun', script: 'check' }),
+    ]);
+    const metadata = { ...run.metadata, isolation: 'container', isolation_env_id: 'env-x' };
+    await store.updateWorkflowRun(run.id, { metadata });
+    options.workflowRun = { ...run, metadata };
+    const scripts = join(wbTestDir, '.archon', 'scripts');
+    await mkdir(scripts, { recursive: true });
+    await writeFile(join(scripts, 'check.ts'), 'console.log("ok")');
+    const capture = await captureWorkflowSource({
+      sourceRoot: wbTestDir,
+      captureRoot: join(wbTestDir, 'capture'),
+    });
+    options.workflowSourceRoots = capturedSourceRoots(capture.anchor);
+    const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockRejectedValue(
+      new WorkflowSourceUnavailableError(join(wbTestDir, 'capture'), new Error('read denied'))
+    );
+    const head = await store.getWorkflowEventHead();
+    try {
+      expect(await executeDagWorkflow(options)).toEqual({ kind: 'source_release', released: true });
+    } finally {
+      fault.mockRestore();
+    }
+    const released = await store.getWorkflowRun(run.id);
+    expect(released?.metadata.approval).toBeUndefined();
+    expect(released?.metadata.source_release).toBeDefined();
+    expect(backend.suspend).not.toHaveBeenCalled();
+    expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
+    const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+    expect(page.events.some(({ event }) => event.event_type === 'approval_pending')).toBe(false);
+  });
 
   it('joins an active peer before stopping or publishing, and does not admit the next layer', async () => {
     const peerStarted = Promise.withResolvers<void>();

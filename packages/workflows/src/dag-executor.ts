@@ -517,6 +517,12 @@ export async function executeDagWorkflow(
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
+  if (sourceUnreadable !== undefined) {
+    return {
+      kind: 'source_release',
+      released: await releaseRunForUnreadableSource(sourceUnreadable),
+    };
+  }
   const boundary = runCtx.containerPause;
   if (boundary?.publish !== undefined && execContext.kind === 'container' && containerCtx) {
     // Active Docker execs and required pass writes have settled; publication hands off ownership.
@@ -533,12 +539,6 @@ export async function executeDagWorkflow(
         outcome
       );
     });
-  }
-  if (sourceUnreadable !== undefined) {
-    return {
-      kind: 'source_release',
-      released: await releaseRunForUnreadableSource(sourceUnreadable),
-    };
   }
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
