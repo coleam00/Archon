@@ -28,7 +28,6 @@ import {
   getCleanupRunLock,
   listContainerEnvironments,
   cleanupContainerEnvironments,
-  type ContainerEnvSummary,
   type RemoveEnvironmentResult,
 } from '@archon/core/services/cleanup-service';
 import {
@@ -89,25 +88,21 @@ export async function isolationListCommand(): Promise<void> {
   // not worktrees — they're labeled Docker containers + upper volumes. A paused
   // run's container shows here (awaiting approve/resume) and is never auto-pruned.
   const containers = await listContainerEnvironments();
-  printContainerEnvironments(containers);
-}
+  if (containers.length === 0) return;
 
-function printContainerEnvironments(containers: readonly ContainerEnvSummary[]): void {
-  if (containers.length > 0) {
-    console.log('\nContainer environments (folder projects):');
-    for (const c of containers) {
-      const runPart =
-        c.runStatus === 'lookup-failed'
-          ? 'run lookup failed'
-          : c.runId
-            ? `run ${c.runId.slice(0, 8)} (${c.runStatus})`
-            : 'no run (orphan)';
-      console.log(`  ${c.envId.slice(0, 8)} — ${c.codebaseName}`);
-      console.log(`    Path: ${c.workingPath}`);
-      console.log(`    ${runPart} | Age: ${c.ageDays}d`);
+  console.log('\nContainer environments (folder projects):');
+  for (const c of containers) {
+    let runPart = 'no run (orphan)';
+    if (c.runStatus === 'lookup-failed') {
+      runPart = 'run lookup failed';
+    } else if (c.runId) {
+      runPart = `run ${c.runId.slice(0, 8)} (${c.runStatus})`;
     }
-    console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
+    console.log(`  ${c.envId.slice(0, 8)} — ${c.codebaseName}`);
+    console.log(`    Path: ${c.workingPath}`);
+    console.log(`    ${runPart} | Age: ${c.ageDays}d`);
   }
+  console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
 }
 
 /**

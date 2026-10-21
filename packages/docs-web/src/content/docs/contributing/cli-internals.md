@@ -245,12 +245,12 @@ archon isolation list → isolationListCommand()
   │    │    └─ Return matched run or null; throw on query/status errors
   │    └─ Build summaries; catch lookup errors and set runStatus: lookup-failed
   │
-  └─ printContainerEnvironments()
-       └─ Print run status, no run (orphan), or run lookup failed
+  └─ Print container details and totals: run status, no run (orphan),
+     or run lookup failed
 ```
 
-**Code:** `packages/cli/src/commands/isolation.ts` (`isolationListCommand`,
-`printContainerEnvironments`), `packages/core/src/operations/isolation-operations.ts`
+**Code:** `packages/cli/src/commands/isolation.ts` (`isolationListCommand`),
+`packages/core/src/operations/isolation-operations.ts`
 (`listEnvironments`), `packages/core/src/services/cleanup-service.ts`
 (`listContainerEnvironments`), `packages/core/src/db/workflow-run-reads.ts`
 (`getRunByIsolationEnvId`).
