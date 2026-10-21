@@ -249,6 +249,7 @@ export function runWorkflowEngineContractTests(
       const pending = engine.resume({
         ...resumeCallInput(),
         run: makeRun({ status: 'paused' }),
+        options: { codebaseId: 'caller-codebase' },
         prepareExecution: async run => {
           expect(run).toBe(resumed);
           entered.resolve();

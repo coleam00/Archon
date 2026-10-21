@@ -20,6 +20,8 @@ import { captureCommand } from '../test-support/command';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import * as receipts from '../utils/detached-resume-receipt';
 import { workflowRunCommand } from './workflow-run-owned';
+import * as preflight from './workflow-run-preflight';
+import { OwnedRunLease } from '../utils/owned-run-lease';
 
 const roots = trackTempRoots();
 const restores: (() => void)[] = [];
@@ -302,3 +304,87 @@ test('invalid prepared options undo admission before execution', async () => {
     expect(f.execute).not.toHaveBeenCalled();
   });
 });
+
+test.each([false, true])(
+  'preparation preserves caller container options (partial: %s)',
+  async partial => {
+    await fixture(async f => {
+      const candidate = await f.paused();
+      const admission = await f.host.engine.resume({
+        platform: new CLIAdapter(),
+        conversationId: 'resume-proof',
+        cwd: f.cwd,
+        userMessage: '',
+        run: candidate,
+        legacyWorkflow: makeTestResolvedWorkflow({
+          name: 'resume',
+          nodes: [{ id: 'second', bash: 'echo second' }],
+        }),
+        options: {
+          execContext: { kind: 'container', containerId: 'restarted' },
+          container: {
+            envId: f.envId,
+            writeBack: 'auto',
+            backend: {
+              suspend: f.suspend,
+              prepareSuspend: async () => async () => undefined,
+              finalize: async () => ({ requiresApproval: false }),
+              applyChanges: f.apply,
+              discardChanges: f.discard,
+            },
+          },
+        },
+        prepareExecution: async () => ({
+          cwd: f.cwd,
+          ...(partial ? { options: { codebaseId: candidate.codebase_id ?? undefined } } : {}),
+        }),
+      });
+      if (!admission.accepted) throw new Error('Expected admission');
+      expect(await admission.settled).toMatchObject({ success: true });
+      expect(f.execute).toHaveBeenCalledTimes(1);
+      expect(f.execute.mock.calls[0]?.[0]).toEqual({ kind: 'container', containerId: 'restarted' });
+    });
+  }
+);
+
+for (const stage of ['notice', 'announcement', 'subscription', 'lease'] as const) {
+  test.each(['SIGINT', 'SIGTERM'] as const)(
+    `fresh container cleanup during ${stage} on %s`,
+    async signal => {
+      await fixture(async f => {
+        watch(spyOn(ContainerBackend.prototype, 'prepare')).mockResolvedValue({
+          cwd: f.cwd,
+          execContext: { kind: 'container', containerId: 'restarted' },
+          envId: f.envId,
+          overlayMode: 'native',
+        });
+        const baseline = process.listeners(signal);
+        const exited = Promise.withResolvers<void>();
+        watch(spyOn(process, 'exit')).mockImplementation((() => exited.resolve()) as never);
+        let interrupted = false;
+        const interrupt = async () => {
+          const handlers = process.listeners(signal).filter(handler => !baseline.includes(handler));
+          expect(handlers).toHaveLength(1);
+          handlers[0]?.(signal);
+          await exited.promise;
+          expect(f.destroy).toHaveBeenCalledWith(f.envId);
+          interrupted = true;
+        };
+        if (stage === 'notice')
+          watch(spyOn(preflight, 'maybePrintTierNotice')).mockImplementation(interrupt);
+        if (stage === 'announcement')
+          watch(spyOn(CLIAdapter.prototype, 'sendMessage')).mockImplementationOnce(interrupt);
+        if (stage === 'subscription')
+          watch(spyOn(f.host.engine, 'subscribe')).mockImplementationOnce(async () => {
+            await interrupt();
+            return { close: async () => undefined };
+          });
+        if (stage === 'lease')
+          watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(interrupt);
+        await workflowRunCommand(f.host, f.cwd, 'resume', '', { folder: true, container: true });
+        expect(interrupted).toBe(true);
+        expect(process.listeners(signal)).toEqual(baseline);
+      });
+    }
+  );
+}

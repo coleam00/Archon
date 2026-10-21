@@ -70,8 +70,7 @@ export async function executeOwnedRun(
     ownsContainerCleanup: !defersContainerResume(launch),
   };
   let deregisterTermination: (() => void) | undefined;
-  const startExecution = async (): Promise<void> => {
-    await lease.start(ownedRunId);
+  const registerTermination = (): void => {
     deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
       runId: ownedRunId,
@@ -87,21 +86,22 @@ export async function executeOwnedRun(
     execution.ownsContainerCleanup = true;
   };
 
-  // One-time-per-version notice when the workflow uses unconfigured tier keywords.
-  await maybePrintTierNotice(
-    host,
-    admission.workflow,
-    workspace.workingCwd,
-    admission.cliUserId,
-    options.quiet
-  );
-  await announceDispatch(launch);
-
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
   let containerTeardownError: Error | undefined;
+  if (!defersContainerResume(launch)) registerTermination();
   try {
+    // One-time-per-version notice when the workflow uses unconfigured tier keywords.
+    await maybePrintTierNotice(
+      host,
+      admission.workflow,
+      workspace.workingCwd,
+      admission.cliUserId,
+      options.quiet
+    );
+    await announceDispatch(launch);
+
     // Progress lines render from the run's committed rows, its sub-runs' included.
     // Subscribed before submit or resume so the run's first row cannot be missed.
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
@@ -109,11 +109,12 @@ export async function executeOwnedRun(
       ? async (run: WorkflowRun) => {
           await provisionWorkspace(launch, lease, run);
           await recordConversationLaunch(launch);
-          await startExecution();
+          await lease.start(ownedRunId);
+          registerTermination();
           return { cwd: workspace.workingCwd, options: commonRunOptions(launch) };
         }
       : undefined;
-    if (!prepareExecution) await startExecution();
+    if (!prepareExecution) await lease.start(ownedRunId);
     execution.result = await driveRun(launch, lease, prepareExecution);
   } finally {
     containerTeardownError = await settleRun(launch, execution, ownedRunId, deregisterTermination);

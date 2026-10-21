@@ -20,7 +20,7 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
    claude + bash/script nodes all run INSIDE via `docker exec`
    env = the Archon-managed bag + auth only (never the host process.env)
         │
-   … approval gate?  →  docker stop (0 RAM while paused)  →  approve/resume → docker start
+   … approval gate?  →  docker stop (0 RAM while stopped)  →  approve/resume → docker start
         │
    nodes done → WRITE-BACK GATE: overlay diff summarized, run pauses
         │
@@ -29,6 +29,8 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
         │
    teardown → container + volume removed
 ```
+
+The diagram shows a normal gate pause. Failed resume setup or suspension can leave a paused run's container running; see [Pause economics](#pause-economics).
 
 The overlay's upper layer **is** the diff by overlayfs construction, so computing what changed is a directory walk, not a tree comparison. Claude nodes run via the SDK's `spawnClaudeCodeProcess` hook into `docker exec`; `bash:`/`script:` nodes exec in the same container rather than silently falling back to host execution.
 
@@ -76,7 +78,7 @@ An **empty diff** skips the gate and completes silently. Set `container.write_ba
 
 ## Pause economics
 
-Any pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, **`docker stop`s the container**. A multi-day wait costs ~0 CPU/RAM. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+On a normal pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, Archon **`docker stop`s the container**. Once stopped, a multi-day wait costs ~0 CPU/RAM. Failed resume setup or suspension can leave the container running while the run is paused, as described below. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
 
 The CLI acquires the run's authoritative resume claim before restarting its container, including write-back-only continuations. A stale or competing attempt that loses admission cannot restart or suspend the container. If restart or container credential setup fails before execution, the CLI surfaces the error and releases only its admission, retaining the prior pause, pause cause, overlay and write-back decision for retry. Credential setup can fail after restart succeeds; in that case the container may remain running, and its overlay is preserved.
 
