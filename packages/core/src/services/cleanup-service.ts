@@ -1033,6 +1033,7 @@ async function isEnvironmentStale(
  * Result from cleanup operations with detailed information
  */
 export interface CleanupOperationResult {
+  errors: { branchName: string; error: string }[];
   removed: string[];
   warnings: { branchName: string; message: string }[];
   skipped: { branchName: string; reason: string }[];
@@ -1127,6 +1128,23 @@ export async function getWorktreeStatusBreakdown(
   return breakdown;
 }
 
+function recordCleanupRemoval(
+  result: CleanupOperationResult,
+  branchName: string,
+  removal: RemoveEnvironmentResult,
+  released?: ReleasedFailedRun
+): void {
+  result.warnings.push(...removal.warnings.map(message => ({ branchName, message })));
+  if (removal.skippedReason === 'filesystem removal incomplete; environment remains active') {
+    result.errors.push({ branchName, error: removal.skippedReason });
+  } else if (removal.skippedReason) {
+    result.skipped.push({ branchName, reason: removal.skippedReason });
+  } else {
+    result.removed.push(branchName);
+    if (released) result.releasedFailedRuns.push({ branchName, ...released });
+  }
+}
+
 /**
  * Clean up stale worktrees for a codebase
  * Respects uncommitted changes and live workflow runs
@@ -1136,6 +1154,7 @@ export async function cleanupStaleWorktrees(
   mainRepoPath: string
 ): Promise<CleanupOperationResult> {
   const result: CleanupOperationResult = {
+    errors: [],
     removed: [],
     skipped: [],
     warnings: [],
@@ -1168,20 +1187,10 @@ export async function cleanupStaleWorktrees(
         continue;
       }
       const removeResult = await removeEnvironment(env);
-      result.warnings.push(
-        ...removeResult.warnings.map(message => ({ branchName: env.branch_name, message }))
-      );
-      if (removeResult.skippedReason) {
-        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
-      } else {
-        result.removed.push(env.branch_name);
-        if (check.released) {
-          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
-        }
-      }
+      recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
       const err = error as Error;
-      result.skipped.push({ branchName: env.branch_name, reason: err.message });
+      result.errors.push({ branchName: env.branch_name, error: err.message });
     }
   }
 
@@ -1204,6 +1213,7 @@ export async function cleanupMergedWorktrees(
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const result: MergedCleanupResult = {
+    errors: [],
     removed: [],
     warnings: [],
     skipped: [],
@@ -1232,15 +1242,13 @@ export async function cleanupMergedWorktrees(
       });
     } catch (error) {
       const err = error as Error;
-      // Log before skipping — silent skips make transient git/network failures
-      // impossible to debug from the cleanup report alone.
       getLog().warn(
         { err, branchName: env.branch_name, repoPath: mainRepoPath },
         'cleanup.merge_check_failed'
       );
-      result.skipped.push({
+      result.errors.push({
         branchName: env.branch_name,
-        reason: `merge check failed: ${err.message}`,
+        error: `merge check failed: ${err.message}`,
       });
       continue;
     }
@@ -1259,20 +1267,10 @@ export async function cleanupMergedWorktrees(
       const removeResult = await removeEnvironment(env, {
         deleteRemoteBranch: true,
       });
-      result.warnings.push(
-        ...removeResult.warnings.map(message => ({ branchName: env.branch_name, message }))
-      );
-      if (removeResult.skippedReason) {
-        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
-      } else {
-        result.removed.push(env.branch_name);
-        if (check.released) {
-          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
-        }
-      }
+      recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
       const err = error as Error;
-      result.skipped.push({ branchName: env.branch_name, reason: err.message });
+      result.errors.push({ branchName: env.branch_name, error: err.message });
     }
   }
 

@@ -539,8 +539,27 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('Usage');
         });
 
+        test.each(['merged', 'stale'] as const)('reports %s removal failures', async type => {
+          const cleanup =
+            type === 'merged' ? mockCleanupMergedWorktrees : mockCleanupStaleWorktrees;
+          cleanup.mockResolvedValueOnce({
+            ...emptyCleanup(),
+            removed: ['done'],
+            errors: [{ branchName: 'kept', error: 'registration changed' }],
+          });
+          const result = await handleCommand(
+            conversationWithCodebase,
+            `/worktree cleanup ${type}`,
+            operator
+          );
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('done');
+          expect(result.message).toContain('Failed: kept (registration changed)');
+        });
+
         test('should report merged worktree cleanup results', async () => {
           mockCleanupMergedWorktrees.mockResolvedValueOnce({
+            errors: [],
             removed: ['feat-old', 'feat-done'],
             warnings: [{ branchName: 'feat-done', message: "Remote branch retained 'feat-done'" }],
             skipped: [{ branchName: 'feat-protected', reason: 'has uncommitted changes' }],

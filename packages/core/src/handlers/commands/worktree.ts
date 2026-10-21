@@ -404,9 +404,13 @@ async function cleanupWorktrees(
       }
     }
 
+    msg += result.errors
+      .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
+      .join('');
+
     msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
 
-    return { success: true, message: msg.trim() };
+    return { success: result.errors.length === 0, message: msg.trim() };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');

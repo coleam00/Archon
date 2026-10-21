@@ -33,6 +33,7 @@ import {
 import {
   listEnvironments,
   cleanupMergedEnvironments,
+  type MergedCleanupResult,
 } from '@archon/core/operations/isolation-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -106,7 +107,7 @@ export async function isolationListCommand(): Promise<void> {
  * criteria). Kept here because the display-heavy flow doesn't map cleanly to
  * the operations layer's batch-oriented API.
  */
-export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
+export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
   // Reconcile ghosts via the operations layer
   const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
@@ -228,6 +229,28 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
         `${String(containerReport.errors.length)} failed`
     );
   }
+  return failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
+}
+
+function printMergedCleanupResult(result: MergedCleanupResult): void {
+  console.log(`  Base: ${result.baseRef}`);
+
+  for (const branch of result.removed) {
+    console.log(`  Cleaned: ${branch}`);
+  }
+  for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+    console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
+  }
+  for (const { branchName, message } of result.warnings) {
+    console.log(`  Warning: ${branchName}: ${message}`);
+  }
+  for (const skip of result.skipped) {
+    console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
+  }
+
+  for (const failure of result.errors) {
+    console.error(`  Failed: ${failure.branchName} (${failure.error})`);
+  }
 }
 
 /**
@@ -236,18 +259,19 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
-): Promise<void> {
+): Promise<0 | 1> {
   console.log('Finding environments with branches merged into their base branch...');
 
   const { codebases } = await listEnvironments();
 
   if (codebases.length === 0) {
     console.log('No codebases with active environments found.');
-    return;
+    return 0;
   }
 
   let totalCleaned = 0;
   let totalSkipped = 0;
+  let totalFailed = 0;
 
   for (const codebase of codebases) {
     try {
@@ -259,35 +283,22 @@ export async function isolationCleanupMergedCommand(
         options
       );
 
-      // The base ref comes back from the sweep that compared against it, so the
-      // operator sees the repo's configured base branch rather than an assumed one.
-      console.log(`  Base: ${result.baseRef}`);
-
-      for (const branch of result.removed) {
-        console.log(`  Cleaned: ${branch}`);
-      }
-      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
-        console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
-      }
-      for (const { branchName, message } of result.warnings) {
-        console.log(`  Warning: ${branchName}: ${message}`);
-      }
-      for (const skip of result.skipped) {
-        console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
-      }
-
+      printMergedCleanupResult(result);
+      totalFailed += result.errors.length;
       totalCleaned += result.removed.length;
       totalSkipped += result.skipped.length;
     } catch (error) {
       const err = error as Error;
       getLog().warn({ err, codebaseId: codebase.codebaseId }, 'merged_cleanup_failed');
       console.error(`  Error processing codebase: ${err.message}`);
+      totalFailed++;
     }
   }
 
   console.log(
-    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped`
+    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped, ${String(totalFailed)} failed`
   );
+  return totalFailed > 0 ? 1 : 0;
 }
 
 type CompletionEnvironment = IsolationEnvironmentRow & { codebase_default_cwd: string };

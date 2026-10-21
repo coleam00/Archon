@@ -35,6 +35,7 @@ const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() 
   Promise.resolve({
     removed: [],
     skipped: [],
+    errors: [],
     releasedFailedRuns: [],
     warnings: [],
     baseRef: MERGED_BASE_REF,
@@ -254,6 +255,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat-a', 'feat-b'],
       skipped: [],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [],
       baseRef: MERGED_BASE_REF,
@@ -269,6 +271,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [],
       baseRef: MERGED_BASE_REF,
@@ -283,6 +286,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: ['feat'],
       skipped: [],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [],
       baseRef: MERGED_BASE_REF,

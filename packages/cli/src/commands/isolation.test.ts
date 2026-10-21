@@ -16,6 +16,28 @@ import {
   isolationCleanupCommand,
   isolationCleanupMergedCommand,
 } from './isolation';
+import { runIsolation } from '../routes/commands';
+import type { CliRouteContext } from '../routes/context';
+
+mock.module('../routes/route-loader', () => ({
+  loadRoute: async <T>(loader: () => Promise<T>): Promise<T> => loader(),
+}));
+
+function cleanupRoute(merged = false): Promise<number> {
+  const context: CliRouteContext = {
+    command: 'isolation',
+    subcommand: 'cleanup',
+    positionals: ['isolation', 'cleanup'],
+    values: { merged },
+    cwd: '/test/repo',
+    effectiveCwd: '/test/repo',
+    json: false,
+    detachedRunConfig: undefined,
+    inheritedEnv: {},
+    forgeTrustedEnv: {},
+  };
+  return runIsolation(context);
+}
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -69,6 +91,7 @@ const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorkt
   Promise.resolve({
     removed: [],
     skipped: [],
+    errors: [],
     releasedFailedRuns: [],
     warnings: [],
     baseRef: toBranchName('origin/dev'),
@@ -121,6 +144,7 @@ const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMer
     Promise.resolve({
       removed: [],
       skipped: [],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [],
       baseRef: toBranchName('origin/dev'),
@@ -1135,6 +1159,7 @@ describe('isolationCleanupMergedCommand', () => {
     mockCleanupMergedEnvironments.mockResolvedValue({
       removed: [],
       skipped: [],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [],
       baseRef: toBranchName('origin/dev'),
@@ -1144,6 +1169,45 @@ describe('isolationCleanupMergedCommand', () => {
   afterEach(() => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+  });
+
+  it.each([false, true])(
+    'returns failure for merged removal errors (failure: %s)',
+    async failed => {
+      mockCleanupMergedEnvironments.mockResolvedValueOnce({
+        removed: ['done'],
+        warnings: [],
+        releasedFailedRuns: [],
+        baseRef: toBranchName('origin/dev'),
+        skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
+        errors: failed ? [{ branchName: 'kept', error: 'registration changed' }] : [],
+      });
+      expect(await cleanupRoute(true)).toBe(failed ? 1 : 0);
+      expect(consoleLogSpy).toHaveBeenCalledWith('  Cleaned: done');
+      if (failed)
+        expect(consoleErrorSpy).toHaveBeenCalledWith('  Failed: kept (registration changed)');
+    }
+  );
+
+  it('continues after a codebase failure and returns failure after the summary', async () => {
+    mockListEnvironments.mockResolvedValueOnce({
+      codebases: ['broken', 'later'].map(codebaseId => ({
+        codebaseId,
+        defaultCwd: '/test/repo',
+        repositoryUrl: null,
+        environments: [],
+      })),
+      totalEnvironments: 0,
+      ghostsReconciled: 0,
+    });
+    mockCleanupMergedEnvironments.mockRejectedValueOnce(new Error('cannot inspect repository'));
+    expect(await cleanupRoute(true)).toBe(1);
+    expect(mockCleanupMergedEnvironments).toHaveBeenLastCalledWith('later', '/test/repo', {
+      includeClosed: false,
+    });
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '\nMerged cleanup complete: 0 cleaned, 0 skipped, 1 failed'
+    );
   });
 
   it('passes includeClosed=true when --include-closed flag is set', async () => {
@@ -1165,6 +1229,7 @@ describe('isolationCleanupMergedCommand', () => {
       removed: ['settled'],
       skipped: [],
       warnings: [],
+      errors: [],
       releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'PR closed' }],
       baseRef: toBranchName('origin/dev'),
     });
@@ -1180,6 +1245,7 @@ describe('isolationCleanupMergedCommand', () => {
     mockCleanupMergedEnvironments.mockResolvedValueOnce({
       removed: ['settled'],
       skipped: [],
+      errors: [],
       releasedFailedRuns: [],
       warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
       baseRef: toBranchName('origin/dev'),
@@ -1241,12 +1307,34 @@ describe('isolationCleanupCommand', () => {
     }
   );
 
+  it('continues worktree and container cleanup after a failed removal', async () => {
+    mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv, { ...mockEnv, id: 'later' }]);
+    mockDestroyWorktree.mockRejectedValueOnce(new Error('removal failed'));
+    expect(await cleanupRoute()).toBe(1);
+    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'later' })
+    );
+    expect(mockCleanupContainerEnvironments).toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      '\nCleanup complete: 1 cleaned, 0 skipped, 1 failed'
+    );
+  });
+
+  it.each([false, true])('returns failure for container errors (failure: %s)', async failed => {
+    mockCleanupContainerEnvironments.mockResolvedValueOnce({
+      removed: [],
+      skipped: failed ? [] : [{ id: 'container', reason: 'live run' }],
+      errors: failed ? [{ id: 'container', error: 'removal failed' }] : [],
+    });
+    expect(await cleanupRoute()).toBe(failed ? 1 : 0);
+  });
+
   it('refuses a changed stale registration before destruction', async () => {
     mockFindStaleEnvironments.mockResolvedValueOnce([mockEnv]);
     mockWithWorktreeRegistration.mockRejectedValueOnce(
       new WorktreeRegistrationChangedError(mockEnv.id)
     );
-    await isolationCleanupCommand(7);
+    expect(await cleanupRoute()).toBe(1);
     expect(mockWithWorktreeRegistration).toHaveBeenLastCalledWith(mockEnv, expect.any(Function));
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
@@ -1331,7 +1419,7 @@ describe('isolationCleanupCommand', () => {
           remoteBranchDeleted: null,
           warnings: ['Retained directory'],
         });
-      await isolationCleanupCommand(7);
+      expect(await cleanupRoute()).toBe(1);
       expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
       expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain(
         mode === 'refusal' ? 'ownership changed' : 'Retained directory'
@@ -1365,7 +1453,7 @@ describe('isolationCleanupCommand', () => {
       blocker: liveRunBlocker('paused'),
     });
 
-    await isolationCleanupCommand(7);
+    expect(await cleanupRoute()).toBe(0);
 
     expect(mockDestroyWorktree).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();

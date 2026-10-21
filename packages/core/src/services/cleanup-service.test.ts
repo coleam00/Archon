@@ -1107,7 +1107,13 @@ describe('cleanup environment configuration', () => {
 
     const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
 
-    expect(result).toEqual({ removed: [], skipped: [], warnings: [], releasedFailedRuns: [] });
+    expect(result).toEqual({
+      errors: [],
+      removed: [],
+      skipped: [],
+      warnings: [],
+      releasedFailedRuns: [],
+    });
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -1262,10 +1268,48 @@ describe('cleanupMergedWorktrees', () => {
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
     expect(result.removed).toEqual(['before', 'after']);
-    expect(result.skipped).toEqual([
-      { branchName: 'broken', reason: 'settled owner query failed' },
-    ]);
+    expect(result.errors).toEqual([{ branchName: 'broken', error: 'settled owner query failed' }]);
     expect(result.releasedFailedRuns).toEqual([]);
+  });
+
+  test.each(
+    (['merged', 'stale'] as const).flatMap(sweep =>
+      (['throw', 'worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )('$sweep cleanup records $failure as an error and continues', async ({ sweep, failure }) => {
+    const envs = ['broken', 'later'].map(branch =>
+      makeEnvironmentWithAge({
+        ...worktreeEnv(branch),
+        created_by_platform: 'slack',
+        days_since_activity: 30,
+      })
+    );
+    mergedSweepFinds(...envs);
+    mockListByCodebaseWithAge.mockResolvedValue(envs);
+    mockIsBranchMerged.mockResolvedValue(true);
+    if (failure === 'throw') mockDestroy.mockRejectedValueOnce(new Error('removal refused'));
+    else
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+    const cleanup = sweep === 'merged' ? cleanupMergedWorktrees : cleanupStaleWorktrees;
+    const result = await cleanup('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual(['later']);
+    expect(result.skipped).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        branchName: 'broken',
+        error:
+          failure === 'throw'
+            ? 'removal refused'
+            : 'filesystem removal incomplete; environment remains active',
+      },
+    ]);
   });
 
   test('removes merged branches without uncommitted changes', async () => {
@@ -1326,14 +1370,14 @@ describe('cleanupMergedWorktrees', () => {
   test.each([
     { check: 'isBranchMerged', mock: mockIsBranchMerged },
     { check: 'isPatchEquivalent', mock: mockIsPatchEquivalent },
-  ])('logs a warn before skipping an environment when $check fails', async ({ mock }) => {
+  ])('logs a warning and reports an error when $check fails', async ({ mock }) => {
     mergedSweepFinds(worktreeEnv('flaky-branch'));
     mock.mockRejectedValue(new Error('network unreachable'));
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
-    expect(result.skipped).toEqual([
-      { branchName: 'flaky-branch', reason: 'merge check failed: network unreachable' },
+    expect(result.errors).toEqual([
+      { branchName: 'flaky-branch', error: 'merge check failed: network unreachable' },
     ]);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ branchName: 'flaky-branch', repoPath: '/workspace/repo' }),
@@ -1415,10 +1459,10 @@ describe('cleanupMergedWorktrees', () => {
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
-    expect(result.skipped).toEqual([
+    expect(result.errors).toEqual([
       {
         branchName: 'head-missing',
-        reason: expect.stringContaining('merge check failed: Failed to fetch PR head'),
+        error: expect.stringContaining('merge check failed: Failed to fetch PR head'),
       },
     ]);
     expect(mockGetById).not.toHaveBeenCalled();
@@ -1773,6 +1817,7 @@ describe('cleanup after a chat plugin is removed', () => {
     const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
     expect(stale).toEqual({
+      errors: [],
       removed: [],
       warnings: [],
       skipped: [{ branchName: env.branch_name, reason }],

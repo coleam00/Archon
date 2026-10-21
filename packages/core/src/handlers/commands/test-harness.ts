@@ -448,6 +448,7 @@ mock.module('@archon/isolation', () => ({
 export const emptyCleanup = (): CleanupOperationResult => ({
   removed: [],
   skipped: [],
+  errors: [],
   releasedFailedRuns: [],
   warnings: [],
 });
