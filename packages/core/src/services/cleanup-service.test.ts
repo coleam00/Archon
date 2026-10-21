@@ -1966,6 +1966,43 @@ describe('failed-run lock release', () => {
     ]);
   });
 
+  test.each(
+    (['merged', 'stale'] as const).flatMap(sweep =>
+      (['worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )(
+    'scheduled $sweep cleanup does not report a failed-run release after incomplete $failure',
+    async ({ sweep, failure }) => {
+      const env = staleEnv();
+      scheduledSweepFinds(env);
+      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      releasedByTheSweep();
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+
+      const report = await runScheduledCleanup();
+
+      expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith(
+        env.id,
+        sweep === 'merged' ? { kind: 'settled' } : { kind: 'stale', staleDays: 14 }
+      );
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+      expect(report.errors).toEqual([
+        { id: env.id, error: 'filesystem removal incomplete; environment remains active' },
+      ]);
+      expect(report.skipped).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.releasedFailedRuns).toEqual([]);
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    }
+  );
+
   test('the stale sweep keeps a released failed run whose commits are on no remote', async () => {
     mockListAllActiveWithCodebase.mockResolvedValue([staleEnv()]);
     releasedByTheSweep();
