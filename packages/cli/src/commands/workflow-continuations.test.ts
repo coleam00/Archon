@@ -47,11 +47,10 @@ const host = {
   deps: { store: { getWorkflowRun: getRun } },
   operations: { signalWorkflowWait: signal },
 } as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
-mock.module('../utils/stdout', () => ({
-  writeStdout: async (value: string) => {
-    output.push(JSON.parse(value));
-  },
-}));
+const writeStdout = mock(async (value: string) => {
+  output.push(JSON.parse(value));
+});
+mock.module('../utils/stdout', () => ({ writeStdout }));
 mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
@@ -65,6 +64,7 @@ beforeEach(() => {
   resume.mockReset();
   resume.mockResolvedValue({ kind: 'not-accepted' });
   getRun.mockReset();
+  writeStdout.mockClear();
   signal.mockClear();
   install.mockClear();
   remove.mockClear();
@@ -419,3 +419,32 @@ test.each([false, true])(
     expect(scan).toHaveBeenCalledTimes(1);
   }
 );
+
+test('a failed accepted report still drains cleanup and fails the wake', async () => {
+  const cleanup = mock(async () => {});
+  resume.mockImplementationOnce(async (_host, _runId, _context, _cursor, _actor, options) => {
+    options?.deferScratchCleanup?.(cleanup);
+    return {
+      kind: 'accepted',
+      run: makeTestWorkflowRun(),
+      settled: Promise.resolve({ success: true, workflowRunId: 'run' }),
+    };
+  });
+  scan.mockImplementationOnce(async (_store, _now, admit) => [
+    {
+      runId: 'run',
+      ...(await admit(makeTestWorkflowRun(), {
+        kind: 'wait',
+        pauseId: 'wait',
+        nodeId: 'hold',
+        resumeAt: '2026-08-24T11:00:00Z',
+      })),
+    },
+  ]);
+  writeStdout.mockImplementationOnce(async () => {
+    throw new Error('stdout closed');
+  });
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
+  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(output).toEqual([{ ok: false, action: 'wake', error: 'stdout closed' }]);
+});
