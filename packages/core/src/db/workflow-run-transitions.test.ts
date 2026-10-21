@@ -9,6 +9,7 @@ const mockQuery = createMockQuery();
 const queryWithCheckout = (sql: string, params?: unknown[]) => {
   if (
     sql === 'SELECT pg_advisory_xact_lock(1797)' ||
+    sql === 'SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $1' ||
     sql.startsWith('SELECT e.working_path FROM remote_agent_isolation_environments e') ||
     sql.startsWith(
       'SELECT codebase_id, working_path, metadata, conversation_id, status FROM remote_agent_workflow_runs'

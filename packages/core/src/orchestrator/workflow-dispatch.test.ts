@@ -193,74 +193,97 @@ describe('workflow dispatch routing', () => {
     }
   );
 
-  test.each(['removed', 'replaced', 'absent-row', 'destroyed', 'removed-before-capture'] as const)(
-    'fresh foreground captures reconciled source when its checkout was %s',
-    async state => {
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-source-')));
-      const retiredPath = join(root, 'retired');
-      const replacementPath = join(root, 'replacement');
-      const projectPath = join(root, 'project');
-      for (const [path, description] of [
-        [retiredPath, 'obsolete source'],
-        [replacementPath, 'replacement source'],
-        [projectPath, 'registered source'],
-      ]) {
-        await mkdir(join(path, '.archon', 'workflows'), { recursive: true });
-        await writeFile(
-          join(path, '.archon', 'workflows', 'test-workflow.yaml'),
-          `name: test-workflow\ndescription: ${description}\nnodes:\n  - id: work\n    prompt: Work\n`
-        );
-      }
-      if (state === 'removed') await rm(retiredPath, { recursive: true });
-      const conversation = makeDispatchConversation({
-        isolation_env_id: 'retired-env',
-        cwd: retiredPath,
-      });
-      mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
-      mockGetCodebase.mockResolvedValueOnce(makeCodebase({ default_cwd: projectPath }));
-      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+  const reconciliationStates = [
+    'removed',
+    'replaced',
+    'absent-row',
+    'destroyed',
+    'removed-before-capture',
+    'override',
+    'override-replaced',
+  ] as const;
+  async function prepareReconciledSource(state: (typeof reconciliationStates)[number]) {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-source-')));
+    const retiredPath = join(root, 'retired');
+    const replacementPath = join(root, 'replacement');
+    const projectPath = join(root, 'project');
+    const overridePath = join(root, 'override');
+    const hasOverride = state === 'override' || state === 'override-replaced';
+    const hasReplacement = state !== 'removed' && state !== 'override';
+    for (const [path, description] of [
+      [retiredPath, 'obsolete source'],
+      [replacementPath, 'replacement source'],
+      [projectPath, 'registered source'],
+      [overridePath, 'override source'],
+    ]) {
+      await mkdir(join(path, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(path, '.archon', 'workflows', 'test-workflow.yaml'),
+        `name: test-workflow\ndescription: ${description}\nnodes:\n  - id: work\n    prompt: Work\n`
+      );
+    }
+    if (state === 'removed') await rm(retiredPath, { recursive: true });
+    const conversation = makeDispatchConversation({
+      isolation_env_id: 'retired-env',
+      cwd: retiredPath,
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase({ default_cwd: projectPath }));
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    mockAdoptedEnvironment.mockResolvedValueOnce(
+      makeIsolationEnvironment({
+        id: 'retired-env',
+        working_path: retiredPath,
+        status: 'destroyed',
+      })
+    );
+    mockClearConversationCheckout.mockResolvedValueOnce({
+      ...conversation,
+      isolation_env_id: hasReplacement ? 'new-env' : null,
+      cwd: hasOverride ? overridePath : null,
+    });
+    if (hasReplacement)
       mockAdoptedEnvironment.mockResolvedValueOnce(
-        makeIsolationEnvironment({
-          id: 'retired-env',
-          working_path: retiredPath,
-          status: 'destroyed',
-        })
+        state === 'absent-row'
+          ? null
+          : makeIsolationEnvironment({
+              id: 'new-env',
+              working_path: replacementPath,
+              status: state === 'destroyed' ? 'destroyed' : 'active',
+            })
       );
-      mockClearConversationCheckout.mockResolvedValueOnce({
-        ...conversation,
-        isolation_env_id: state === 'removed' ? null : 'new-env',
+    if (state === 'destroyed') await rm(replacementPath, { recursive: true });
+    const captureRoot = join(root, 'capture');
+    mockPrepareWorkflowSource.mockClear();
+    if (state !== 'destroyed')
+      mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
+        if (state === 'removed-before-capture') await rm(replacementPath, { recursive: true });
+        const capture = await captureWorkflowSource({ ...options, captureRoot });
+        return {
+          ...capture,
+          runId: 'prepared-run-id',
+          roots: capturedSourceRoots(capture.anchor),
+        };
       });
-      if (state !== 'removed')
-        mockAdoptedEnvironment.mockResolvedValueOnce(
-          state === 'absent-row'
-            ? null
-            : makeIsolationEnvironment({
-                id: 'new-env',
-                working_path: replacementPath,
-                status: state === 'destroyed' ? 'destroyed' : 'active',
-              })
-        );
-      if (state === 'destroyed') await rm(replacementPath, { recursive: true });
-      const captureRoot = join(root, 'capture');
-      mockPrepareWorkflowSource.mockClear();
-      if (state !== 'destroyed')
-        mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
-          if (state === 'removed-before-capture') await rm(replacementPath, { recursive: true });
-          const capture = await captureWorkflowSource({ ...options, captureRoot });
-          return {
-            ...capture,
-            runId: 'prepared-run-id',
-            roots: capturedSourceRoots(capture.anchor),
-          };
-        });
-      mockDiscoverWorkflowsWithConfig.mockImplementation((...args) =>
-        realDiscoverWorkflowsWithConfig(...args)
-      );
-      const platform = makeForegroundPlatform();
+    mockDiscoverWorkflowsWithConfig.mockImplementation((...args) =>
+      realDiscoverWorkflowsWithConfig(...args)
+    );
+    return { conversation, hasReplacement, hasOverride, replacementPath, captureRoot };
+  }
+
+  test.each(
+    reconciliationStates.flatMap(state => [false, true].map(background => ({ state, background })))
+  )(
+    'fresh background=$background captures reconciled source when its checkout was $state',
+    async ({ state, background }) => {
+      const { conversation, hasReplacement, hasOverride, replacementPath, captureRoot } =
+        await prepareReconciledSource(state);
+      const platform = background ? makePlatform() : makeForegroundPlatform();
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: operator,
       });
       if (state === 'destroyed' || state === 'removed-before-capture') {
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
         expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
         expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
         expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -271,16 +294,28 @@ describe('workflow dispatch routing', () => {
         await expect(readFile(join(captureRoot, 'manifest.json'))).rejects.toThrow();
         return;
       }
-      const expectedDescription = state === 'replaced' ? 'replacement source' : 'registered source';
+      const expectedDescription = hasOverride
+        ? 'override source'
+        : state === 'replaced'
+          ? 'replacement source'
+          : 'registered source';
       expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
-      expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe(
-        state === 'removed' ? null : 'new-env'
-      );
+      if (!background)
+        expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe(
+          hasReplacement ? 'new-env' : null
+        );
       expect(
         await readFile(join(captureRoot, 'project/.archon/workflows/test-workflow.yaml'), 'utf8')
       ).toContain(expectedDescription);
-      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
-      expect(mockExecuteWorkflow.mock.calls[0]?.[4].description).toBe(expectedDescription);
+      if (background) {
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockDispatchBackgroundWorkflow.mock.calls[0]?.[1].description).toBe(
+          expectedDescription
+        );
+      } else {
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockExecuteWorkflow.mock.calls[0]?.[4].description).toBe(expectedDescription);
+      }
     }
   );
 

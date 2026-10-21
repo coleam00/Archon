@@ -6,7 +6,7 @@ import {
 } from '@archon/workflows/schemas/checkout-ownership';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 export { introducesCheckout };
-import { getDatabaseType } from './connection';
+import { getDatabaseType, getDialect } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { normalizeMetadata } from './workflow-run-shared';
 
@@ -21,6 +21,58 @@ type CheckoutRun = Pick<
   WorkflowRun,
   'codebase_id' | 'working_path' | 'metadata' | 'conversation_id'
 >;
+
+function hasDurableCheckout(run: Pick<CheckoutRun, 'working_path' | 'metadata'>): boolean {
+  return (
+    Boolean(run.working_path) ||
+    checkoutEnvironmentReferences(run.metadata).some(id => typeof id === 'string')
+  );
+}
+
+export async function snapshotConversationCheckout(
+  query: TransactionQuery,
+  data: Pick<
+    Parameters<IWorkflowStore['createWorkflowRun']>[0],
+    'working_path' | 'metadata' | 'origin'
+  >
+): Promise<WorkflowRun['metadata']> {
+  const metadata = data.metadata ?? {};
+  const conversationId = data.origin?.conversationId;
+  if (hasDurableCheckout({ working_path: data.working_path ?? null, metadata }) || !conversationId)
+    return metadata;
+  const result = await query<{ isolation_env_id: string | null }>(
+    'SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $1',
+    [conversationId]
+  );
+  const id = result.rows[0]?.isolation_env_id;
+  return id ? { ...metadata, isolation_env_id: id } : metadata;
+}
+
+/** Freeze legacy and not-yet-bound runs before a conversation can move to another checkout. */
+export async function snapshotConversationRunCheckouts(
+  query: TransactionQuery,
+  conversationId: string
+): Promise<void> {
+  const result = await query<{
+    id: string;
+    working_path: string | null;
+    metadata: unknown;
+    isolation_env_id: string;
+  }>(
+    `SELECT r.id, r.working_path, r.metadata, c.isolation_env_id
+       FROM remote_agent_workflow_runs r
+       JOIN remote_agent_conversations c ON c.id = r.conversation_id
+      WHERE c.id = $1 AND c.isolation_env_id IS NOT NULL`,
+    [conversationId]
+  );
+  for (const row of result.rows) {
+    if (hasDurableCheckout({ ...row, metadata: normalizeMetadata(row.metadata) })) continue;
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)} WHERE id = $1`,
+      [row.id, JSON.stringify({ isolation_env_id: row.isolation_env_id })]
+    );
+  }
+}
 
 export async function releasedCheckout(
   query: TransactionQuery,
@@ -43,9 +95,7 @@ export async function releasedCheckout(
       run.working_path,
       typeof environmentId === 'string' ? environmentId : null,
       typeof ownedId === 'string' ? ownedId : null,
-      run.working_path || typeof environmentId === 'string' || typeof ownedId === 'string'
-        ? null
-        : run.conversation_id,
+      hasDurableCheckout(run) ? null : run.conversation_id,
     ]
   );
   return result.rows[0]?.working_path;

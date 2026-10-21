@@ -541,7 +541,9 @@ export async function getLiveRunOwningEnv(
                WHERE alias.codebase_id = e.codebase_id AND alias.working_path = e.working_path
                  AND (CAST(alias.id AS TEXT) = ${envIdExtract}
                    OR CAST(alias.id AS TEXT) = ${ownedEnvExtract}
-                   OR CAST(alias.id AS TEXT) = ${conversationEnvMatch}))))
+                   OR (r.working_path IS NULL AND ${envIdExtract} IS NULL
+                     AND ${ownedEnvExtract} IS NULL
+                     AND CAST(alias.id AS TEXT) = ${conversationEnvMatch})))))
      ORDER BY r.started_at DESC
      LIMIT 1`,
     params

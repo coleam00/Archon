@@ -996,7 +996,71 @@ test.each(['path', 'metadata', 'owned'] as const)(
     });
     await sqlStore.failWorkflowRun(run.id, 'original');
     await updateConversation(conversationId, { isolation_env_id: b.id });
-    await sql.withWorktreeRegistration(b, async mark => mark(), { runOwnership: false });
+    await sql.withWorktreeRegistration(b, async mark => mark());
     await expect(sqlStore.resumeWorkflowRun(run.id)).resolves.toBeDefined();
+  }
+);
+
+test.each(
+  (['creation', 'late-binding', 'historical'] as const).flatMap(association =>
+    [false, true].map(rebind => ({ association, rebind }))
+  )
+)(
+  'SQL preserves a $association conversation checkout after retirement, rebind=$rebind, and detachment',
+  async ({ association, rebind }) => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const env = await sql.create({
+      codebase_id: codebase,
+      workflow_type: 'task',
+      workflow_id: randomUUID(),
+      working_path: join(root, randomUUID()),
+      branch_name: toBranchName(randomUUID()),
+    });
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, association === 'late-binding' ? null : env.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'conversation-owner',
+      user_message: '',
+      origin: { conversationId },
+    });
+    if (association === 'late-binding')
+      await updateConversation(conversationId, { isolation_env_id: env.id });
+    expect((await sqlStore.getWorkflowRun(run.id))?.metadata.isolation_env_id).toBe(env.id);
+    if (association === 'historical')
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $2 WHERE id = $1', [
+        run.id,
+        '{}',
+      ]);
+    await sqlStore.failWorkflowRun(run.id, 'original failure');
+    if (rebind) {
+      const other = await sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+      });
+      await updateConversation(conversationId, { isolation_env_id: other.id });
+      await sql.withWorktreeRegistration(other, async mark => mark());
+      await updateConversation(conversationId, { isolation_env_id: null });
+    }
+    await sql.withWorktreeRegistration(env, async mark => mark(), {
+      runOwnership: { releaseFailed: { kind: 'settled' } },
+    });
+    if (!rebind) await clearConversationCheckout(conversationId, env.id);
+    const before = await sqlStore.getWorkflowRun(run.id);
+    const events = await sqlStore.listWorkflowEvents(run.id);
+    await expect(sqlStore.resumeWorkflowRun(run.id)).rejects.toThrow(
+      `Checkout '${env.working_path}' was released; start a fresh run.`
+    );
+    expect(await sqlStore.getWorkflowRun(run.id)).toEqual(before);
+    expect(await sqlStore.listWorkflowEvents(run.id)).toEqual(events);
   }
 );

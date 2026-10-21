@@ -16,6 +16,6 @@ export async function reconcileFreshCheckout(scope: DispatchScope): Promise<Disp
   return {
     ...scope,
     conversation,
-    runCwd: currentEnvironment?.working_path ?? scope.codebase.default_cwd,
+    runCwd: conversation.cwd ?? currentEnvironment?.working_path ?? scope.codebase.default_cwd,
   };
 }

@@ -1,4 +1,8 @@
-import { lockCheckoutOwnership, assertCheckoutAvailable } from './checkout-ownership';
+import {
+  lockCheckoutOwnership,
+  assertCheckoutAvailable,
+  snapshotConversationRunCheckouts,
+} from './checkout-ownership';
 import { noDefaultProviderMessage } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import type { UpdateConversationInput } from '../schemas/conversation';
@@ -147,14 +151,18 @@ export async function clearConversationCheckout(
   expectedEnvironmentId: string
 ): Promise<Conversation> {
   assertPublicConversation(id);
-  await pool.query(
-    `UPDATE remote_agent_conversations SET isolation_env_id = NULL,
+  await getDatabase().withTransaction(async query => {
+    await lockCheckoutOwnership(query);
+    await snapshotConversationRunCheckouts(query, id);
+    await query(
+      `UPDATE remote_agent_conversations SET isolation_env_id = NULL,
        cwd = CASE WHEN cwd = (SELECT working_path FROM remote_agent_isolation_environments WHERE id = $2)
          THEN NULL ELSE cwd END,
        updated_at = ${getDialect().now()}
      WHERE id = $1 AND isolation_env_id = $2`,
-    [id, expectedEnvironmentId]
-  );
+      [id, expectedEnvironmentId]
+    );
+  });
   const conversation = await getConversationById(id);
   if (!conversation) throw new ConversationNotFoundError(id);
   return conversation;
@@ -195,18 +203,23 @@ export async function updateConversation(
   values.push(id);
 
   const sql = `UPDATE remote_agent_conversations SET ${fields.join(', ')} WHERE id = $${String(i)}`;
-  const result = updates.isolation_env_id
-    ? await getDatabase().withTransaction(async query => {
-        await lockCheckoutOwnership(query);
-        await assertCheckoutAvailable(query, {
-          codebase_id: null,
-          working_path: null,
-          conversation_id: null,
-          metadata: { isolation_env_id: updates.isolation_env_id },
-        });
-        return query(sql, values);
-      })
-    : await pool.query(sql, values);
+  const result =
+    updates.isolation_env_id !== undefined
+      ? await getDatabase().withTransaction(async query => {
+          await lockCheckoutOwnership(query);
+          await snapshotConversationRunCheckouts(query, id);
+          if (updates.isolation_env_id)
+            await assertCheckoutAvailable(query, {
+              codebase_id: null,
+              working_path: null,
+              conversation_id: null,
+              metadata: { isolation_env_id: updates.isolation_env_id },
+            });
+          const result = await query(sql, values);
+          await snapshotConversationRunCheckouts(query, id);
+          return result;
+        })
+      : await pool.query(sql, values);
 
   if (result.rowCount === 0) {
     getLog().error({ conversationId: id, fields, updates }, 'db.conversation_update_not_found');

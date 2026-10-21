@@ -7,6 +7,7 @@ import {
   lockCheckoutOwnership,
   assertNewRunCheckoutAvailable,
   releasedCheckout,
+  snapshotConversationCheckout,
 } from './checkout-ownership';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
@@ -36,7 +37,7 @@ import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
-import { getLog } from './workflow-run-shared';
+import { getLog, normalizeMetadata } from './workflow-run-shared';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
@@ -78,6 +79,13 @@ export async function insertWorkflowRun(
     );
     metadataJson = '{}';
   }
+
+  metadataJson = JSON.stringify(
+    await snapshotConversationCheckout(query, {
+      ...data,
+      metadata: normalizeMetadata(metadataJson),
+    })
+  );
 
   const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);

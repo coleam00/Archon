@@ -36,8 +36,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
   const continuation = await detectContinuation(scope, target.request, requested);
   if (continuation === undefined) return;
   const { willContinueExistingRun } = continuation;
-  if (!willContinueExistingRun && platform.capabilities.defaultWorkflowDispatch !== 'background')
-    scope = await reconcileFreshCheckout(scope);
+  if (!willContinueExistingRun) scope = await reconcileFreshCheckout(scope);
 
   const executable = await prepareExecutableSource(
     scope,
