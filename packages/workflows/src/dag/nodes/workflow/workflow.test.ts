@@ -15,8 +15,11 @@ import {
   dagOptions,
   makeWorkflowRun,
   readTranscript,
+  runUsageWrites,
+  persistedEvents,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { type RunChildWorkflowFn } from '../../child-run';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -53,6 +56,62 @@ describe('executeDagWorkflow -- workflow: node', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each([false, true])(
+    'counts persisted child usage once across parent replay (malformed=%s)',
+    async malformed => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('settled-child', {
+          status: 'completed',
+          metadata: {
+            parent_node_id: 'sub',
+            summary: 'child output',
+            total_tokens_in: 100,
+            total_tokens_out: malformed ? 'unreadable' : 10,
+            total_cost_usd: 0.3,
+          },
+        }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+        throw new Error('Settled child must not be run again');
+      });
+      const workflowRun = makeWorkflowRun('parent-reentry');
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        workflow: {
+          name: 'parent',
+          nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-workflow' }],
+        },
+        runChildWorkflow,
+      });
+      await executeDagWorkflow(options);
+      const snapshot = await foldDagResumeSnapshot(persistedEvents(store), workflowRun.id);
+      expect(snapshot.tokensUnknown).toBe(malformed);
+      expect(snapshot.tokens).toEqual(malformed ? undefined : { input: 100, output: 10 });
+      expect(snapshot.costUsd).toBe(0.3);
+      await executeDagWorkflow({
+        ...options,
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        priorUsage: snapshot,
+      });
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      const writes = runUsageWrites(store);
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(writes[1]?.total_cost_usd).toBe(0.3);
+      expect(writes[1]?.total_tokens_in).toBe(malformed ? null : 100);
+      expect(writes[1]?.total_tokens_out).toBe(malformed ? null : 10);
+      expect(writes[1]?.total_tokens_unknown).toBe(malformed ? true : undefined);
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it.each(['node', 'terminal'] as const)(
     'mixed child fan-out rejections preserve the %s write failure',

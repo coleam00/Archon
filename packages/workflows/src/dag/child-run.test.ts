@@ -84,3 +84,30 @@ describe('childOutcomeFromRun cache reporting', () => {
     expect(outcome.tokens).not.toHaveProperty('cachePartial');
   });
 });
+
+describe('childOutcomeFromRun historical required counters', () => {
+  it.each([
+    { total_tokens_in: 100 },
+    { total_tokens_out: 10 },
+    { total_tokens_in: 100, total_tokens_out: 'unreadable' },
+    { total_tokens_in: 'unreadable', total_tokens_out: 10 },
+    { total_tokens_in: null, total_tokens_out: null },
+    { total_tokens_in: NaN, total_tokens_out: 10 },
+    { total_tokens_in: 100, total_tokens_out: Infinity },
+  ])('keeps malformed counters unknown: %j', metadata => {
+    const outcome = childOutcomeFromRun(settledRun({ ...metadata, total_cost_usd: 0.3 }));
+    expect(outcome.tokensUnknown).toBe(true);
+    expect(outcome.tokens).toBeUndefined();
+    expect(outcome.costUsd).toBe(0.3);
+    expect(outcome.status).toBe('completed');
+  });
+
+  it('preserves absent usage and valid zero totals', () => {
+    const absent = childOutcomeFromRun(settledRun({}));
+    expect(absent.tokens).toBeUndefined();
+    expect(absent.tokensUnknown).toBeUndefined();
+    const zero = childOutcomeFromRun(settledRun({ total_tokens_in: 0, total_tokens_out: 0 }));
+    expect(zero.tokens).toEqual({ input: 0, output: 0 });
+    expect(zero.tokensUnknown).toBeUndefined();
+  });
+});

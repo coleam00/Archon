@@ -105,24 +105,32 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
+  const input = md.total_tokens_in;
+  const output = md.total_tokens_out;
+  const hasValidTokens =
+    typeof input === 'number' &&
+    Number.isFinite(input) &&
+    typeof output === 'number' &&
+    Number.isFinite(output);
+  const tokensUnknown =
+    md.total_tokens_unknown === true ||
+    ((Object.hasOwn(md, 'total_tokens_in') || Object.hasOwn(md, 'total_tokens_out')) &&
+      !hasValidTokens);
   const cacheRead =
     typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
   const cacheWrite =
     typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens =
-    input !== undefined || output !== undefined
-      ? {
-          input: input ?? 0,
-          output: output ?? 0,
-          ...(cacheRead !== undefined ? { cacheRead } : {}),
-          ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-          // Persisted by persistRunUsage; without it a child's floor would contribute to
-          // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-        }
-      : undefined;
+  const tokens = hasValidTokens
+    ? {
+        input,
+        output,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+        // Persisted by persistRunUsage; without it a child's floor would contribute to
+        // the parent as though it were an exact total.
+        ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
+      }
+    : undefined;
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
@@ -139,7 +147,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
+    ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
 }
