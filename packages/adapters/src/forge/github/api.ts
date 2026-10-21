@@ -41,7 +41,9 @@ function githubHost(host: string): GitHubHost {
     );
   }
   const configured = resolveGitHubHost();
-  return configured.host === host.toLowerCase() ? configured : github;
+  const protocol = new URL(configured.webUrl).protocol;
+  const requested = parseGitHubHost(`${protocol}//${host}`);
+  return configured.host === requested?.host ? configured : github;
 }
 
 /** The REST and GraphQL roots and encoded `owner/repo` segment for one qualified repository. */

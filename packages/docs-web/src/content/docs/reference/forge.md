@@ -165,7 +165,7 @@ Put trusted executable configuration in the user Archon config, `~/.archon/confi
 ```yaml
 forge:
   hosts:
-    github.example.com:
+    github.example.com:8080:
       plugin: github
       token_env: COMPANY_GITHUB_TOKEN
   plugins:
@@ -175,7 +175,7 @@ forge:
   scanPath: true
 ```
 
-A host mapping may name a discovered plugin directly, or supply `plugin`, an absolute `command`, interpreter `args`, and `token_env`. The GitHub plugin supports explicitly mapped GitHub Enterprise hosts at `https://HOST/api/v3`. Set `GITHUB_URL` to a bare HTTP(S) origin, such as `http://github.example.com:8080`, to preserve its scheme and port for REST and GraphQL calls to that matching host and port. Other hosts keep HTTPS, and github.com always uses its canonical HTTPS endpoints. Invalid `GITHUB_URL` values fail before API dispatch.
+A host mapping may name a discovered plugin directly, or supply `plugin`, an absolute `command`, interpreter `args`, and `token_env`. Its key must match the repository's exact `host[:port]`. The GitHub plugin supports explicitly mapped GitHub Enterprise hosts at `https://HOST/api/v3`. Set `GITHUB_URL` to a bare HTTP(S) origin, such as `http://github.example.com:8080` for the mapping above, to preserve its scheme and port for REST and GraphQL calls to that matching host and port. Other hosts keep HTTPS, and github.com always uses its canonical HTTPS endpoints. Invalid `GITHUB_URL` values fail before API dispatch.
 
 Discovery examines configured executables, `~/.archon/plugins`, configured `pluginDirs`, and PATH names beginning with `archon-forge-`. Duplicate identities or host claims fail loudly. Failed explicitly configured or host-selected plugins fail discovery. An unrelated automatically scanned candidate with a failed metadata handshake is reported on stderr and skipped when another valid plugin serves the requested host. If no valid plugin serves it and any candidate failed, resolution fails rather than reporting no forge. No forge is injected as an implicit fallback. No remote URL can select an arbitrary executable.
 

@@ -442,6 +442,36 @@ describe('GitHub forge origins', () => {
       'http://ghes.example.test:8080/api/graphql',
     ],
     [
+      'http://ghes.example.test:80',
+      'ghes.example.test:80',
+      'http://ghes.example.test/api/v3',
+      'http://ghes.example.test/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'ghes.example.test:08080',
+      'http://ghes.example.test:8080/api/v3',
+      'http://ghes.example.test:8080/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:80',
+      'ghes.example.test',
+      'http://ghes.example.test/api/v3',
+      'http://ghes.example.test/api/graphql',
+    ],
+    [
+      'https://ghes.example.test:443',
+      'ghes.example.test:443',
+      'https://ghes.example.test/api/v3',
+      'https://ghes.example.test/api/graphql',
+    ],
+    [
+      'http://ghes.example.test:8080',
+      'GHES.EXAMPLE.TEST:8080',
+      'http://ghes.example.test:8080/api/v3',
+      'http://ghes.example.test:8080/api/graphql',
+    ],
+    [
       'https://ghes.example.test:8443',
       'ghes.example.test:8443',
       'https://ghes.example.test:8443/api/v3',
