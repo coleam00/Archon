@@ -157,6 +157,14 @@ Run the same check yourself against any PostgreSQL with `bun run check:schema-up
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.pg_schema_init_failed`.
 
+Worktree cleanup holds a database-wide checkout advisory lock through local checkout
+and branch removal. Run creation, activation, resume, checkout association, and resource
+admission share that lock, including across unrelated codebases. Slow removal delays
+these operations; waiting transactions also occupy database pool connections and can
+delay other database work when the pool fills. This exclusion prevents acquisition or
+replacement of a checkout during deletion. Remote branch deletion does not run inside
+the claim.
+
 ## Local PostgreSQL via Docker
 
 Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
