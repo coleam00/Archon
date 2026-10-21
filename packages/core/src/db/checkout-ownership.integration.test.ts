@@ -1,11 +1,12 @@
 // @archon-test-isolated
+import { checkoutEnvironmentReferences } from '@archon/workflows/schemas/checkout-ownership';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IsolationResolver, registerWorktree } from '@archon/isolation';
-import { toRepoPath, toBranchName } from '@archon/git';
+import { IsolationResolver, registerWorktree, WorktreeProvider } from '@archon/isolation';
+import { toRepoPath, toBranchName, execFileAsync } from '@archon/git';
 import { Database, SQLiteError } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -1166,5 +1167,157 @@ test.each(
     );
     if (status === 'failed' || status === 'paused')
       await expect(sqlStore.resumeWorkflowRun(run.id)).resolves.toBeDefined();
+  }
+);
+
+for (const field of ['isolation_env_id', 'owned_worktree'] as const) {
+  test(`SQL ${field} ownership conforms to the typed checkout reader`, async () => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const createEnv = () =>
+      sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+      });
+    const conversationEnv = await createEnv();
+    const referencedEnv = await createEnv();
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, conversationEnv.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'conformance',
+      user_message: '',
+      codebase_id: codebase,
+      origin: { conversationId },
+    });
+    const values: unknown[] = [
+      undefined,
+      null,
+      '',
+      referencedEnv.id,
+      'unregistered',
+      42,
+      false,
+      [],
+      {},
+      { envId: referencedEnv.id },
+    ];
+    const cases: Record<string, unknown>[] = values.flatMap(value =>
+      value === undefined
+        ? [{}]
+        : field === 'owned_worktree'
+          ? [{ [field]: { envId: value } }, { [field]: value }]
+          : [{ [field]: value }]
+    );
+    for (const metadata of cases) {
+      const references = checkoutEnvironmentReferences(metadata).filter(
+        id => typeof id === 'string'
+      );
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $2 WHERE id = $1', [
+        run.id,
+        JSON.stringify(metadata),
+      ]);
+      expect((await sql.getLiveRunOwningEnv(referencedEnv.id))?.id, JSON.stringify(metadata)).toBe(
+        references.includes(referencedEnv.id) ? run.id : undefined
+      );
+      expect(
+        (await sql.getLiveRunOwningEnv(conversationEnv.id))?.id,
+        JSON.stringify(metadata)
+      ).toBe(references.length === 0 ? run.id : undefined);
+    }
+  });
+}
+
+test.each([false, true])(
+  'real setup binds only a registered checkout (failure: %s)',
+  async fail => {
+    const repo = await mkdtemp(join(root, 'setup-repo-'));
+    const git = (...args: string[]) => execFileAsync('git', args, { cwd: repo });
+    await git('init', '--initial-branch=main');
+    await git('remote', 'add', 'origin', repo);
+    await git(
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'initial'
+    );
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, repo]
+    );
+    const branch = 'setup-target';
+    const selectedPath = join(repo, '.worktrees', branch);
+    if (!fail) {
+      const retired = await sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: selectedPath,
+        branch_name: toBranchName(branch),
+      });
+      await sql.withWorktreeRegistration(retired, async mark => mark());
+    }
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'setup',
+      user_message: '',
+      codebase_id: codebase,
+    });
+    const { createRunWorktreeSetupExecutor, recordSetupRunCheckout } = await import(
+      '../workflows/worktree-setup'
+    );
+    const executor = createRunWorktreeSetupExecutor({ store: sqlStore }, run, {});
+    const provider = new WorktreeProvider(async () => ({
+      path: '.worktrees',
+      postCreate: [fail ? 'exit 7' : 'true'],
+    }));
+    const creation = provider.create(
+      {
+        codebaseId: codebase,
+        codebaseName: codebase,
+        canonicalRepoPath: toRepoPath(repo),
+        workflowType: 'task',
+        identifier: run.id,
+        taskBranch: { kind: 'new', branch: toBranchName(branch), fromBranch: toBranchName('main') },
+        baseBranch: toBranchName('main'),
+      },
+      executor
+    );
+    if (fail) {
+      await expect(creation).rejects.toThrow('exit code 7');
+      await expect(access(selectedPath)).rejects.toThrow();
+      await sqlStore.failWorkflowRun(run.id, 'setup failed', { exitReason: 'launch_failed' });
+      expect((await sqlStore.getWorkflowRun(run.id))?.working_path).toBeNull();
+      await sqlStore.resumeWorkflowRun(run.id);
+      expect((await sqlStore.getWorkflowRun(run.id))?.working_path).toBeNull();
+      expect(
+        (await sqlStore.listWorkflowEvents(run.id)).some(
+          event => event.event_type === 'worktree_setup_failed'
+        )
+      ).toBe(true);
+    } else {
+      const environment = await creation;
+      const registered = await registerWorktree(
+        { store: sql.createIsolationStore(), provider, registrationsBeforeCreation: [] },
+        environment,
+        toRepoPath(repo),
+        { codebase_id: codebase, workflow_type: 'task', workflow_id: run.id }
+      );
+      await recordSetupRunCheckout({ store: sqlStore }, run, registered.working_path);
+      await expect(sqlStore.claimPendingWorkflowRun(run.id)).resolves.toBeDefined();
+      expect((await sqlStore.getWorkflowRun(run.id))?.working_path).toBe(selectedPath);
+    }
   }
 );

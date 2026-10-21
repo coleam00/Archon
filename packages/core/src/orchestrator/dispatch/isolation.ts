@@ -7,10 +7,7 @@ import type { OwnedWorktree, WorkflowRun } from '@archon/workflows/schemas/workf
 import * as db from '../../db/conversations';
 import { toError } from '../../utils/error';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
-import {
-  createRunWorktreeSetupExecutor,
-  recordSetupRunCheckout,
-} from '../../workflows/worktree-setup';
+import { createRunWorktreeSetupExecutor } from '../../workflows/worktree-setup';
 import { getLog } from '../agent-log';
 import { validateAndResolveIsolation } from '../orchestrator';
 import type {
@@ -124,14 +121,7 @@ async function resolveNewIsolation(
       false,
       userId,
       setupRun && preparedAiConfiguration
-        ? async input => {
-            await recordSetupRunCheckout(setupDeps, setupRun, input.workingPath);
-            await createRunWorktreeSetupExecutor(
-              setupDeps,
-              setupRun,
-              preparedAiConfiguration.config
-            )(input);
-          }
+        ? createRunWorktreeSetupExecutor(setupDeps, setupRun, preparedAiConfiguration.config)
         : undefined
     );
     return result.status === 'new'

@@ -588,7 +588,7 @@ describe('workflow dispatch routing', () => {
     }
   );
 
-  test('foreground setup records its selected checkout before a setup command fails', async () => {
+  test('foreground setup failure leaves its unregistered checkout unbound', async () => {
     const adapter = await import('../workflows/store-adapter');
     const setup = await import('../workflows/worktree-setup');
     const original = adapter.createWorkflowDeps();
@@ -625,13 +625,12 @@ describe('workflow dispatch routing', () => {
       await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
         actor: operator,
       });
-      expect(writesAtExecution).toContainEqual([
+      const selectedCheckoutWrite = [
         expect.any(String),
-        {
-          working_path: '/wt/selected',
-          metadata: { isolation_env_id: null },
-        },
-      ]);
+        expect.objectContaining({ working_path: '/wt/selected' }),
+      ];
+      expect(writesAtExecution).not.toContainEqual(selectedCheckoutWrite);
+      expect(writes.mock.calls).not.toContainEqual(selectedCheckoutWrite);
       expect(executor).toHaveBeenCalledTimes(1);
       expect(mockFailPreparedRun).toHaveBeenCalled();
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
