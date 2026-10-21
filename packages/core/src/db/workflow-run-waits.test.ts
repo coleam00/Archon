@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { WorkflowRunPauseConflictError } from '@archon/workflows/store';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
@@ -95,6 +96,26 @@ describe('durable workflow waits', () => {
 
     expect(mockQuery.mock.calls).toHaveLength(2);
   });
+
+  test.each(['started', 'continued'] as const)(
+    '%s pause classifies only a zero-row CAS as a conflict',
+    async kind => {
+      const pause = kind === 'started' ? { kind, stepName: 'await-ci' } : { kind };
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+      await expect(pauseWorkflowRunForWait('workflow-run-123', wait, pause)).rejects.toBeInstanceOf(
+        WorkflowRunPauseConflictError
+      );
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+
+      mockQuery.mockReset();
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockRejectedValueOnce(new Error('event insert failed'));
+      const pending = pauseWorkflowRunForWait('workflow-run-123', wait, pause);
+      await expect(pending).rejects.not.toBeInstanceOf(WorkflowRunPauseConflictError);
+      await expect(pending).rejects.toThrow('event insert failed');
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    }
+  );
 
   test('rejects widened mixed wait fields before persistence', async () => {
     const mixed = {

@@ -17,6 +17,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { PAUSE_CAUSE_METADATA_KEY, pauseCauseOfWait } from '@archon/workflows/schemas/pause-cause';
 import {
+  WorkflowRunPauseConflictError,
   answeredAttentionWait,
   attentionLabeledEvent,
   labeledAttentionWait,
@@ -66,7 +67,7 @@ export async function pauseWorkflowRunForWait(
         [id, JSON.stringify(parsedWaitContext), pauseCauseOfWait(parsedWaitContext)]
       );
       if ((result.rowCount ?? 0) === 0) {
-        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+        throw new WorkflowRunPauseConflictError(id);
       }
       if (pause.kind === 'started') {
         await insertWorkflowEvent(query, {
@@ -86,7 +87,7 @@ export async function pauseWorkflowRunForWait(
       }
     });
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
+    if (error instanceof WorkflowRunPauseConflictError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_wait_pause_failed');
     throw new Error(`Failed to pause workflow run for wait: ${err.message}`);

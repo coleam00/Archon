@@ -414,7 +414,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const pauseForWait = store.pauseWorkflowRunForWait;
     store.pauseWorkflowRunForWait = mock(async (id, context, event) => {
       if (store.getState().status !== 'running') {
-        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+        throw new WorkflowRunPauseConflictError(id);
       }
       await pauseForWait(id, context, event);
     });

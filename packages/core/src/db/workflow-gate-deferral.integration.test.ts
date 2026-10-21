@@ -421,7 +421,7 @@ describe('per-run gate deferral — real SQLite', () => {
       "SELECT event_type FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND step_name = 'review'",
       [id]
     );
-    expect(events.rows.map(row => row.event_type)).toEqual(['node_started']);
+    expect(events.rows.map(row => row.event_type)).toEqual(['node_started', 'node_suspended']);
     await closeDatabase();
     resetDatabase();
     const resume = async () => {

@@ -989,3 +989,51 @@ describe('container pause segment ownership through the executor', () => {
     );
   }
 });
+
+describe('wait pause transaction failures', () => {
+  for (const nested of [false, true]) {
+    it.each([
+      { duration_ms: 3_600_000 },
+      { until: '2099-01-01T00:00:00Z' },
+      { event: 'signal', deadline_ms: 3_600_000 },
+      { attention: 'Finish the action' },
+    ])(
+      `failed wait transaction remains visible behind a sibling pause (nested=${nested}): %j`,
+      async wait => {
+        const leaf = { id: 'delay', wait };
+        const node = nested
+          ? { id: 'group', loop_group: { max_iterations: 2, until_bash: 'true', nodes: [leaf] } }
+          : leaf;
+        const f = await setup('ordinary', [
+          { id: 'review', approval: { message: 'Review' } },
+          node,
+        ]);
+        const published = Promise.withResolvers<void>();
+        const attempted = Promise.withResolvers<void>();
+        try {
+          await f.execute({
+            pauseWorkflowRun: async (...args) => {
+              await attempted.promise;
+              await f.store.pauseWorkflowRun(...args);
+              published.resolve();
+            },
+            pauseWorkflowRunForWait: async () => {
+              attempted.resolve();
+              await published.promise;
+              throw new Error('Wait pause transaction rejected');
+            },
+          });
+          expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe('paused');
+          const events = (await f.store.listWorkflowEvents(f.run.id)).filter(
+            event => event.step_name === (nested ? 'group.delay' : 'delay')
+          );
+          expect(events.map(event => event.event_type)).toEqual(['node_started', 'node_failed']);
+          expect(JSON.stringify(events.at(-1)?.data)).toContain('Wait pause transaction rejected');
+        } finally {
+          published.resolve();
+          f.unsubscribe();
+        }
+      }
+    );
+  }
+});

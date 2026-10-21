@@ -16,7 +16,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { workflowWaitContextSchema, type WorkflowWaitContext } from '../../../schemas';
-import type { IWorkflowStore } from '../../../store';
+import { WorkflowRunPauseConflictError, type IWorkflowStore } from '../../../store';
 
 describe('executeDagWorkflow -- durable wait node', () => {
   let testDir: string;
@@ -861,7 +861,7 @@ describe('executeDagWorkflow -- durable wait node', () => {
           .map(event => event.event_type)
       ).toEqual(['node_started']);
       pauseAttempted = true;
-      throw new Error('Workflow run not found or not in running state');
+      throw new WorkflowRunPauseConflictError('wait-cancelled');
     });
     store.getWorkflowRunStatus = mock(async () => (pauseAttempted ? 'cancelled' : 'running'));
 

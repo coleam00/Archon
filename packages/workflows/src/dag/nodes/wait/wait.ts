@@ -20,7 +20,7 @@ import { waitOutputFormat } from '../../../schemas/dag-node';
 import type { WaitNode, WorkflowWaitContext } from '../../../schemas';
 import { type BodySessionCursorAncestry, type SessionCursor } from '../../../schemas';
 import { readWorkflowWaitContext, waitUntilTimestampSchema, waitCondition } from '../../../schemas';
-import { waitCompletionEvents } from '../../../store';
+import { WorkflowRunPauseConflictError, waitCompletionEvents } from '../../../store';
 import {
   declaredOutputPathsFromSchema,
   canonicalValueText,
@@ -68,6 +68,7 @@ async function pauseWait(
     );
     return 'paused';
   } catch (pauseError) {
+    if (!(pauseError instanceof WorkflowRunPauseConflictError)) throw pauseError;
     const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
     if (status === 'running') throw pauseError;
     getLog().warn(
