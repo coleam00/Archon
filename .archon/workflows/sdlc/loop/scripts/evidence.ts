@@ -39,7 +39,11 @@ const problems = evidenceProblems(
   cited => {
     const path = resolve(cited);
     if (!existsSync(path)) return { exists: false, mtimeMs: 0, opened: null };
-    return { exists: true, mtimeMs: statSync(path).mtimeMs, opened: opened === null ? null : opened.has(key(path)) };
+    // This run's artifacts directory is new for the run, so a file in it was written during this run:
+    // the builder's saved check output is reusable evidence (seen live: refused as "written before").
+    const ownRun = key(path).startsWith(`${key(artifacts)}/`);
+    const mtimeMs = ownRun ? Math.max(statSync(path).mtimeMs, started) : statSync(path).mtimeMs;
+    return { exists: true, mtimeMs, opened: opened === null ? null : opened.has(key(path)) };
   },
   {
     // Any word of the citation that is a file on disk, quotes and trailing punctuation aside.
