@@ -204,15 +204,12 @@ describe('workflowRunCommand — progress rendering', () => {
       workflowRunId: 'run-paused',
       paused: true,
     });
-    const host = createTestWorkflowHost();
-    const lookup = spyOn(host.deps.store, 'getWorkflowRun');
-    try {
-      await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
-      expect(lookup).not.toHaveBeenCalled();
-      expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
-    } finally {
-      lookup.mockRestore();
-    }
+    const workflowDb = require('@archon/core/db/workflows');
+    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    const readsBefore = lookup.mock.calls.length;
+    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    expect(lookup.mock.calls.length).toBe(readsBefore);
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
   });
 
   const completionUsageCases = [
