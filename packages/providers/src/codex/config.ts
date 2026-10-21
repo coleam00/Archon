@@ -38,7 +38,8 @@ const localFields = {
   /**
    * Models whose route rejects tools and a strict output schema in one request. On these, a
    * node with `output_format` runs its tools without the schema, then one tool-free turn on
-   * the same thread with it. Codex multi-agent is off on their threads.
+   * the same thread with it. Codex multi-agent is off on their threads, except that a model
+   * catalog entry with `multi_agent_version: v2` keeps its collaboration tools on both turns.
    */
   toolFreeStructuredOutputModels: z.array(configStringSchema).optional(),
 };
