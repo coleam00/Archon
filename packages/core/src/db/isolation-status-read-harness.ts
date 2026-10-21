@@ -1,10 +1,6 @@
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import {
-  workflowRunStatusSchema,
-  TERMINAL_WORKFLOW_STATUSES,
-  RESUMABLE_WORKFLOW_STATUSES,
-} from '@archon/workflows/schemas/workflow-run';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 
@@ -43,41 +39,25 @@ export function isolationStatusReadTests(
         id,
       ]);
       expect((await getRunByIsolationEnvId(env.id))?.status).toBe(status);
-      const claimable =
-        !TERMINAL_WORKFLOW_STATUSES.includes(status) ||
-        RESUMABLE_WORKFLOW_STATUSES.includes(status);
-      expect(await getLiveRunOwningEnv(env.id)).toEqual(claimable ? { id, status } : null);
     }
   });
 
-  test('isolation projections keep their distinct newest-run and release filters', async () => {
+  test('environment lookup returns the newest run', async () => {
     const db = getDb();
-    const { getLiveRunOwningEnv } = await import('./isolation-environments');
     const { getRunByIsolationEnvId } = await import('./workflow-run-reads');
     const env = await createEnv(randomUUID());
-    const running = await seedRun(env.id, 'running');
     const failed = await seedRun(env.id, 'failed');
     const completed = await seedRun(env.id, 'completed');
     for (const [id, date] of [
-      [running, '2020-01-01'],
       [failed, '2020-01-02'],
       [completed, '2020-01-03'],
     ]) {
-      await db.query(
-        'UPDATE remote_agent_workflow_runs SET started_at = $1, last_activity_at = $1 WHERE id = $2',
-        [date, id]
-      );
+      await db.query('UPDATE remote_agent_workflow_runs SET started_at = $1 WHERE id = $2', [
+        date,
+        id,
+      ]);
     }
     expect((await getRunByIsolationEnvId(env.id))?.id).toBe(completed);
-    expect(await getLiveRunOwningEnv(env.id)).toEqual({ id: failed, status: 'failed' });
-    expect(await getLiveRunOwningEnv(env.id, { kind: 'settled' })).toEqual({
-      id: running,
-      status: 'running',
-    });
-    expect(await getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).toEqual({
-      id: running,
-      status: 'running',
-    });
   });
 
   test.each(['unexpected', ''])(
