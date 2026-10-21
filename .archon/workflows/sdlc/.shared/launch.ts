@@ -11,14 +11,16 @@ import { note, nullableJson } from './io.ts';
 export interface LaunchOptions {
   /** Start with the run config this run was started with (`--config-from-run`). */
   readonly configFromRun?: string;
+  readonly branch?: string;
 }
 
 export function launchDetached(workflow: string, inputs: Record<string, string>, options: LaunchOptions = {}): string {
   const root = dirname(gitOrThrow('rev-parse', '--path-format=absolute', '--git-common-dir').trim());
   const args = Object.entries(inputs).flatMap(([name, value]) => ['--input', `${name}=${value}`]);
   const config = options.configFromRun === undefined ? [] : ['--config-from-run', options.configFromRun];
+  const branch = options.branch === undefined ? [] : ['--branch', options.branch];
   const result = Bun.spawnSync(
-    [...archonCommand(), 'workflow', 'run', workflow, '--cwd', root, ...args, ...config, '--detach', '--json'],
+    [...archonCommand(), 'workflow', 'run', workflow, '--cwd', root, ...args, ...config, ...branch, '--detach', '--json'],
     { env: process.env, stdout: 'pipe', stderr: 'pipe' }
   );
   if (result.exitCode !== 0) throw new Error(`${workflow} did not start: ${result.stderr.toString().trim()}`);

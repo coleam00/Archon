@@ -518,7 +518,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
   takes, pushing onto its head so the same pull request updates. A round that failed
   after publishing still records its pull request. Otherwise the round opens its
-  pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
+  pull request from the branch chosen by pickup. A first pickup chooses a fresh
+  `build/<issue>-<slug>-<pickup>` name; subsequent rounds use its PR branch. A closed or
   merged pull request, or one from a fork, is asked about.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
@@ -557,8 +558,26 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   rounds and its last twenty decisions with any maintainer's answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
-changes its checkout, so every run needs its own worktree:
+item and a continuation waits for the next run. Pickup creates no worktree. It
+resolves the existing PR's head branch, or chooses
+`build/<issue>-<slug>-<pickup>` for a first round, before launching
+[`archon-build-round`](build-round/archon-build-round.yaml) with literal CLI
+`--branch`. The worker takes the pickup's claim in one conditional write, which also
+links the worker to the item, before any agent or delivery node runs. Later rounds
+use the PR's actual branch and reuse its checkout. Paused and failed build runs keep
+their claim: resume the owning run to continue its work, or explicitly abandon it
+before asking another pickup to take the item. Intake and merge runs retain their
+existing terminal-claim recovery policy.
+
+The pickup waits up to 30 seconds for worker admission. Expiry reports the worker id
+and retains both process and claim. A resume uses the recorded launch receipt and
+item links. If the CLI might have started a worker but no receipt or admission can
+be established, pickup refuses to launch again. Inspect `archon workflow runs --json`
+and the pickup's `build/dispatch-started.json`, resume the existing worker, or
+explicitly abandon the pickup after verifying no worker exists.
+
+Install the pickup binding without an isolation override; its workflow declares
+`worktree.enabled: false`:
 
 ```json
 {
@@ -575,8 +594,7 @@ changes its checkout, so every run needs its own worktree:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-build-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
-      "isolation": { "kind": "worktree" }
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }

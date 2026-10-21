@@ -1,6 +1,6 @@
 /**
  * The host CLI for intake and discoveries script tests: `workflow get <id> --json`
- * answers from the status table in `INTAKE_RUN_STATUSES`, `workflow runs --json` from
+ * answers from `RUN_DETAILS` or the status table in `INTAKE_RUN_STATUSES`, `workflow runs --json` from
  * the rows in `RUN_LISTING`, and `workflow run <name>` acknowledges `launched-<name>`
  * without starting anything (or refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every other command runs the real CLI, whose argv the test
  * passes as a JSON array in `INTAKE_HOST_CLI` (`ARCHON_CLI_COMMAND` names this fake).
@@ -27,14 +27,15 @@ if (argv[0] === 'workflow' && argv[1] === 'runs') {
 } else if (argv[0] === 'workflow' && argv[1] === 'get') {
   const statuses = JSON.parse(process.env.INTAKE_RUN_STATUSES ?? '{}') as Record<string, string>;
   const status = statuses[argv[2]];
+  const detail = (JSON.parse(process.env.RUN_DETAILS ?? '{}') as Record<string, unknown>)[argv[2]];
   process.stdout.write(
     JSON.stringify(
-      status === undefined
+      detail ?? (status === undefined
         ? { ok: false, runId: argv[2], error: 'not_found' }
-        : { id: argv[2], status }
+        : { id: argv[2], status, workflow_name: (JSON.parse(process.env.INTAKE_RUN_WORKFLOWS ?? '{}') as Record<string, string>)[argv[2]] ?? 'archon-intake' })
     )
   );
-  process.exitCode = status === undefined ? 1 : 0;
+  process.exitCode = status === undefined && detail === undefined ? 1 : 0;
 } else {
   if (!process.env.INTAKE_HOST_CLI) throw new Error('INTAKE_HOST_CLI names no host CLI');
   const [command, ...prefix] = JSON.parse(process.env.INTAKE_HOST_CLI) as string[];

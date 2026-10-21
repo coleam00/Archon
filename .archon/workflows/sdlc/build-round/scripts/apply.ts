@@ -25,7 +25,6 @@ import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
@@ -173,17 +172,6 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
 
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
-  if (path === 'idle') {
-    emit({
-      decision: 'idle',
-      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
-      attention: '',
-      options: [],
-      class: '',
-      asked: null,
-    });
-    return;
-  }
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);

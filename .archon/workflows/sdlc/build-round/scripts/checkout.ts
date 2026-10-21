@@ -1,26 +1,14 @@
-/**
- * Move the run's checkout to the head of the pull request the round continues.
- *
- * The run's checkout is cut from the default branch. A round that continues a pull
- * request and adds nothing would otherwise publish that base onto the pull request's
- * head, which git refuses as a non-fast-forward. Starting from the pull request's head
- * makes publish a fast-forward, or a no-op when the round adds nothing.
- *
- * The checkout moves only when it is clean and its commit is already on a remote, so
- * nothing local is lost.
- *
- * Bound inputs: INPUTS_PULL_REQUEST, the item's pull request from facts, or null;
- * INPUTS_CONTINUES, its number when the round continues it, else empty or `null`.
- */
-
 import type { PrRecord } from '../../.shared/forge.ts';
-import { forgeSource } from '../../.shared/forge.ts';
+import { forgeSource, sameRepo } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { remoteFor } from '../../.shared/remote.ts';
 
 function main(): void {
+  const branch = trimmed(process.env.INPUTS_BRANCH);
+  if (branch === '' || gitOrThrow('branch', '--show-current') !== branch)
+    throw new Error(`the checkout is not on selected branch ${branch}; it is left as it is`);
   const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
   if (continues === null) {
     emit({ head: null });
@@ -30,6 +18,8 @@ function main(): void {
   if (known === null || known.number !== continues)
     throw new Error(`facts continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
   const pr = viewPr({ repo: known.repo, number: continues }, forgeSource()).pr;
+  if (pr.head !== branch || pr.head_repo === null || !sameRepo(pr.head_repo, known.repo))
+    throw new Error(`${pr.url} no longer names the selected branch in this repository`);
   if (pr.state !== 'open' || pr.head_revision === null)
     throw new Error(`${pr.url} is ${pr.state}; the round cannot continue it`);
 
@@ -40,8 +30,7 @@ function main(): void {
   const head = gitOrThrow('rev-parse', 'FETCH_HEAD');
   if (head !== pr.head_revision)
     throw new Error(`${pr.url} reports head ${pr.head_revision}, but its branch is at ${head}`);
-  const branch = gitOrThrow('branch', '--show-current');
-  gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
+  gitOrThrow('merge', '--ff-only', '--no-edit', head);
   emit({ head });
 }
 

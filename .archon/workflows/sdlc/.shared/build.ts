@@ -26,17 +26,17 @@ import {
   workItemName,
 } from './workitem.ts';
 
-/** What a build choice does when a person picks it; archon-build-queue.yaml declares the same enum. */
+/** What a build choice does when a person picks it; archon-build-round.yaml declares the same enum. */
 export const BUILD_EFFECTS = ['continue', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
 export type BuildAttention = Attention<BuildEffect>;
 
-/** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
+/** The decision each agent can declare; archon-build-round.yaml declares the same enums. */
 export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
 export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
-/** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
+/** What apply reports the run decided; archon-build-round.yaml declares the same enum. */
 export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
 export type ApplyDecision = (typeof APPLY_DECISIONS)[number];
 /** Which decision raised an attention item: its class label, which the YAML also declares. */
@@ -108,6 +108,7 @@ export function claimNamed(number: number, at: string, runId: string): WorkItem 
   const issue = `issue ${String(number)}`;
   const found = read(workItemName(number));
   if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  if (found.doc.claim?.run_id === runId) return found.doc;
   const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
   const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
   if (won !== null) return won;

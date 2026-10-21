@@ -27,7 +27,11 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { BundledScriptPack } from './bundled-script-pack';
-import { collectBundleSources, readBundleRecords } from './bundle-inventory';
+import {
+  collectBundleSources,
+  collectInstalledBundleSources,
+  readBundleRecords,
+} from './bundle-inventory';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 const SCRIPT = resolve(import.meta.dir, '../../../../scripts/generate-bundled-defaults.ts');
@@ -111,6 +115,20 @@ function runScript(repoRoot: string): { exitCode: number; stderr: string } {
 }
 
 describe('generate-bundled-defaults', () => {
+  it('collects the build round and its admission script from the indexed source pack', async () => {
+    const sources = await collectInstalledBundleSources(
+      resolve(import.meta.dir, '../../../../.archon/workflows')
+    );
+    expect(sources).toBeDefined();
+    const records = await readBundleRecords(sources ?? []);
+    expect(records.workflowPaths['archon-build-round']).toBe(
+      'workflows/sdlc/build-round/archon-build-round.yaml'
+    );
+    expect(
+      records.scriptPacks.sdlc.scripts['__archon_pack__bundled:sdlc:build-round::admit']
+    ).toEqual({ path: 'build-round/scripts/admit.ts', runtime: 'bun' });
+  });
+
   it('ignores unindexed packs and fails without publishing when an indexed pack is missing', async () => {
     const repoRoot = createRepo();
     try {

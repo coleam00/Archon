@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -20,9 +20,13 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
+import { MERGE_PICKUP } from '../../workflows/sdlc/.shared/merge';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   applyDecision,
+  INTAKE_PICKUP,
+  read,
+  releaseIfTerminal,
   decideIntake,
   newWorkItem,
   parseWorkItem,
@@ -172,7 +176,7 @@ describe('the build record', () => {
       };
     };
     const workflow = Bun.YAML.parse(
-      readFileSync(join(PACK, 'build-queue/archon-build-queue.yaml'), 'utf8')
+      readFileSync(join(PACK, 'build-round/archon-build-round.yaml'), 'utf8')
     ) as { nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[] };
     const field = (id: string, name: string) =>
       workflow.nodes.find(node => node.id === id)?.output_format?.properties[name] as
@@ -246,7 +250,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'apply' | 'checkout' | 'ruling' | 'retriage',
+  script: 'facts' | 'apply' | 'checkout' | 'ruling' | 'retriage' | 'admit' | 'dispatch' | 'settle',
   inputs: Record<string, string>,
   options: {
     issue?: GhApiIssue;
@@ -254,12 +258,14 @@ function run(
     writeLost?: boolean;
     source?: ScriptOptions['source'];
     preload?: ScriptOptions['preload'];
+    artifacts?: ScriptOptions['artifacts'];
   } = {}
 ): ScriptRun {
-  return runPackScript(`build-queue/scripts/${script}`, {
+  return runPackScript(`${['admit', 'apply', 'checkout', 'ruling'].includes(script) ? 'build-round' : 'build-queue'}/scripts/${script}`, {
     cwd: at.checkout,
     source: options.source,
     preload: options.preload,
+    artifacts: options.artifacts,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     gh: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
@@ -274,6 +280,8 @@ function run(
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_ORDER: '',
+      INPUTS_NUMBER: '',
+      INPUTS_RETRIAGE_AS: '',
       INPUTS_ROUND_LIMIT: '3',
       ...inputs,
     },
@@ -471,14 +479,13 @@ describe('the build queue scripts', () => {
     }
   });
 
-  test("facts claims a triaged item without taking intake's requests, and writes the issue the agents read", () => {
+  test("facts claims a triaged item without taking intake's requests", () => {
     const at = install();
     const request = { at: AT, run_id: 'event', action: 'edited' as const, label: null, actor: null, body_digest: null };
     seed(at, triaged({ requests: [request] }));
     const picked = run(at, 'facts', {});
     expect(ok(picked)).toMatchObject({ path: 'route', item: SUBJECT, url: ISSUE_URL, brief: '', at_cap: false });
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1', requests: [] }, requests: [request] });
-    expect(readFileSync(join(picked.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
     // The item is now claimed, so the next pickup finds nothing.
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
   }, 60_000);
@@ -516,11 +523,19 @@ describe('the build queue scripts', () => {
     // A failed round after the pull request's round opened none; the item's PR is still 42.
     const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
     seed(at, triaged({}, record({ rounds })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'feature' });
     seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: 'feature' });
     seed(at, triaged({ claim: null }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
+  }, 60_000);
+
+  test('a second round before PR creation reuses the prior worker branch', () => {
+    const at = install();
+    seed(at, triaged({}, record({ rounds: [{ ...round('worker-previous', AT), pr_url: '' }] })));
+    expect(ok(run(at, 'facts', {
+      RUN_DETAILS: JSON.stringify({ 'worker-previous': { workflow_name: 'archon-build-round', metadata: { inputs: { selected_branch: 'build/7-first-pickup' } } } }),
+    }))).toMatchObject({ branch: 'build/7-first-pickup', continues: null });
   }, 60_000);
 
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
@@ -826,20 +841,228 @@ describe('the build queue checkout', () => {
     return result.stdout.trim();
   }
 
-  test("a round that continues a pull request starts from that pull request's head", () => {
+  test("a round fast-forwards its selected PR branch without replacing local history", () => {
     const at = install();
-    // The fixture leaves the checkout on the pull request's branch. Publish it, then go
-    // back to dev, where a run's checkout starts.
+    // A reused named checkout may lag the published PR head.
     git(at.checkout, 'push', '-q', 'upstream', 'feature');
     const head = git(at.checkout, 'rev-parse', 'feature');
-    git(at.checkout, 'checkout', '-q', 'dev');
+    git(at.checkout, 'reset', '--hard', 'dev');
     const result = run(
       at,
       'checkout',
-      { INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
+      { INPUTS_BRANCH: 'feature', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
       { pr: { headRefOid: head } }
     );
     expect(ok(result)).toEqual({ head });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
+  }, 60_000);
+});
+
+describe('build checkout refusal', () => {
+
+  for (const condition of ['wrong branch', 'dirty', 'local commit', 'diverged'] as const) {
+    test(`checkout retains ${condition} without replacing HEAD or files`, () => {
+      const at = install();
+      const git = (...args: string[]) => {
+        const result = spawnSync('git', args, { cwd: at.checkout, encoding: 'utf8' });
+        expect(result.status).toBe(0);
+        return result.stdout.trim();
+      };
+      git('push', '-q', 'upstream', 'feature');
+      let remoteHead = git('rev-parse', 'HEAD');
+      if (condition === 'wrong branch') git('checkout', '-q', 'dev');
+      if (condition === 'dirty') writeFileSync(join(at.checkout, 'local.txt'), 'keep me');
+      if (condition === 'local commit' || condition === 'diverged') {
+        git('commit', '--allow-empty', '-qm', 'local work');
+        if (condition === 'diverged') {
+          git('branch', 'saved-work');
+          git('push', '-q', 'upstream', 'saved-work');
+          git('checkout', '-qb', 'remote-work', remoteHead);
+          git('commit', '--allow-empty', '-qm', 'remote work');
+          remoteHead = git('rev-parse', 'HEAD');
+          git('push', '-q', 'upstream', 'HEAD:refs/heads/feature');
+          git('checkout', '-q', 'feature');
+        }
+      }
+      const head = git('rev-parse', 'HEAD');
+      const status = git('status', '--porcelain');
+      const refused = run(at, 'checkout', {
+        INPUTS_BRANCH: 'feature', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }),
+      }, { pr: { headRefOid: remoteHead } });
+      expect(refused.code).not.toBe(0);
+      expect(git('rev-parse', 'HEAD')).toBe(head);
+      expect(git('status', '--porcelain')).toBe(status);
+    }, 60_000);
+  }
+
+});
+
+describe('build pickup and worker handoff', () => {
+  const workerInputs = {
+    WORKFLOW_ID: 'worker-1', INPUTS_NUMBER: '7', INPUTS_PICKUP_RUN: 'run-1', INPUTS_SELECTED_BRANCH: 'feature',
+  };
+
+  test('pickup facts agree with the worker facts contract', () => {
+    const schema = (name: string) => {
+      const workflow = Bun.YAML.parse(readFileSync(join(PACK, `${name === 'archon-build-round' ? 'build-round' : 'build-queue'}/${name}.yaml`), 'utf8')) as {
+        nodes: { id: string; output_format?: unknown }[];
+      };
+      return workflow.nodes.find(node => node.id === 'facts')?.output_format;
+    };
+    const queue = schema('archon-build-queue') as { properties: Record<string, unknown> };
+    const worker = schema('archon-build-round') as { properties: Record<string, unknown> };
+    for (const [key, value] of Object.entries(queue.properties)) expect(value).toEqual(worker.properties[key]);
+  });
+
+  test('admission transfers the expected pickup claim and appends the worker atomically, and resume keeps it', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ rounds: [round('previous', AT)] })));
+    const admitted = run(at, 'admit', workerInputs);
+    expect(ok(admitted)).toMatchObject({ branch: 'feature', continues: 42 });
+    expect(readFileSync(join(admitted.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'worker-1' }, links: { runs: ['worker-1'] } });
+    const revision = stored(at).revision;
+    expect(ok(run(at, 'admit', workerInputs))).toMatchObject({ branch: 'feature' });
+    expect(stored(at).revision).toBe(revision);
+  }, 60_000);
+
+  test('first pickup selects the build branch before a worker can admit, without creating a run branch', () => {
+    const at = install();
+    seed(at, triaged());
+    const pickup = ok(run(at, 'facts', {}));
+    expect(pickup.branch).toBe('build/7-an-issue-run-1');
+    const git = spawnSync('git', ['checkout', '-qb', String(pickup.branch)], { cwd: at.checkout, encoding: 'utf8' });
+    expect(git.status).toBe(0);
+    expect(ok(run(at, 'admit', { ...workerInputs, INPUTS_SELECTED_BRANCH: String(pickup.branch) })))
+      .toMatchObject({ branch: pickup.branch, continues: null });
+    expect(spawnSync('git', ['branch', '--list', 'archon*'], { cwd: at.checkout, encoding: 'utf8' }).stdout).toBe('');
+  }, 60_000);
+
+  test('admission refuses a different claim, wrong item, wrong checkout or a lost conditional write before delivery', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ rounds: [round('previous', AT)] })));
+    const before = stored(at).revision;
+    expect(run(at, 'admit', { ...workerInputs, INPUTS_PICKUP_RUN: 'other' }).stderr).toContain('no longer claimed');
+    expect(run(at, 'admit', { ...workerInputs, INPUTS_REPO_PATH: 'other/repo' }).stderr).toContain('another repository');
+    expect(run(at, 'admit', { ...workerInputs, INPUTS_SELECTED_BRANCH: 'wrong' }).stderr).toContain('not on selected branch');
+    const lost = run(at, 'admit', workerInputs, {
+      preload: `
+const spawnAdmission = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
+  if (argv.includes('state') && argv.includes('put')) return { exitCode: 3, stdout: Buffer.from(''), stderr: Buffer.from('') };
+  return spawnAdmission(argv, options);
+}});
+`,
+    });
+    expect(lost.stderr).toContain('changed during admission');
+    expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
+  test('build pickup holds failed and paused build claims, while failed intake and merge claims remain releasable', () => {
+    const at = install();
+    for (const workflow of ['archon-build-queue', 'archon-build-round', 'archon-intake', 'archon-merge-queue']) {
+      for (const status of ['failed', 'paused']) {
+        seed(at, triaged(CLAIMED));
+        const result = run(at, 'facts', {
+          WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: JSON.stringify({ 'run-1': status }),
+          INTAKE_RUN_WORKFLOWS: JSON.stringify({ 'run-1': workflow }),
+        });
+        expect(result.code).toBe(0);
+        expect(stored(at).value?.claim?.run_id).toBe(
+          status === 'failed' && !workflow.startsWith('archon-build-') ? 'run-2' : 'run-1'
+        );
+      }
+    }
+    seed(at, triaged(CLAIMED));
+    expect(run(at, 'facts', { WORKFLOW_ID: 'run-2' }).stderr).toContain('no status');
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
+  }, 60_000);
+
+  test('intake and merge pickups cannot release a failed build worker', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    for (const pickup of [INTAKE_PICKUP, MERGE_PICKUP]) {
+      inProcess(at, () => {
+        process.env.INTAKE_RUN_STATUSES = JSON.stringify({ 'run-1': 'failed' });
+        process.env.INTAKE_RUN_WORKFLOWS = JSON.stringify({ 'run-1': 'archon-build-round' });
+        const item = read('work/7');
+        if (item === undefined) throw new Error('missing item');
+        expect(releaseIfTerminal(item, LATER, 'another-run', pickup).doc.claim?.run_id).toBe('run-1');
+      });
+    }
+  }, 60_000);
+
+  test('a pickup resumed after claiming selects its own item again', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ item: SUBJECT, path: 'route' });
+  }, 60_000);
+
+  test('a known admitted receipt is reused, and an uncertain launch never starts another worker', () => {
+    const at = install();
+    seed(at, triaged({ claim: { run_id: 'worker-1', at: AT, requests: [] }, links: { runs: ['worker-1'] } }));
+    const inputs = { INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_BRANCH: 'feature' };
+    const reused = run(at, 'dispatch', inputs, { artifacts: { 'build/dispatch.json': JSON.stringify({ run_id: 'worker-1' }) } });
+    expect(ok(reused)).toMatchObject({ run_id: 'worker-1' });
+    seed(at, triaged(CLAIMED));
+    const uncertain = run(at, 'dispatch', inputs, { artifacts: { 'build/dispatch-started.json': '{}' } });
+    expect(uncertain.code).not.toBe(0);
+    expect(uncertain.stderr).toContain('uncertain worker launch');
+    expect(uncertain.stderr).toContain('explicitly abandon pickup run-1 after verifying no worker exists');
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
+  }, 60_000);
+
+  test('a missing receipt is recovered from the admitted worker link and launch inputs', () => {
+    const at = install();
+    seed(at, triaged({ claim: null, links: { runs: ['worker-1'] } }));
+    const result = run(at, 'dispatch', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_BRANCH: 'feature',
+      RUN_DETAILS: JSON.stringify({ 'worker-1': { workflow_name: 'archon-build-round', metadata: { inputs: { pickup_run: 'run-1' } } } }),
+    }, { artifacts: { 'build/dispatch-started.json': '{}' } });
+    expect(ok(result)).toMatchObject({ run_id: 'worker-1' });
+  }, 60_000);
+
+  test('admission timeout keeps the pickup claim and the worker receipt for resume', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const result = run(at, 'dispatch', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_BRANCH: 'feature',
+    }, { preload: 'let dispatchTime = 0; Date.now = () => dispatchTime += 31_000;' });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('worker launched-archon-build-round has not acknowledged admission');
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
+    expect(readFileSync(join(result.artifacts, 'build/dispatch.json'), 'utf8')).toBe('{"run_id":"launched-archon-build-round"}');
+  }, 60_000);
+
+  test('the pickup settles a closed item without admitting a worker', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    expect(ok(run(at, 'settle', { INPUTS_PATH: 'closed', INPUTS_ITEM: JSON.stringify(SUBJECT) }))).toMatchObject({ summary: 'Issue 7: parked. the issue is closed' });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked' } } });
+  }, 60_000);
+
+  test('dispatch passes the selected branch literally and observes admission through the work item', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-dispatch-calls-'))), 'calls.jsonl');
+    // The CLI boundary admits the child before returning its launch receipt.
+    const result = run(at, 'dispatch', {
+      INPUTS_PATH: 'route', INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_BRANCH: 'feature', ARCHON_CALL_LOG: calls,
+    }, { preload: `
+import { stateGet as getDispatchState, statePut as putDispatchState } from ${JSON.stringify(resolve(PACK, '.shared/state.ts'))};
+const spawnDispatch = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, options) => {
+  const result = spawnDispatch(argv, options);
+  if (argv.includes('workflow') && argv.includes('run') && argv.includes('archon-build-round')) {
+    const stored = getDispatchState('work/7');
+    putDispatchState('work/7', { ...stored.value, claim: { run_id: 'launched-archon-build-round', at: '${AT}', requests: [] }, links: { runs: ['launched-archon-build-round'] } }, stored.revision);
+  }
+  return result;
+}});
+` });
+    expect(ok(result)).toMatchObject({ run_id: 'launched-archon-build-round' });
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-build-round', '--branch', 'feature', 'selected_branch=feature', 'pickup_run=run-1', '--config-from-run', 'run-1']));
+    expect(readFileSync(join(result.artifacts, 'build/dispatch.json'), 'utf8')).toBe('{"run_id":"launched-archon-build-round"}');
   }, 60_000);
 });

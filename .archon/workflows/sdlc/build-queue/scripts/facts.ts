@@ -1,99 +1,10 @@
-/**
- * Claim the build queue's next item and write the issue the deciding agents read.
- *
- * It claims the waiting item that sorts first with intake's claim and order, or the
- * item the `number` input names, and writes only that claim. A named item that cannot
- * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
- * apply parks without an agent.
- *
- * With `retriage_as` set and no item named, it also lists the blocked items due a
- * revisit, for the revisit agent beside the item's path.
- *
- * It also resolves the item's pull request as the forge reports it now. An open one
- * whose head is in the item's repository is the pull request the round continues;
- * otherwise the round opens one from a new branch named after the issue.
- */
-
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import {
-  BUILD_PICKUP,
-  type BlockedItem,
-  type BuildRound,
-  buildBranch,
-  claimNamed,
-  dueBlocked,
-  countedRounds,
-  itemPullRequest,
-} from '../../.shared/build.ts';
-import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { BUILD_PICKUP, claimNamed, dueBlocked, countedRounds } from '../../.shared/build.ts';
+import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
-import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
-
-function positive(name: string, value: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
-  return parsed;
-}
-
-/** Write the issue every agent reads; its path is fixed so the prompts name it. */
-function writeIssue(title: string, url: string, body: string): void {
-  const dir = join(artifactsDir(), 'build');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'issue.md'), `# ${title}\n\n${url}, now.\n\n${body}\n`);
-}
-
-/** For an open item, exactly one of `continues` and `branch` is set. */
-interface ItemPr {
-  readonly pull_request: PrRecord | null;
-  readonly continues: number | null;
-  readonly branch: string;
-}
-
-const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
-
-function resolvePr(
-  subject: QualifiedPr,
-  title: string,
-  doc: WorkItem | null,
-  rounds: readonly BuildRound[],
-  runId: string
-): ItemPr {
-  const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
-  const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
-  if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
-    return { pull_request: pr, continues: pr.number, branch: '' };
-  }
-  return { pull_request: pr, continues: null, branch: buildBranch(subject.number, title, runId) };
-}
-
-function emitItem(
-  path: 'closed' | 'route',
-  subject: QualifiedPr,
-  url: string,
-  doc: WorkItem | null,
-  rounds: readonly BuildRound[],
-  atCap: boolean,
-  itemPr: ItemPr,
-  blocked: readonly BlockedItem[]
-): void {
-  emit({
-    path,
-    item: subject,
-    url,
-    record: doc === null ? null : withPlainReports(doc),
-    brief: doc?.facts.build?.brief ?? '',
-    rounds,
-    at_cap: atCap,
-    policy_defaults: POLICY_DEFAULTS,
-    ...itemPr,
-    blocked,
-    blocked_count: blocked.length,
-  });
-}
+import { stateDocuments } from '../../.shared/state.ts';
+import { claimNext, parseOrder, read } from '../../.shared/workitem.ts';
+import { positive, emitItem, resolvePr, NO_ITEM_PR } from '../../.shared/build-facts.ts';
 
 function main(): void {
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
@@ -109,10 +20,12 @@ function main(): void {
   const number = trimmed(process.env.INPUTS_NUMBER);
   const revisits = number === '' && trimmed(process.env.INPUTS_RETRIAGE_AS) !== '';
   const blocked = revisits ? dueBlocked(new Date().toISOString()) : [];
-  const doc =
+  const owned = stateDocuments('work/').map(row => read(row.name, row))
+    .find(row => row?.doc.claim?.run_id === runId)?.doc;
+  const doc = owned ?? (
     number === ''
       ? claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP)
-      : claimNamed(positive('number', number), new Date().toISOString(), runId);
+      : claimNamed(positive('number', number), new Date().toISOString(), runId));
   if (doc === null) {
     emit({
       path: 'idle',
@@ -130,7 +43,6 @@ function main(): void {
     return;
   }
   const issue = viewIssue(doc.subject);
-  writeIssue(issue.title, issue.url, issue.body);
   const closed = issue.state === 'closed';
   const rounds = doc.facts.build?.rounds ?? [];
   emitItem(

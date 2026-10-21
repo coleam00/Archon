@@ -1,19 +1,10 @@
 /**
- * The intake work item: one state document per issue, `work/<number>`, in the run's
- * project scope.
- *
- * The document is the item's state; its labels mirror it, and a label a person adds
- * is a request, never the state. Trust is decided once, by a script, from the
- * project's maintainer list, so no model and no workflow input can raise it. Every
- * event records a request on its item; a run then claims the best waiting item with
- * a conditional write, so two runs never work the same item, and releases the claim
- * when it is done. A claim whose run the engine reports terminal is released by the
- * next pickup; any other answer leaves it held, because a live owner and an orphan
- * cannot be told apart here.
- *
- * The build and merge queues claim the same documents through the same claim, so an
- * item has one owner at a time across the queues; their records are `facts.build`
- * (./build.ts) and `facts.merge` (./merge.ts).
+ * One state document per issue, `work/<number>`, in the run's project scope.
+ * Labels mirror its state; label events enqueue requests rather than replacing it.
+ * Intake establishes trust from project maintainers before any agent can act.
+ * Intake, build and merge share a conditional claim, so an item has one owner.
+ * Terminal claims release on pickup, except failed builds kept for resume.
+ * Unknown owners remain held until an operator resolves them.
  */
 
 import { createHash } from 'node:crypto';
@@ -33,7 +24,7 @@ import {
 } from './labels.ts';
 import {
   claimDisposition,
-  runStatus,
+  runDetail,
   stateAppend,
   stateDocuments,
   stateGet,
@@ -671,15 +662,22 @@ export function readWorkItem(number: number): WorkItem | null {
 }
 
 /**
- * Release a claim whose run the engine reports terminal; any other answer holds it.
- * A run that finishes clears its own claim, so a terminal run still holding one
- * stopped before its labels were written, and its requests wait again.
+ * Release terminal claims, except failed build runs whose checkout and claim remain resumable.
+ * A queue that finishes clears its own claim. Recoverable terminal claims return
+ * their requests to the queue.
  */
 export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
-  const status = runStatus(claim.run_id);
+  const run = runDetail(claim.run_id);
+  const status = typeof run?.status === 'string' ? run.status : null;
+  if (status === 'failed' &&
+    (run?.workflow_name === 'archon-build-queue' || run?.workflow_name === 'archon-build-round' ||
+      typeof run?.workflow_name !== 'string')) {
+    note(`${pickup.stage} leaves ${item.name} claimed by failed run ${claim.run_id}: resume that run, or explicitly abandon it before another pickup`);
+    return item;
+  }
   if (claimDisposition(status) === 'hold') {
     if (status === null) {
       note(
