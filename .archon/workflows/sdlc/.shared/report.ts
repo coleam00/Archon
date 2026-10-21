@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
+import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -200,23 +200,20 @@ export function caveats(
 }
 
 /** A verified publication can outlive a failed node with no typed output. */
-function creationRecord(path: string): { url: string; at?: number; problem?: string } {
+function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
+  const path = join(artifacts, PR_CREATE_RECORD);
   try {
     const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
-    return { url: claim.state === 'verified' ? claim.pr.url : '', at: modified(path) };
+    const at = modified(path);
+    return claim.state === 'verified' ? { url: claim.pr.url, at } : { url: '', unresolvedAt: at };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
-    return { url: '', at: modified(path), problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      url: '',
+      unresolvedAt: modified(path) ?? Infinity,
+      problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
-}
-
-function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
-  const records = [PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD].map(name => creationRecord(join(artifacts, name)));
-  const latest = records.filter(record => record.url !== '').sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).at(-1);
-  const problems = records.flatMap(record => record.problem === undefined ? [] : [record.problem]);
-  const claim = records[0];
-  const unresolvedAt = claim?.url === '' && (claim.at !== undefined || claim.problem !== undefined) ? (claim.at ?? Infinity) : undefined;
-  return { url: latest?.url ?? '', at: latest?.at, unresolvedAt, problem: problems.length === 0 ? undefined : problems.join('\n\n') };
 }
 
 /**

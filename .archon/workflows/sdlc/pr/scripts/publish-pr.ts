@@ -33,7 +33,7 @@
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { encodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { encodePrPublicationRecord, PR_CREATE_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
@@ -173,17 +173,9 @@ function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): 
   try {
     writeFileSync(claimPath, encodePrPublicationRecord({ pr }), { mode: 0o600 });
   } catch (error) {
-    const recoveryPath = join(artifactsDir(), PR_CREATE_VERIFIED_RECORD);
-    let recoveryError: unknown;
-    try {
-      writeFileSync(recoveryPath, encodePrPublicationRecord({ pr }), { mode: 0o600 });
-    } catch (failure) {
-      recoveryError = failure;
-    }
     throw new Error(
-      `published and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}` +
-      (recoveryError === undefined ? '' : `; recovery record ${recoveryPath} also failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`),
-      { cause: recoveryError === undefined ? error : new AggregateError([error, recoveryError]) }
+      `published and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
   }
 }

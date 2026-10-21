@@ -9,7 +9,6 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { itemPullRequest } from '../../workflows/sdlc/.shared/build';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import { trackTempRoots } from './temp-roots';
 import {
@@ -92,7 +91,6 @@ describe('publish-pr opens the pull request at most once', () => {
       expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
       expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
       expect(result.bodies).toEqual([]);
-      expect(existsSync(join(result.artifacts, 'pr-create-verified.json'))).toBe(false);
     }
   });
 
@@ -684,80 +682,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
       expect(report.code).toBe(0);
       expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
     }
-  });
-
-  it.each(['gh', 'forge'] as const)('names the verified PR when recording its identity fails after create through %s', source => {
-    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
-      forgeAt: head => ({ kind: 'fake', response: [
-        forgeOperation('pr.view', null),
-        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
-      ] }),
-      preload: `import { unlinkSync, mkdirSync } from 'node:fs';
-        const spawn = Bun.spawnSync.bind(Bun);
-        Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-          const result = spawn(argv, settings);
-          if ((argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') || argv.includes('pr.create')) {
-            unlinkSync('{ARTIFACTS}/pr-create-started');
-            mkdirSync('{ARTIFACTS}/pr-create-started');
-          }
-          return result;
-        } });`,
-    });
-    expect(result.code).toBe(1);
-    expect(source === 'gh' ? result.gh.some(call => call.startsWith('pr create')) : result.forge.some(call => call.includes('forge pr.create'))).toBe(true);
-    expect(result.stderr).toContain(PR_URL);
-    expect(result.stderr).toContain('EISDIR');
-    expect(result.bodies).toEqual([]);
-    const report = runPackScript('deliver/scripts/report', {
-      inputs: { INPUTS_OUTCOME: 'null' },
-      artifacts: existsSync(join(result.artifacts, 'pr-create-verified.json'))
-        ? { 'pr-create-verified.json': readFileSync(join(result.artifacts, 'pr-create-verified.json'), 'utf8') }
-        : {},
-      preload: `import { mkdirSync, utimesSync } from 'node:fs';
-        mkdirSync('{ARTIFACTS}/pr-create-started');
-        utimesSync('{ARTIFACTS}/pr-create-started', 100, 100);`,
-    });
-    expect(report.code).toBe(0);
-    const ending = JSON.parse(report.stdout);
-    expect(ending).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
-    expect(itemPullRequest([{ ...ending, run_id: 'run', at: '', delivered: false, artifacts: '' }], undefined, PR.repo)).toEqual(PR);
-  });
-
-  it.each(['gh', 'forge'] as const)('retains both recording errors and the verified URL when both writes fail through %s', source => {
-    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
-      forgeAt: head => ({ kind: 'fake', response: [
-        forgeOperation('pr.view', null),
-        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
-      ] }),
-      preload: `import { unlinkSync, mkdirSync } from 'node:fs';
-        const spawn = Bun.spawnSync.bind(Bun);
-        Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-          const result = spawn(argv, settings);
-          if ((argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') || argv.includes('pr.create')) {
-            unlinkSync('{ARTIFACTS}/pr-create-started');
-            mkdirSync('{ARTIFACTS}/pr-create-started');
-            mkdirSync('{ARTIFACTS}/pr-create-verified.json');
-          }
-          return result;
-        } });`,
-    });
-    expect(result.code).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain(PR_URL);
-    expect(result.stderr).toContain('pr-create-started');
-    expect(result.stderr).toContain('pr-create-verified.json');
-    expect(result.stderr.match(/EISDIR/g)?.length).toBe(2);
-    expect(result.bodies).toEqual([]);
-    const report = runPackScript('deliver/scripts/report', {
-      inputs: { INPUTS_OUTCOME: 'null' },
-      preload: `import { mkdirSync } from 'node:fs';
-        mkdirSync('{ARTIFACTS}/pr-create-started');
-        mkdirSync('{ARTIFACTS}/pr-create-verified.json');`,
-    });
-    expect(report.code).toBe(0);
-    const ending = JSON.parse(report.stdout);
-    expect(ending).toMatchObject({ ready: false, reason: 'pr_create_unresolved', pr_url: '' });
-    expect(() => itemPullRequest([{ ...ending, run_id: 'run', at: '', delivered: false, artifacts: '' }], undefined, PR.repo)).toThrow('unresolved PR create');
   });
 
   it.each([

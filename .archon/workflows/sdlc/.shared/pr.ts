@@ -28,7 +28,6 @@ import {
 
 export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
 export const PR_CREATE_RECORD = 'pr-create-started';
-export const PR_CREATE_VERIFIED_RECORD = 'pr-create-verified.json';
 
 export type PrPublicationRecord =
   | { readonly repo: QualifiedPr['repo']; readonly headRepo: QualifiedPr['repo']; readonly head: string }

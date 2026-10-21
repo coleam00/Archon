@@ -171,11 +171,10 @@ A blank line separates the closing delimiter from prepared content, including te
 legacy sections whose closing delimiter follows a table row remain replaceable.
 If publication verifies a created or reused PR but a later description edit fails,
 the failure report still names that PR from its verified publication record. If writing that record
-fails, publication fails and attempts to save the verified identity independently in
-`pr-create-verified.json`. The failure report selects the latest verified publication
-by artifact write time across the typed output and both creation records, and reports
-unreadable creation records. Even if both record writes fail, the node error names
-the verified PR URL and both recording errors for explicit continuation. An unresolved
+fails, publication fails and the node error names the verified PR URL and recording
+error for explicit continuation. The failure report selects the latest verified publication
+by artifact write time across the typed output and creation record, and reports an
+unreadable creation record. An unresolved
 creation claim reports `pr_create_unresolved`; the build queue refuses to select
 another PR or branch until newer triage explicitly names the reconciled PR or a later
 round records it. `update-pr-body` corrects the
