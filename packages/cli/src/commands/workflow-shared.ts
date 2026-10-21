@@ -366,10 +366,17 @@ async function resolveProjectScopedRunId(
   codebaseId: string
 ): Promise<string> {
   if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
-  const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
+  const fullId = FULL_RUN_ID_RE.test(runId);
+  let matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
+  if (matches.length === 0 && fullId && !runId.includes('-')) {
+    const id = runId.toLowerCase();
+    const dashedId = `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
+    matches = await host.deps.store.findWorkflowRunsByIdPrefix(dashedId, codebaseId);
+  }
   if (
     matches.length !== 1 ||
-    (FULL_RUN_ID_RE.test(runId) && matches[0]?.id.toLowerCase() !== runId.toLowerCase())
+    (fullId &&
+      matches[0]?.id.replaceAll('-', '').toLowerCase() !== runId.replaceAll('-', '').toLowerCase())
   ) {
     throw new Error(`Run id '${runId}' does not identify exactly one run in the selected project.`);
   }

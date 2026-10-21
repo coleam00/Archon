@@ -79,17 +79,47 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       checkout_baseline: null,
     };
     try {
-      for (const id of [
-        FULL_ID,
-        FULL_ID.toUpperCase(),
-        FULL_ID.replaceAll('-', ''),
-        FULL_ID.replaceAll('-', '').toUpperCase(),
-        '0b1ee8da',
+      const undashedId = FULL_ID.replaceAll('-', '');
+      for (const [id, storedId] of [
+        [FULL_ID, FULL_ID],
+        [FULL_ID.toUpperCase(), FULL_ID],
+        [undashedId, undashedId],
+        [undashedId.toUpperCase(), undashedId],
+        [undashedId, FULL_ID],
+        [undashedId.toUpperCase(), FULL_ID],
+        ['0b1ee8da', FULL_ID],
       ]) {
-        const matchedId = id.length === 32 ? id.toLowerCase() : FULL_ID;
-        find.mockResolvedValueOnce([{ ...run, id: matchedId }]);
-        expect(await resolveRunIdArg(host, id, '/repo')).toBe(matchedId);
-        expect(find).toHaveBeenLastCalledWith(id, 'cb-1');
+        find.mockClear();
+        find.mockImplementation(async (prefix, projectId) =>
+          projectId === run.codebase_id && storedId.startsWith(prefix.toLowerCase())
+            ? [{ ...run, id: storedId }]
+            : []
+        );
+        expect(await resolveRunIdArg(host, id, '/repo')).toBe(storedId);
+        expect(find).toHaveBeenNthCalledWith(1, id, 'cb-1');
+        expect(find.mock.calls).toEqual(
+          id.length === 32 && storedId === FULL_ID
+            ? [
+                [id, 'cb-1'],
+                [FULL_ID, 'cb-1'],
+              ]
+            : [[id, 'cb-1']]
+        );
+      }
+      for (const matches of [
+        [],
+        [{ ...run, id: FULL_ID + '-other' }],
+        [run, { ...run, id: FULL_ID + '-other' }],
+      ]) {
+        find.mockClear();
+        find.mockResolvedValueOnce([]).mockResolvedValueOnce(matches);
+        await expect(resolveRunIdArg(host, undashedId, '/repo')).rejects.toThrow(
+          'selected project'
+        );
+        expect(find.mock.calls).toEqual([
+          [undashedId, 'cb-1'],
+          [FULL_ID, 'cb-1'],
+        ]);
       }
       find.mockResolvedValue([]);
       const refused = [
