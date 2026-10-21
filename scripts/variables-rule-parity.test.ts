@@ -33,9 +33,9 @@
  * configuration and credentials outside the engine's own bag.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { ENVIRONMENT_READ_PATTERNS } from '../packages/workflows/src/exec-input-validation';
@@ -277,13 +277,18 @@ describe('the user-controlled variable rule', () => {
 
   test('the guard reads every Markdown extension the surfaces ship in', () => {
     const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'variables-rule-pages-')));
+    mkdirSync(join(root, 'nested'));
     writeFileSync(join(root, 'page.md'), '# page\n');
     writeFileSync(join(root, 'page.mdx'), '# page\n');
+    writeFileSync(join(root, 'nested', 'page.md'), '# nested page\n');
+    writeFileSync(join(root, 'nested', 'page.mdx'), '# nested page\n');
     writeFileSync(join(root, 'notes.txt'), 'not a page\n');
-    const read = pageFiles(root)
-      .map(file => basename(file))
-      .sort();
-    expect(read).toEqual(['page.md', 'page.mdx']);
+    expect(pageFiles(root).sort()).toEqual([
+      `${root}/nested/page.md`,
+      `${root}/nested/page.mdx`,
+      `${root}/page.md`,
+      `${root}/page.mdx`,
+    ]);
   });
 });
 
@@ -460,7 +465,7 @@ function pageFiles(root: string): string[] {
       (entry): entry is string =>
         typeof entry === 'string' && PAGE_EXTENSIONS.some(extension => entry.endsWith(extension))
     )
-    .map(entry => `${root}/${entry}`);
+    .map(entry => `${root}/${entry.replaceAll('\\', '/')}`);
 }
 
 /**
