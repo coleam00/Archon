@@ -37,6 +37,29 @@ test('framing rejects malformed JSON, UTF-8, envelopes and unterminated final li
   await malformed([encode({ jsonrpc: '2.0', id: 999, result: {} })], 1);
 });
 
+test('line evidence names a method only when the connection handles it', async () => {
+  const evidence = async (value: unknown): Promise<unknown> => {
+    const rpc = new PluginRpc({
+      readable: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encode(value));
+          controller.close();
+        },
+      }),
+      writable: new WritableStream(),
+    });
+    rpc.on('_test', () => undefined);
+    const error: unknown = await rpc.done.catch((e: unknown) => e);
+    await rpc.close();
+    expect(error).toBeInstanceOf(PluginProtocolError);
+    expect(String(error)).not.toContain('private-line-secret');
+    return (error as PluginProtocolError).evidence?.message;
+  };
+  expect(await evidence({ jsonrpc: '1.0', method: '_test' })).toBe('_test');
+  expect(await evidence({ jsonrpc: '1.0', method: 'private-line-secret' })).toBe('unknown');
+  expect(await evidence({ jsonrpc: '1.0', id: 'private-line-secret' })).toBe('unknown');
+});
+
 test('the size cap counts bytes across reads, including multibyte text', async () => {
   const first = new Uint8Array(PROVIDER_PLUGIN_MAX_MESSAGE_BYTES).fill(32);
   await malformed([first, new TextEncoder().encode('🦊\n')], 1);
