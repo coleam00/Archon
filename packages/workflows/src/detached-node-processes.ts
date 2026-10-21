@@ -17,6 +17,7 @@ export class DetachedNodeProcesses {
   readonly mode = 'detached-posix';
   ended = false;
   private readonly commands = new Map<number, RecordedCommand>();
+  private hasExitedCommands = false;
   private preparation: { result: PreparedNodeTermination; settled: Promise<void> } | undefined;
 
   get held(): boolean {
@@ -30,6 +31,7 @@ export class DetachedNodeProcesses {
     this.commands.set(pid, command);
     child.once('exit', () => {
       command.reaped = true;
+      this.hasExitedCommands = true;
     });
   }
 
@@ -68,6 +70,8 @@ export class DetachedNodeProcesses {
 
   prepareTermination(): PreparedNodeTermination {
     if (this.preparation) return this.preparation.result;
+    // Exits outlive forget; snapshot before our own signals cause more exits.
+    const hasExitedCommands = this.hasExitedCommands;
     let releaseHold!: () => void;
     const settled = new Promise<void>(resolve => {
       releaseHold = resolve;
@@ -76,13 +80,19 @@ export class DetachedNodeProcesses {
       groups: this.signalCommands(),
       ready: Promise.all(
         [...this.commands.values()].map(command => this.waitForOutput(command.child))
-      ).then(closed =>
-        closed.every(Boolean)
+      ).then(closed => {
+        const warnings = closed.every(Boolean)
           ? []
           : [
               "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
-            ]
-      ),
+            ];
+        if (hasExitedCommands) {
+          warnings.push(
+            "Exited host commands may have left untracked background work. No survivor or cleanup is confirmed. Inspect the run's checkout processes with lsof, verify ownership, and stop leftovers before reusing or removing the checkout."
+          );
+        }
+        return warnings;
+      }),
       release: () => {
         if (this.preparation?.result !== result) return;
         this.preparation = undefined;

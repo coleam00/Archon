@@ -109,6 +109,41 @@ posixOnly('direct execution preserves numeric exit 143 versus SIGTERM', async ()
 });
 
 posixOnly(
+  'completed commands preserve success and report uncertainty across preparations',
+  async () => {
+    const trees = recordNodeProcessTrees({ mode: 'detached-posix' });
+    try {
+      const fresh = trees.prepareTermination();
+      expect(await fresh.ready).toEqual([]);
+      fresh.release();
+      expect(await body('/bin/echo', ['ordinary success'])).toEqual({
+        stdout: 'ordinary success\n',
+        stderr: '',
+        credentialValues: [],
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const prepared = trees.prepareTermination();
+        expect(prepared.groups).toEqual([]);
+        expect(await prepared.ready).toEqual([
+          expect.stringContaining('may have left untracked background work'),
+        ]);
+        prepared.release();
+      }
+    } finally {
+      trees.prepareTermination().release();
+      trees.release();
+    }
+    const fresh = recordNodeProcessTrees({ mode: 'detached-posix' });
+    try {
+      expect(await fresh.prepareTermination().ready).toEqual([]);
+    } finally {
+      fresh.prepareTermination().release();
+      fresh.release();
+    }
+  }
+);
+
+posixOnly(
   'termination preparation signals live groups once and holds results until release',
   async () => {
     const dir = fixtureDir();
@@ -132,6 +167,7 @@ posixOnly(
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
       expect(settled).toBe(false);
+      expect(await prepared.ready).toEqual([]);
       for (const options of [{ endTreeOnTimeout: true }, {}, { ownProcessGroup: true }] as const) {
         await expect(
           runSubprocess({ kind: 'host' }, '/bin/echo', ['blocked'], {
@@ -209,6 +245,11 @@ posixOnly.each(['end', 'timeout', 'abort'] as const)(
           expect(
             processes.split('\n').some(line => line.trim().endsWith(`archon-node-lifeline ${root}`))
           ).toBe(false);
+          const warnings = await prepared.ready;
+          expect(warnings).toEqual([
+            expect.stringContaining("still holds the node's output"),
+            expect.stringContaining('may have left untracked background work'),
+          ]);
           await expect(trees.end()).rejects.toThrow('still running');
           prepared.release();
         } else {
