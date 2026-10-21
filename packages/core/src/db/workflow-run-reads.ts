@@ -8,7 +8,6 @@ import {
  */
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
-  workflowRunStatusSchema,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -17,6 +16,7 @@ import type { TransactionQuery } from './resource-slots';
 import { notOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
+import { readWorkflowRunStatus } from './workflow-run-status';
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   try {
@@ -42,20 +42,22 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
  */
 export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
   const extract = getDialect().jsonText('metadata', 'isolation_env_id');
-  try {
-    const result = await pool.query<WorkflowRunRow>(
+  const result = await pool
+    .query<Omit<WorkflowRunRow, 'status'> & { status: string }>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE ${extract} = $1
-       ORDER BY started_at DESC LIMIT 1`,
+     WHERE ${extract} = $1
+     ORDER BY started_at DESC LIMIT 1`,
       [envId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
-    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
-  }
+    )
+    .catch((error: unknown) => {
+      const err = error as Error;
+      getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
+      throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
+    });
+  const row = result.rows[0];
+  return row
+    ? normalizeWorkflowRun({ ...row, status: readWorkflowRunStatus(row.id, row.status) })
+    : null;
 }
 
 /**
@@ -83,18 +85,7 @@ export async function findWorkflowRunsByIdPrefix(
   }
 }
 
-export class WorkflowStatusReadError extends Error {
-  override readonly name = 'WorkflowStatusReadError';
-
-  constructor(
-    readonly workflowRunId: string,
-    readonly storedStatus: string
-  ) {
-    super(
-      `Unsupported workflow run status for run ${workflowRunId}: ${JSON.stringify(storedStatus)}`
-    );
-  }
-}
+export { WorkflowStatusReadError } from './workflow-run-status';
 
 export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null> {
   const result = await pool
@@ -106,9 +97,7 @@ export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatu
     });
   const row = result.rows[0];
   if (!row) return null;
-  const status = workflowRunStatusSchema.safeParse(row.status);
-  if (!status.success) throw new WorkflowStatusReadError(id, row.status);
-  return status.data;
+  return readWorkflowRunStatus(id, row.status);
 }
 
 export async function getActiveWorkflowRun(
