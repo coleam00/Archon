@@ -53,23 +53,29 @@ import { createTransactionView } from './transaction-view';
 
 const log = createLogger('file-store.admission');
 
+const runHolderSchema = z.object({ kind: z.literal('run'), id: z.string() });
+const attemptHolderSchema = z.object({ kind: z.literal('attempt'), id: z.string() });
+const admittedSchema = z.array(z.string()).default([]);
+const foreignSlotSchema = z.object({
+  holders: z.array(z.discriminatedUnion('kind', [runHolderSchema, attemptHolderSchema])),
+  admitted: admittedSchema,
+});
+
 /** `source` names the slot document in a malformed attempt owner's error. */
 const slotSchema = (source: string) =>
   z.object({
     capacity: z.number().int().positive(),
     holders: z.array(
       z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('run'), id: z.string() }),
-        z.object({
-          kind: z.literal('attempt'),
-          id: z.string(),
+        runHolderSchema,
+        attemptHolderSchema.extend({
           owner: z.unknown().transform(owner => parseProcessOwner(owner, source)),
         }),
       ])
     ),
     queue: z.array(z.string()),
     // Checkout membership survives giving back capacity while paused.
-    admitted: z.array(z.string()).default([]),
+    admitted: admittedSchema,
   });
 const requestSchema = z.object({
   id: z.string(),
@@ -217,13 +223,7 @@ export function createAdmissionTransaction(
     for (const path of await documentPaths(root, 'slots')) {
       if (path === pathFor('slots', resource)) continue;
       try {
-        const row = await read(
-          path,
-          z.object({
-            holders: z.array(z.object({ kind: z.string(), id: z.string() })),
-            admitted: z.array(z.string()).default([]),
-          })
-        );
+        const row = await read(path, foreignSlotSchema);
         if (
           row?.admitted.includes(id) ||
           row?.holders.some(holder => holder.kind === 'run' && holder.id === id)
@@ -504,6 +504,19 @@ export function createFileAdmissionStore(
       return null;
     }
   }
+  async function receiptIdForRequest(id: string): Promise<string | undefined> {
+    const schema = receiptSchema
+      .pick({ id: true })
+      .strip()
+      .extend({
+        bindings: z.array(bindingSchema.pick({ requestIds: true })),
+      });
+    for (const path of await documentPaths(root, 'receipts')) {
+      const receipt = await queueCandidate(path, schema);
+      if (receipt?.bindings.some(binding => binding.requestIds.includes(id))) return receipt.id;
+    }
+    return undefined;
+  }
   async function inspectQueuedRequest(
     slotPath: string,
     id: string,
@@ -518,6 +531,7 @@ export function createFileAdmissionStore(
       return {
         inspection: {
           id,
+          receiptId: await receiptIdForRequest(id),
           resource:
             typeof resource === 'string' && pathFor('slots', resource) === slotPath
               ? resource
@@ -696,7 +710,7 @@ export function createFileAdmissionStore(
           for (const [position, id] of slot.queue.entries()) {
             const envelope = await queueCandidate(
               pathFor('requests', id),
-              requestSchema.pick({ hostId: true }).extend({ resource: z.unknown() })
+              requestSchema.pick({ hostId: true }).extend({ resource: z.unknown().optional() })
             );
             if (!envelope || envelope.hostId !== hostId) continue;
             queued.push(await inspectQueuedRequest(path, id, envelope.resource, position));

@@ -672,7 +672,20 @@ for (const branchFirst of [false, true]) {
   });
 }
 
-for (const corruption of ['launch', 'json', 'missing', 'only-launch', 'only-resource'] as const) {
+for (const corruption of [
+  'launch',
+  'json',
+  'missing',
+  'only-launch',
+  'only-resource',
+  'only-missing-resource',
+  'only-missing-id',
+  'only-missing-overlap',
+  'only-missing-status',
+  'only-missing-blocker',
+  'only-missing-launch',
+  'only-missing-position',
+] as const) {
   test(`host drain contains queued ${corruption} corruption within its resource`, async () => {
     const root = roots(await mkdtemp(join(tmpdir(), 'host-drain-')));
     const host = await createFileWorkflowHost(root);
@@ -725,7 +738,9 @@ for (const corruption of ['launch', 'json', 'missing', 'only-launch', 'only-reso
       else if (corruption === 'json') await writeFile(path, '{');
       else {
         const row = JSON.parse(await readFile(path, 'utf8'));
-        if (corruption === 'only-resource') row.resource = null;
+        if (corruption.startsWith('only-missing-'))
+          delete row[corruption.slice('only-missing-'.length)];
+        else if (corruption === 'only-resource') row.resource = null;
         else row.launch = {};
         await writeFile(path, JSON.stringify(row));
       }
@@ -744,7 +759,9 @@ for (const corruption of ['launch', 'json', 'missing', 'only-launch', 'only-reso
     expect(error).toBeInstanceOf(ResourceStartDrainError);
     if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
     expect(error.failures).toHaveLength(1);
-    expect(error.failures[0]?.resource).toBe(corruption === 'only-resource' ? undefined : 'a');
+    expect(error.failures[0]?.resource).toBe(
+      corruption === 'only-resource' || corruption === 'only-missing-resource' ? undefined : 'a'
+    );
     const failure = error.failures[0]?.error;
     if (!(failure instanceof Error)) throw new Error('expected original drain error');
     expect(failure.message).toContain(

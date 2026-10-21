@@ -458,7 +458,12 @@ export async function listQueuedResourceStartsForHost(
     try {
       return inspectRequest(row);
     } catch (error) {
-      return { id: String(row.id), resource: String(row.resource_key), error };
+      return {
+        id: String(row.id),
+        resource: String(row.resource_key),
+        receiptId: typeof row.receipt_id === 'string' ? row.receipt_id : undefined,
+        error,
+      };
     }
   });
 }

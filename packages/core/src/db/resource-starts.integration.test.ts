@@ -1507,9 +1507,23 @@ for (const damagedLaunch of ['{', '{}']) {
         [holder.run.id]
       );
     }
+    const receiptId = crypto.randomUUID();
+    await acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'older',
+        deliveryId: null,
+        contentDigest: 'older',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'unmatched',
+      bindings: [],
+    });
     await getDatabase().query(
-      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
-      [queued[0]!, damagedLaunch]
+      'UPDATE remote_agent_resource_start_requests SET launch = $2, receipt_id = $3 WHERE id = $1',
+      [queued[0]!, damagedLaunch, receiptId]
     );
     const started: string[] = [];
     const error = await drainResourceStartHost({
@@ -1523,6 +1537,7 @@ for (const damagedLaunch of ['{', '{}']) {
     expect(error).toBeInstanceOf(ResourceStartDrainError);
     if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
     expect(error.failures[0]?.resource).toBe('a');
+    expect(error.failures[0]?.receiptId).toBe(receiptId);
     expect(await host.deps.store.getWorkflowRun(queued[0]!)).toBeNull();
   });
 }

@@ -1,9 +1,9 @@
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, realpath, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
@@ -33,6 +33,7 @@ import {
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
 import { triggerCommand } from './trigger';
+import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
 const tempRoots = trackTempRoots();
 
@@ -604,7 +605,8 @@ test('preparation passes event-mapped inputs to a workflow that declares them', 
 });
 
 /** A registered project, a user, and a timer config that fires `portable` on host `host`. */
-async function fireFixture(): Promise<{
+async function fireFixture(fileStore = false): Promise<{
+  stateRoot: string;
   host: WorkflowHost;
   project: string;
   userId: string;
@@ -620,7 +622,8 @@ async function fireFixture(): Promise<{
   process.env.ARCHON_HOME = join(root, 'home');
   registerBuiltinProviders();
   setPlatformPolicies([]);
-  const host = hostForTest();
+  const stateRoot = join(root, 'state');
+  const host = fileStore ? await createFileWorkflowHost(stateRoot) : hostForTest();
   await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
@@ -649,6 +652,7 @@ async function fireFixture(): Promise<{
     })
   );
   return {
+    stateRoot,
     host,
     project,
     userId: user.id,
@@ -765,6 +769,80 @@ test("fire does not blame its receipt for another binding's preparation failure"
     restore();
   }
 });
+
+test.each([true, false])(
+  'fire reports damaged older queued work without failing its receipt (attributed: %s)',
+  async attributed => {
+    const { host, project, configPath, stateRoot, restore } = await fireFixture(true);
+    const store = host.deps.store;
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+    if (!codebase) throw new Error('Expected registered project');
+    const holder = launch(codebase.id);
+    holder.execution.cwd = project;
+    await store.admitResourceStart({
+      resource: 'portable',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: holder,
+    });
+    const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+      const [older] = await store.listStartReceipts(10);
+      if (!older) throw new Error('Expected older receipt');
+      const [request] = await store.listQueuedResourceStartsForHost('host');
+      if (!request || 'error' in request) throw new Error('Expected queued request');
+      expect(request.status).toBe('queued');
+      const documentPath = (kind: string, id: string) =>
+        join(stateRoot, 'resource', kind, `${createHash('sha256').update(id).digest('hex')}.json`);
+      const path = documentPath('requests', request.id);
+      const row = JSON.parse(await readFile(path, 'utf8'));
+      row.launch = {};
+      await writeFile(path, JSON.stringify(row));
+      if (!attributed) await unlink(documentPath('receipts', older.id));
+      const [inspection] = await store.listQueuedResourceStartsForHost('host');
+      if (!inspection || !('error' in inspection)) throw new Error('Expected inspection failure');
+      expect(inspection.receiptId).toBe(attributed ? older.id : undefined);
+      await store.claimPendingWorkflowRun(holder.run.id);
+      await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      config.binding.resource = 'independent';
+      await writeFile(configPath, JSON.stringify(config));
+      stdout.mockClear();
+      const started: string[] = [];
+      await triggerCommand(host, 'fire', [], { config: configPath }, async requestId => {
+        started.push(requestId);
+      });
+      expect(started).toHaveLength(1);
+      expect(await store.getWorkflowRun(started[0]!)).toMatchObject({ status: 'pending' });
+      const output = stdout.mock.calls
+        .map(call => String(call[0]))
+        .find(chunk => chunk.startsWith('{\n'));
+      if (!output) throw new Error('Expected printed receipt');
+      const printed: { id: string; bindings: { requestStatus: string }[] } = JSON.parse(output);
+      expect(printed.id).not.toBe(older.id);
+      expect(printed.bindings[0].requestStatus).toBe('admitted');
+      expect(stderr.mock.calls.map(call => String(call[0])).join('')).toContain(
+        `Queued request '${request.id}' is invalid`
+      );
+      await expect(triggerCommand(host, 'drain', [], { host: 'host' }, noDispatch)).rejects.toThrow(
+        'resource start operation'
+      );
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      restore();
+    }
+  }
+);
 
 test('a queued start that fails is attributed to the receipt that requested it', async () => {
   const host = hostForTest();

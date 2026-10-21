@@ -359,7 +359,7 @@ export function resumeRefusal(
 
 export type QueuedResourceStartInspection =
   | ResourceStartRequestInspection
-  | { id: string; resource?: string; error: unknown };
+  | { id: string; resource?: string; receiptId?: string; error: unknown };
 
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;

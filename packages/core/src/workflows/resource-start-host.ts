@@ -401,6 +401,7 @@ function queuedDrainResources(
     if (request.resource !== undefined) damaged.add(request.resource);
     failures.push({
       resource: request.resource,
+      receiptId: request.receiptId,
       error: new Error(`Queued request '${request.id}' is invalid`, {
         cause: request.error,
       }),
