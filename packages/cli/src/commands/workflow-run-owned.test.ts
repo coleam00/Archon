@@ -46,6 +46,8 @@ import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
+import { resolveLaunchRunConfig } from './workflow-run-config';
+import * as chatScope from '../workflow-scope';
 
 describe('workflowRunCommand — --input declared inputs (#2554)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -699,6 +701,71 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
       else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
     }
   });
+
+  it.each(
+    ['0b1ee8da-1111-2222-3333-444455556666', '0b1ee8da'].flatMap(configFromRun =>
+      [{}, { detach: true }, { dryRun: true }, { stubsInitPath: 'stubs.yaml' }].map(options => ({
+        configFromRun,
+        ...options,
+      }))
+    )
+  )('refuses foreign source config before reading it: %j', async options => {
+    const scope = spyOn(chatScope, 'readChatProjectScope').mockReturnValue('selected-project');
+    const host = createTestWorkflowHost();
+    const workflowDb = await import('@archon/core/db/workflows');
+    const find = workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>;
+    find.mockResolvedValueOnce([]);
+    const read = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    read.mockClear();
+    try {
+      await expect(workflowRunCommand(host, tempRoot, 'bench', 'go', options)).rejects.toThrow(
+        'selected project'
+      );
+      expect(find).toHaveBeenCalledWith(options.configFromRun, 'selected-project');
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      scope.mockRestore();
+    }
+  });
+
+  it.each(['0b1ee8da-1111-2222-3333-444455556666', '0b1ee8da'])(
+    'copies config from a matching-project run %s',
+    async configFromRun => {
+      const scope = spyOn(chatScope, 'readChatProjectScope').mockReturnValue('selected-project');
+      const previousKey = process.env.TOKEN_ENCRYPTION_KEY;
+      process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+      try {
+        const id = '0b1ee8da-1111-2222-3333-444455556666';
+        const { sealWorkflowRunConfig } = await import('@archon/core/config/run-config');
+        const workflowDb = await import('@archon/core/db/workflows');
+        const find = workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>;
+        find.mockResolvedValueOnce([{ id }]);
+        const read = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+        read.mockResolvedValueOnce({
+          id,
+          metadata: {
+            run_config: sealWorkflowRunConfig(
+              { envVars: { PROJECT_TOKEN: 'selected-project-token' } },
+              { kind: 'cli', label: 'config.yaml' }
+            ),
+          },
+        });
+        const config = await resolveLaunchRunConfig(
+          createTestWorkflowHost(),
+          { configFromRun },
+          tempRoot,
+          false
+        );
+        expect(find).toHaveBeenLastCalledWith(configFromRun, 'selected-project');
+        expect(read).toHaveBeenLastCalledWith(id);
+        expect(config?.layer.envVars).toEqual({ PROJECT_TOKEN: 'selected-project-token' });
+      } finally {
+        scope.mockRestore();
+        if (previousKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+        else process.env.TOKEN_ENCRYPTION_KEY = previousKey;
+      }
+    }
+  );
 
   it('refuses --config-from-run on a resume, before reading the named run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
