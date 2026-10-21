@@ -173,11 +173,12 @@ export function createAdmissionTransaction(
       let raw: unknown;
       try {
         raw = path in documents ? documents[path] : await readJson(join(root, path));
-        const row = raw === undefined ? null : slotMembershipSchema.parse(raw);
+        const row = slotMembershipSchema.optional().parse(raw);
         if (hasReadableSlotMembership(row, id)) return true;
       } catch (error) {
+        const damagedDocument = error instanceof SyntaxError || error instanceof z.ZodError;
         // A damaged component cannot erase contradictory membership in the other component.
-        if (associationKnown && !hasReadableSlotMembership(raw, id)) continue;
+        if (associationKnown && damagedDocument && !hasReadableSlotMembership(raw, id)) continue;
         throw new Error(`Invalid resource slot membership '${path}'`, { cause: error });
       }
     }

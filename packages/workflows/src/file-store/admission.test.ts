@@ -1486,6 +1486,56 @@ test.each(
   }
 );
 
+test.each(['paused', 'failed'] as const)(
+  'historical %s resume refuses a foreign slot read failure without committing',
+  async status => {
+    const { root, store, holder, queued, path, slotPath } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    if (status === 'failed')
+      await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+      }));
+    const foreign = { ...intent(), resource: 'foreign' };
+    foreign.launch.execution.cwd = '/foreign';
+    await store.admitResourceStart(foreign);
+    const foreignPath = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update('foreign').digest('hex')}.json`
+    );
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    const request = await readFile(path, 'utf8');
+    const slot = await readFile(slotPath, 'utf8');
+    const foreignSlot = await readFile(foreignPath, 'utf8');
+    const failure = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+    const readJson = commitModule.readJson;
+    const reads = spyOn(commitModule, 'readJson').mockImplementation(async document => {
+      if (document === foreignPath) throw failure;
+      return readJson(document);
+    });
+    try {
+      await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
+        message: `Invalid resource slot membership 'resource/slots/${createHash('sha256').update('foreign').digest('hex')}.json'`,
+        cause: failure,
+      });
+    } finally {
+      reads.mockRestore();
+    }
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    expect(await readFile(path, 'utf8')).toBe(request);
+    expect(await readFile(slotPath, 'utf8')).toBe(slot);
+    expect(await readFile(foreignPath, 'utf8')).toBe(foreignSlot);
+    expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe(status);
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+  }
+);
+
 test('unreadable foreign membership remains relevant through a registered checkout alias', async () => {
   const { root, store } = await fixture();
   const foreign = { ...intent(), resource: 'foreign' };
