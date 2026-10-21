@@ -66,6 +66,44 @@ function readRecordedPids(pidFile: string): [owner: number, node: number] | unde
   return Number.isSafeInteger(owner) && Number.isSafeInteger(node) ? [owner, node] : undefined;
 }
 
+function stagedPidWriter(pidFile: string): string {
+  return `node_pid=$$; echo "$PPID $$" > '${pidFile}.ready'; printf '%s %s' "$PPID" "\${node_pid:0:1}" > '${pidFile}'; while [ ! -f '${pidFile}.publish' ]; do sleep 0.025; done; printf '%s\\n' "\${node_pid:1}" >> '${pidFile}'; exec sleep 60`;
+}
+
+async function publishPidsAfterConsumerWaits(
+  pidFile: string,
+  consumer: Promise<[owner: number, node: number]>
+): Promise<[owner: number, node: number]> {
+  const expected = await waitFor(
+    () => readRecordedPids(`${pidFile}.ready`),
+    'node to prepare its complete PID pair'
+  );
+  await waitFor(
+    () =>
+      existsSync(pidFile) &&
+      readFileSync(pidFile, 'utf8') === `${expected[0]} ${String(expected[1])[0]}`
+        ? true
+        : undefined,
+    'node to pause with a positive partial second PID'
+  );
+  let consumed = false;
+  const result = consumer.then(pids => {
+    consumed = true;
+    return pids;
+  });
+  try {
+    // Allow several consumer polls while the shell is held at the publication gate.
+    await Bun.sleep(100);
+    expect(consumed).toBe(false);
+    if (process.platform !== 'win32') expect(processAlive(expected[0])).toBe(true);
+  } finally {
+    writeFileSync(`${pidFile}.publish`, '');
+  }
+  const pids = await result;
+  expect(pids).toEqual(expected);
+  return pids;
+}
+
 describe('trigger fixture PID records', () => {
   test.each([
     '',
@@ -914,7 +952,7 @@ nodes:
           `name: signal-proof\ndescription: Signal proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
         );
       };
-      writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+      writeWorkflow(stagedPidWriter(pidFile));
 
       const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
       const databasePath = join(archonHome, 'archon.db');
@@ -961,10 +999,18 @@ nodes:
       let sleepPid: number | undefined;
       try {
         await runCli(cliPath, projectRoot, archonHome, fire);
-        const [ownerPid, nodePid] = await waitFor(() => {
-          if (runs()[0]?.status !== 'running') return undefined;
-          return readRecordedPids(pidFile);
-        }, 'trigger execution to start its node');
+        const first = await waitFor(() => {
+          const run = runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        activeRuns.add(first.id);
+        const [ownerPid, nodePid] = await publishPidsAfterConsumerWaits(
+          pidFile,
+          waitFor(() => {
+            if (runs()[0]?.status !== 'running') return undefined;
+            return readRecordedPids(pidFile);
+          }, 'trigger execution to start its node')
+        );
         sleepPid = nodePid;
 
         process.kill(ownerPid, 'SIGTERM');
@@ -983,6 +1029,7 @@ nodes:
             return true;
           }
         }, 'signalled owner to exit');
+        activeRuns.delete(first.id);
 
         // With the run terminal, the capacity-1 slot admits the next start at once.
         writeWorkflow('echo done');
@@ -1026,7 +1073,7 @@ nodes:
       );
     };
     // A bash node's parent is the `trigger execute` process that owns the run.
-    writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+    writeWorkflow(stagedPidWriter(pidFile));
 
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
     const databasePath = join(archonHome, 'archon.db');
@@ -1083,7 +1130,7 @@ nodes:
         return run?.status === 'running' ? run : undefined;
       }, 'trigger execution to start');
       activeRuns.add(first.id);
-      pids = await recordedPids(pidFile);
+      pids = await publishPidsAfterConsumerWaits(pidFile, recordedPids(pidFile));
 
       // The next start captures its own source at intake and waits behind the slot.
       writeWorkflow('echo done');
