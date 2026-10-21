@@ -233,13 +233,19 @@ browsing.
 
 ## Migrating from the old path
 
-Pre-refactor versions of Archon stored global workflows at `~/.archon/.archon/workflows/` (with an extra nested `.archon/`). That location is no longer read. If you have workflows there, Archon emits a one-time deprecation warning on first use telling you the exact migration command:
+Earlier versions of Archon stored global workflows at `~/.archon/.archon/workflows/`
+(with an extra nested `.archon/`). Archon no longer reads that location or warns about
+it, and does not migrate workflows automatically. Set `ARCHON_HOME` in your shell to
+your Archon home (default `~/.archon`). If `$ARCHON_HOME/workflows` does not exist, move
+the old directory:
 
 ```bash
-mv ~/.archon/.archon/workflows ~/.archon/workflows && rmdir ~/.archon/.archon
+mv "$ARCHON_HOME/.archon/workflows" "$ARCHON_HOME/workflows"
 ```
 
-Run it once; the warning stops firing on subsequent invocations. There was no prior home-scoped commands location, so `~/.archon/commands/` is new capability -- nothing to migrate.
+If the destination already exists, merge the files manually, checking for name conflicts.
+There was no prior home-scoped commands location, so `~/.archon/commands/` has nothing
+to migrate.
 
 ## Troubleshooting
 

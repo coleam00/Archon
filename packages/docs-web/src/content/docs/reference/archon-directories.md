@@ -131,13 +131,18 @@ The repo directory holds **source** only. Everything a run produces lives under
 path is the *worktree*, so the "cross-run memory" was destroyed at cleanup; and Archon
 never writes a `.gitignore`, so in a user's repository the directory was fully stageable.
 
-It is replaced by [`$STATE_DIR`](/reference/variables/). If Archon finds a legacy
-directory when a run starts it logs one warning with the exact move command and **moves
-nothing**:
+It is replaced by [`$STATE_DIR`](/reference/variables/). Archon no longer checks this
+legacy directory or warns about it, and does not read or move its contents. To migrate
+state, set `STATE_DIR` in your shell to the destination used by your workflow, then run
+from the repository:
 
 ```bash
-mv <repo>/.archon/state/* ~/.archon/workspaces/<project>/state/
+mkdir -p "$STATE_DIR"
+mv .archon/state/* "$STATE_DIR"/
 ```
+
+The glob moves non-hidden entries. Inspect hidden entries and destination conflicts
+before moving them.
 
 Then replace `.archon/state/` with `$STATE_DIR/` in the workflow's prompts and scripts, and
 delete any `mkdir -p .archon/state` — the executor pre-creates `$STATE_DIR`.

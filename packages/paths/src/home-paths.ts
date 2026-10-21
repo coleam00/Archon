@@ -252,16 +252,6 @@ export function getHomeScriptsPath(): string {
 }
 
 /**
- * Legacy home-scoped workflows directory (`~/.archon/.archon/workflows/`).
- * Retained only so discovery can DETECT files there and emit a one-time
- * deprecation warning pointing at the migration command. Archon no longer
- * reads workflows from this path — it's a signal, not a source.
- */
-export function getLegacyHomeWorkflowsPath(): string {
-  return join(getArchonHome(), '.archon', 'workflows');
-}
-
-/**
  * Get the home-scope archon env file path (~/.archon/.env).
  * This is the archon-owned env location loaded by every entry point.
  */

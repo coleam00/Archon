@@ -7,8 +7,8 @@
  * Inside an isolated run it resolved to the *worktree*, so the cross-run memory
  * it held was destroyed at cleanup; in a user's repository it was stageable
  * (Archon never writes a `.gitignore`). `$STATE_DIR` (#2200) is the external,
- * per-project replacement. Archon itself never moves the legacy directory — it
- * warns once and leaves it alone — so this script is the operator's one-shot.
+ * per-project replacement. Archon itself never moves the legacy directory, so
+ * this script is the operator's one-shot.
  *
  * It resolves the destination through the SAME helper the executor, the artifact
  * routes, and the CLI use (`resolveProjectStorageKey` + `getProjectStoragePaths`

@@ -70,8 +70,10 @@ Two properties matter:
 Like `$BASE_BRANCH`, referencing `$STATE_DIR` where no state directory could be resolved
 **throws** rather than substituting an empty string.
 
-If Archon finds a legacy `<repo>/.archon/state/` directory when a run starts, it logs one
-warning with the exact `mv` command and moves nothing.
+Archon no longer checks or warns about legacy `<repo>/.archon/state/` directories,
+and does not read or move their contents. Follow the [manual state migration
+steps](/reference/archon-directories/#legacy-archonstate), including the checks for
+hidden entries and destination conflicts, then update workflows to use `$STATE_DIR`.
 
 **Concurrency.** The engine does no locking on `$STATE_DIR`. See
 [Workflow language](/reference/workflow-language/#cross-run-state-with-state_dir) for
