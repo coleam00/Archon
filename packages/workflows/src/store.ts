@@ -768,7 +768,7 @@ export interface IWorkflowStore
   findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
-  /** Event reads return created_at with an explicit UTC offset, independent of storage dialect. */
+  /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
     runId: string,
     options?: { excludeEventTypes?: readonly string[] }

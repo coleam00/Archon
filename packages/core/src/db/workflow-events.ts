@@ -303,7 +303,8 @@ export async function listActiveWorkflowNodeIds(
 
 /**
  * Rows of the given event types, data included, for several runs in one query: each
- * run's rows in event order, and an entry (possibly empty) for every requested run. A
+ * run's rows in durable event order, and an entry (possibly empty) for every requested run.
+ * Legacy rows without a sequence precede sequenced rows, ordered by timestamp then id. A
  * run list uses it to report per-node state without one query per run, fetching only the
  * types its fold reads so high-volume rows such as provider events never leave the
  * database.
@@ -324,7 +325,7 @@ export async function listEventsForRuns(
       `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
          AND event_type IN (${eventPlaceholders.join(', ')})
-       ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+       ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
       [...workflowRunIds, ...eventTypes]
     );
     for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));

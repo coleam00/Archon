@@ -35,6 +35,7 @@ mock.module('./connection', () => ({
 const {
   persistWorkflowEvent,
   listWorkflowEvents,
+  listEventsForRuns,
   persistWorkflowEventIfRunning,
   readWorkflowEventsAfter,
 } = await import('./workflow-events');
@@ -138,6 +139,48 @@ describe('workflow events — real SQLite', () => {
 
     const stored = await listWorkflowEvents('run-1');
     expect(lifecycleTypes(stored)).toEqual(['node_started', 'node_completed']);
+  });
+
+  test('batched resume events follow durable order across timestamp reversals and legacy rows', async () => {
+    const runId = 'run-resume-event-order';
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status)
+       VALUES ($1, 'wf', 'conv-1', 'msg', 'failed')`,
+      [runId]
+    );
+    const rows = [
+      ['legacy-b', 'node_started', '2030-01-01 00:00:00'],
+      ['legacy-a', 'source_released', '2030-01-01 00:00:00'],
+      ['legacy-old', 'node_started', '2029-01-01 00:00:00'],
+      ['release', 'source_released', '2026-01-02 00:00:00'],
+      ['started', 'node_started', '2026-01-01 00:00:00'],
+    ];
+    for (const [id, type, timestamp] of rows) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events
+           (id, workflow_run_id, event_type, created_at)
+         VALUES ($1, $2, $3, $4)`,
+        [id, runId, type, timestamp]
+      );
+    }
+    await db.query(
+      `UPDATE remote_agent_workflow_events SET event_order = NULL
+       WHERE workflow_run_id = $1 AND id IN ('legacy-a', 'legacy-b', 'legacy-old')`,
+      [runId]
+    );
+
+    const events = (await listEventsForRuns([runId], ['source_released', 'node_started'])).get(
+      runId
+    );
+    expect(events?.map(event => event.id)).toEqual([
+      'legacy-old',
+      'legacy-a',
+      'legacy-b',
+      'release',
+      'started',
+    ]);
+    expect(events?.at(-1)?.event_type).toBe('node_started');
   });
 
   test('malformed data degrades to {} instead of throwing the whole batch (I2)', async () => {
