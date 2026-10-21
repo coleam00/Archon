@@ -5,6 +5,7 @@ import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
 import { dispatchBackgroundWorkflow } from '../orchestrator';
 import { dispatchForeground } from './foreground';
+import { reconcileFreshCheckout } from './checkout';
 import { runSignatureGates, sendRunStartNotices } from './gates';
 import {
   detectContinuation,
@@ -25,8 +26,8 @@ import { prepareExecutableSource, prepareLaunchAiConfiguration } from './source'
  * from the orchestrator (currently coupled to SSE bridging infrastructure).
  */
 export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget): Promise<void> {
-  const scope = createDispatchScope(target);
-  const { platform, conversationId, conversation, codebase, options } = scope;
+  let scope = createDispatchScope(target);
+  const { platform, conversationId, codebase, options } = scope;
 
   const requested = await resolveRequestedWorkflow(scope, target.request);
   if (requested === undefined) return;
@@ -35,6 +36,8 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
   const continuation = await detectContinuation(scope, target.request, requested);
   if (continuation === undefined) return;
   const { willContinueExistingRun } = continuation;
+  if (!willContinueExistingRun && platform.capabilities.defaultWorkflowDispatch !== 'background')
+    scope = await reconcileFreshCheckout(scope);
 
   const executable = await prepareExecutableSource(
     scope,
@@ -74,7 +77,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     });
 
   // Auto-attach project to conversation
-  await db.updateConversation(conversation.id, {
+  await db.updateConversation(scope.conversation.id, {
     codebase_id: codebase.id,
   });
 
@@ -88,7 +91,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
         conversationId,
         cwd: launchConfigCwd,
         originalMessage: scope.userMessage,
-        conversationDbId: conversation.id,
+        conversationDbId: scope.conversation.id,
         codebaseId: codebase.id,
         availableWorkflows: [workflow],
         isolationHints: scope.isolationHints,

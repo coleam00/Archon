@@ -2,7 +2,7 @@
 /** Covers workflow-dispatch.ts, directly and through `handleMessage`; shared mocks live in `../test/orchestrator-agent-harness`. */
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -10,7 +10,7 @@ import type { IPlatformAdapter } from '../types';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toBranchName } from '@archon/git';
-import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
+import { captureWorkflowSource, capturedSourceRoots } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
 import {
@@ -193,25 +193,71 @@ describe('workflow dispatch routing', () => {
     }
   );
 
-  test('fresh foreground resolution uses the concurrent replacement checkout', async () => {
-    const conversation = makeDispatchConversation({ isolation_env_id: 'retired-env' });
-    mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
-    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
-    mockAdoptedEnvironment.mockResolvedValueOnce(
-      makeIsolationEnvironment({ id: 'retired-env', status: 'destroyed' })
-    );
-    mockClearConversationCheckout.mockResolvedValueOnce({
-      ...conversation,
-      isolation_env_id: 'new-env',
-    });
-    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
-      actor: operator,
-    });
-    expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
-    expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe('new-env');
-    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
-  });
+  test.each(['removed', 'replaced'] as const)(
+    'fresh foreground captures reconciled source when its checkout was %s',
+    async state => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-source-')));
+      const retiredPath = join(root, 'retired');
+      const replacementPath = join(root, 'replacement');
+      const projectPath = join(root, 'project');
+      for (const [path, description] of [
+        [retiredPath, 'obsolete source'],
+        [replacementPath, 'replacement source'],
+        [projectPath, 'registered source'],
+      ]) {
+        await mkdir(join(path, '.archon', 'workflows'), { recursive: true });
+        await writeFile(
+          join(path, '.archon', 'workflows', 'test-workflow.yaml'),
+          `name: test-workflow\ndescription: ${description}\nnodes:\n  - id: work\n    prompt: Work\n`
+        );
+      }
+      if (state === 'removed') await rm(retiredPath, { recursive: true });
+      const conversation = makeDispatchConversation({
+        isolation_env_id: 'retired-env',
+        cwd: retiredPath,
+      });
+      mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase({ default_cwd: projectPath }));
+      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+      mockAdoptedEnvironment.mockResolvedValueOnce(
+        makeIsolationEnvironment({
+          id: 'retired-env',
+          working_path: retiredPath,
+          status: 'destroyed',
+        })
+      );
+      mockClearConversationCheckout.mockResolvedValueOnce({
+        ...conversation,
+        isolation_env_id: state === 'replaced' ? 'new-env' : null,
+        cwd: state === 'replaced' ? replacementPath : retiredPath,
+      });
+      if (state === 'replaced')
+        mockAdoptedEnvironment.mockResolvedValueOnce(
+          makeIsolationEnvironment({ id: 'new-env', working_path: replacementPath })
+        );
+      const captureRoot = join(root, 'capture');
+      mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
+        const capture = await captureWorkflowSource({ ...options, captureRoot });
+        return { ...capture, runId: 'prepared-run-id', roots: capturedSourceRoots(capture.anchor) };
+      });
+      mockDiscoverWorkflowsWithConfig.mockImplementation((...args) =>
+        realDiscoverWorkflowsWithConfig(...args)
+      );
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const expectedDescription = state === 'replaced' ? 'replacement source' : 'registered source';
+      expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
+      expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe(
+        state === 'replaced' ? 'new-env' : null
+      );
+      expect(
+        await readFile(join(captureRoot, 'project/.archon/workflows/test-workflow.yaml'), 'utf8')
+      ).toContain(expectedDescription);
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      expect(mockExecuteWorkflow.mock.calls[0]?.[4].description).toBe(expectedDescription);
+    }
+  );
 
   test('a terminal status write failure during worktree preparation is not retried', async () => {
     const { IsolationBlockedError } = await import('@archon/isolation');

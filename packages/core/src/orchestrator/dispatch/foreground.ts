@@ -10,8 +10,6 @@ import {
   TerminalStatusWriteError,
   requireTerminalStatusWrite,
 } from '@archon/workflows/terminal-status-write';
-import * as sqlIsolation from '../../db/isolation-environments';
-import { clearConversationCheckout } from '../../db/conversations';
 import { startRunLiveOwner } from '../../services/run-live-owner';
 import { toError } from '../../utils/error';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
@@ -58,11 +56,6 @@ export async function dispatchForeground(
   let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
   let foregroundSubmitted = false;
   try {
-    if (!willContinueExistingRun)
-      scope = {
-        ...scope,
-        conversation: await clearRetiredConversationCheckout(scope.conversation),
-      };
     if (
       !willContinueExistingRun &&
       workflow.worktree?.enabled !== false &&
@@ -153,16 +146,6 @@ export async function dispatchForeground(
   } finally {
     await setupOwner?.close();
   }
-}
-
-async function clearRetiredConversationCheckout(
-  conversation: DispatchScope['conversation']
-): Promise<DispatchScope['conversation']> {
-  if (!conversation.isolation_env_id) return conversation;
-  const environment = await sqlIsolation.getById(conversation.isolation_env_id);
-  if (environment?.provider === 'worktree' && environment.status === 'destroyed')
-    return clearConversationCheckout(conversation.id, environment.id);
-  return conversation;
 }
 
 /** The run row a fresh worktree run is created under before its worktree setup runs. */
