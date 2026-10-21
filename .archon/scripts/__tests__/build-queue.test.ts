@@ -851,13 +851,12 @@ describe('the build queue checkout', () => {
     return result.stdout.trim();
   }
 
-  test("a round that continues a pull request starts from that pull request's head", () => {
+  test("a continued round starts at the PR head on its queue branch and publishes to the PR branch", () => {
     const at = install();
-    // The fixture leaves the checkout on the pull request's branch. Publish it, then go
-    // back to dev, where a run's checkout starts.
     git(at.checkout, 'push', '-q', 'upstream', 'feature');
     const head = git(at.checkout, 'rev-parse', 'feature');
-    git(at.checkout, 'checkout', '-q', 'dev');
+    const branch = 'build/7-continued-round';
+    git(at.checkout, 'checkout', '-q', '-b', branch, 'dev');
     const result = run(
       at,
       'checkout',
@@ -866,5 +865,27 @@ describe('the build queue checkout', () => {
     );
     expect(ok(result)).toEqual({ head });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
+    expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
+
+    git(at.checkout, 'commit', '-q', '--allow-empty', '-m', 'continued round');
+    const corrected = git(at.checkout, 'rev-parse', 'HEAD');
+    const published = runPackScript('pr/scripts/publish-pr', {
+      cwd: at.checkout,
+      gh: { pr: { headRefName: 'feature', headRefOid: corrected } },
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: branch,
+        INPUTS_BRANCH: branch,
+        INPUTS_EXISTING: '42',
+        INPUTS_PULL_REQUEST: '42',
+      },
+    });
+    expect(ok(published)).toMatchObject({ number: 42, head: 'feature', head_revision: corrected });
+    expect(published.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(git(at.checkout, 'ls-remote', 'upstream', 'refs/heads/feature').split(/\s+/)[0]).toBe(corrected);
+    expect(git(at.checkout, 'ls-remote', 'upstream', `refs/heads/${branch}`)).toBe('');
+    expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
+    expect(git(at.checkout, 'status', '--porcelain')).toBe('');
   }, 60_000);
 });
