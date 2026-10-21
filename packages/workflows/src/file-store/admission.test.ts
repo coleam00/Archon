@@ -939,7 +939,7 @@ async function corruptQueuedDocument(
 ): Promise<string> {
   const slot = corruption.startsWith('slot-');
   const key = slot ? 'foreign' : id;
-  const path = join(
+  const path = posix.join(
     'resource',
     slot ? 'slots' : 'requests',
     `${createHash('sha256').update(key).digest('hex')}.json`
