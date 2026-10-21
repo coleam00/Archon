@@ -38,20 +38,11 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fixtures/sdlc-fake-github.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-// A real checkout whose recorded remote is a local bare repository: publish-pr pushes
-// it before it creates.
-const CHECKOUT = gitCheckout({}, trackTempRoot);
-const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], {
-  cwd: CHECKOUT,
-  encoding: 'utf8',
-}).stdout.trim();
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
-const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
-const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
 /** A host with the GitHub plugin configured for the fake host and a host command. */
-function forgeHost(other = false): { argv: string[]; statePath: string } {
+function forgeHost(other = false, headSha = 'deadbeef'): { argv: string[]; statePath: string } {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-forge-delivery-')));
   const home = join(root, 'home');
   mkdirSync(home);
@@ -72,7 +63,7 @@ function forgeHost(other = false): { argv: string[]; statePath: string } {
             operations: [],
             writes: [],
           }
-        : initialState(HEAD_SHA)
+        : initialState(headSha)
     )
   );
 
@@ -139,7 +130,16 @@ process.exitCode = await forgeCommand(
 
 describe('the forge source delivers through plugin operations', () => {
   it('creates a draft and upserts one review comment', () => {
-    const host = forgeHost();
+    // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+    // it before it creates.
+    const CHECKOUT = gitCheckout({}, trackTempRoot);
+    const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: CHECKOUT,
+      encoding: 'utf8',
+    }).stdout.trim();
+    const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
+    const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
+    const host = forgeHost(false, HEAD_SHA);
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
         cwd: CHECKOUT,
@@ -226,6 +226,13 @@ describe('the forge source delivers through plugin operations', () => {
 // Agent outputs are fixture data; publication and the review read use the real
 // composed bindings and publisher, CLI, and GitHub adapter against the fake API.
 it('a description-only round publishes prepared content before review and finishes in one round', async () => {
+  // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+  // it before it creates.
+  const CHECKOUT = gitCheckout({}, trackTempRoot);
+  const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: CHECKOUT,
+    encoding: 'utf8',
+  }).stdout.trim();
   const catalog = await discoverWorkflows(REPO_ROOT, {
     providers: providerRegistry,
     loadDefaults: false,
@@ -241,7 +248,7 @@ it('a description-only round publishes prepared content before review and finish
   const authored = 'Written by the author.  \n\n';
 
   for (const loseBinding of [false, true]) {
-    const host = forgeHost();
+    const host = forgeHost(false, HEAD_SHA);
     const initial = runPackScript('pr/scripts/publish-pr', {
       cwd: CHECKOUT,
       source: 'forge',
