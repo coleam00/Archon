@@ -27,7 +27,7 @@ archon provider add claude codex pi   # any subset
 
 OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them. Both keep working until that release; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal. To keep using one after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
-In chat, Claude, Codex and Pi launch and manage runs through native `invoke_workflow`, `register_project` and `manage_run` tools. Copilot and OpenCode have no native tools, so after you select a project they run `archon workflow run <workflow> "<message>" --detach` in its directory and return the run ID. Those runs are headless: they use CLI identity and send no progress or results back to the chat.
+In chat, Claude, Codex and Pi launch and manage runs through native `invoke_workflow`, `register_project` and `manage_run` tools. Copilot and OpenCode have no native tools, so after you select a project with `/setproject <name>` they run `archon workflow run <workflow> "<message>" --detach` in its directory and return the run ID. Those runs are headless: they use CLI identity and send no progress or results back to the chat.
 
 Archon shows the deprecation notice only to someone who uses one of them, at most once per command or process. `archon doctor` reports it when one is your default assistant, `archon ai default` prints it when you select one, and the first run in a process that uses one prints it on stderr. The server writes it to its log.
 
@@ -124,10 +124,11 @@ A source install runs the binary from the `@openai/codex` package Archon depends
 
 ### Authenticate Codex
 
-By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. Archon never writes to that directory.
+By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. Outside Docker, Archon never writes to that directory.
 
+- **Login on the host.** Run `codex login` on the machine that runs Archon. This works for a server too.
 - **API key.** Set `CODEX_API_KEY` in Archon's environment, for example `~/.archon/.env`. Archon passes it to the Codex process in memory. Codex does not read `OPENAI_API_KEY`.
-- **Copied login tokens.** For a server that cannot run `codex login`, run it elsewhere and copy the four values from `~/.codex/auth.json` into `.env`:
+- **Copied login tokens, Docker only.** For the Docker image, run `codex login` on another machine and copy the four values from `~/.codex/auth.json` into `.env`:
 
   ```ini
   ARCHON_CODEX_ID_TOKEN=eyJhbGc...
@@ -136,7 +137,7 @@ By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`)
   ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
   ```
 
-  The `ARCHON_` prefix keeps them from overriding your own Codex login, because Codex reads `CODEX_ACCESS_TOKEN` itself. If your `.env` still has the old `CODEX_*` names, run `archon setup` to rename them or rename all four yourself. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
+  At each start, the container's `setup-auth` step writes them to `~/.codex/auth.json`. Outside Docker nothing reads them at run time: the server's startup check passes, but every Codex run fails with `auth`. Use a host login or `CODEX_API_KEY` there instead. The `ARCHON_` prefix keeps the values from overriding a Codex login, because Codex reads `CODEX_ACCESS_TOKEN` itself. If your `.env` still has the old `CODEX_*` names, run `archon setup` to rename them or rename all four yourself. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
 - **Connected credential.** With `store: database`, an `openai` credential connected in Archon (`archon ai key set openai` or `archon ai login openai`) takes precedence over the native login, in workflows and in chat. An API key reaches Codex as `CODEX_API_KEY`; a ChatGPT subscription logs the Codex process in, in memory. A subscription token that expires during a run fails the turn with `auth`, and resuming the run picks up the refreshed token.
 
 ### How Archon runs Codex
@@ -336,7 +337,7 @@ Copilot has no session-fork API. When Archon asks for a fork on retry, it starts
 
 Everything above configures install-wide credentials that every run shares. On a shared Archon server, each user can instead connect their own API key or subscription, so their runs and chats use their account. A solo install does not need this.
 
-The credential vault works on every install. Archon creates a local encryption key at `~/.archon/credential-key` on first use. To manage the key yourself, for example to share it across containers or keep it in a secrets manager, set `TOKEN_ENCRYPTION_KEY` (64 hex characters, `openssl rand -hex 32`) and the key file is not used. Changing the key, or deleting the key file, makes every stored credential unreadable and everyone must reconnect; `archon doctor` reports this as `mass_decrypt_failure`.
+The credential vault works on every install. Archon creates a local encryption key at `~/.archon/credential-key` on first use. To manage the key yourself, for example to share it across containers or keep it in a secrets manager, set `TOKEN_ENCRYPTION_KEY` (64 hex characters, `openssl rand -hex 32`) and the key file is not used. Changing the key, or deleting the key file, makes every stored credential unreadable and everyone must reconnect. `archon doctor` then lists each of your credentials as "cannot be used", with the `archon ai login <vendor>` or `archon ai key set <vendor>` command that reconnects it.
 
 ### Connect a credential
 
