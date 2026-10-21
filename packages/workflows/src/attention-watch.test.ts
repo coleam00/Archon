@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
@@ -645,6 +645,93 @@ describe('watchAttentionQueue', () => {
       await stream.close();
     }
   });
+
+  test.each(['attention', 'ready'] as const)(
+    'rejecting initial %s delivery rejects startup without starting background work',
+    async type => {
+      const store = await makeStore();
+      await pausedAtAsk(store);
+      await pausedAtAsk(store);
+      await running(store);
+      const reads = spyOn(store, 'readWorkflowEventsAfter');
+      const listRunning = spyOn(store, 'listWorkflowRuns');
+      const ownerLoss = mock(() => Promise.resolve(null));
+      const doorbell = mock(async () => () => {});
+      const entered = Promise.withResolvers<void>();
+      const delivery = Promise.withResolvers<void>();
+      const cause = new Error('initial delivery rejected');
+      const lines: AttentionStreamLine[] = [];
+      const startup = watchAttentionQueue(
+        store,
+        { ...host, ownerLoss, doorbell },
+        line => {
+          lines.push(line);
+          if (line.type === type) {
+            entered.resolve();
+            return delivery.promise;
+          }
+          return undefined;
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      ).then(
+        handle => ({ status: 'resolved' as const, handle }),
+        error => ({ status: 'rejected' as const, error: error as unknown })
+      );
+      await entered.promise;
+      delivery.reject(cause);
+      const result = await startup;
+      if (result.status === 'resolved') await result.handle.close();
+      expect(result).toEqual({ status: 'rejected', error: cause });
+      expect(lines.map(line => line.type)).toEqual(
+        type === 'attention' ? ['attention'] : ['attention', 'attention', 'ready']
+      );
+      expect(reads).not.toHaveBeenCalled();
+      expect(listRunning).not.toHaveBeenCalled();
+      expect(ownerLoss).not.toHaveBeenCalled();
+      expect(doorbell).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['attention', 'ready'] as const)(
+    'startup waits for initial %s delivery to be accepted',
+    async type => {
+      const store = await makeStore();
+      await pausedAtAsk(store);
+      const entered = Promise.withResolvers<void>();
+      const delivery = Promise.withResolvers<void>();
+      const lines: AttentionStreamLine[] = [];
+      let started = false;
+      const startup = watchAttentionQueue(
+        store,
+        host,
+        line => {
+          lines.push(line);
+          if (line.type === type) {
+            entered.resolve();
+            return delivery.promise;
+          }
+          return undefined;
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      ).then(handle => {
+        started = true;
+        return handle;
+      });
+      await entered.promise;
+      try {
+        expect(started).toBe(false);
+        expect(lines.map(line => line.type)).toEqual(
+          type === 'attention' ? ['attention'] : ['attention', 'ready']
+        );
+      } finally {
+        delivery.resolve();
+        const handle = await startup;
+        await handle.close();
+      }
+      expect(started).toBe(true);
+      expect(lines.map(line => line.type)).toEqual(['attention', 'ready']);
+    }
+  );
 
   test('the snapshot is the open set in scope, as the queue builds it, then ready', async () => {
     const store = await makeStore();
