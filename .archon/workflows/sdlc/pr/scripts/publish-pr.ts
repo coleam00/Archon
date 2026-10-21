@@ -33,7 +33,7 @@
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
@@ -47,8 +47,7 @@ import { pushHead } from '../../.shared/push.ts';
 
 type Repo = QualifiedPr['repo'];
 
-const SECTION_START = '<!-- archon-delivery-description -->';
-const SECTION_END = '<!-- /archon-delivery-description -->';
+const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
 function occurrences(haystack: string, needle: string): number[] {
   const found: number[] = [];

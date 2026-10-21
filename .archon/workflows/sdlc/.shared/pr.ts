@@ -269,6 +269,15 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
 }
 
 /**
+ * The markers around the description section a delivery round publishes.
+ * `deliver/commands/update-pr-body.md` names them literally; a test holds it to these.
+ */
+export const DESCRIPTION_SECTION = {
+  start: '<!-- archon-delivery-description -->',
+  end: '<!-- /archon-delivery-description -->',
+} as const;
+
+/**
  * Replace a pull request's whole description and return the record read back from
  * the forge. Neither source has a conditional body write, so an edit saved between
  * the caller's read and this write is lost.

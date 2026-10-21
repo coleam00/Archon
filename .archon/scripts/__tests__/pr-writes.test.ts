@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import { trackTempRoots } from './temp-roots';
 import {
   PACK,
@@ -494,8 +495,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 });
 
 const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
-const START = '<!-- archon-delivery-description -->';
-const END = '<!-- /archon-delivery-description -->';
+const { start: START, end: END } = DESCRIPTION_SECTION;
 
 /** publish-pr continuing pull request 42, with a prepared description section. */
 function publishSection(options: Parameters<typeof publishPr>[0] & { live?: string; allowed?: boolean } = {}) {
@@ -588,6 +588,12 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection({ gh: { writeLost: true } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('does not read back the written description');
+  });
+
+  it('names the same markers in the update-pr-body prompt that keeps them', () => {
+    const prompt = readFileSync(join(PACK, 'deliver/commands/update-pr-body.md'), 'utf8');
+    expect(prompt).toContain(`\`${START}\``);
+    expect(prompt).toContain(`\`${END}\``);
   });
 });
 
