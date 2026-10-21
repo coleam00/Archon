@@ -414,7 +414,8 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'compose-quota-run',
       expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
-      { kind: 'started', stepName: 'fan' }
+      { kind: 'started', stepName: 'fan' },
+      null
     );
   });
 

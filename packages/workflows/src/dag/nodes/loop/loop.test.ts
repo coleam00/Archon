@@ -263,7 +263,8 @@ describe('loop node execution', () => {
             expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
               'loop-retry-policy-run',
               expect.objectContaining({ kind: 'quota', nodeId: 'my-loop' }),
-              { kind: 'started', stepName: 'my-loop' }
+              { kind: 'started', stepName: 'my-loop' },
+              null
             );
           } else {
             expect(store.failWorkflowRun).toHaveBeenCalled();

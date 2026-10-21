@@ -1877,7 +1877,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
         waitingSince: expect.any(String),
         resumeAt: resetAt,
       },
-      { kind: 'started', stepName: 'investigate' }
+      { kind: 'started', stepName: 'investigate' },
+      null
     );
     // The typed failure is recorded on the node, unchanged.
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
@@ -1910,7 +1911,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'credit-write-failure-run',
       expect.objectContaining({ kind: 'quota', resumeAt: resetAt }),
-      { kind: 'started', stepName: 'investigate' }
+      { kind: 'started', stepName: 'investigate' },
+      null
     );
     expect(store.getWorkflowRunStatus).toHaveBeenCalledWith('credit-write-failure-run');
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
@@ -1949,7 +1951,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'credit-wait-group-run',
       expect.objectContaining({ kind: 'quota', nodeId: 'refine', resumeAt: resetAt }),
-      { kind: 'started', stepName: 'refine' }
+      { kind: 'started', stepName: 'refine' },
+      null
     );
   });
 
@@ -2004,7 +2007,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'credit-wait-latest-run',
       expect.objectContaining({ kind: 'quota', nodeId: 'first', resumeAt: later }),
-      { kind: 'started', stepName: 'first' }
+      { kind: 'started', stepName: 'first' },
+      null
     );
   });
 
@@ -2179,7 +2183,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
         'rate-wait-run',
         expect.objectContaining({ owner: 'node', nodeId: 'investigate', kind: 'quota' }),
-        { kind: 'started', stepName: 'investigate' }
+        { kind: 'started', stepName: 'investigate' },
+        null
       );
       const wait = store.pauseWorkflowRunForWait.mock.calls[0]?.[1];
       const resumeAt = Date.parse(wait?.kind === 'quota' ? wait.resumeAt : '');
@@ -2218,7 +2223,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
         'rate-reset-run',
         expect.objectContaining({ kind: 'quota', nodeId: 'investigate', resumeAt: resetAt }),
-        { kind: 'started', stepName: 'investigate' }
+        { kind: 'started', stepName: 'investigate' },
+        null
       );
     },
     testTimeout(10_000)

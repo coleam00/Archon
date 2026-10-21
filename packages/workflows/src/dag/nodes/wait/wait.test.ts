@@ -145,7 +145,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'wait-input',
       expect.objectContaining({ owner: 'node', nodeId: 'delay', resumeAt }),
-      { kind: 'started', stepName: 'delay' }
+      { kind: 'started', stepName: 'delay' },
+      null
     );
   });
 
@@ -176,7 +177,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
       'wait-event-input',
       expect.objectContaining({ owner: 'node', nodeId: 'deploy', event: 'deploy:prod' }),
-      { kind: 'started', stepName: 'deploy' }
+      { kind: 'started', stepName: 'deploy' },
+      null
     );
   });
 
@@ -217,7 +219,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
         pauseId: expect.any(String),
         form: 'message',
       },
-      { kind: 'started', stepName: 'rerun-ci' }
+      { kind: 'started', stepName: 'rerun-ci' },
+      null
     );
     const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(call =>
       String(call[1])
@@ -433,7 +436,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
         message: 'Which base? prior says new',
         form: 'select',
       }),
-      { kind: 'started', stepName: 'ask' }
+      { kind: 'started', stepName: 'ask' },
+      null
     );
     const pausedWith = store.pauseWorkflowRunForWait.mock.calls[0]?.[1] as WorkflowWaitContext;
     expect(pausedWith.kind === 'attention' && pausedWith.answer).toBeFalsy();
@@ -627,9 +631,14 @@ describe('executeDagWorkflow -- durable wait node', () => {
       })
     );
 
-    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith('attention-unanswered', persisted, {
-      kind: 'continued',
-    });
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-unanswered',
+      persisted,
+      {
+        kind: 'continued',
+      },
+      null
+    );
     expect(store.clearWorkflowWaitContext).not.toHaveBeenCalled();
   });
 
@@ -684,7 +693,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
         form: 'select',
         options: [{ id: 'use-main', label: 'Main' }, { id: 'use-dev' }],
       }),
-      { kind: 'started', stepName: 'ask' }
+      { kind: 'started', stepName: 'ask' },
+      null
     );
   });
 
@@ -732,7 +742,8 @@ describe('executeDagWorkflow -- durable wait node', () => {
         kind: 'attention',
         labels: { ci: 'other', area: 'delivery' },
       }),
-      { kind: 'started', stepName: 'ask' }
+      { kind: 'started', stepName: 'ask' },
+      null
     );
   });
 
@@ -844,9 +855,14 @@ describe('executeDagWorkflow -- durable wait node', () => {
       })
     );
 
-    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith('wait-early-resume', persisted, {
-      kind: 'continued',
-    });
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'wait-early-resume',
+      persisted,
+      {
+        kind: 'continued',
+      },
+      null
+    );
   });
 
   it('tolerates cancellation that wins the wait pause CAS', async () => {
