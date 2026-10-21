@@ -49,25 +49,25 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
-// The renderer distinguishes raw HTML from code but exposes no source offsets.
-function descriptionMarkers(markdown: string): { marker: string; at: number }[] {
+// Rendered code is escaped; the HTML parser also excludes comments nested in raw containers.
+async function descriptionMarkers(markdown: string): Promise<{ marker: string; at: number }[]> {
   const candidates: { marker: string; at: number; token: string }[] = [];
   const tagged = markdown.replace(
     new RegExp(Object.values(DESCRIPTION_SECTION).join('|'), 'g'),
     (marker: string, at: number) => {
-      const token = `<!-- archon-description-position-${at} -->`;
+      const token = ` archon-description-position-${at} `;
       candidates.push({ marker, at, token });
-      return token;
+      return `<!--${token}-->`;
     }
   );
-  const raw: string[] = [];
-  Bun.markdown.render(tagged, {
-    html: html => {
-      raw.push(html);
-      return '';
-    },
-  });
-  return candidates.filter(candidate => raw.some(html => html.includes(candidate.token)));
+  const comments = new Set<string>();
+  const nested = new Set<string>();
+  await new HTMLRewriter()
+    .on('*', { comments: comment => { nested.add(comment.text); } })
+    .onDocument({ comments: comment => { comments.add(comment.text); } })
+    .transform(new Response(Bun.markdown.html(tagged)))
+    .text();
+  return candidates.filter(candidate => comments.has(candidate.token) && !nested.has(candidate.token));
 }
 
 /**
@@ -75,27 +75,41 @@ function descriptionMarkers(markdown: string): { marker: string; at: number }[] 
  * between an existing pair, or appended as a new pair. Text outside the markers is
  * never changed, and a marker that does not pair is refused rather than guessed at.
  */
-function withDescriptionSection(live: string, section: string): string {
-  const block = `${SECTION_START}\n${section.trim()}\n${SECTION_END}`;
-  const markers = descriptionMarkers(live);
+async function withDescriptionSection(live: string, section: string): Promise<string> {
+  const block = `${SECTION_START}\n${section}${section.endsWith('\n') ? '' : '\n'}${SECTION_END}`;
+  const markers = await descriptionMarkers(live);
+  let composed: string;
+  let blockAt: number;
   const starts = markers.filter(entry => entry.marker === SECTION_START).map(entry => entry.at);
   const ends = markers.filter(entry => entry.marker === SECTION_END).map(entry => entry.at);
   if (starts.length === 0 && ends.length === 0) {
     const separator = live === '' || live.endsWith('\n\n') ? '' : live.endsWith('\n') ? '\n' : '\n\n';
-    return `${live}${separator}${block}\n`;
+    blockAt = live.length + separator.length;
+    composed = `${live}${separator}${block}\n`;
+  } else {
+    const [start] = starts;
+    const [end] = ends;
+    if (starts.length !== 1 || ends.length !== 1 || start === undefined || end === undefined || end < start) {
+      throw new Error(
+        'the description has an unpaired or repeated archon-delivery-description marker; fix it by hand'
+      );
+    }
+    blockAt = start;
+    composed = live.slice(0, start) + block + live.slice(end + SECTION_END.length);
   }
-  const [start] = starts;
-  const [end] = ends;
-  if (starts.length !== 1 || ends.length !== 1 || start === undefined || end === undefined || end < start) {
-    throw new Error(
-      'the description has an unpaired or repeated archon-delivery-description marker; fix it by hand'
-    );
+  const pair = await descriptionMarkers(composed);
+  if (
+    pair.length !== 2 ||
+    pair[0]?.marker !== SECTION_START || pair[0].at !== blockAt ||
+    pair[1]?.marker !== SECTION_END || pair[1].at !== blockAt + block.length - SECTION_END.length
+  ) {
+    throw new Error('the composed description hides or adds delivery markers; close Markdown fences and HTML containers before publishing');
   }
-  return live.slice(0, start) + block + live.slice(end + SECTION_END.length);
+  return composed;
 }
 
 /** The prepared section's content, or undefined when prepare declared none. */
-function preparedSection(artifacts: string): string | undefined {
+async function preparedSection(artifacts: string): Promise<string | undefined> {
   const pointer = record(nullableJson(process.env.INPUTS_DESCRIPTION));
   if (pointer === undefined) return undefined;
   if (trimmed(process.env.INPUTS_PUBLISH_DESCRIPTION) !== 'true') {
@@ -110,16 +124,16 @@ function preparedSection(artifacts: string): string | undefined {
   }
   const section = readFileSync(join(artifacts, pointer.path), 'utf8');
   if (section.trim() === '') throw new Error('prepare declared an empty pr-description.md');
-  if (descriptionMarkers(section).length > 0) {
+  if ((await descriptionMarkers(section)).length > 0) {
     throw new Error('pr-description.md contains reserved description markers; put literal examples in Markdown code');
   }
   return section;
 }
 
-function applyDescription(pr: PrRecord, section: string, source: ForgeSource): void {
+async function applyDescription(pr: PrRecord, section: string, source: ForgeSource): Promise<void> {
   const ref = { repo: pr.repo, number: pr.number };
   const live = viewPr(ref, source).body;
-  const body = withDescriptionSection(live, section);
+  const body = await withDescriptionSection(live, section);
   if (body === live) {
     note(`publish-pr: ${pr.url}'s description section is already current.`);
     return;
@@ -146,6 +160,17 @@ function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read(
     );
   }
   return pr;
+}
+
+function recordCreatedPr(claimPath: string, pr: PrRecord): void {
+  try {
+    writeFileSync(claimPath, JSON.stringify({ repo: pr.repo, headRepo: pr.head_repo, head: pr.head, pr }), { mode: 0o600 });
+  } catch (error) {
+    throw new Error(
+      `created and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
 }
 
 function publish(): PrRecord {
@@ -234,7 +259,7 @@ function publish(): PrRecord {
       },
       source
     );
-    writeFileSync(claimPath, JSON.stringify({ repo, headRepo, head, pr }), { mode: 0o600 });
+    recordCreatedPr(claimPath, pr);
     return pr;
   } catch (error) {
     // A forge refusal is definite: no write was sent, so the claim would only block
@@ -246,17 +271,17 @@ function publish(): PrRecord {
   }
 }
 
-// The section is read and checked before publish() pushes, so a refused one pushes nothing.
-function publishWithDescription(): PrRecord {
-  const section = preparedSection(artifactsDir());
+// Validate the artifact before pushing; check composition against the live body before editing.
+async function publishWithDescription(): Promise<PrRecord> {
+  const section = await preparedSection(artifactsDir());
   const pr = publish();
   // The edit does not move the head, so the head-verified record stays the output.
-  if (section !== undefined) applyDescription(pr, section, forgeSource());
+  if (section !== undefined) await applyDescription(pr, section, forgeSource());
   return pr;
 }
 
 try {
-  emit(publishWithDescription());
+  emit(await publishWithDescription());
 } catch (error) {
   refuse(`publish-pr: ${error instanceof Error ? error.message : String(error)}`);
 }

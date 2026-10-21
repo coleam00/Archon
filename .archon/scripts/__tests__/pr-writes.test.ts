@@ -554,6 +554,33 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(again.bodies).toEqual([]);
   });
 
+  it.each([
+    `    ${START}\n    literal\n    ${END}\n`,
+    ...['pre', 'code', 'script', 'style', 'textarea'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
+  ])('preserves literal marker containers in both ingresses and can publish again: %s', section => {
+    const live = `Authored.\n\n${section}\n\n`;
+    const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
+    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n') ? '' : '\n'}${END}\n`);
+    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+  });
+
+  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>'])(
+    'refuses a composed pair swallowed by an unclosed %s in either ingress', opening => {
+      for (const options of [
+        { artifacts: { [DESCRIPTION.path]: `${opening}\nunfinished` } },
+        { live: `Author text.\n\n${opening}\nunfinished` },
+      ]) {
+        const result = publishSection(options);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('composed description');
+        expect(result.bodies).toEqual([]);
+      }
+    }
+  );
+
   it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
     const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
     expect(result.code).toBe(1);
@@ -598,6 +625,41 @@ describe('publish-pr writes the description section a delivery round prepared', 
       artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
     });
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
+  });
+
+  it.each(['gh', 'forge'] as const)('names the verified PR when recording its identity fails after create through %s', source => {
+    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', null),
+        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
+      ] }),
+      preload: `import { unlinkSync, mkdirSync } from 'node:fs';
+        const spawn = Bun.spawnSync.bind(Bun);
+        Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+          const result = spawn(argv, settings);
+          if ((argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'create') || argv.includes('pr.create')) {
+            unlinkSync('{ARTIFACTS}/pr-create-started');
+            mkdirSync('{ARTIFACTS}/pr-create-started');
+          }
+          return result;
+        } });`,
+    });
+    expect(result.code).toBe(1);
+    expect(source === 'gh' ? result.gh.some(call => call.startsWith('pr create')) : result.forge.some(call => call.includes('forge pr.create'))).toBe(true);
+    expect(result.stderr).toContain(PR_URL);
+    expect(result.stderr).toContain('EISDIR');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it.each([
+    { name: 'replacement', live: `${START}\nold\n${END}` },
+    { name: 'reusing a head PR', target: { existing: null }, prepareBody: true },
+    { name: 'creating a PR', target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } },
+  ])('refuses invalid composition when $name', ({ name: _name, ...options }) => {
+    const result = publishSection({ ...options, artifacts: { [DESCRIPTION.path]: '```\nunclosed' } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('composed description');
+    expect(result.bodies).toEqual([]);
   });
 
   it('replaces only the content between its markers', () => {

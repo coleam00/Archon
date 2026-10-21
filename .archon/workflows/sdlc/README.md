@@ -163,10 +163,14 @@ description is written during the round that prepared it, before that round's
 review reads the pull request: `prepare` copies it to `pr-description.md`, and
 `publish-pr` writes it between `archon-delivery-description` markers, keeps the
 rest of the description as it is, and reads it back. Markers in Markdown code
-examples are literal text; raw markers are reserved for the managed section and
-are refused in prepared content before pushing. If creation succeeds but a later
-description edit fails, the failure report still names the created PR from its
-verified creation record. `update-pr-body` corrects the
+examples and raw HTML containers are literal text; top-level markers are reserved
+for the managed section and are refused in prepared content before pushing. The
+composed body must expose exactly the intended pair before any description edit;
+unclosed fences or HTML containers that hide either delimiter refuse publication.
+If creation succeeds but a later description edit fails, the failure report still
+names the created PR from its verified creation record. If writing that record
+fails, publication fails and the node error names the verified PR URL for explicit
+continuation. `update-pr-body` corrects the
 description's stale claims and links the issue once the rounds end. A standalone
 `archon-pr` leaves a continued pull request's description as its author left it:
 its `publish_description` input defaults off. `publish-review` upserts the one marked review
