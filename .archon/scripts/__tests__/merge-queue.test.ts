@@ -726,6 +726,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       competing = { ...stored(at).value!, claim: { ...CLAIMED.claim, run_id: 'other-run' } };
       seed(at, competing);
     }
+    const companions = [11, PR.number].map(number => stored(at, number));
     const recorded = run(at, 'record', recordFacts(output), { pr: { unreadable: true } });
     expect(recorded.code).toBe(1);
     expect(recorded.stdout).toBe('');
@@ -737,18 +738,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         status: done.status, pr: done.pr, decisions: [{ decision: done.decision, reason: done.reason }],
       } } });
     }
-    const open = stored(at, PR.number).value!;
-    expect(open).toMatchObject({ claim: null, facts: { own_pr: own.facts.own_pr, merge: {
-      status: 'waiting', approval: { head: HEAD, at: AT },
-    } } });
-    for (const number of [11, PR.number]) {
-      const companion = stored(at, number).value!;
-      expect(companion).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
-      expect(companion.facts.merge?.decisions.at(-1)).toMatchObject({
-        decision: 'wait (unclear)', head: HEAD, reason: output.base_error, reran: false,
-      });
-      expect(mergeWaits(companion)).toBe(true);
-    }
+    expect([11, PR.number].map(number => stored(at, number))).toEqual(companions);
     if (loseClaim) {
       expect(stored(at).value).toEqual(competing);
       expect(recorded.stderr).toContain('work/7 is no longer claimed by this run');

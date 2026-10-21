@@ -18,7 +18,7 @@
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
  * rest of the batch from being recorded. If facts could not read the default branch,
- * record settlements and leave open companions waiting without further forge reads,
+ * record settlements without further forge reads, leaving open companions untouched,
  * then fail with the original diagnostic.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
@@ -279,16 +279,8 @@ function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   }
 }
 
-function recordBaseFailure(writes: Writes, items: readonly Item[], settled: readonly MergeSettled[], baseError: string): never {
+function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
   recordSettled(writes, settled);
-  for (const item of items) {
-    const head = item.facts?.head_revision ?? '';
-    const decision: Decision = {
-      number: item.pr.number, action: 'wait', class: 'unclear', head,
-      reran: false, reason: baseError, brief: '', attention: null,
-    };
-    recordPr(writes, item, { decision, status: 'waiting', reason: baseError, head, contradiction: null }, false);
-  }
   throw new Error([baseError, ...writes.failed, 'every other decision is recorded'].join('; '));
 }
 
@@ -301,7 +293,7 @@ function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
   const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
-  if (baseError !== '') recordBaseFailure(writes, items, settled, baseError);
+  if (baseError !== '') recordBaseFailure(writes, settled, baseError);
   if (path === 'idle') {
     emit({
       merged: [],
