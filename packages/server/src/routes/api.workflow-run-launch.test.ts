@@ -16,6 +16,7 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
+import { workflowRunConfigKeys } from '@archon/core/config';
 import {
   workflowRunLaunchConfigSchema,
   workflowRunLaunchJsonSchema,
@@ -33,6 +34,60 @@ describe('POST /api/workflows/:name/run', () => {
     mockAddMessage.mockReset();
     mockGenerateAndSetTitle.mockReset();
   });
+
+  test.each(['text', 'mixed', 'too many', 'too large'] as const)(
+    'refuses %s multipart files without writing uploads or dispatching',
+    async kind => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-invalid-launch-files-'));
+      setMockArchonHome(home);
+      const write = spyOn(fsPromises, 'writeFile');
+      mockFindConversationByPlatformId.mockResolvedValue(null);
+      try {
+        const form = new FormData();
+        form.set('conversationId', 'web-test-abc');
+        form.set('message', 'Deploy');
+        if (kind === 'text' || kind === 'mixed') form.append('files', 'request.txt');
+        if (kind === 'mixed' || kind === 'too many') {
+          const count = kind === 'too many' ? 6 : 1;
+          for (let index = 0; index < count; index++) {
+            form.append(
+              'files',
+              new File(['details'], `request-${index}.txt`, { type: 'text/plain' })
+            );
+          }
+        }
+        if (kind === 'too large') {
+          form.append(
+            'files',
+            new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'large.txt', { type: 'text/plain' })
+          );
+        }
+        const { app } = makeApp();
+        const response = await app.request('/api/workflows/deploy/run', {
+          method: 'POST',
+          body: form,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error:
+            kind === 'too many'
+              ? 'Maximum 5 files per message'
+              : kind === 'too large'
+                ? 'File "large.txt" exceeds the 10 MB size limit'
+                : 'files must contain only file parts',
+        });
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        expect(mockAddMessage).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+        expect(await fsPromises.readdir(home)).toEqual([]);
+      } finally {
+        write.mockRestore();
+        setMockArchonHome(originalHome);
+        await removeTempTree(home);
+      }
+    }
+  );
 
   test('publishes both launch bodies with transport-specific fields', async () => {
     const { app } = makeApp();
@@ -72,18 +127,7 @@ describe('POST /api/workflows/:name/run', () => {
     ]);
     const config = resolve(json.properties?.config);
     expect(config.additionalProperties).toBe(false);
-    expect(Object.keys(config.properties ?? {})).toEqual(
-      expect.arrayContaining([
-        'assistant',
-        'defaultAssistant',
-        'docs',
-        'env',
-        'tiers',
-        'aliases',
-        'assistants',
-        'workflows',
-      ])
-    );
+    expect(Object.keys(config.properties ?? {}).sort()).toEqual([...workflowRunConfigKeys].sort());
     for (const field of ['layer', 'source', 'docsPath', 'envVars'])
       expect(config.properties).not.toHaveProperty(field);
     expect(resolve(resolve(config.properties?.docs).properties?.path).type).toBe('string');
@@ -769,6 +813,13 @@ describe('POST /api/workflows/:name/run', () => {
           env: { BENCH_TOKEN: 'test-token' },
           workflows: { autoResumeOnQuotaReset: false },
         };
+        expect(Object.keys(config).sort()).toEqual(
+          workflowRunConfigKeys
+            .filter(
+              key => key !== (assistantField === 'assistant' ? 'defaultAssistant' : 'assistant')
+            )
+            .sort()
+        );
         const payload = {
           conversationId: 'web-test-abc',
           message: 'Go',
@@ -803,17 +854,17 @@ describe('POST /api/workflows/:name/run', () => {
         expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({
           workflowInputs: payload.inputs,
           workflowModelOverrides: { tiers: payload.tiers, aliases: payload.aliases },
-          workflowRunConfig: {
-            source: { kind: 'http', label: 'inline' },
-            layer: {
-              assistant: 'pi',
-              assistants: config.assistants,
-              tiers: config.tiers,
-              aliases: config.aliases,
-              docsPath: 'handbook',
-              envVars: config.env,
-              workflows: config.workflows,
-            },
+        });
+        expect(mockHandleMessage.mock.calls[0]?.[3]?.workflowRunConfig).toEqual({
+          source: { kind: 'http', label: 'inline' },
+          layer: {
+            assistant: 'pi',
+            assistants: config.assistants,
+            tiers: config.tiers,
+            aliases: config.aliases,
+            docsPath: 'handbook',
+            envVars: config.env,
+            workflows: config.workflows,
           },
         });
       }

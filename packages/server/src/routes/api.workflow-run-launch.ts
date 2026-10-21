@@ -261,14 +261,20 @@ async function parseMultipartRunRequest(
 
   const options = parseMultipartRunOptions(body, workflowName);
   if (!options.ok) return options;
-  const files = Array.isArray(body.files) ? body.files : [body.files];
+  const files =
+    body.files === undefined ? [] : Array.isArray(body.files) ? body.files : [body.files];
+  const fileEntries: File[] = [];
+  for (const file of files) {
+    if (!(file instanceof File)) return { ok: false, error: 'files must contain only file parts' };
+    fileEntries.push(file);
+  }
   return {
     ok: true,
     value: {
       conversationId,
       message,
       ...options.value,
-      fileEntries: files.filter((e): e is File => e instanceof File),
+      fileEntries,
     },
   };
 }
