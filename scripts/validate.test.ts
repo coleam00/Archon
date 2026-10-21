@@ -18,7 +18,6 @@ describe('validate check selection', () => {
       'cli-import-boundary',
       'package-edges',
       'generated-files',
-      'variables-rule',
       'type-check',
       'lint',
       'ratchet',
