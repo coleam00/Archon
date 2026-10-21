@@ -72,7 +72,8 @@ export function describeRunScratchConformance(
         (store, id) => store.cancelFanOutRun(id, 'fan_out_sibling'),
       ],
     ] as const satisfies readonly (readonly [string, WorkflowRunStatus, Transition])[];
-    // Each SQL writer that ends a paused run releases scratch on its own commit path.
+    // A paused run may still be executing a gate's sibling nodes, so a store leaves its
+    // scratch to the executor or to the operation that finds no owner left.
     const fromPaused = [
       ['an abandon', (store, id) => store.cancelWorkflowRun(id)],
       [
@@ -82,15 +83,20 @@ export function describeRunScratchConformance(
       ['a conversation reset', store => store.cancelResumableRunsForConversation(conversationId)],
       ['a fan-out cancel', (store, id) => store.cancelFanOutRun(id, 'fan_out_sibling')],
     ] as const satisfies readonly (readonly [string, Transition])[];
+    // A failed run's process wrote that failure on its way out; each SQL writer that ends
+    // one releases scratch on its own commit path.
+    const fromFailed = fromPaused.filter(([path]) => path !== 'a rejected approval');
 
+    type Prior = 'running' | 'paused' | 'failed';
     async function afterTransition(
-      paused: boolean,
+      prior: Prior,
       transition: Transition,
       status: WorkflowRunStatus
     ): Promise<{ released: boolean }> {
       const { id, root, artifactsDir } = await runWithScratch();
       try {
-        if (paused) await getStore().pauseWorkflowRun(id, approval);
+        if (prior === 'paused') await getStore().pauseWorkflowRun(id, approval);
+        if (prior === 'failed') await getStore().failWorkflowRun(id, 'failure');
         await transition(getStore(), id);
         expect((await getStore().getWorkflowRun(id))?.status).toBe(status);
         for (const [path, content] of Object.entries(evidence))
@@ -105,12 +111,21 @@ export function describeRunScratchConformance(
 
     for (const [ending, status, transition] of fromRunning) {
       test(`a running run that becomes ${ending} keeps its scratch for its executor`, async () => {
-        expect(await afterTransition(false, transition, status)).toEqual({ released: false });
+        expect(await afterTransition('running', transition, status)).toEqual({ released: false });
       });
     }
     for (const [path, transition] of fromPaused) {
-      test(`a paused run cancelled by ${path} keeps its evidence and loses its scratch checkout`, async () => {
-        expect(await afterTransition(true, transition, 'cancelled')).toEqual({ released: true });
+      test(`a paused run cancelled by ${path} keeps its scratch at the store`, async () => {
+        expect(await afterTransition('paused', transition, 'cancelled')).toEqual({
+          released: false,
+        });
+      });
+    }
+    for (const [path, transition] of fromFailed) {
+      test(`a failed run cancelled by ${path} keeps its evidence and loses its scratch checkout`, async () => {
+        expect(await afterTransition('failed', transition, 'cancelled')).toEqual({
+          released: true,
+        });
       });
     }
 

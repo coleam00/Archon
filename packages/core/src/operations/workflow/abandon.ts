@@ -10,6 +10,7 @@ import {
   findParentBlockedOn,
   MAX_CASCADE_RUNS,
   reclaimCancelledRunContainer,
+  noOwnerCanWrite,
   stopLiveOwner,
   type AbandonAttemptResult,
   type AbandonOwnerOutcome,
@@ -352,6 +353,7 @@ export async function abandonResumableRunsForConversation(
       const release = await releaseRunWorktree(ctx, run);
       cleanupWarnings.push(...release.warnings);
       if (release.released) releasedWorktrees.push(release.released);
+      if (await noOwnerCanWrite(ctx, run)) await releaseRunScratch(run);
     }
     const blocked = await findParentBlockedOn(ctx, run);
     if (blockedParentRunId === null) blockedParentRunId = blocked;

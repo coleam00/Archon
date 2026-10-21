@@ -1,14 +1,10 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import {
-  getArchonWorkspacesPath,
-  getRunArtifactsDirForRoot,
-  getRunScratchDir,
-} from '@archon/paths/archon-paths';
+import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createServer } from 'node:net';
@@ -23,6 +19,7 @@ import {
   noOwnerAnswers,
   mockRequestDetachedRunStop,
   makePausedRun,
+  makeRunWithScratch,
   CancelRefusedError,
   cancelWorkflow,
 } from './test-harness';
@@ -219,9 +216,7 @@ describe('cancelWorkflow', () => {
     [['An output holder is still running.'], true],
   ] as const)('a stop with warnings %p keeps the run’s scratch: %p', async (warnings, kept) => {
     const root = trackTempRoot(join(getArchonWorkspacesPath(), '_cwd', `cancel-${randomUUID()}`));
-    const run = makePausedRun({ status: 'running', output_root: root });
-    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
-    mkdirSync(join(checkout, '.git'), { recursive: true });
+    const { run, checkout } = makeRunWithScratch(root, { status: 'running' });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
     mockRequestDetachedRunStop.mockImplementationOnce(() =>
       Promise.resolve({

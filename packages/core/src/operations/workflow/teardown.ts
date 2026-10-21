@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   isRunBlockedOnChild,
@@ -282,6 +283,37 @@ export async function reclaimCancelledRunContainer(
   return [];
 }
 
+/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
+export async function rootRunIdOf(
+  ctx: OperationContext,
+  runId: string
+): Promise<string | undefined> {
+  return (await ctx.store.getRunAncestry(runId)).at(-1)?.id;
+}
+
+/**
+ * Whether no process can still be executing a cancelled `run`. A paused run can be: a
+ * gate pauses its run while sibling nodes in the same layer still execute. An owner that
+ * answers is such an executor, and it tears down the run's scratch and container as it
+ * exits. Silence counts only for an owner recorded on this host as this user, and a
+ * sub-run executes in its root run's process, so that root must be silent too. A failed
+ * check is logged and reads as "may still be executing".
+ */
+export async function noOwnerCanWrite(ctx: OperationContext, run: WorkflowRun): Promise<boolean> {
+  const recorded = readExecutionOwner(run.metadata);
+  if (recorded?.host !== hostname() || (process.getuid && recorded.uid !== process.getuid()))
+    return false;
+  try {
+    if (await ctx.isRunOwnerAnswering(run.id)) return false;
+    if (!run.parent_run_id) return true;
+    const rootRunId = await rootRunIdOf(ctx, run.id);
+    return rootRunId !== undefined && !(await ctx.isRunOwnerAnswering(rootRunId));
+  } catch (err) {
+    getLog().warn({ err, runId: run.id }, 'operations.workflow_owner_probe_failed');
+    return false;
+  }
+}
+
 export async function cancelRunAndCleanup(
   ctx: OperationContext,
   run: WorkflowRun,
@@ -303,6 +335,10 @@ export async function cancelRunAndCleanup(
   let cancelledRuns: WorkflowRun[] = [];
   if (cancelled) {
     ({ failures: cascadeFailures, runs: cancelledRuns } = await cascadeCancelChildren(ctx, run.id));
+    // An output holder the stop left running may still write a descendant's scratch.
+    if (!stopWarnings.length)
+      for (const child of cancelledRuns)
+        if (await noOwnerCanWrite(ctx, child)) await releaseRunScratch(child);
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 

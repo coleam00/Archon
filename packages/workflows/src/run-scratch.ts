@@ -4,16 +4,21 @@
  * Scratch is removed only where nothing of the run can still write into it:
  * - The executor removes it when it exits and the run is terminal. Its nodes have stopped
  *   by then, including after a cancel it only observed at a status check.
- * - A store removes it after a terminal write that ended a paused or failed run
- *   (`releaseScratchAfterTerminalWrite`): no executor is behind such a run. A terminal
- *   write that ended a pending or running run leaves scratch to that run's executor,
- *   because a cooperative cancel, `halt`, a cancelling gate or a fan-out cancel commits
- *   while its nodes may still be writing.
+ * - A store removes it after a terminal write that ended a failed run
+ *   (`releaseScratchAfterTerminalWrite`): the process executing the run wrote that failure on its way out.
+ *   Any other terminal write leaves scratch alone. A cooperative cancel, `halt`, a
+ *   cancelling gate or a fan-out cancel commits while the run's nodes may still be
+ *   writing, and so does a write that ends a paused run: a gate pauses its run while
+ *   sibling nodes in the same layer still execute.
  * - Cancel and abandon remove it themselves once they have stopped the run's owner.
+ *   Abandon, a conversation reset and a cancelling gate reject remove a cancelled run's
+ *   scratch when no owner answers for it; an owner that answers is an executor that
+ *   removes scratch as it exits.
  * - A container run is skipped by all of these: its container mounts the artifacts
  *   directory and lives past the terminal write. The container backend calls
- *   `removeRunScratch` once the container is removed, so every operation that cancels a
- *   paused container run (abandon, conversation reset, gate reject) reclaims its container.
+ *   `removeRunScratch` once the container is removed, so abandon, a conversation reset and
+ *   a cancelling gate reject with no owner answering reclaim a paused container run's
+ *   container.
  *
  * Only the scratch child is removed; the rest of the artifacts directory is the
  * workflow's evidence and is never inspected.
@@ -43,15 +48,16 @@ type ScratchRun = Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>;
 
 /**
  * A store's duty after a terminal write it won: remove scratch when the write moved `run`
- * from a status with no executor left to write it into a terminal one. A terminal event
- * appended without that status change ends nothing. Never throws.
+ * from `failed`, the one status no executor can still be writing under, into another
+ * terminal one. A terminal event appended without that status change ends nothing.
+ * Never throws.
  */
 export async function releaseScratchAfterTerminalWrite(
   run: ScratchRun & Pick<WorkflowRun, 'status'>,
   priorStatus: WorkflowRunStatus
 ): Promise<void> {
   if (!isTerminalRunStatus(run.status) || run.status === priorStatus) return;
-  if (priorStatus === 'paused' || priorStatus === 'failed') await releaseRunScratch(run);
+  if (priorStatus === 'failed') await releaseRunScratch(run);
 }
 
 /**

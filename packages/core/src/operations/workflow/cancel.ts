@@ -7,6 +7,7 @@ import {
   cancelByOperator,
   describeAbandonOwner,
   recordAbandoned,
+  rootRunIdOf,
   stopLiveOwner,
   type AbandonOwnerOutcome,
   type AbandonWorkflowResult,
@@ -157,11 +158,6 @@ async function cancelWithoutOwner(
         'If its process is gone, abandon the run to release it.',
     ].join('\n')
   );
-}
-
-/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
-async function rootRunIdOf(ctx: OperationContext, runId: string): Promise<string | undefined> {
-  return (await ctx.store.getRunAncestry(runId)).at(-1)?.id;
 }
 
 async function cooperativeCancel(

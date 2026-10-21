@@ -87,7 +87,9 @@ layout below. Existing projects keep their names and storage.
   `.archon/scratch/`, where a workflow puts throwaway checkouts and dependency installs, is
   removed once the run is completed, failed or cancelled (including a failed run that is
   resumed later) and its nodes have stopped. A container run's scratch is removed when its
-  container is. Everything else in `$ARTIFACTS_DIR` is kept.
+  container is. A cancelled run whose nodes Archon cannot confirm stopped (its owner ran on
+  another host or as another user) keeps its scratch until the operator removes it.
+  Everything else in `$ARTIFACTS_DIR` is kept.
   `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
