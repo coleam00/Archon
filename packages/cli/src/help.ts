@@ -82,14 +82,6 @@ const forgeOperationDescriptions = {
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 
-// One entry per Commands-block line, in global-help order. `renderHelp()`
-// returns the global index with no selection; `renderHelp(...)`
-// filters this list by the (command, subcommand) tuple for scoped slices.
-// Subcommands listed in `scopedOnlyHelp` below never render in the global
-// Commands block, so global help stays byte-identical to the pre-refactor
-// template literal while scoped slices can still surface every supported
-// subcommand (`--detach` is owned by `workflow approve`/`reject`, which
-// live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
     command: 'state',
