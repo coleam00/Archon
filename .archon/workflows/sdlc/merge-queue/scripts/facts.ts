@@ -10,7 +10,8 @@
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
  * that sequence durably before the sweep, keeping the claim until record settles it.
- * A red default branch reaches the sweep even when no pull request waits.
+ * A red default branch reaches the sweep even when no pull request waits. An unreadable
+ * base reaches record for independent bookkeeping before the run reports the failure.
  */
 
 import { join } from 'node:path';
@@ -152,6 +153,32 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
   }));
 }
 
+function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: readonly MergeSettled[], gate: string): void {
+  // The default branch is read on every run: a red one after the last merge needs the
+  // sweep's question even when no pull request waits.
+  let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
+  try {
+    inspection = { base: readBase(repo), error: '' };
+  } catch (error) {
+    inspection = { base: null, error: `merge-queue facts: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const { base } = inspection;
+  const path = base === null
+    ? 'record'
+    : items.length > 0 || base.checks.state === 'red'
+      ? 'sweep'
+      : settled.length > 0 ? 'record' : 'idle';
+  emit({
+    path,
+    base,
+    base_error: inspection.error,
+    items,
+    settled,
+    gate,
+    policy_defaults: POLICY_DEFAULTS,
+  });
+}
+
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const order = parseOrder(text(process.env.INPUTS_ORDER));
@@ -206,18 +233,7 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
-  // The default branch is read on every run: a red one after the last merge needs the
-  // sweep's question even when no pull request waits.
-  const base = readBase(repo);
-  const sweep = items.length > 0 || base.checks.state === 'red';
-  emit({
-    path: sweep ? 'sweep' : settled.length > 0 ? 'record' : 'idle',
-    base,
-    items,
-    settled,
-    gate,
-    policy_defaults: POLICY_DEFAULTS,
-  });
+  emitFacts(repo, items, settled, gate);
 }
 
 try {

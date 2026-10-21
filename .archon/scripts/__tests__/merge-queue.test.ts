@@ -285,6 +285,7 @@ interface FakePr {
   readonly baseChecks?: 'green' | 'red' | 'pending';
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
+  readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
   readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
   /** `gh pr list --author` fails. */
@@ -328,7 +329,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(number)) return out(1, '', 'HTTP 502');
     return out(0, JSON.stringify({ data: { repository: { defaultBranchRef: { name: 'dev' }, pullRequest: {
       url: ${JSON.stringify(PR_URL.replace(/42$/, ''))} + number, title: 'Fix the thing',
-      state: (forgePr.merged ?? []).includes(number) ? 'MERGED' : forgePr.state, isDraft: false,
+      state: (forgePr.merged ?? []).includes(number) ? 'MERGED' : (forgePr.closed ?? []).includes(number) ? 'CLOSED' : forgePr.state, isDraft: false,
       baseRefName: 'dev', headRefName: 'feature', headRefOid: forgePr.headRefOid, mergeable: forgePr.conflicts ? 'CONFLICTING' : 'MERGEABLE',
       additions: 10, deletions: 2, changedFiles: 2,
       mergeCommit: forgePr.mergeCommit === null ? null : { oid: forgePr.mergeCommit },
@@ -416,6 +417,14 @@ function decision(overrides: Record<string, unknown>): Record<string, unknown> {
 
 const FACTS_BASE_GREEN = { branch: 'dev', head: OLD, checks: { state: 'green', failing: [], pending: [] } };
 const FACTS_BASE_RED = { branch: 'dev', head: OLD, checks: { state: 'red', failing: ['test'], pending: [] } };
+
+function recordFacts(output: Record<string, unknown>): Record<string, string> {
+  return {
+    INPUTS_PATH: String(output.path), INPUTS_ITEMS: JSON.stringify(output.items),
+    INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_BASE: JSON.stringify(output.base),
+    INPUTS_BASE_ERROR: String(output.base_error), INPUTS_SWEEP: 'null',
+  };
+}
 
 function recordInputs(
   decisions: readonly Record<string, unknown>[],
@@ -645,8 +654,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('a red default branch with no queued pull request still reaches the sweep, so its question can be raised', () => {
     const at = install();
     const output = ok(run(at, 'facts', {}, { pr: { baseChecks: 'red' } })) as { path: string; items: unknown[]; base: { checks: { state: string } } };
-    expect(output).toMatchObject({ path: 'sweep', items: [], base: { checks: { state: 'red' } } });
-    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }))).toMatchObject({ path: 'idle' });
+    expect(output).toMatchObject({ path: 'sweep', items: [], base_error: '', base: { checks: { state: 'red' } } });
+    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }))).toMatchObject({ path: 'idle', base_error: '' });
   }, 60_000);
 
   test('without the opt-in, nobody\'s pull requests are enrolled', () => {
@@ -672,6 +681,93 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       items: [],
       settled: [{ item: SUBJECT, pr: PR, status: 'merged' }],
     });
+  }, 60_000);
+
+  test('a failed base read still records a no-PR settlement and releases its claim', () => {
+    const at = install();
+    seed(at, item({ ...BUILT, rounds: [] }));
+    const picked = run(at, 'facts', {}, { pr: { baseUnreadable: true } });
+    const output = ok(picked);
+    expect(output).toMatchObject({ path: 'record', base: null, base_error: 'merge-queue facts: gh api graphql failed: HTTP 502 reading base' });
+    const recorded = run(at, 'record', recordFacts(output));
+    expect(recorded.code).toBe(1);
+    expect(recorded.stderr).toContain(String(output.base_error));
+    expect(recorded.stdout).toBe('');
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked', decisions: [{
+      decision: 'parked', reason: 'the build record names no pull request',
+    }] } } });
+    expect(merges(picked)).toEqual([]);
+    expect(merges(recorded)).toEqual([]);
+  }, 60_000);
+
+  test.each([false, true])('a failed base read preserves the whole batch, including a competing claim: %s', loseClaim => {
+    const at = install();
+    const builtFor = (number: number): BuildRecord => ({
+      ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: PR_URL.replace(/42$/, String(number)) })),
+    });
+    seed(at, item({ ...BUILT, rounds: [] }));
+    seed(at, { ...item(builtFor(43)), subject: { repo: PR.repo, number: 8 } });
+    seed(at, { ...item(builtFor(44)), subject: { repo: PR.repo, number: 9 } });
+    seed(at, { ...item(builtFor(45)), subject: { repo: PR.repo, number: 10 } });
+    const own = parkedOwn();
+    seed(at, { ...own, facts: { ...own.facts, merge: { ...own.facts.merge, status: 'waiting' } } });
+    const picked = run(at, 'facts', {}, { pr: { baseUnreadable: true, merged: [43], closed: [44], unreadable: [45] } });
+    const output = ok(picked) as Record<string, unknown> & { settled: MergeSettled[] };
+    expect(output).toMatchObject({ path: 'record', base: null, items: [{ pr: PR, own_pr: true }] });
+    expect(output.settled.map(done => [done.item.number, done.status, done.decision]).sort()).toEqual([
+      [7, 'parked', 'parked'], [8, 'merged', 'merged'], [9, 'parked', 'parked'], [10, 'waiting', UNREADABLE],
+    ].sort());
+    let competing: WorkItem | null = null;
+    if (loseClaim) {
+      competing = { ...stored(at).value!, claim: { ...CLAIMED.claim, run_id: 'other-run' } };
+      seed(at, competing);
+    }
+    const recorded = run(at, 'record', recordFacts(output), { pr: { unreadable: true } });
+    expect(recorded.code).toBe(1);
+    expect(recorded.stdout).toBe('');
+    expect(recorded.stderr).toContain(String(output.base_error));
+    expect(recorded.stderr).toContain('every other decision is recorded');
+    for (const done of output.settled) {
+      if (loseClaim && done.item.number === 7) continue;
+      expect(stored(at, done.item.number).value).toMatchObject({ claim: null, facts: { merge: {
+        status: done.status, pr: done.pr, decisions: [{ decision: done.decision, reason: done.reason }],
+      } } });
+    }
+    const open = stored(at, PR.number).value!;
+    expect(open).toMatchObject({ claim: null, facts: { own_pr: own.facts.own_pr, merge: {
+      status: 'waiting', approval: { head: HEAD, at: AT },
+    } } });
+    expect(open.facts.merge?.decisions.at(-1)).toMatchObject({
+      decision: 'wait (unclear)', head: HEAD, reason: output.base_error, reran: false,
+    });
+    expect(mergeWaits(open)).toBe(true);
+    if (loseClaim) {
+      expect(stored(at).value).toEqual(competing);
+      expect(recorded.stderr).toContain('work/7 is no longer claimed by this run');
+    }
+    expect(forgeCalls(recorded)).toEqual([]);
+    expect(merges(picked)).toEqual([]);
+  }, 60_000);
+
+  test('an unreadable base with an empty queue still fails record visibly', () => {
+    const at = install();
+    const output = ok(run(at, 'facts', {}, { pr: { baseUnreadable: true } }));
+    expect(output).toMatchObject({ path: 'record', base: null, items: [], settled: [] });
+    const recorded = run(at, 'record', recordFacts(output));
+    expect(recorded.code).toBe(1);
+    expect(recorded.stderr).toContain(String(output.base_error));
+    expect(recorded.stdout).toBe('');
+    expect(forgeCalls(recorded)).toEqual([]);
+  }, 60_000);
+
+  test('the gate refuses an unreadable base and merges nothing', () => {
+    const at = install();
+    const gated = run(at, 'gate', {}, { pr: { baseUnreadable: true }, args: [
+      '--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge',
+    ] });
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toContain('gh api graphql failed: HTTP 502 reading base');
+    expect(merges(gated)).toEqual([]);
   }, 60_000);
 
   test('the gate merges pinned to the head it passed', () => {
@@ -811,8 +907,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const before = stored(at).value as WorkItem;
     const readable = run(at, 'facts', { WORKFLOW_ID: 'readable-run' }, { pr: { baseUnreadable: failure === 'base read failed' } });
     if (failure === 'base read failed') {
-      expect(readable.code).not.toBe(0);
-      expect(readable.stderr).toContain('HTTP 502 reading base');
+      expect(ok(readable)).toMatchObject({ path: 'record', base: null, base_error: 'merge-queue facts: gh api graphql failed: HTTP 502 reading base' });
     } else {
       expect(ok(readable)).toMatchObject({ path: 'sweep', settled: [] });
     }

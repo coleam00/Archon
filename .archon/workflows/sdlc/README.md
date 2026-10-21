@@ -625,7 +625,8 @@ then the project's file, whose lines win where the two conflict.
   read resets that sequence even if later work fails. An unreadable own-PR park stays
   parked; it is not an answered park. To reconsider an answered own-PR park, facts
   reads its snapshot before claiming and reuses it in the sweep. A failed recovery
-  read leaves that unclaimed item unchanged and reports the error.
+  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default
@@ -657,8 +658,13 @@ then the project's file, whose lines win where the two conflict.
   refuses every merge. Red in code no recent merge touched gets one rerun of its failed
   jobs; red after that, or red in code a recent merge touched, is raised to a
   maintainer, naming the pull requests merged since it was last green, with a revert
-  or fix-forward recommendation.
-- **Record.** The `record` script refuses a sweep that decided a pull request this
+  or fix-forward recommendation. An unreadable default branch permits no sweep or merge;
+  independent bookkeeping completes before the run fails with the read diagnostic.
+- **Record.** When the default branch could not be read, `record` writes the independent
+  settlements and records readable open companions as waiting at their snapshot heads,
+  releasing only claims it still owns. It makes no further forge reads and fails with
+  the original diagnostic and any write failures after attempting the entire batch.
+  Otherwise, the `record` script refuses a sweep that decided a pull request this
   run did not claim, because that item belongs to another run. It also refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
   question or, on a pull request a build round owns, without the brief a `return`
