@@ -5,6 +5,7 @@
  * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
 import { setPlatformPolicies } from '../platforms/registry';
+import { apiPolicy } from '../workflows/headless-policy';
 import * as gitModule from '@archon/git';
 import * as isolationModule from '@archon/isolation';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
@@ -733,13 +734,13 @@ describe('completed run worktree release', () => {
     }
   );
 
-  test.each(['web', 'github', 'gitea', 'gitlab', 'discord'])(
-    '%s generated completion follows its registered retention policy',
-    async platform => {
-      setPlatformPolicies([{ id: platform, workspaceRetention: 'age-based' }]);
+  test.each([apiPolicy, { id: 'custom-platform', workspaceRetention: 'age-based' } as const])(
+    '$id generated completion follows its registered retention policy',
+    async policy => {
+      setPlatformPolicies([policy]);
       await db.query(
         'UPDATE remote_agent_isolation_environments SET created_by_platform = $1 WHERE id = $2',
-        [platform, env.id]
+        [policy.id, env.id]
       );
       expect(await assess()).toEqual({ disposition: 'release' });
       await releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
