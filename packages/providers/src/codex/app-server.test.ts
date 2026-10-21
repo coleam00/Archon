@@ -303,12 +303,23 @@ describe('AppServerConnection', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  test('shutdown closes stdin and sends SIGTERM only when the process does not exit', async () => {
+  test('shutdown closes stdin and sends SIGTERM only when asked and the process does not exit', async () => {
     const signalsOnExit: string[] = [];
     const exits = rawChild((_child, signal) => signalsOnExit.push(signal));
     exits.child.stdin.on('finish', () => exits.child.emit('close', 0, null));
     await AppServerConnection.start(BINARY, [], {}, exits.spawner).shutdown(50);
     expect(signalsOnExit).toEqual([]);
+
+    // Without a SIGTERM deadline a slow exit is awaited, however long past any grace.
+    const slowSignals: string[] = [];
+    const slow = rawChild((_child, signal) => slowSignals.push(signal));
+    slow.child.stdin.on('finish', () => setTimeout(() => slow.child.emit('close', 0, null), 60));
+    const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(
+      undefined,
+      20
+    );
+    expect(slowSignals).toEqual([]);
+    expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
 
     const signals: string[] = [];
     const hangs = rawChild((child, signal) => {
