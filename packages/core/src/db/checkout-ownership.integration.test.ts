@@ -1064,3 +1064,107 @@ test.each(
     expect(await sqlStore.listWorkflowEvents(run.id)).toEqual(events);
   }
 );
+
+for (const field of ['isolation_env_id', 'owned_worktree'] as const) {
+  test(`SQL malformed legacy ${field} keeps its conversation owner`, async () => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const env = await sql.create({
+      codebase_id: codebase,
+      workflow_type: 'task',
+      workflow_id: randomUUID(),
+      working_path: join(root, randomUUID()),
+      branch_name: toBranchName(randomUUID()),
+    });
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, env.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'legacy',
+      user_message: '',
+      origin: { conversationId },
+    });
+    await sqlStore.claimPendingWorkflowRun(run.id);
+    const metadata =
+      field === 'isolation_env_id' ? { isolation_env_id: 42 } : { owned_worktree: { envId: 42 } };
+    await db.query('UPDATE remote_agent_workflow_runs SET metadata = $2 WHERE id = $1', [
+      run.id,
+      JSON.stringify(metadata),
+    ]);
+    expect((await sql.getLiveRunOwningEnv(env.id))?.id).toBe(run.id);
+    await expect(sql.withWorktreeRegistration(env, async mark => mark())).rejects.toBeInstanceOf(
+      WorktreeInUseError
+    );
+  });
+
+  for (const route of ['updateWorkflowRun', 'updateWorkflowRunMetadataIfRunning'] as const) {
+    test(`SQL ${route} rejects malformed ${field}`, async () => {
+      const run = await sqlStore.createWorkflowRun({ workflow_name: 'writer', user_message: '' });
+      await sqlStore.claimPendingWorkflowRun(run.id);
+      const before = await sqlStore.getWorkflowRun(run.id);
+      const metadata =
+        field === 'isolation_env_id' ? { isolation_env_id: 42 } : { owned_worktree: { envId: 42 } };
+      await expect(
+        route === 'updateWorkflowRun'
+          ? sqlStore.updateWorkflowRun(run.id, { metadata })
+          : sqlStore.updateWorkflowRunMetadataIfRunning(run.id, metadata)
+      ).rejects.toThrow();
+      expect(await sqlStore.getWorkflowRun(run.id)).toEqual(before);
+    });
+  }
+}
+
+test.each(
+  (['pending', 'running', 'paused', 'failed'] as const).flatMap(status =>
+    [false, true].map(rebindFirst => ({ status, rebindFirst }))
+  )
+)(
+  'SQL setup selection releases provisional checkout: $status, rebindFirst=$rebindFirst',
+  async ({ status, rebindFirst }) => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const createEnv = () =>
+      sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+      });
+    const a = await createEnv();
+    const b = await createEnv();
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, a.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'setup',
+      user_message: '',
+      codebase_id: codebase,
+      origin: { conversationId },
+    });
+    if (rebindFirst) await updateConversation(conversationId, { isolation_env_id: b.id });
+    const { recordSetupRunCheckout } = await import('../workflows/worktree-setup');
+    await recordSetupRunCheckout({ store: sqlStore }, run, b.working_path);
+    if (!rebindFirst) await updateConversation(conversationId, { isolation_env_id: b.id });
+    expect((await sqlStore.getWorkflowRun(run.id))?.metadata.isolation_env_id ?? null).toBeNull();
+    if (status !== 'pending') await sqlStore.claimPendingWorkflowRun(run.id);
+    if (status === 'paused') await sqlStore.updateWorkflowRun(run.id, { status });
+    if (status === 'failed') await sqlStore.failWorkflowRun(run.id, 'original');
+    await sql.withWorktreeRegistration(a, async mark => mark());
+    await expect(sql.withWorktreeRegistration(b, async mark => mark())).rejects.toBeInstanceOf(
+      WorktreeInUseError
+    );
+    if (status === 'failed' || status === 'paused')
+      await expect(sqlStore.resumeWorkflowRun(run.id)).resolves.toBeDefined();
+  }
+);

@@ -140,6 +140,15 @@ export async function assertRunCheckoutAvailable(
   if (run) await assertCheckoutAvailable(query, run);
 }
 
+export function validateCheckoutMetadata(metadata: WorkflowRun['metadata'] | undefined): void {
+  if (!metadata) return;
+  if (metadata.isolation_env_id != null && typeof metadata.isolation_env_id !== 'string')
+    throw new Error('isolation_env_id must be a string or null');
+  const [, ownedId] = checkoutEnvironmentReferences(metadata);
+  if (metadata.owned_worktree != null && typeof ownedId !== 'string')
+    throw new Error('owned_worktree.envId must be a non-empty string');
+}
+
 export function associatesCheckout(metadata: Record<string, unknown> | undefined): boolean {
   return introducesCheckout(undefined, { working_path: null, metadata: metadata ?? {} });
 }

@@ -494,7 +494,14 @@ export async function getLiveRunOwningEnv(
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
-  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
+  const stringReference = (path: string): string => {
+    const extract = dialect.jsonText('r.metadata', path);
+    const type = postgres
+      ? `jsonb_typeof(r.metadata #> '{${path.replaceAll('.', ',')}}') = 'string'`
+      : `json_type(r.metadata, '$.${path}') = 'text'`;
+    return `CASE WHEN ${type} THEN ${extract} END`;
+  };
+  const envIdExtract = stringReference('isolation_env_id');
   // UUID identifiers must compare as text so $1 has one type across metadata,
   // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
@@ -524,7 +531,7 @@ export async function getLiveRunOwningEnv(
     excludeRunId === undefined
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
-  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
+  const ownedEnvExtract = `NULLIF(${stringReference('owned_worktree.envId')}, '')`;
   const result = await query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r

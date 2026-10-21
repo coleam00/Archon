@@ -540,6 +540,108 @@ describe('workflow dispatch routing', () => {
     expect(opts.adoptedFromRunId).toBe('prior-run');
   });
 
+  test.each(['reuse-worktree', 'checkout-branch'] as const)(
+    'foreground %s selection replaces the setup run checkout before submission',
+    async kind => {
+      const adapter = await import('../workflows/store-adapter');
+      const original = adapter.createWorkflowDeps();
+      const writes = mock(original.store.updateWorkflowRun);
+      const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+        ...original,
+        store: { ...original.store, updateWorkflowRun: writes },
+      }));
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeDispatchConversation({ isolation_env_id: 'old-env' })
+      );
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+      if (kind === 'checkout-branch')
+        mockValidateAndResolveIsolation.mockResolvedValueOnce({
+          cwd: '/wt/adopted',
+          status: 'new',
+          env: makeIsolationEnvironment(),
+        });
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane:
+          kind === 'reuse-worktree'
+            ? { kind, environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }) }
+            : { kind, taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') } },
+      });
+      try {
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          workflowAdoptRunId: 'prior-run',
+        });
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(writes).toHaveBeenCalledWith(expect.any(String), {
+          working_path: '/wt/adopted',
+          metadata: { isolation_env_id: null },
+        });
+        const opts = mockExecuteWorkflow.mock.calls[0]?.at(-1) as { preCreatedRun?: WorkflowRun };
+        expect(opts.preCreatedRun?.working_path).toBe('/wt/adopted');
+        expect(opts.preCreatedRun?.metadata.isolation_env_id).toBeNull();
+      } finally {
+        factory.mockRestore();
+        (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+      }
+    }
+  );
+
+  test('foreground setup records its selected checkout before a setup command fails', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const setup = await import('../workflows/worktree-setup');
+    const original = adapter.createWorkflowDeps();
+    const writes = mock(original.store.updateWorkflowRun);
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: { ...original.store, updateWorkflowRun: writes },
+    }));
+    let writesAtExecution: unknown[] = [];
+    const executor = spyOn(setup, 'createRunWorktreeSetupExecutor').mockImplementation(
+      () => async () => {
+        writesAtExecution = [...writes.mock.calls];
+        throw new Error('setup command failed');
+      }
+    );
+    mockGetOrCreateConversation.mockResolvedValueOnce(
+      makeDispatchConversation({ isolation_env_id: 'old-env' })
+    );
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    mockValidateAndResolveIsolation.mockImplementationOnce(async (...args) => {
+      const execute = args[7];
+      if (!execute) throw new Error('Missing setup executor');
+      await execute({
+        workingPath: '/wt/selected',
+        canonicalRepoPath: '/repo',
+        codebaseId: 'codebase-1',
+        commands: ['false'],
+        timeout: 1000,
+      });
+      throw new Error('Expected setup failure');
+    });
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      expect(writesAtExecution).toContainEqual([
+        expect.any(String),
+        {
+          working_path: '/wt/selected',
+          metadata: { isolation_env_id: null },
+        },
+      ]);
+      expect(executor).toHaveBeenCalledTimes(1);
+      expect(mockFailPreparedRun).toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      executor.mockRestore();
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
   // R7: the resolver short-circuits on `existingEnvId` before hints are read, so a
   // checkout-branch adoption must neutralize the conversation's stale env and key
   // its reuse lookup with a unique per-dispatch workflow id.
@@ -2373,7 +2475,7 @@ describe('workflow dispatch routing', () => {
     expect(opts.preCreatedRun).toMatchObject({
       id: 'prepared-run-id',
       status: 'pending',
-      working_path: null,
+      working_path: '/test/cwd',
     });
     expect(opts.priorCompletedNodes).toBeUndefined();
   });

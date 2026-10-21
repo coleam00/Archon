@@ -10,6 +10,7 @@ import {
   readRunCheckout,
   introducesCheckout,
   associatesCheckout,
+  validateCheckoutMetadata,
 } from './checkout-ownership';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
@@ -113,6 +114,7 @@ export async function updateWorkflowRun(
   const values: unknown[] = [];
   const requestedStatus: WorkflowRunStatus | undefined = updates.status;
   validateWorkflowWaitMetadata(updates.metadata);
+  validateCheckoutMetadata(updates.metadata);
 
   if (requestedStatus !== undefined && TERMINAL_WORKFLOW_STATUSES.includes(requestedStatus)) {
     throw new Error(`Terminal workflow status '${requestedStatus}' requires a lifecycle writer`);
@@ -194,6 +196,7 @@ export async function updateWorkflowRunMetadataIfRunning(
   metadata: WorkflowRun['metadata']
 ): Promise<boolean> {
   validateWorkflowWaitMetadata(metadata);
+  validateCheckoutMetadata(metadata);
   const sql = `UPDATE remote_agent_workflow_runs
      SET metadata = ${getDialect().jsonMerge('metadata', 2)}
      WHERE id = $1 AND status = 'running'`;
