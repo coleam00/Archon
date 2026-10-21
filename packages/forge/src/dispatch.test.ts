@@ -170,3 +170,22 @@ test('an older plugin refuses new work-item capability before executing it', asy
     mutation: { outcome: 'refused', target: repo },
   });
 });
+
+test.each([
+  ['github-origin', 'http://ghes.example.test:8080', 'http://ghes.example.test:8080'],
+  ['other-origin', 'http://ghes.example.test:8080', 'absent'],
+  ['other-origin', 'http://user:private@ghes.example.test:8080', 'absent'],
+])(
+  'scopes the configured GitHub origin to selected GitHub operations (%s)',
+  async (mode, origin, expected) => {
+    const result = await dispatchForge(
+      { operationId: 'origin', op: 'resolve', remote: 'https://forge.example/team/repo' },
+      { config: config(mode), env: { GITHUB_URL: origin } }
+    );
+    expect(result.response).toEqual({
+      operationId: 'origin',
+      ok: false,
+      error: { kind: 'forge_error', message: expected },
+    });
+  }
+);
