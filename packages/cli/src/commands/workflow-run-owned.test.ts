@@ -477,7 +477,25 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   it('still resumes when the prior run has completed nodes', async () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    await stubFailedPriorRun();
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const metadata = {
+      worktree_creation_id: 'original-creation',
+      worktree_registration_id: 'original-registration',
+      worktree_branch_created: true,
+      adopted: false,
+    };
+    const updateMetadata = spyOn(isolationDb, 'updateMetadata');
+    updateMetadata.mockClear();
+    await stubFailedPriorRun('failed', [
+      {
+        id: 'env-1',
+        codebase_id: 'cb-resume',
+        provider: 'worktree',
+        working_path: tempRoot,
+        branch_name: 'archon/task-ship-original',
+        metadata,
+      },
+    ]);
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
       priorCompletedNodes: new Map([['triage', 'done']]),
@@ -492,6 +510,9 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     });
 
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(updateMetadata).not.toHaveBeenCalled();
+    expect(metadata.adopted).toBe(false);
+    updateMetadata.mockRestore();
   });
 });
 

@@ -3,14 +3,8 @@ import type { InMemoryStoreEvent } from '../test-utils';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { settlingProvider } from '../test-settling-provider';
 /**
- * Shared scaffolding for the end-to-end `workflow:` sub-run tests (#2121 Phase 2), the
- * `child-runs.*.test.ts` files beside child-runs.ts.
- *
- * Those tests drive the REAL executor recursion — executeWorkflow → runChildWorkflow
- * closure → executeDagWorkflow → executeWorkflowNode → child executeWorkflow — with
- * a stateful in-memory store, a canned AI provider, and real workflow files on disk
- * (so runChildWorkflow's discovery/resolveWorkflowName and the parent auto-resume
- * hook both work against real definitions).
+ * Sub-run fixtures execute real executor recursion with a stateful in-memory store,
+ * canned providers and workflow files for discovery and parent resume.
  *
  * Importing this module replaces `@archon/paths`, `@archon/git` and `fs/promises`
  * with test doubles and registers the built-in providers, so it must be the first
@@ -467,6 +461,11 @@ export class InMemoryStore implements IWorkflowStore {
     }
     return Promise.resolve();
   };
+
+  recordCompletedWorktreeRetention: IWorkflowStore['recordCompletedWorktreeRetention'] =
+    async () => {
+      throw new Error('Unexpected completed worktree retention');
+    };
 
   updateWorkflowRunMetadataIfRunning: IWorkflowStore['updateWorkflowRunMetadataIfRunning'] = async (
     id,

@@ -1,3 +1,4 @@
+import { WORKTREE_DISPOSITION_METADATA_KEY } from '../schemas/terminal-record';
 import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
@@ -54,7 +55,7 @@ import {
   pauseCauseOfWait,
 } from '../schemas/pause-cause';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
-import { buildTerminalRecord } from '../terminal-record';
+import { buildTerminalRecord, completedWorktreeRetentionEvent } from '../terminal-record';
 import { isDeepStrictEqual } from 'node:util';
 import { readProviderEventRows } from '../provider-event-reader';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
@@ -71,10 +72,7 @@ export type TransactionView = Omit<
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
 > & {
-  /**
-   * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
-   * otherwise. Lets a store decide slot admission before the resume changes anything.
-   */
+  /** Validate resume at cursor without changing state, so slot admission can inspect it. */
   resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
   recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
@@ -161,30 +159,18 @@ export function createTransactionView(
     precedingEvents?: WorkflowEventInput[];
   }
   const terminalBatch = async (changes: TerminalChange[]): Promise<void> => {
-    const prepared = await Promise.all(
-      changes.map(async ({ run, event, precedingEvents = [] }) => {
-        run.completed_at = new Date();
-        const terminalRecord = await buildTerminalRecord({
-          run,
-          events: [
-            ...listEvents(run.id),
-            ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
-          ],
-        });
-        return {
-          run,
-          precedingEvents,
-          event: {
-            ...event,
-            data: { ...event.data, terminal_record: terminalRecord },
-          },
-        };
-      })
-    );
-    for (const { run, precedingEvents, event } of prepared) {
+    for (const { run, event, precedingEvents = [] } of changes) {
+      run.completed_at = new Date();
+      const terminalRecord = await buildTerminalRecord({
+        run,
+        events: [
+          ...listEvents(run.id),
+          ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
+        ],
+      });
       runs.set(run.id, run);
       for (const preceding of precedingEvents) record(preceding);
-      record(event);
+      record({ ...event, data: { ...event.data, terminal_record: terminalRecord } });
     }
   };
   const terminal = async (
@@ -328,6 +314,13 @@ export function createTransactionView(
         output_root: run.output_root ?? updates.output_root ?? null,
         working_path: run.working_path ?? updates.working_path ?? null,
       });
+    },
+    recordCompletedWorktreeRetention: async (id, disposition) => {
+      const run = row(id);
+      if (run.status !== 'completed')
+        throw new Error('Worktree retention requires a completed run');
+      run.metadata[WORKTREE_DISPOSITION_METADATA_KEY] = structuredClone(disposition);
+      record(completedWorktreeRetentionEvent(id, disposition));
     },
     updateWorkflowRunMetadataIfRunning: async (id, metadata) => {
       validateWorkflowWaitMetadata(metadata);

@@ -79,6 +79,7 @@ export {
 export {
   updateWorkflowRun,
   updateWorkflowRunMetadataIfRunning,
+  recordCompletedWorktreeRetention,
   updateWorkflowActivity,
   recordWorkflowRunCheckoutBaseline,
   setToolCallAttention,

@@ -1,3 +1,4 @@
+import type { WorkflowEventInput } from './store';
 import { z } from 'zod';
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
@@ -20,6 +21,28 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import { readNodeRecordEvent } from './node-record-reader';
+
+export function completedWorktreeRetentionEvent(
+  runId: string,
+  disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
+): WorkflowEventInput<'workflow_cleanup_warning'> {
+  return {
+    workflow_run_id: runId,
+    event_type: 'workflow_cleanup_warning',
+    data: {
+      warnings: [disposition.detail ?? disposition.reason],
+      [WORKTREE_DISPOSITION_METADATA_KEY]: disposition,
+    },
+  };
+}
+
+export function worktreeRetentionWarning(
+  path: string,
+  disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
+): string {
+  const detail = disposition.detail ? ` (${disposition.detail})` : '';
+  return `Retained checkout ${path}: ${disposition.reason}${detail}. Removing it could lose local work or another run's checkout. Inspect it with archon isolation list and use explicit cleanup when safe.`;
+}
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -204,15 +227,25 @@ export function getTerminalRecord(
   events: readonly TerminalRecordEvent[]
 ): TerminalRecord | null {
   if (!terminalStatusSchema.safeParse(runStatus).success) return null;
+  let retention: WorktreeDisposition | undefined;
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
+    if (
+      runStatus === 'completed' &&
+      event?.event_type === 'workflow_cleanup_warning' &&
+      eventData(event.data)[WORKTREE_DISPOSITION_METADATA_KEY] !== undefined
+    ) {
+      retention ??= worktreeDispositionSchema.parse(
+        eventData(event.data)[WORKTREE_DISPOSITION_METADATA_KEY]
+      );
+    }
     if (event?.event_type !== `workflow_${runStatus}`) continue;
     const data = eventData(event.data);
     if (data.terminal_record === undefined) return null;
     const record = terminalRecordSchema.parse(data.terminal_record);
     if (record.status !== runStatus)
       throw new Error('Terminal record status differs from its terminal event');
-    return record;
+    return retention ? { ...record, worktree_disposition: retention } : record;
   }
   return null;
 }

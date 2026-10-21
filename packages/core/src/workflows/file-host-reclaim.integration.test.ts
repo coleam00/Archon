@@ -42,7 +42,7 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 }
 
 async function fileHostWithWorktree() {
-  setPlatformPolicies([]);
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
   const home = roots(await realpath(await mkdtemp(join(tmpdir(), 'file-reclaim-'))));
   process.env.ARCHON_HOME = home;
   process.env.GIT_CONFIG_GLOBAL = join(home, '.gitconfig');
@@ -86,7 +86,12 @@ async function fileHostWithWorktree() {
     workflow_id: 'release',
     working_path: created.workingPath,
     branch_name: created.branchName,
-    metadata: { worktree_creation_id: created.metadata.creationId },
+    created_by_platform: 'cli',
+    metadata: {
+      worktree_creation_id: created.metadata.creationId,
+      worktree_branch_created: true,
+      adopted: false,
+    },
   });
   return { home, repo, host, codebase, created, creationId: created.metadata.creationId, env };
 }

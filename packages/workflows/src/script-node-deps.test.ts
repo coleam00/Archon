@@ -247,6 +247,9 @@ function createMockStore(): IWorkflowStore {
       })
     ),
     recoverCancelledFanOutRun: mock(() => Promise.reject(new Error('unused in this test'))),
+    recordCompletedWorktreeRetention: mock<IWorkflowStore['recordCompletedWorktreeRetention']>(
+      async () => undefined
+    ),
     updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
       async () => true
     ),

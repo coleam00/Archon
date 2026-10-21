@@ -16,7 +16,7 @@ export const runGraphSchema = z.object({
 export type RunGraph = z.infer<typeof runGraphSchema>;
 export const terminalStatusSchema = terminalWorkflowRunStatusSchema;
 
-/** Run metadata key where a completed run's host-assessed disposition waits for the record. */
+/** The completed run's latest checkout disposition, including a refusal after assessment. */
 export const WORKTREE_DISPOSITION_METADATA_KEY = 'worktree_disposition';
 /** What happens to the worktree a run created once the run is terminal, and why it stays. */
 export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [

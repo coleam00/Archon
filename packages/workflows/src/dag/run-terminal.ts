@@ -2,6 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the evidence and write-back gates, and the completion write.
  */
+import { worktreeRetentionWarning } from '../terminal-record';
 import { existsSync } from 'fs';
 import { join as joinPath } from 'path';
 import type { WorkflowDeps } from '../deps';
@@ -418,8 +419,8 @@ async function completeRun(
     { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
   );
 
-  // The terminal record already carries the decision. Removing the checkout is cleanup
-  // of terminal data, so a refusal or failure leaves it in place and the run completed.
+  // Removal follows the terminal write so resumable work is never destroyed. A refusal
+  // appends retention evidence without changing the successful execution status.
   if (worktreeDisposition?.disposition === 'release') {
     try {
       await deps.completedRunWorktree?.release(completedRun);
@@ -429,6 +430,22 @@ async function completeRun(
         { err, workflowRunId: workflowRun.id },
         'workflow.completed_worktree_release_failed'
       );
+      try {
+        await deps.store.recordCompletedWorktreeRetention(workflowRun.id, {
+          disposition: 'retained',
+          reason: 'check_failed',
+          detail: worktreeRetentionWarning(completedRun.working_path ?? '(unknown)', {
+            disposition: 'retained',
+            reason: 'check_failed',
+            detail: (err as Error).message,
+          }),
+        });
+      } catch (recordError) {
+        getLog().error(
+          { err: recordError, workflowRunId: workflowRun.id },
+          'workflow.completed_worktree_retention_record_failed'
+        );
+      }
     }
   }
 }
@@ -601,9 +618,19 @@ async function assessCompletedWorktree(
     // Read fresh: a pre-created run's `owned_worktree` proof is stamped on the row after
     // this object was loaded.
     const completedRun = (await deps.store.getWorkflowRun(workflowRun.id)) ?? workflowRun;
+    const disposition = await deps.completedRunWorktree.assess(completedRun);
     return {
       completedRun,
-      worktreeDisposition: await deps.completedRunWorktree.assess(completedRun),
+      worktreeDisposition:
+        disposition?.disposition === 'retained'
+          ? {
+              ...disposition,
+              detail: worktreeRetentionWarning(
+                completedRun.working_path ?? '(unknown)',
+                disposition
+              ),
+            }
+          : disposition,
     };
   } catch (err) {
     getLog().warn(

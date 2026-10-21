@@ -309,6 +309,9 @@ export function createMockStore(): MockWorkflowStore {
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
       mockWorkflowRun()
     ),
+    recordCompletedWorktreeRetention: mock<IWorkflowStore['recordCompletedWorktreeRetention']>(
+      async () => undefined
+    ),
     updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
       async () => true
     ),

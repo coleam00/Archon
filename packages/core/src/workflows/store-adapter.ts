@@ -186,6 +186,7 @@ export function createWorkflowStore(): IWorkflowStore {
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,
+    recordCompletedWorktreeRetention: workflowDb.recordCompletedWorktreeRetention,
     updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
     getWorkflowRunStatus: workflowDb.getWorkflowRunStatus,

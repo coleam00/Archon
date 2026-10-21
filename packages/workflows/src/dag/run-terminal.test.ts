@@ -1154,6 +1154,11 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
 
     expect(order).toEqual(['assess', 'complete', 'release']);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.recordCompletedWorktreeRetention).toHaveBeenCalledWith('release-run-id', {
+      disposition: 'retained',
+      reason: 'check_failed',
+      detail: expect.stringContaining('uncommitted_changes'),
+    });
   });
 
   it('completes the run without a disposition when the run cannot be re-read', async () => {

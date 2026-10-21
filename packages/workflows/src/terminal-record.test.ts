@@ -15,6 +15,7 @@ import {
 import {
   RUN_GRAPH_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
+  type WorktreeDisposition,
 } from './schemas/terminal-record';
 
 const roots: string[] = [];
@@ -418,5 +419,40 @@ describe('durable terminal projection', () => {
         [WORKTREE_DISPOSITION_METADATA_KEY]: { disposition: 'release' },
       })
     ).toBeUndefined();
+  });
+  it('reports a post-completion cleanup refusal without another completion event', async () => {
+    const record = await buildTerminalRecord({
+      run: {
+        ...run,
+        status: 'completed',
+        metadata: {
+          owned_worktree: { envId: 'env-1', creationId: '00000000-0000-4000-8000-000000000001' },
+          worktree_disposition: { disposition: 'release' },
+        },
+      },
+      events: [],
+    });
+    expect(record.worktree_disposition).toEqual({ disposition: 'release' });
+    const retained = {
+      disposition: 'retained',
+      reason: 'check_failed',
+      detail: 'Retained checkout /checkout: new local work',
+    } satisfies WorktreeDisposition;
+    const events = [
+      { event_type: 'workflow_completed', data: { terminal_record: record } },
+      { event_type: 'workflow_cleanup_warning', data: { warnings: ['unrelated cleanup'] } },
+      {
+        event_type: 'workflow_cleanup_warning',
+        data: { warnings: [retained.detail], worktree_disposition: retained },
+      },
+    ];
+    expect(getTerminalRecord('completed', events)?.worktree_disposition).toEqual(retained);
+    expect(getTerminalRecord('running', events)).toBeNull();
+    expect(
+      getTerminalRecord('completed', [
+        ...events,
+        { event_type: 'workflow_completed', data: { terminal_record: record } },
+      ])?.worktree_disposition
+    ).toEqual({ disposition: 'release' });
   });
 });

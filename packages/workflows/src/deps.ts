@@ -252,7 +252,8 @@ export interface WorkflowDeps {
    * the run has no proof it created its checkout, and reports a failed check as a
    * `check_failed` retention instead of throwing. `release` runs only after the
    * completion write commits and only for a `release` disposition; it re-checks under
-   * the worktree lock and throws when it refuses, which the engine logs and ignores.
+   * the worktree lock and throws when it refuses. The engine records that retention
+   * without changing the completed status.
    */
   completedRunWorktree?: {
     assess(run: WorkflowRun): Promise<WorktreeDisposition | null>;

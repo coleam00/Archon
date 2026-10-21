@@ -837,9 +837,15 @@ that can still claim it, or a commit its pull request did not carry stays and is
 to keep worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 
-A worktree that never opened a pull request is not its concern. A completed run removes
-its own worktree when the checkout is clean, every commit is on a remote, and the branch
-was never published; otherwise the run's terminal record says why it stayed.
+A worktree that never opened a pull request is not its concern. A completed CLI run
+removes only the checkout it created on its generated run branch, when clean and every
+HEAD and branch commit is reachable from a remote ref. Publication does not keep that
+checkout; completion keeps its local branch for adoption. Explicit named branches,
+including each build item's branch, survive completion until merged or closed cleanup.
+Failed runs retain their checkout for resume. Adopted checkouts and historical detached
+registrations that cannot establish generated ownership stay; inspect them with
+`archon isolation list` and use explicit cleanup when their work is finished. The run's
+terminal record explains retention.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
 installs that run only the CLI. The pack installs no binding. A native schedule starts a

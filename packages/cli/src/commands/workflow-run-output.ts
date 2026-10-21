@@ -1,3 +1,7 @@
+import {
+  WORKTREE_DISPOSITION_METADATA_KEY,
+  worktreeDispositionSchema,
+} from '@archon/workflows/schemas/terminal-record';
 import { formatDuration } from '@archon/paths/duration';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
@@ -178,6 +182,7 @@ export async function presentRunResult(
       console.log('\nWorkflow completed successfully.');
     }
     printRunUsage(run);
+    printRetainedWorktree(run);
   } else {
     if (result.workflowRunId !== undefined)
       printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
@@ -185,6 +190,17 @@ export async function presentRunResult(
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   }
   return undefined;
+}
+
+function printRetainedWorktree(run: WorkflowRun | null): void {
+  const disposition = worktreeDispositionSchema.safeParse(
+    run?.metadata[WORKTREE_DISPOSITION_METADATA_KEY]
+  );
+  if (run?.working_path && disposition.success && disposition.data.disposition === 'retained') {
+    console.warn(
+      `Warning: ${disposition.data.detail ?? `Retained checkout ${run.working_path}: ${disposition.data.reason}. Inspect it with archon isolation list before explicit cleanup.`}`
+    );
+  }
 }
 
 async function readRunForPresentation(

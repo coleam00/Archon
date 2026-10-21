@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { getGitCheckoutIdentity, readWorktreeLock, toRepoPath, toBranchName } from '@archon/git';
 import {
+  generatedTaskBranchName,
   IsolationResolver,
   WorktreeProvider,
   WorktreeRegistrationChangedError,
@@ -602,6 +603,12 @@ describe('completed run worktree release', () => {
   };
 
   beforeEach(async () => {
+    setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+    env.created_by_platform = 'cli';
+    await db.query(
+      "UPDATE remote_agent_isolation_environments SET created_by_platform = 'cli' WHERE id = $1",
+      [env.id]
+    );
     await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
     await mkdir(join(repo, '.archon'));
     await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
@@ -626,6 +633,7 @@ describe('completed run worktree release', () => {
           working_path: env.working_path,
           branch_name: toBranchName(env.branch_name),
           metadata: env.metadata,
+          created_by_platform: 'cli',
         });
         run.metadata = {
           owned_worktree: { envId: env.id, creationId: env.metadata.worktree_creation_id },
@@ -658,7 +666,7 @@ describe('completed run worktree release', () => {
       );
       try {
         await releaseCompletedRunWorktree(completed, registrationStore, readers());
-        expect(networkClaims).toEqual([false]);
+        expect(networkClaims).toEqual([]);
       } finally {
         exec.mockRestore();
       }
@@ -666,6 +674,61 @@ describe('completed run worktree release', () => {
       expect(existsSync(env.working_path)).toBe(false);
       expect((await target.getById(env.id))?.status).toBe('destroyed');
       expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+    }
+  );
+
+  test.each(['sql', 'file'] as const)(
+    '%s: a refused completion removal records retention atomically',
+    async persistence => {
+      const host =
+        persistence === 'file'
+          ? await (await import('../workflows/file-host')).createFileWorkflowHost(
+              join(root, 'retention-store')
+            )
+          : undefined;
+      const workflowStore =
+        host?.deps.store ?? (await import('../workflows/store-adapter')).createWorkflowStore();
+      const row = await workflowStore.createWorkflowRun({
+        workflow_name: 'release',
+        user_message: '',
+        working_path: env.working_path,
+        metadata: run.metadata,
+      });
+      await workflowStore.claimPendingWorkflowRun(row.id);
+      const retained = {
+        disposition: 'retained' as const,
+        reason: 'check_failed' as const,
+        detail: `Retained checkout ${env.working_path}: local work appeared`,
+      };
+      await expect(
+        workflowStore.recordCompletedWorktreeRetention(row.id, retained)
+      ).rejects.toThrow('requires a completed run');
+      expect(
+        (await workflowStore.listWorkflowEvents(row.id)).filter(
+          event => event.event_type === 'workflow_cleanup_warning'
+        )
+      ).toHaveLength(0);
+      await workflowStore.completeWorkflowRun(
+        row.id,
+        { duration_ms: 1 },
+        { worktree_disposition: { disposition: 'release' } }
+      );
+      await workflowStore.recordCompletedWorktreeRetention(row.id, retained);
+      const current = await workflowStore.getWorkflowRun(row.id);
+      const events = await workflowStore.listWorkflowEvents(row.id);
+      expect(current?.status).toBe('completed');
+      expect(current?.metadata.worktree_disposition).toEqual(retained);
+      expect(events.filter(event => event.event_type === 'workflow_completed')).toHaveLength(1);
+      expect(
+        events
+          .filter(event => event.event_type === 'workflow_cleanup_warning')
+          .map(event => event.data.warnings)
+      ).toEqual([[retained.detail]]);
+      expect(
+        (await import('@archon/workflows/terminal-record')).getTerminalRecord('completed', events)
+          ?.worktree_disposition
+      ).toEqual(retained);
+      expect(existsSync(env.working_path)).toBe(true);
     }
   );
 
@@ -683,14 +746,20 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({ disposition: 'retained', reason: 'uncommitted_changes' });
   });
 
-  test('a branch published to the configured remote waits for the merged sweep', async () => {
+  test('a published generated branch releases the checkout, keeping the branch', async () => {
     await commitInWorktree();
     await git(env.working_path, 'push', '-q', 'upstream', `HEAD:refs/heads/${env.branch_name}`);
     await git(repo, 'fetch', '-q', 'upstream');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+    expect(await assess()).toEqual({ disposition: 'release' });
+    await releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+    expect(await git(repo, 'ls-remote', 'upstream', `refs/heads/${env.branch_name}`)).toContain(
+      env.branch_name
+    );
   });
 
-  test('a published branch with no remote-tracking ref still waits for the merged sweep', async () => {
+  test('a published branch needs no matching remote-tracking ref when its commits are already reachable', async () => {
     await git(
       env.working_path,
       'push',
@@ -701,12 +770,76 @@ describe('completed run worktree release', () => {
     // Git on Windows matches the path to the upstream URL and writes the tracking ref anyway.
     await git(repo, 'update-ref', '-d', `refs/remotes/upstream/${env.branch_name}`);
     expect(await git(repo, 'branch', '-r', '--list', `upstream/${env.branch_name}`)).toBe('');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+    expect(await assess()).toEqual({ disposition: 'release' });
   });
 
-  test('a remote that cannot be read keeps the checkout', async () => {
+  test('completion does not need the network when remote-tracking refs cover the commits', async () => {
     await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));
-    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+    expect(await assess()).toEqual({ disposition: 'release' });
+  });
+
+  test.each([
+    'named',
+    'historical-detached',
+    'explicit-fixed-point',
+    'adopted',
+    'unknown-adoption',
+    'existing-branch',
+    'non-cli',
+    'non-task',
+    'continuation',
+  ] as const)('%s registration cannot authorize generated completion cleanup', async kind => {
+    if (kind === 'named') {
+      await git(env.working_path, 'branch', '-m', 'build/4856');
+      env.workflow_id = env.branch_name = 'build/4856';
+    }
+    if (kind === 'historical-detached') env.workflow_id = env.branch_name;
+    if (kind === 'explicit-fixed-point') {
+      let branch = 'topic';
+      for (let i = 0; i < 12; i++) branch = generatedTaskBranchName(branch);
+      expect(generatedTaskBranchName(branch)).toBe(branch);
+      await git(env.working_path, 'branch', '-m', branch);
+      env.workflow_id = env.branch_name = branch;
+    }
+    if (kind === 'adopted') env.metadata.adopted = true;
+    if (kind === 'unknown-adoption') delete env.metadata.adopted;
+    if (kind === 'existing-branch') env.metadata.worktree_branch_created = false;
+    if (kind === 'non-cli') env.created_by_platform = null;
+    if (kind === 'non-task') env.workflow_type = 'review';
+    if (kind === 'continuation') run.adopted_from_run_id = 'prior-run';
+    const observed = { ...store, getById: async () => env };
+    const completed = { ...run, status: 'completed' as const };
+    expect(await assessCompletedRunWorktree(completed, observed, readers())).toMatchObject({
+      disposition: 'retained',
+      reason: 'workspace_retained',
+      detail: expect.stringContaining('explicit isolation cleanup'),
+    });
+    await expect(releaseCompletedRunWorktree(completed, observed, readers())).rejects.toThrow(
+      'workspace_retained'
+    );
+    expect(existsSync(env.working_path)).toBe(true);
+  });
+
+  test('a remotely reachable detached HEAD can release its generated checkout', async () => {
+    await git(env.working_path, 'checkout', '--detach', '-q');
+    expect(await assess()).toEqual({ disposition: 'release' });
+    await releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers());
+    expect(existsSync(env.working_path)).toBe(false);
+  });
+
+  test('a detached HEAD with unique commits is retained even when the registered branch is safe', async () => {
+    await git(env.working_path, 'checkout', '--detach', '-q');
+    await commitInWorktree();
+    expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'unpushed_commits' });
+  });
+
+  test('a different checked-out branch cannot authorize removal', async () => {
+    await git(env.working_path, 'checkout', '-qb', 'operator-work');
+    expect(await assess()).toMatchObject({
+      disposition: 'retained',
+      reason: 'check_failed',
+      detail: expect.stringContaining('operator-work'),
+    });
   });
 
   test('the completing run does not hold its own checkout, another claimable run does', async () => {

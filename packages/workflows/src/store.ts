@@ -1,3 +1,4 @@
+import type { WorktreeDisposition } from './schemas/terminal-record';
 import { WORKTREE_SETUP_EVENT_TYPES } from './schemas/worktree-setup';
 import { PAUSE_CAUSE_METADATA_KEY, type PauseCause } from './schemas/pause-cause';
 import type { IStateDocumentStore } from './state-document-store';
@@ -903,16 +904,9 @@ export interface IWorkflowStore
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
-   * `output_root` (#2200) is write-once: the executor sets it at run start only
-   * when the persisted value is null. Re-writing it on resume would re-derive
-   * the path from a possibly-renamed codebase and orphan the run's artifacts,
-   * defeating the whole point of persisting it.
-   *
-   * `working_path` (#2872) is write-once for the same reason and exists for the
-   * same shape: a row created before its checkout was decided. `run --detach`
-   * creates the row in the launching process — so `Started` means a queryable
-   * run — and forks before any worktree exists, so the child fills the path in
-   * once it has one. Every other caller supplies it at creation.
+   * output_root and working_path are write-once. Re-deriving output_root after a
+   * codebase rename would orphan artifacts. A detached launcher creates a queryable
+   * row before checkout provisioning; its child fills working_path once resolved.
    */
   updateWorkflowRun(
     id: string,
@@ -921,6 +915,11 @@ export interface IWorkflowStore
       outcome?: WorkflowRunOutcome;
       working_path?: string;
     }
+  ): Promise<void>;
+  /** Record a refused post-completion removal together with its durable retention event. */
+  recordCompletedWorktreeRetention(
+    id: string,
+    disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
   ): Promise<void>;
   /** Atomically merge metadata only while running; false means nothing was written. */
   updateWorkflowRunMetadataIfRunning(

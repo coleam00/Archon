@@ -105,6 +105,31 @@ describe('workflowRunCommand — progress rendering', () => {
     }
   }
 
+  it('prints one retained-checkout warning for a successful manual run', async () => {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    executeWorkflow.mockResolvedValueOnce({ success: true, workflowRunId: 'retained-run' });
+    const detail =
+      'Retained checkout /checkout: unpushed_commits. Inspect it with archon isolation list before explicit cleanup.';
+    workflowDb.getWorkflowRun.mockResolvedValueOnce({
+      id: 'retained-run',
+      status: 'completed',
+      working_path: '/checkout',
+      metadata: {
+        worktree_disposition: { disposition: 'retained', reason: 'unpushed_commits', detail },
+      },
+    });
+    const warning = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledWith(`Warning: ${detail}`);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stderrSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);

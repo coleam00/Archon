@@ -4,6 +4,11 @@
  * write-back claim, and deleting terminal runs. Re-exported from the
  * `./workflows` entry.
  */
+import { completedWorktreeRetentionEvent } from '@archon/workflows/terminal-record';
+import {
+  WORKTREE_DISPOSITION_METADATA_KEY,
+  type WorktreeDisposition,
+} from '@archon/workflows/schemas/terminal-record';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 import {
@@ -164,6 +169,21 @@ export async function updateWorkflowRun(
     getLog().error({ err }, 'db.workflow_run_update_failed');
     throw new Error(`Failed to update workflow run: ${err.message}`);
   }
+}
+
+export async function recordCompletedWorktreeRetention(
+  id: string,
+  disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
+): Promise<void> {
+  await getDatabase().withTransaction(async query => {
+    const row = await lockedRunRow(query, id);
+    if (row?.status !== 'completed') throw new Error('Worktree retention requires a completed run');
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)} WHERE id = $1`,
+      [id, JSON.stringify({ [WORKTREE_DISPOSITION_METADATA_KEY]: disposition })]
+    );
+    await insertWorkflowEvent(query, completedWorktreeRetentionEvent(id, disposition));
+  });
 }
 
 export async function updateWorkflowRunMetadataIfRunning(

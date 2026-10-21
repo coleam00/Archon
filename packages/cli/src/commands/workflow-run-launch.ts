@@ -444,7 +444,12 @@ async function bindResumableRun(
   const allEnvs = await host.records.isolation.listByCodebase(codebase.id);
   const matchingEnv = allEnvs.find(e => e.working_path === workspace.workingCwd);
   if (matchingEnv) {
-    await recordWorktreeAdoption(host.records.isolation, matchingEnv, codebase.default_cwd);
+    if (matchingEnv.provider === 'worktree') {
+      await git.verifyWorktreeOwnership(
+        git.toWorktreePath(matchingEnv.working_path),
+        git.toRepoPath(codebase.default_cwd)
+      );
+    }
     workspace.isolationEnvId = matchingEnv.id;
     getLog().info(
       { envId: workspace.isolationEnvId, workingPath: workspace.workingCwd },

@@ -10,6 +10,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
 import {
+  generatedTaskBranchName,
   readWorktreeBranchCreated,
   readWorktreeCreationId,
   WorktreeLeftoverError,
@@ -30,6 +31,7 @@ import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
+  getCurrentBranchStrict,
   hasUncommittedChangesStrict,
   isWorktreeRegistered,
   worktreeExists,
@@ -37,7 +39,6 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
-  inspectRemoteBranches,
   isRevCoveredBy,
   countCommitsMissingFromRemotes,
   getLastCommitDate,
@@ -1339,7 +1340,6 @@ export interface WorktreeOwnershipReaders {
   getLiveRunOwningEnv: typeof isolationEnvDb.getLiveRunOwningEnv;
 }
 
-/** The isolation record and repository behind a run's creation proof; throws when they disagree. */
 async function resolveOwnedWorktree(
   run: WorkflowRun,
   proof: OwnedWorktree,
@@ -1381,26 +1381,39 @@ async function judgeLocalCompletedWorktree(
   return { disposition: 'release' };
 }
 
-async function judgePublishedBranch(
-  env: IsolationEnvironmentRow,
-  repo: RepoPath
+async function verifyCompletedOwnership(
+  run: WorkflowRun,
+  env: IsolationEnvironmentRow
 ): Promise<WorktreeDisposition> {
-  // Ask the remote: a push by URL or refspec need not leave a remote-tracking ref.
-  const remote = configuredRemote(await loadRepoConfig(repo));
-  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath: repo, remote });
-  if (advertised.status === 'unavailable') {
-    throw new Error(`cannot read branches on remote '${remote}': ${advertised.evidence}`);
+  // Slug truncation has fixed points; named-branch identity needs its own exclusion.
+  if (
+    retainsWorkspace(env.created_by_platform) ||
+    env.created_by_platform !== 'cli' ||
+    env.workflow_type !== 'task' ||
+    !readWorktreeBranchCreated(env.metadata) ||
+    env.metadata.adopted !== false ||
+    run.adopted_from_run_id !== null ||
+    env.workflow_id === env.branch_name ||
+    env.branch_name !== generatedTaskBranchName(env.workflow_id)
+  ) {
+    return {
+      disposition: 'retained',
+      reason: 'workspace_retained',
+      detail:
+        'This registration does not establish an original generated run branch. Inspect the checkout and use explicit isolation cleanup when its work is finished.',
+    };
   }
-  if (advertised.branches.includes(toBranchName(env.branch_name))) {
-    return { disposition: 'retained', reason: 'published_branch' };
+
+  if (await worktreeExists(toWorktreePath(env.working_path))) {
+    const branch = await getCurrentBranchStrict(toWorktreePath(env.working_path));
+    if (branch !== null && branch !== env.branch_name) {
+      throw new Error(`checkout is on ${branch}, expected ${env.branch_name}`);
+    }
   }
   return { disposition: 'release' };
 }
 
-/**
- * Decide what happens to the worktree a completed run created. Null when the run has
- * no creation proof; a failed check is reported as a retention, never thrown.
- */
+/** Without creation proof there is no disposal decision; failed checks retain the checkout. */
 export async function assessCompletedRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
@@ -1410,9 +1423,8 @@ export async function assessCompletedRunWorktree(
   if (!proof || run.metadata?.isolation === 'container') return null;
   try {
     const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
-    if (retainsWorkspace(env.created_by_platform)) {
-      return { disposition: 'retained', reason: 'workspace_retained' };
-    }
+    const ownership = await verifyCompletedOwnership(run, env);
+    if (ownership.disposition !== 'release') return ownership;
     // The completing run is still claimable here; release refuses any other claimant.
     const user = await readers.getLiveRunOwningEnv(env.id, undefined, run.id);
     if (user) {
@@ -1422,36 +1434,28 @@ export async function assessCompletedRunWorktree(
         detail: `run ${user.id} (${user.status})`,
       };
     }
-    const local = await judgeLocalCompletedWorktree(env, repo);
-    return local.disposition === 'release' ? await judgePublishedBranch(env, repo) : local;
+    return await judgeLocalCompletedWorktree(env, repo);
   } catch (err) {
     getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
     return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
   }
 }
 
-/**
- * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
- * Remote inspection precedes the registration claim; local checks run under the worktree lock.
- */
+/** Completion keeps the local branch for adoption; safety checks repeat under the lock. */
 export async function releaseCompletedRunWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders
 ): Promise<void> {
-  const result = await reclaimOwnedWorktree(run, store, readers, {
-    beforeClaim: async (env, repo) => {
-      const disposition = await judgePublishedBranch(env, repo);
-      if (disposition.disposition !== 'release') {
-        throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
-      }
-    },
-    beforeRemove: async (env, repo) => {
-      const disposition = await judgeLocalCompletedWorktree(env, repo);
-      if (disposition.disposition !== 'release') {
-        throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
-      }
-    },
+  const result = await reclaimOwnedWorktree(run, store, readers, async (env, repo) => {
+    const ownership = await verifyCompletedOwnership(run, env);
+    if (ownership.disposition !== 'release') {
+      throw new Error(`worktree is no longer releasable: ${ownership.reason}`);
+    }
+    const disposition = await judgeLocalCompletedWorktree(env, repo);
+    if (disposition.disposition !== 'release') {
+      throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
+    }
   });
   if (result.warnings.length > 0) {
     getLog().warn(
@@ -1465,10 +1469,7 @@ async function reclaimOwnedWorktree(
   run: WorkflowRun,
   store: IIsolationStore,
   readers: WorktreeOwnershipReaders,
-  verify?: {
-    beforeClaim: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>;
-    beforeRemove: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>;
-  }
+  beforeRemove?: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>
 ): Promise<RunWorktreeRelease> {
   const proof = readOwnedWorktree(run.metadata);
   if (!proof) {
@@ -1505,7 +1506,6 @@ async function reclaimOwnedWorktree(
   }
   if (env.status === 'destroyed')
     return refuse('a path exists for an already destroyed environment');
-  await verify?.beforeClaim(env, repo);
   const user = await readers.getLiveRunOwningEnv(env.id);
   if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
   return store.withWorktreeRegistration(env, async markDestroyed => {
@@ -1514,7 +1514,7 @@ async function reclaimOwnedWorktree(
       guardedRemoval: {
         creationId: proof.creationId,
         beforeRemove: async () => {
-          await verify?.beforeRemove(env, repo);
+          await beforeRemove?.(env, repo);
           await markDestroyed();
         },
       },

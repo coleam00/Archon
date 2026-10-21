@@ -118,6 +118,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     claimPendingWorkflowRun: async () => makeRun(),
     recordWorkflowRunCheckoutBaseline: async (_id, baseline) => baseline,
     updateWorkflowRun: noop,
+    recordCompletedWorktreeRetention: noop,
     failWorkflowRun: async () => ({ failed: true }),
     getWorkflowRun: async () => ({ ...makeRun(), status: 'completed' as const }),
     getWorkflowRunStatus: async () => 'completed' as const,
