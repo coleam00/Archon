@@ -84,6 +84,8 @@ Unreadable-source suspension uses a one-second Docker stop grace and a two-secon
 
 Resume acquisition and suspension of an ordinary DAG or write-back pause exclude one another. If resume acquires the run first, old cleanup skips suspension. Otherwise resume cannot acquire the next execution claim until suspension settles. This holds the SQL run lock (SQLite writer reservation) or file-store lock during Docker work. Another file-store process may reach its existing ten-second lock acquisition timeout and must retry; a timeout does not grant ownership.
 
+If a required node-state write fails after a pause is published, execution reports an error and retains the pause. Resume refuses a paused run with an unfinished leaf node that has no durable completion or suspension record, since replay could repeat side effects. If the old execution is still settling, retry after it finishes; if the write failed, inspect and repair the missing state before resuming.
+
 Stopping is best-effort: a backend failure is logged and reported to the operator, and the run stays paused for retry. No `container_stopped` event is emitted on failure; the container may keep consuming resources until resume or teardown.
 
 Container pauses are only resumable **from the CLI**, where the Docker backend is wired. Approving or rejecting a container run from chat or the Web UI records the decision but cannot continue the container. The run stays paused until you run `archon workflow resume <run-id>` from the CLI in the same project. Do not re-send the decision: the gate is already resolved.

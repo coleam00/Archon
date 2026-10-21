@@ -10,7 +10,12 @@ import {
   readSourceRelease,
   reRunsOwnNodeOnResume,
 } from './schemas';
-import type { PersistedNodeOutput, PriorFailedNode, WorkflowResumeCursor } from './store';
+import type {
+  DagResumeSnapshot,
+  PersistedNodeOutput,
+  PriorFailedNode,
+  WorkflowResumeCursor,
+} from './store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -57,12 +62,32 @@ export interface ResumeStoreDeps {
   >;
 }
 
+function assertSettledPause(candidate: WorkflowRun, snapshot: DagResumeSnapshot): void {
+  if (candidate.status !== 'paused' || readSourceRelease(candidate.metadata) !== undefined) return;
+  for (const [path, execution] of snapshot.unfinishedInvocations ?? []) {
+    if (execution.lifecycle.status !== 'started') continue;
+    // These containers recover from their durable body/child plans; leaves cannot
+    // distinguish an in-flight operation from a lost completion write.
+    if (
+      execution.node.kind === 'loop_group' ||
+      execution.node.kind === 'workflow' ||
+      execution.node.kind === 'compose_fan_out' ||
+      execution.node.kind === 'compose_fan_out_instance'
+    )
+      continue;
+    throw new Error(
+      `Cannot resume paused run ${candidate.id}: node '${path}' has no durable completion or suspension record. Its execution may still be settling or its state write failed.`
+    );
+  }
+}
+
 /** Read whether a candidate has state worth resuming without claiming or mutating it. */
 export async function inspectResumableRun(
   deps: ResumeStoreDeps,
   candidate: WorkflowRun
 ): Promise<ResumableRunInspection | null> {
   const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);
+  assertSettledPause(candidate, snapshot);
   const priorCompletedNodes = snapshot.completedNodeOutputs;
   const rawApproval = candidate.metadata?.approval;
   const approvalContext = isApprovalContext(rawApproval) ? rawApproval : undefined;

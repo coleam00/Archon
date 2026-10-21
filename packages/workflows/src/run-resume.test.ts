@@ -13,6 +13,8 @@ mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => m
 
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
+import { newNodeInvocation, startNodeExecution } from './node-execution';
+import type { NodeDescriptor } from './schemas/node-execution';
 import type { DagResumeSnapshot } from './store';
 
 type ResumeStore = ResumeStoreDeps['store'];
@@ -60,6 +62,77 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 describe('hydrateResumableRun', () => {
+  const leafNodes: NodeDescriptor[] = [
+    { id: 'leaf', kind: 'agent', source: { kind: 'inline' } },
+    ...(['sh', 'bun', 'uv'] as const).map(runtime => ({
+      id: 'leaf',
+      kind: 'exec' as const,
+      runtime,
+    })),
+    { id: 'leaf', kind: 'gate' },
+    { id: 'leaf', kind: 'wait' },
+    { id: 'leaf', kind: 'loop' },
+    { id: 'leaf', kind: 'halt' },
+  ];
+  const recoveringNodes: NodeDescriptor[] = [
+    { id: 'group', kind: 'loop_group' },
+    { id: 'child', kind: 'workflow' },
+    { id: 'fanout', kind: 'workflow', fanOut: true },
+    { id: 'compose', kind: 'compose_fan_out' },
+    { id: 'instance', kind: 'compose_fan_out_instance' },
+  ];
+  for (const node of [...leafNodes, ...recoveringNodes]) {
+    it.each(['started', 'suspended', 'failed'] as const)(
+      `checks unfinished ${JSON.stringify(node)} before claiming: %s`,
+      async status => {
+        const execution = startNodeExecution({
+          runId: 'run-123',
+          path: node.id,
+          node: { id: 'leaf', kind: 'agent', source: { kind: 'inline', prompt: 'Work' } },
+          invocation: newNodeInvocation(),
+        });
+        const snapshot: DagResumeSnapshot = {
+          completedNodeOutputs: new Map([['done', { output: 'Done' }]]),
+          failedNodes: new Map(),
+          fanOutSnapshots: new Map(),
+          unresolvedNodeStarts: new Set(),
+          budget: { workUnits: 0, spendUsd: 0 },
+          unfinishedInvocations: new Map([
+            [
+              node.id,
+              {
+                ...execution,
+                node,
+                lifecycle:
+                  status === 'suspended'
+                    ? { status, point: 'wait' }
+                    : status === 'failed'
+                      ? { status, error: 'failed' }
+                      : { status },
+              },
+            ],
+          ]),
+        };
+        const candidate = makeRun({ status: 'paused' });
+        const store = makeStore({
+          getDagResumeSnapshot: mock(async () => snapshot),
+          resumeWorkflowRun: mock(async () => makeRun()),
+        });
+        if (status === 'started' && leafNodes.includes(node)) {
+          await expect(hydrateResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+            'no durable completion or suspension record'
+          );
+          expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+          // Explicit failed-run retries retain their existing behavior.
+          expect(
+            await hydrateResumableRun(makeDeps(store), { ...candidate, status: 'failed' })
+          ).not.toBeNull();
+        } else {
+          expect(await hydrateResumableRun(makeDeps(store), candidate)).not.toBeNull();
+        }
+      }
+    );
+  }
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);

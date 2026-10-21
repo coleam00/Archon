@@ -536,6 +536,9 @@ export async function executeWorkflow(
       if (dagResult.kind === 'source_release' && dagResult.released)
         return { success: true, paused: true, workflowRunId: workflowRun.id };
     }
+    if (typeof dagResult === 'object' && dagResult.kind === 'container_pause' && dagResult.error) {
+      return { success: false, workflowRunId: workflowRun.id, error: dagResult.error };
+    }
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { NodeEventWriteError } from './node-event-write';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -93,7 +94,10 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
 ): Promise<
-  string | undefined | { kind: 'source_release'; released: boolean } | { kind: 'container_pause' }
+  | string
+  | undefined
+  | { kind: 'source_release'; released: boolean }
+  | { kind: 'container_pause'; error?: string }
 > {
   const {
     deps,
@@ -309,13 +313,9 @@ export async function executeDagWorkflow(
    * *completed* children. With `all_done` the default join, that made partial failure
    * — the ordinary case — under-report with no warning.
    *
-   * Every disposition below (container pause, external cancel/pause, the two failure
-   * branches, the evidence gate, the write-back gate, completion) is reached from the
-   * one point where the accumulators are settled and identical, so the write belongs
-   * HERE rather than in each of them. It goes through `updateWorkflowRun`, not the
-   * terminal writers, because that merge carries no `WHERE status = 'running'` guard
-   * and so still lands on a row another process has already flipped to `cancelled`.
-   * Same ordering as the evidence gate: metadata first, terminal status after.
+   * Exceptional nested exits rebuild usage from durable events because their body
+   * accumulators may not have reached the parent. Metadata writes also retain spend
+   * after an external pause or cancellation without changing the run's status.
    *
    * Best-effort by design — a bookkeeping write must not fail an otherwise-fine run —
    * but never silent: the whole defect was a number quietly going missing.
@@ -456,6 +456,20 @@ export async function executeDagWorkflow(
     return true;
   };
 
+  const refreshRunUsage = async (): Promise<void> => {
+    try {
+      const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+      runCtx.totalCostUsd = durable.costUsd;
+      runCtx.totalTokens = durable.tokens;
+      runCtx.totalTokensUnknown = durable.tokensUnknown;
+    } catch (readError) {
+      getLog().error(
+        { err: readError, workflowRunId: workflowRun.id },
+        'dag.unwind_usage_refresh_failed'
+      );
+    }
+  };
+
   const recoverLayerFailure = async (
     error: unknown
   ): Promise<RunSourceUnreadableError | 'budget_refused'> => {
@@ -467,19 +481,7 @@ export async function executeDagWorkflow(
     // fails the run here instead of propagating. An unreadable source escapes it too; the
     // run is released below after persisting the settled usage and outcome.
     if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
-      // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
-      try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        runCtx.totalCostUsd = durable.costUsd;
-        runCtx.totalTokens = durable.tokens;
-        runCtx.totalTokensUnknown = durable.tokensUnknown;
-      } catch (readError) {
-        getLog().error(
-          { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.unwind_usage_refresh_failed'
-        );
-      }
+      await refreshRunUsage();
     }
     if (error instanceof RunSourceUnreadableError) {
       return error;
@@ -502,6 +504,7 @@ export async function executeDagWorkflow(
   };
 
   await persistAuthoredOutcome();
+  let pauseError: string | undefined;
   // Publication belongs to this segment even when a nested walker or later hook throws.
   let pausePublished = false;
   let layerStop: Awaited<ReturnType<typeof runLayers>>;
@@ -545,6 +548,9 @@ export async function executeDagWorkflow(
       { err: error, workflowRunId: workflowRun.id },
       'dag.execution_error_after_pause'
     );
+    await refreshRunUsage();
+    await persistRunUsage();
+    if (error instanceof NodeEventWriteError) pauseError = error.message;
     layerStop = 'paused';
   }
 
@@ -561,7 +567,10 @@ export async function executeDagWorkflow(
         workflowRun.id,
         executionClaim(workflowRun.metadata)
       );
-      return { kind: 'container_pause' };
+      return {
+        kind: 'container_pause',
+        ...(pauseError !== undefined ? { error: pauseError } : {}),
+      };
     }
   }
 

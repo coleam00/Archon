@@ -15,6 +15,7 @@ import {
 } from './dag/test-utils';
 import { createFileWorkflowStore } from './file-store/store';
 import { executeWorkflow } from './executor';
+import { hydrateResumableRun } from './run-resume';
 import { resolveWorkflow } from './graph-plan';
 import { workflowDefinitionSchema, type WorkflowRun } from './schemas';
 import { approvalContextSchema } from './schemas/workflow-run';
@@ -226,6 +227,11 @@ describe('container pause segment ownership through the executor', () => {
               expect(events.filter(e => e.event_type === 'loop_iteration_started')).toHaveLength(2);
               expect(completion).not.toHaveBeenCalled();
             }
+            if (order === 'read-failure' && row) {
+              expect((await hydrateResumableRun({ store: f.store }, row)) === null).toBe(
+                'approval' in suspension
+              );
+            }
           } finally {
             completion.mockRestore();
             f.unsubscribe();
@@ -244,7 +250,13 @@ describe('container pause segment ownership through the executor', () => {
       async resume => {
         const transport = stubMissingContainer();
         mockSendQueryDag.mockImplementation(async function* () {
-          yield { type: 'result', sessionId: 'verdict-session', structuredOutput: { green: true } };
+          yield {
+            type: 'result',
+            sessionId: 'verdict-session',
+            structuredOutput: { green: true },
+            cost: 0.25,
+            tokens: { input: 100, output: 10 },
+          };
         });
         const error = new Error('outcome write unavailable after pause');
         const f = await setup(
@@ -290,6 +302,11 @@ describe('container pause segment ownership through the executor', () => {
           });
           expect(published).toBe(true);
           const row = await f.store.getWorkflowRun(f.run.id);
+          expect(row?.metadata).toMatchObject({
+            total_cost_usd: 0.25,
+            total_tokens_in: 100,
+            total_tokens_out: 10,
+          });
           expect(row?.status).toBe(resume ? 'running' : 'paused');
           expect(executionClaim(row?.metadata ?? {})).toBe(
             executionClaim((successor ?? f.run).metadata)
@@ -330,14 +347,30 @@ describe('container pause segment ownership through the executor', () => {
     it.each([false, true])(
       `post-publication wait event failure (nested=${nested}, resume=%s) preserves the segment`,
       async resume => {
-        const leaf = { id: 'review', wait: { duration_ms: 3_600_000 } };
+        const transport = stubMissingContainer();
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Paid work' };
+          yield {
+            type: 'result',
+            sessionId: 'paid-session',
+            cost: 0.25,
+            tokens: { input: 100, output: 10 },
+          };
+        });
+        const paid = { id: 'paid', prompt: 'Paid work' };
+        const leaf = { id: 'review', depends_on: ['paid'], wait: { duration_ms: 3_600_000 } };
         const pauseNode = nested
           ? {
               id: 'group',
-              loop_group: { max_iterations: 2, until_bash: 'echo MUST_NOT_RUN', nodes: [leaf] },
+              loop_group: {
+                max_iterations: 2,
+                until_bash: 'echo MUST_NOT_RUN',
+                nodes: [paid, leaf],
+              },
             }
           : leaf;
         const f = await setup('ordinary', [
+          ...(nested ? [] : [paid]),
           pauseNode,
           { id: 'after', bash: 'echo MUST_NOT_RUN', depends_on: [pauseNode.id] },
         ]);
@@ -364,7 +397,21 @@ describe('container pause segment ownership through the executor', () => {
           expect(executionClaim(row?.metadata ?? {})).toBe(
             executionClaim((successor ?? f.run).metadata)
           );
-          expect(result).toMatchObject({ success: true, paused: true });
+          expect(result).toMatchObject({
+            success: false,
+            error: expect.stringContaining('node_suspended'),
+          });
+          expect(row?.metadata).toMatchObject({
+            total_cost_usd: 0.25,
+            total_tokens_in: 100,
+            total_tokens_out: 10,
+          });
+          if (!resume && row) {
+            await expect(hydrateResumableRun({ store: f.store }, row)).rejects.toThrow(
+              'no durable completion or suspension record'
+            );
+            expect((await f.store.getWorkflowRun(f.run.id))?.status).toBe('paused');
+          }
           expect(f.stop).toHaveBeenCalledTimes(resume ? 0 : 1);
           const events = await f.store.listWorkflowEvents(f.run.id);
           expect(
@@ -375,6 +422,12 @@ describe('container pause segment ownership through the executor', () => {
             )
           ).toBe(false);
           expect(events.some(event => event.step_name === 'after')).toBe(false);
+          expect(events.filter(event => event.event_type === 'node_suspended')).toHaveLength(0);
+          expect(
+            events.filter(
+              event => event.event_type === 'node_completed' && event.step_name?.endsWith('paid')
+            )
+          ).toHaveLength(1);
           expect(
             mockLogFn.mock.calls.some(
               ([data]) =>
@@ -386,6 +439,95 @@ describe('container pause segment ownership through the executor', () => {
             )
           ).toBe(true);
         } finally {
+          transport.mockRestore();
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'result', sessionId: 'dag-session-id' };
+          });
+          f.unsubscribe();
+        }
+      }
+    );
+  }
+
+  for (const nested of [false, true]) {
+    it.each([{ approval: { message: 'Review' } }, { wait: { duration_ms: 3_600_000 } }])(
+      `missing sibling completion (nested=${nested}) refuses resume: %j`,
+      async suspension => {
+        const transport = stubMissingContainer();
+        transport.mockImplementation(async () => ({ stdout: 'done', stderr: '' }));
+        const body = [
+          { id: 'work', bash: 'echo side-effect' },
+          { id: 'review', ...suspension },
+        ];
+        const f = await setup(
+          'ordinary',
+          nested
+            ? [
+                body[0],
+                {
+                  id: 'group',
+                  loop_group: {
+                    max_iterations: 2,
+                    until_bash: 'echo MUST_NOT_RUN',
+                    nodes: [body[1]],
+                  },
+                },
+              ]
+            : body
+        );
+        let publish!: () => void;
+        const published = new Promise<void>(resolve => {
+          publish = resolve;
+        });
+        try {
+          const result = await f.execute({
+            pauseWorkflowRun: async (...args) => {
+              await f.store.pauseWorkflowRun(...args);
+              publish();
+            },
+            pauseWorkflowRunForWait: async (...args) => {
+              await f.store.pauseWorkflowRunForWait(...args);
+              publish();
+            },
+            persistWorkflowEvent: async event => {
+              if (event.event_type === 'node_completed' && event.step_name?.endsWith('work')) {
+                await published;
+                throw new Error('completion write unavailable');
+              }
+              await f.store.persistWorkflowEvent(event);
+            },
+          });
+          expect(result).toMatchObject({
+            success: false,
+            error: expect.stringContaining('node_completed'),
+          });
+          expect(f.stop).toHaveBeenCalledTimes(1);
+          const row = await f.store.getWorkflowRun(f.run.id);
+          if (!row) throw new Error('missing run');
+          await expect(hydrateResumableRun({ store: f.store }, row)).rejects.toThrow(
+            'no durable completion or suspension record'
+          );
+          expect(executionClaim((await f.store.getWorkflowRun(f.run.id))?.metadata ?? {})).toBe(
+            executionClaim(f.run.metadata)
+          );
+          const events = await f.store.listWorkflowEvents(f.run.id);
+          expect(
+            events.filter(
+              event => event.event_type === 'node_started' && event.step_name?.endsWith('work')
+            )
+          ).toHaveLength(1);
+          expect(
+            events.filter(
+              event => event.event_type === 'node_completed' && event.step_name?.endsWith('work')
+            )
+          ).toHaveLength(0);
+          expect(
+            events.filter(
+              event => event.event_type === 'node_suspended' && event.step_name?.endsWith('review')
+            )
+          ).toHaveLength(1);
+        } finally {
+          transport.mockRestore();
           f.unsubscribe();
         }
       }
