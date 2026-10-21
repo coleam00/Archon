@@ -15,7 +15,7 @@ sidebar:
 
 Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
-The `workflow` subcommands, except `attention`, `test`, `wake` and `signal`, plus `isolation`, `complete` and `validate`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
+The `workflow` subcommands, except `attention`, `test`, `wake` and `signal`, plus `isolation`, `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
 
 ## Setup and maintenance
 
@@ -25,7 +25,7 @@ Interactive wizard for credentials and configuration.
 
 ```bash
 archon setup                      # writes ~/.archon/.env (home scope, the default; applies to every project)
-archon setup --scope project      # writes <cwd>/.archon/.env, overriding home scope for this repo
+archon setup --scope project      # writes <repo-root>/.archon/.env, overriding home scope; needs a git repository
 archon setup --providers codex    # install maintained providers (claude, codex, pi) and skip that question
 archon setup --force              # replace the target file instead of merging (a backup is still written)
 archon setup --spawn              # open the wizard in a new terminal window
@@ -278,7 +278,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
 | `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`, and rejected with `--resume`. Works with `--detach`. |
-| `--resume` | Resume the most recent failed or paused run of this workflow at the working path, skipping completed nodes and reusing its recorded AI configuration. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the run id. |
+| `--resume` | Resume the most recent failed or paused run of this workflow at the working path, or a `running` run with no activity for over a day, skipping completed nodes and reusing its recorded AI configuration. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the run id. |
 | `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. Run-id selection is exact; adoption never infers a run from workflow name or prompt text. |
 | `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
@@ -1133,7 +1133,7 @@ With `--json` the command validates that the run is resumable, reports its state
 
 `--detach` hands the resume to a background child that runs it without `--json`, so the run does continue, outside your shell. The acknowledgement carries `continues: true` and is sent only after the engine accepts the resume and clears the old pause. An immediate `workflow wait` can therefore report a new pause, even repeated attention at the same node, but never the cleared one. See [Detached control verbs](#detached-control-verbs).
 
-Prefer this exact-id form when you hold a run id. `workflow run <name> --resume` answers a different question: the newest resumable run of that workflow in the current checkout. From another worktree it finds nothing.
+Prefer this exact-id form when you hold a run id. `workflow run <name> --resume` answers a different question: the newest resumable run of that workflow in the current checkout, which is a failed or paused run or a `running` run with no activity for over a day. From another worktree it finds nothing.
 
 ### `workflow cancel`
 
@@ -1947,7 +1947,7 @@ On startup, the CLI:
 1. Removes from `process.env` every key named in `<cwd>/.env`, `.env.local`, `.env.development` and `.env.production`, whatever its value or source (shell exports and direnv included), plus nested Claude Code session markers. It prints `[archon] stripped N keys from <cwd> (...)` when it removed any. This keeps project API keys from overriding subscription auth, which would bill the API, and from overriding Archon's own environment.
 2. Loads `~/.archon/.env` (home scope) with `override: true`.
 3. Loads `<cwd>/.archon/.env` (project scope), which overrides home scope except for `GH_CONFIG_DIR` and inherited workflow identity. The CLI keeps the home-scope `GH_CONFIG_DIR`, including its absence; inside a workflow, an inherited login directory takes precedence over both files. See [forge configuration](/reference/forge/#plugin-configuration). Steps 2 and 3 print `[archon] loaded N keys …` only when `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL` is `debug` or `trace`.
-4. Sets `CLAUDE_USE_GLOBAL_AUTH=true` when neither `CLAUDE_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set and the variable is not already set, so Claude uses your `claude /login` session.
+4. Sets `CLAUDE_USE_GLOBAL_AUTH=true` when neither `CLAUDE_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set and the variable is not already set. The variable is only the server's startup-check marker; Claude Code ignores it and uses your `claude /login` session whenever no token or key is set.
 
 A detached run's child process restores Archon's install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME` and `USERPROFILE`) from the trusted detached config, never from the project `.env`.
 
