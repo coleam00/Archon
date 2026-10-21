@@ -449,6 +449,8 @@ describe('scratch on exit', () => {
   // A cooperative cancel commits while nodes still run; what they write after it is
   // removed once the executor has stopped them.
   it.each([
+    ['completed', false, undefined, process.pid],
+    ['failed', false, undefined, process.pid],
     ['cancelled', false, undefined, process.pid],
     ['paused', true, undefined, process.pid],
     // The layer's source release lost to that cancel, so the executor stopped executing.

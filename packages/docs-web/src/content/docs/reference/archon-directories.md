@@ -89,6 +89,8 @@ layout below. Existing projects keep their names and storage.
   resumed later) and its nodes have stopped. A container run's scratch is removed when its
   container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
   host, or its owner process is still alive) keeps its scratch until the operator removes it.
+  A CLI run stopped by a signal (Ctrl-C, SIGTERM) is marked failed without stopping its nodes
+  through Archon, so it keeps its scratch until it is abandoned or its conversation is reset.
   Everything else in `$ARTIFACTS_DIR` is kept.
   `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
