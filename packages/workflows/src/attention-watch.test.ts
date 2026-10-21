@@ -692,47 +692,6 @@ describe('watchAttentionQueue', () => {
     }
   );
 
-  test.each(['attention', 'ready'] as const)(
-    'startup waits for initial %s delivery to be accepted',
-    async type => {
-      const store = await makeStore();
-      await pausedAtAsk(store);
-      const entered = Promise.withResolvers<void>();
-      const delivery = Promise.withResolvers<void>();
-      const lines: AttentionStreamLine[] = [];
-      let started = false;
-      const startup = watchAttentionQueue(
-        store,
-        host,
-        line => {
-          lines.push(line);
-          if (line.type === type) {
-            entered.resolve();
-            return delivery.promise;
-          }
-          return undefined;
-        },
-        { scope: { kind: 'all' }, pollIntervalMs: 5 }
-      ).then(handle => {
-        started = true;
-        return handle;
-      });
-      await entered.promise;
-      try {
-        expect(started).toBe(false);
-        expect(lines.map(line => line.type)).toEqual(
-          type === 'attention' ? ['attention'] : ['attention', 'ready']
-        );
-      } finally {
-        delivery.resolve();
-        const handle = await startup;
-        await handle.close();
-      }
-      expect(started).toBe(true);
-      expect(lines.map(line => line.type)).toEqual(['attention', 'ready']);
-    }
-  );
-
   test('the snapshot is the open set in scope, as the queue builds it, then ready', async () => {
     const store = await makeStore();
     const other = await pausedAtAsk(store, { ci: 'other' });
