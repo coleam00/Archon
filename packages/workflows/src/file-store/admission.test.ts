@@ -390,3 +390,162 @@ test('a persisted malformed guard stays inspectable without stalling independent
   expect(await store.getWorkflowRun(id)).toBeNull();
   expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ run: { id } });
 });
+
+async function finishRun(root: string, id: string): Promise<void> {
+  await commitModule.commit(root, [id], async runs => {
+    const run = runs.get(id)!;
+    run.status = 'completed';
+    return { result: undefined, changes: { runs: [{ run }] } };
+  });
+}
+
+for (const corruption of ['launch', 'json'] as const) {
+  for (const status of [
+    'pending',
+    'expired-pending',
+    'running',
+    'paused',
+    'completed',
+    'failed',
+    'cancelled',
+  ] as const) {
+    test(`foreign request ${corruption} corruption respects ${status} checkout occupancy`, async () => {
+      const { root, store } = await fixture();
+      const foreign = intent();
+      foreign.resource = 'foreign';
+      await store.admitResourceStart(foreign);
+      const id = foreign.launch.run.id;
+      const active = status === 'pending' || status === 'running' || status === 'paused';
+      await commitModule.commit(root, [id], async runs => {
+        const run = runs.get(id)!;
+        run.status = status === 'expired-pending' ? 'pending' : status;
+        run.started_at = new Date(Date.now() - (status === 'expired-pending' ? 600_000 : 0));
+        run.working_path = '/test';
+        return { result: undefined, changes: { runs: [{ run }] } };
+      });
+      const path = join(
+        root,
+        'resource/requests',
+        `${createHash('sha256').update(id).digest('hex')}.json`
+      );
+      const row = JSON.parse(await readFile(path, 'utf8'));
+      await writeFile(path, corruption === 'json' ? '{' : JSON.stringify({ ...row, launch: {} }));
+      const blocked = intent();
+      expect(await store.admitResourceStart(blocked)).toMatchObject(
+        active ? { status: 'queued', blocker: { kind: 'run', id } } : { status: 'admitted' }
+      );
+      if (active) {
+        const skipped = { ...intent(), resource: 'skip', overlap: 'skip' as const };
+        expect(await store.admitResourceStart(skipped)).toMatchObject({
+          status: 'skipped',
+          blocker: { kind: 'run', id },
+        });
+      }
+      for (const kind of ['guarded', 'read-only', 'branchless'] as const) {
+        const independent = intent();
+        independent.resource = kind;
+        if (kind === 'guarded') independent.launch.execution.cwd = '/independent';
+        if (kind === 'read-only') independent.launch.run.metadata.admission_checkout_guard = false;
+        if (kind === 'branchless') independent.launch.execution.isolation = { kind: 'worktree' };
+        expect(await store.admitResourceStart(independent)).toMatchObject({ status: 'admitted' });
+        await finishRun(root, independent.launch.run.id);
+      }
+      if (!active) await finishRun(root, blocked.launch.run.id);
+      const aliasStore = await createFileWorkflowStore({
+        root,
+        listReusableCheckouts: async () => [
+          { codebaseId: 'codebase', branch: 'alias', workingPath: '/test' },
+        ],
+      });
+      const alias = { ...intent(), resource: 'alias' };
+      alias.launch.execution.isolation = { kind: 'worktree', branch: 'alias' };
+      expect(await aliasStore.admitResourceStart(alias)).toMatchObject(
+        active ? { status: 'queued', blocker: { kind: 'run', id } } : { status: 'admitted' }
+      );
+      if (active) {
+        expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual(
+          []
+        );
+        await finishRun(root, id);
+        expect(
+          await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+        ).toMatchObject([{ runId: blocked.launch.run.id }]);
+      }
+    });
+  }
+}
+
+test.each(['launch', 'json'] as const)(
+  'an unknown corrupt foreign checkout (%s) permits independent work but blocks guarded starts',
+  async corruption => {
+    const { root, store } = await fixture();
+    const foreign = { ...intent(), resource: 'foreign' };
+    const local = intent();
+    local.launch.execution.cwd = '/local';
+    await store.admitResourceStart(foreign);
+    await store.admitResourceStart(local);
+    const queued = [intent(), intent(), intent()];
+    queued[1]!.launch.run.metadata.admission_checkout_guard = false;
+    queued[2]!.launch.execution.isolation = { kind: 'worktree' };
+    for (const start of queued) await store.admitResourceStart(start);
+    const id = foreign.launch.run.id;
+    const path = join(
+      root,
+      'resource/requests',
+      `${createHash('sha256').update(id).digest('hex')}.json`
+    );
+    const row = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, corruption === 'json' ? '{' : JSON.stringify({ ...row, launch: {} }));
+    for (const isolation of [
+      { kind: 'in-place' },
+      { kind: 'worktree', branch: 'explicit' },
+    ] as const) {
+      for (const overlap of ['queue', 'skip'] as const) {
+        const start = { ...intent(), resource: crypto.randomUUID(), overlap };
+        start.launch.execution.isolation = isolation;
+        expect(await store.admitResourceStart(start)).toMatchObject({
+          status: overlap === 'queue' ? 'queued' : 'skipped',
+          blocker: { kind: 'run', id },
+        });
+      }
+    }
+    for (const template of queued.slice(1)) {
+      const start = {
+        ...template,
+        resource: crypto.randomUUID(),
+        launch: { ...template.launch, run: { ...template.launch.run, id: crypto.randomUUID() } },
+      };
+      expect(await store.admitResourceStart(start)).toMatchObject({ status: 'admitted' });
+      await finishRun(root, start.launch.run.id);
+    }
+    for (const status of ['failed', 'paused'] as const) {
+      await commitModule.commit(root, [local.launch.run.id], async runs => {
+        const run = runs.get(local.launch.run.id)!;
+        run.status = status;
+        return { result: undefined, changes: { runs: [{ run }] } };
+      });
+      if (status === 'failed')
+        await expect(store.resumeWorkflowRun(local.launch.run.id)).rejects.toBeInstanceOf(
+          WorkflowResourceBusyError
+        );
+      else expect((await store.resumeWorkflowRun(local.launch.run.id)).status).toBe('running');
+    }
+    await finishRun(root, local.launch.run.id);
+    for (const start of queued.slice(1)) {
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: start.launch.run.id }]);
+      await finishRun(root, start.launch.run.id);
+    }
+    expect(await store.getWorkflowRun(queued[0]!.launch.run.id)).toBeNull();
+    expect((await store.getWorkflowRun(id))?.status).toBe('pending');
+    await expect(store.admitResourceStart({ ...intent(), resource: 'foreign' })).rejects.toThrow();
+    await expect(
+      store.drainResourceStarts({ resource: 'foreign', hostId: 'host' })
+    ).rejects.toThrow();
+    await finishRun(root, id);
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject(
+      [{ runId: queued[0]!.launch.run.id }]
+    );
+  }
+);

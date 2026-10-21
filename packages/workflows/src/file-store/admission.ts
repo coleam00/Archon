@@ -4,6 +4,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
+import { createLogger } from '@archon/paths/logger';
 import { isOwnerProvablyGone, parseProcessOwner } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
@@ -49,6 +50,8 @@ import {
 } from './commit';
 import { createTransactionView } from './transaction-view';
 
+const log = createLogger('file-store.admission');
+
 /** `source` names the slot document in a malformed attempt owner's error. */
 const slotSchema = (source: string) =>
   z.object({
@@ -74,6 +77,9 @@ const requestSchema = z.object({
   blocker: resourceStartDispositionSchema.options[1].shape.blocker.nullable(),
   launch: preparedWorkflowLaunchSchema,
   position: z.number().int().nonnegative(),
+});
+const requestEnvelopeSchema = requestSchema.pick({ resource: true, status: true }).extend({
+  launch: z.unknown(),
 });
 const bindingSchema = z.object({
   receiptId: z.string(),
@@ -182,6 +188,33 @@ export function createAdmissionTransaction(
     row.holders = holders;
     return row;
   }
+  async function occupancyRun(run: WorkflowRun, resource: string, local: boolean) {
+    try {
+      const raw = await read(pathFor('requests', run.id), z.unknown());
+      const envelope = raw === null ? null : requestEnvelopeSchema.parse(raw);
+      local ||= envelope?.status === 'admitted' && envelope.resource === resource;
+      if (local && envelope?.status === 'admitted')
+        return { kind: 'local' as const, run: { ...run, launch: requestSchema.parse(raw).launch } };
+      if (!holdsWorkflowPath(run)) return null;
+      const launch =
+        envelope?.status === 'admitted'
+          ? preparedWorkflowLaunchSchema.parse(envelope.launch)
+          : undefined;
+      return { kind: 'foreign' as const, run: { ...run, launch }, unknown: false };
+    } catch (error) {
+      if (local || !(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      if (!holdsWorkflowPath(run)) return null;
+      // Corrupt foreign requests still hold their recorded path and registered aliases.
+      // Without a path, guarded starts must wait for the holder to end.
+      log.error(
+        { runId: run.id },
+        run.working_path
+          ? 'foreign_request_invalid_using_working_path'
+          : 'foreign_request_invalid_checkout_unknown'
+      );
+      return { kind: 'foreign' as const, run, unknown: !run.working_path };
+    }
+  }
   // Paused runs, and so waiters, live only on run rows: finding them scans every run, as
   // the due scan does.
   async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
@@ -191,16 +224,19 @@ export function createAdmissionTransaction(
     const runs = (await listRunSnapshots(root)).sort(
       (a, b) => a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
     );
+    let unknownForeignCheckoutHolder: string | undefined;
     for (const run of runs) {
       if (isTerminalRunStatus(run.status)) continue;
-      const admitted = await request(run.id);
-      if (admitted?.status === 'admitted' && admitted.resource === resource)
-        admittedRuns.push({ ...run, launch: admitted.launch });
-      else if (holdsWorkflowPath(run))
-        foreign.push({
-          ...run,
-          launch: admitted?.status === 'admitted' ? admitted.launch : undefined,
-        });
+      const holder = await occupancyRun(
+        run,
+        resource,
+        row.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
+      );
+      if (holder?.kind === 'local') admittedRuns.push(holder.run);
+      else if (holder) {
+        foreign.push(holder.run);
+        if (holder.unknown) unknownForeignCheckoutHolder ??= run.id;
+      }
     }
     const queue: QueuedStart[] = [];
     for (const id of row.queue) {
@@ -219,6 +255,7 @@ export function createAdmissionTransaction(
       queue,
       heldCheckouts: heldCheckouts(admittedRuns, reusable),
       foreignHeldCheckouts: heldCheckouts(foreign, reusable),
+      unknownForeignCheckoutHolder,
     };
   }
   async function admitExisting(
