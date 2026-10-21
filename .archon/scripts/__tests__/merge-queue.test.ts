@@ -878,7 +878,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     for (const [declared, refusal] of [
       [decision({ action: 'return', brief: ' ', reason: 'CI red in its test' }), 'the sweep returned pull request 42 with no brief'],
       [decision({ action: 'ask', class: 'unclear', attention: null, brief: 'rework PR 42' }), 'the sweep asked about pull request 42 with no question'],
-      [decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: '' }), 'the sweep asked about pull request 42 with no brief for a return'],
     ] as const) {
       seed(at, item(BUILT, undefined, CLAIMED));
       const refused = run(at, 'record', recordInputs([declared]));
@@ -946,6 +945,62 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       expect(asked.attention).toContain(part);
     }
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+  }, 60_000);
+
+  test.each([
+    { name: 'empty', brief: '', returnOnly: false },
+    { name: 'whitespace-only', brief: ' \n ', returnOnly: true },
+  ])('an ask with an $name brief raises its question without return effects and other parks', ({ brief, returnOnly }) => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
+    const rework = { id: 'revise-scope', label: 'Rework it', does: 'sends it back', effect: 'return', ruling: '' } as const;
+    const attention: MergeAttention = {
+      ...ATTENTION,
+      recommendation: { ...ATTENTION.recommendation, choice: returnOnly ? rework.id : 'merge' },
+      choices: [...(returnOnly ? [] : ATTENTION.choices), rework],
+    };
+    const output = ok(run(at, 'record', {
+      ...recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief }), decision({ number: 43 })]),
+      INPUTS_ITEMS: BOTH_ITEMS,
+    }, { pr: { merged: [43] } })) as {
+      attention: string;
+      options: { id: string; label: string }[];
+      asked: { attention: MergeAttention };
+    };
+    expect(output).toMatchObject({ merged: [43], class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief } });
+    const prepared = output.asked.attention;
+    expect(prepared.choices.map(choice => choice.effect)).not.toContain('return');
+    expect(prepared.choices.map(choice => choice.id)).toEqual(returnOnly ? ['other'] : ['merge', 'park', 'other']);
+    expect(prepared.choices.find(choice => choice.id === 'other')).toMatchObject({ effect: 'park' });
+    expect(output.options).toEqual(prepared.choices.map(({ id, label }) => ({ id, label })));
+    expect(prepared.recommendation).toEqual({ ...attention.recommendation, why: prepared.recommendation.why });
+    expect(prepared.recommendation.why).toContain(attention.recommendation.why);
+    if (returnOnly) expect(prepared.recommendation.why).toContain('unavailable without a brief');
+    else expect(prepared.recommendation).toEqual(attention.recommendation);
+    for (const part of [attention.what, attention.why, attention.recommendation.evidence, PR_URL, 'no build brief']) {
+      expect(output.attention).toContain(part);
+    }
+    if (returnOnly) expect(output.attention).toContain('unavailable without a brief');
+    expect(output.attention).not.toContain('`revise-scope` (Rework it)');
+    expect(output.attention).toContain('until the build queue readies the item again');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+
+    const calls = join(at.checkout, 'calls.jsonl');
+    const words = 'Hold this while I reconsider the scope.';
+    const ruled = run(at, 'ruling', {
+      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: 'other', INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
+    });
+    expect(ok(ruled).decision).toBe('park');
+    expect(ruled.bodies[0]).toContain(words);
+    expect(stored(at).value).toMatchObject({
+      claim: null,
+      facts: { build: { status: 'ready' }, merge: { status: 'parked', decisions: expect.arrayContaining([
+        expect.objectContaining({ answer: expect.objectContaining({ choice: 'other', text: words }) }),
+      ]) } },
+    });
+    expect(launchOf(calls)).toBeUndefined();
   }, 60_000);
 
   test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {

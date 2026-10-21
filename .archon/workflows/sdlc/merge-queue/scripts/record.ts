@@ -48,17 +48,24 @@ const OWN_PR_PARK = 'Stops queue work until a later sweep observes a different h
 const OWN_PR_OTHER =
   `Do what the answer text says. The text is recorded as the ruling on this pull request. ${OWN_PR_PARK} Nothing goes to the build queue.`;
 
-/**
- * `other` hands the item back to the build queue with the person's text as the ruling.
- * No build round owns an own pull request, so there a declared `return` choice is
- * dropped and `other` parks with the text recorded.
- */
-function withQueueOther(attention: MergeAttention, item: Item): MergeAttention {
-  if (item.own_pr !== true) return withOther(attention, 'return');
-  const choices = attention.choices
-    .filter(choice => choice.effect !== 'return')
-    .map(choice => choice.effect === 'park' ? { ...choice, does: OWN_PR_PARK } : choice);
-  return withOther({ ...attention, choices }, 'park', OWN_PR_OTHER);
+function withQueueOther(attention: MergeAttention, item: Item, brief: string): MergeAttention {
+  if (item.own_pr === true) {
+    const choices = attention.choices
+      .filter(choice => choice.effect !== 'return')
+      .map(choice => choice.effect === 'park' ? { ...choice, does: OWN_PR_PARK } : choice);
+    return withOther({ ...attention, choices }, 'park', OWN_PR_OTHER);
+  }
+  if (brief.trim() !== '') return withOther(attention, 'return');
+  const choices = attention.choices.filter(choice => choice.effect !== 'return');
+  const removedRecommendation = attention.choices.some(choice => choice.id === attention.recommendation.choice && choice.effect === 'return');
+  return withOther({
+    ...attention,
+    why: `${attention.why} Return is unavailable because the sweep supplied no build brief.`,
+    choices,
+    recommendation: removedRecommendation
+      ? { ...attention.recommendation, why: `${attention.recommendation.why} This recommendation is unavailable without a brief; choose a remaining option.` }
+      : attention.recommendation,
+  }, 'park', 'Records the answer text as the ruling. Stops queue work until the build queue readies the item again; no build round starts.');
 }
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -103,8 +110,7 @@ function message(error: unknown): string {
 /**
  * Why a declared decision cannot be acted on, or null. A return hands the item to the
  * build queue, which needs a brief to start from and cannot work an own pull request no
- * build round owns. An ask needs its question, and on a pull request a build round owns it
- * also needs the brief a `return` answer starts from: the queue always offers one.
+ * build round owns. An ask needs its question.
  */
 function invalidDecision(decision: Decision, item: Item): string | null {
   const pr = `pull request ${String(decision.number)}`;
@@ -112,7 +118,6 @@ function invalidDecision(decision: Decision, item: Item): string | null {
   if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
   if (decision.action !== 'ask') return null;
   if (decision.attention === null) return `the sweep asked about ${pr} with no question`;
-  if (item.own_pr !== true && decision.brief.trim() === '') return `the sweep asked about ${pr} with no brief for a return`;
   return null;
 }
 
@@ -302,7 +307,7 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number)),
+            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number), firstAsk.brief),
           };
   const render = (raised: MergeAsked | null): string =>
     raised === null

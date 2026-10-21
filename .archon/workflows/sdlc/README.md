@@ -658,11 +658,10 @@ then the project's file, whose lines win where the two conflict.
   jobs; red after that, or red in code a recent merge touched, is raised to a
   maintainer, naming the pull requests merged since it was last green, with a revert
   or fix-forward recommendation.
-- **Record.** The `record` script refuses a sweep that decided a pull request this
-  run did not claim, because that item belongs to another run. It also refuses a
+- **Record.** The `record` script skips and reports a decision for a pull request this
+  run did not claim, because that item belongs to another run. It refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question or, on a pull request a build round owns, without the brief a `return`
-  answer starts from, and a red default branch the sweep neither re-ran nor raised: the pull
+  question, and a red default branch the sweep neither re-ran nor raised: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -684,8 +683,13 @@ then the project's file, whose lines win where the two conflict.
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. Every pull-request item also offers `other`; for a build item, it returns
-  the pull request to the build queue with the answer's text as the ruling. A red default branch is only
+  links. A build-owned ask with a blank brief still raises its question, with all
+  return effects omitted and an explanation that no build brief was supplied. A
+  removed recommendation stays visible, explicitly marked unavailable.
+  Every pull-request item also offers `other`; for a build item with a nonblank
+  brief, it returns the pull request to the build queue with the answer's text as
+  the ruling. Without a brief, `other` records the text and parks until the build
+  queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config and its `order`,
   `limit` and `merge_method`) merges it once the
