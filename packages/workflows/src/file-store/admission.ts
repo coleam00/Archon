@@ -252,7 +252,7 @@ export function createAdmissionTransaction(
       if (!knownForeign && envelope)
         return {
           kind: 'unknown' as const,
-          run: { ...run, launch: requestSchema.parse(raw).launch },
+          run: { ...run, launch: preparedWorkflowLaunchSchema.parse(envelope.launch) },
         };
       if (!holdsWorkflowPath(run)) return null;
       const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;

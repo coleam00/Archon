@@ -670,6 +670,8 @@ test.each([
   }
 );
 
+const occupancyUnrelatedFields = ['hostId', 'id', 'overlap', 'blocker', 'position'] as const;
+
 async function releasedHolderFixture(
   membership: 'retained' | 'upgrade-before-release' | 'released-before-upgrade',
   corruption: string
@@ -727,7 +729,12 @@ async function releasedHolderFixture(
     'resource/requests',
     `${createHash('sha256').update(holder.launch.run.id).digest('hex')}.json`
   );
-  const row = JSON.parse(await readFile(path, 'utf8'));
+  const intact = JSON.parse(await readFile(path, 'utf8'));
+  const row = structuredClone(intact);
+  for (const field of occupancyUnrelatedFields) {
+    if (corruption === `missing-${field}`) delete row[field];
+    if (corruption === `invalid-${field}`) row[field] = {};
+  }
   if (corruption === 'missing-resource') delete row.resource;
   if (corruption === 'invalid-resource') row.resource = 42;
   if (corruption === 'resource-mismatch') row.resource = 'wrong-resource';
@@ -737,7 +744,12 @@ async function releasedHolderFixture(
   await writeFile(path, damaged);
   store = await createFileWorkflowStore({ root });
   const unknownMembership = membership === 'released-before-upgrade';
-  const readable = corruption === 'intact' || corruption === 'resource-mismatch';
+  const readable =
+    corruption === 'intact' ||
+    corruption === 'resource-mismatch' ||
+    occupancyUnrelatedFields.some(field =>
+      [`missing-${field}`, `invalid-${field}`].includes(corruption)
+    );
   const serializes = corruption === 'intact' || (unknownMembership && readable);
   return {
     root,
@@ -749,8 +761,8 @@ async function releasedHolderFixture(
     cursor,
     slotPath,
     path,
-    row,
     damaged,
+    intact,
     unknownMembership,
     readable,
     serializes,
@@ -843,6 +855,7 @@ test.each(
       'resource-mismatch',
       'missing-status',
       'invalid-status',
+      ...occupancyUnrelatedFields.flatMap(field => [`missing-${field}`, `invalid-${field}`]),
     ].map(corruption => ({ membership, corruption }))
   )
 )(
@@ -851,8 +864,26 @@ test.each(
     const context = await releasedHolderFixture(membership, corruption);
     await checkLocalHolderDecisions(context);
     await checkForeignHolderDecisions(context);
-    const { root, store, holder, queued, resuming, wait, cursor, slotPath, path, row } = context;
-    await writeFile(path, JSON.stringify({ ...row, resource: 'resource', status: 'admitted' }));
+    const { root, store, holder, queued, resuming, wait, cursor, slotPath, path } = context;
+    if (context.unknownMembership && context.readable) {
+      const independent = { ...intent(), resource: 'independent' };
+      independent.launch.execution.cwd = '/independent';
+      const independentQueued = {
+        ...independent,
+        launch: {
+          ...independent.launch,
+          run: { ...independent.launch.run, id: crypto.randomUUID() },
+        },
+      };
+      expect(await store.admitResourceStart(independent)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(independentQueued)).toMatchObject({ status: 'queued' });
+      await finishRun(root, independent.launch.run.id);
+      expect(
+        await store.drainResourceStarts({ resource: 'independent', hostId: 'host' })
+      ).toMatchObject([{ runId: independentQueued.launch.run.id }]);
+      await finishRun(root, independentQueued.launch.run.id);
+    }
+    await writeFile(path, JSON.stringify(context.intact));
     if (membership === 'released-before-upgrade') {
       await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toThrow();
       const repairedSlot = JSON.parse(await readFile(slotPath, 'utf8'));
@@ -874,6 +905,26 @@ test.each(
     );
   }
 );
+
+test('a paused manual holder permits a foreign reader beside an old released slot', async () => {
+  const { root, store, slotPath, wait } = await releasedHolderFixture(
+    'released-before-upgrade',
+    'intact'
+  );
+  const manual = await store.createWorkflowRun(intent().launch.run);
+  await store.claimPendingWorkflowRun(manual.id, '/manual');
+  await store.pauseWorkflowRunForWait(manual.id, wait, { kind: 'started', stepName: 'wait' });
+  const reader = { ...intent(), resource: 'manual-reader' };
+  reader.launch.execution.cwd = '/manual';
+  reader.launch.run.metadata.admission_checkout_guard = false;
+  const slotBefore = await readFile(slotPath, 'utf8');
+  expect(await store.admitResourceStart(reader)).toMatchObject({ status: 'admitted' });
+  expect(await readFile(slotPath, 'utf8')).toBe(slotBefore);
+  expect(await store.getWorkflowRun(manual.id)).toMatchObject({
+    status: 'paused',
+    metadata: { wait },
+  });
+});
 
 const queuedCorruptions = [
   'json',
