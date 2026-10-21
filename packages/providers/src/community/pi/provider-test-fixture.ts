@@ -53,6 +53,7 @@ const mockSession = {
   getAllTools: () => [],
   getToolDefinition: () => undefined,
   setActiveToolsByName: (_toolNames: string[]) => undefined,
+  agent: {},
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -220,7 +221,7 @@ export const mockSettingsManagerCreate = mock(() => ({
   getProjectSettings: mockSettingsManagerGetProjectSettings,
 }));
 export const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({
-  getDefaultTools: () => undefined,
+  getDefaultTools: (): string[] | undefined => undefined,
 }));
 export const mockResourceLoaderReload = mock(async () => undefined);
 
@@ -250,6 +251,9 @@ const mockCreateWriteTool = mock((_cwd: string) => ({ __piTool: 'write' }));
 const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
+export const mockCreatePowerShellTool = mock((_cwd: string, _options?: unknown) => ({
+  __piTool: 'powershell',
+}));
 
 export const mockDefineTool = mock(
   (def: {
@@ -287,6 +291,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
+  createPowerShellTool: mockCreatePowerShellTool,
   defineTool: mockDefineTool,
 }));
 

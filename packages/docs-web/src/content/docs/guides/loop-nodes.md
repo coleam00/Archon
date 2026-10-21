@@ -334,9 +334,9 @@ carries the same value.
 
 **Per-provider behavior is the same as any other node.** On a provider with
 *enforced* structured output (Claude, Codex, OpenCode) the schema constrains
-decoding. On a *best-effort* provider (Pi, Copilot) the schema is appended to the
-prompt, and a payload that fails validation is re-asked up to three times **within
-the same iteration** — a reask does not consume a loop iteration. If those are
+decoding. On a *best-effort* provider the model is asked for the schema (Pi through
+a `structured_output` tool call, Copilot through the prompt), and a payload that fails
+validation is re-asked up to three times **within the same iteration** — a reask does not consume a loop iteration. If those are
 exhausted, the node **fails** with the validation errors; it is never treated as an
 incomplete iteration. See
 [provider capabilities](/reference/provider-capabilities/).

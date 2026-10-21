@@ -6,9 +6,9 @@
  * are loaded inside `streamPiTurn` (see the lazy-load note in ./provider.ts).
  */
 import { createLogger } from '@archon/paths';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { MessageChunk, SendQueryOptions, SystemPromptInput } from '../../types';
 import { resumedOutcome, withResumedOutcome } from '../../shared/resumed';
-import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { authorizePiTurn, openTurnModelRuntime, piAuthEnv, resolvePiModel } from './auth';
 import { parsePiConfig, resolvePiExtensionSettings, type PiProviderDefaults } from './config';
 import { beginPiExtensionTurn } from './extension-error-broker';
@@ -67,22 +67,38 @@ async function loadPiTurnModules() {
   const bedrockReady = ensureBedrockProviderRegistered();
   const oauthFlowsReady = ensurePiOAuthFlowsRegistered();
 
-  const [pi, eventBridge, optionsTranslator, sessionResolver, sessionSetup, nativeTools] =
-    await Promise.all([
-      import('@earendil-works/pi-coding-agent'),
-      import('./event-bridge'),
-      import('./options-translator'),
-      import('./session-resolver'),
-      import('./session-setup'),
-      import('./native-tools'),
-    ]);
+  const [
+    pi,
+    eventBridge,
+    optionsTranslator,
+    sessionResolver,
+    sessionSetup,
+    nativeTools,
+    structuredOutputTool,
+  ] = await Promise.all([
+    import('@earendil-works/pi-coding-agent'),
+    import('./event-bridge'),
+    import('./options-translator'),
+    import('./session-resolver'),
+    import('./session-setup'),
+    import('./native-tools'),
+    import('./structured-output-tool'),
+  ]);
 
   // Ensure both registrations are in place before any session work — the SDK
   // reads them only when a backend is first streamed or an OAuth credential is
   // first resolved, but awaiting here keeps the ordering obvious and the cost is
   // one resolved-promise await after the first call.
   await Promise.all([bedrockReady, oauthFlowsReady]);
-  return { pi, eventBridge, optionsTranslator, sessionResolver, sessionSetup, nativeTools };
+  return {
+    pi,
+    eventBridge,
+    optionsTranslator,
+    sessionResolver,
+    sessionSetup,
+    nativeTools,
+    structuredOutputTool,
+  };
 }
 
 /** One Pi prompt as a stream of chunks; ./provider.ts owns the failure result and `settled`. */
@@ -207,7 +223,9 @@ async function* streamSession(
 ): AsyncGenerator<MessageChunk> {
   const { cwd, resumeSessionId, requestOptions, parsed } = turn;
   const nodeConfig = requestOptions?.nodeConfig;
-  const options = yield* translateNodeOptions(modules, cwd, requestOptions);
+  const settingsManager = modules.sessionSetup.seedPiSettings(modules.pi, cwd);
+  const defaultToolNames = settingsManager.getDefaultTools();
+  const options = yield* translateNodeOptions(modules, cwd, requestOptions, defaultToolNames);
 
   const { sessionManager, resumeFailed } = await modules.sessionResolver.resolvePiSession(
     cwd,
@@ -224,7 +242,6 @@ async function* streamSession(
     };
   }
 
-  const settingsManager = modules.sessionSetup.seedPiSettings(modules.pi, cwd);
   // Default ON: extensions (community packages like @plannotator/pi-extension
   // or your own local ones) are a core reason users run Pi. Opt out with
   // `assistants.pi.enableExtensions: false` in `.archon/config.yaml`.
@@ -270,7 +287,18 @@ async function* streamSession(
     'pi.session_started'
   );
 
-  const customTools = piCustomTools(modules, cwd, requestOptions, options.filteredTools);
+  const outputFormat = requestOptions?.outputFormat;
+  const structuredTool = outputFormat
+    ? modules.structuredOutputTool.createStructuredOutputTool(outputFormat.schema)
+    : undefined;
+  const customTools = piCustomTools(
+    modules,
+    cwd,
+    requestOptions,
+    options.filteredTools,
+    defaultToolNames,
+    structuredTool?.definition
+  );
 
   // A caller that aborted (the idle watchdog, a cancel) has stopped reading, so a
   // session started now would run unobserved.
@@ -295,16 +323,16 @@ async function* streamSession(
       extensions,
       extensionTurn,
     });
+    structuredTool?.capFailedCalls(session);
 
-    // Structured output (best-effort). Pi has no SDK-level JSON schema
-    // mode the way Claude and Codex do, so we implement it via prompt
-    // engineering: append the schema + "JSON only, no fences" instruction,
-    // and have the bridge parse the accumulated assistant text on
-    // agent_end. Parse failures degrade gracefully — the executor's
-    // existing dag.structured_output_missing warning path handles them.
-    const outputFormat = requestOptions?.outputFormat;
+    // Structured output (best-effort): the tool call cannot be forced, so the
+    // prompt asks for it. When no valid call arrives, the bridge parses the
+    // reply text instead, and the executor reasks or fails the node.
     const effectivePrompt = outputFormat
-      ? augmentPromptForJsonSchema(turn.prompt, outputFormat.schema)
+      ? modules.structuredOutputTool.augmentPromptForStructuredOutput(
+          turn.prompt,
+          outputFormat.schema
+        )
       : turn.prompt;
 
     // Bridge callback-based events to the async generator contract.
@@ -318,7 +346,7 @@ async function* streamSession(
           session,
           effectivePrompt,
           requestOptions?.abortSignal,
-          outputFormat?.schema,
+          structuredTool?.output,
           uiBridge,
           extensionTurn
         ),
@@ -354,7 +382,8 @@ interface PiNodeOptions {
 async function* translateNodeOptions(
   { optionsTranslator }: PiTurnModules,
   cwd: string,
-  requestOptions: SendQueryOptions | undefined
+  requestOptions: SendQueryOptions | undefined,
+  defaultToolNames: readonly string[] | undefined
 ): AsyncGenerator<MessageChunk, PiNodeOptions> {
   const nodeConfig = requestOptions?.nodeConfig;
 
@@ -374,7 +403,8 @@ async function* translateNodeOptions(
   const { tools: filteredTools, unknownTools } = optionsTranslator.resolvePiTools(
     cwd,
     nodeConfig,
-    requestOptions?.env
+    requestOptions?.env,
+    defaultToolNames
   );
   if (unknownTools.length > 0) {
     yield {
@@ -435,26 +465,31 @@ function coerceStringPrompt(
 }
 
 /**
- * In-process native tools (e.g. manage_run) via Pi customTools. Because
- * setting customTools forces noTools:'builtin' (dropping Pi's defaults), the
- * base tool set must be re-supplied alongside the native defs.
+ * In-process tools (native tools such as manage_run, and the structured_output
+ * tool) via Pi customTools. Because setting customTools forces
+ * noTools:'builtin' (dropping Pi's defaults), an unrestricted node re-supplies
+ * the same default tools a session without customTools would start with.
  */
 function piCustomTools(
   { optionsTranslator, nativeTools }: PiTurnModules,
   cwd: string,
   requestOptions: SendQueryOptions | undefined,
-  filteredTools: PiNodeOptions['filteredTools']
+  filteredTools: PiNodeOptions['filteredTools'],
+  defaultToolNames: readonly string[] | undefined,
+  structuredOutputTool: ToolDefinition | undefined
 ) {
-  const nativeToolDefs =
-    requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
+  const addedTools = [
+    ...(requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
       ? nativeTools.buildPiNativeToolDefinitions(requestOptions.nativeTools)
-      : [];
+      : []),
+    ...(structuredOutputTool ? [structuredOutputTool] : []),
+  ];
   const baseTools =
     filteredTools ??
-    (nativeToolDefs.length > 0
-      ? optionsTranslator.buildDefaultPiTools(cwd, requestOptions?.env)
+    (addedTools.length > 0
+      ? optionsTranslator.buildDefaultPiTools(cwd, requestOptions?.env, defaultToolNames)
       : undefined);
-  return baseTools && [...baseTools, ...nativeToolDefs];
+  return baseTools && [...baseTools, ...addedTools];
 }
 
 /**
