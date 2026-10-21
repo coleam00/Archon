@@ -62,7 +62,7 @@ export async function snapshotConversationRunCheckouts(
     `SELECT r.id, r.working_path, r.metadata, c.isolation_env_id
        FROM remote_agent_workflow_runs r
        JOIN remote_agent_conversations c ON c.id = r.conversation_id
-      WHERE c.id = $1 AND c.isolation_env_id IS NOT NULL`,
+      WHERE c.id = $1 AND c.isolation_env_id IS NOT NULL AND r.status <> 'completed'`,
     [conversationId]
   );
   for (const row of result.rows) {

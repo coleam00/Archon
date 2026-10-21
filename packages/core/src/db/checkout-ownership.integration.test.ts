@@ -959,6 +959,53 @@ test('SQL conditional checkout clear refuses a missing conversation', async () =
   );
 });
 
+test.each(
+  (['pending', 'running', 'paused', 'failed', 'cancelled', 'completed'] as const).flatMap(status =>
+    (['clear', 'rebind', 'attach'] as const).map(change => ({ status, change }))
+  )
+)(
+  'SQL conversation $change snapshots only execution-capable legacy runs: $status',
+  async ({ status, change }) => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const createEnv = () =>
+      sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+      });
+    const env = await createEnv();
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, change === 'attach' ? null : env.id]
+    );
+    const run = await sqlStore.createWorkflowRun({
+      workflow_name: 'legacy',
+      user_message: '',
+      origin: { conversationId },
+    });
+    await db.query(
+      'UPDATE remote_agent_workflow_runs SET status = $2, metadata = $3 WHERE id = $1',
+      [run.id, status, JSON.stringify({ retained: true })]
+    );
+    if (change === 'clear') await clearConversationCheckout(conversationId, env.id);
+    else
+      await updateConversation(conversationId, {
+        isolation_env_id: change === 'attach' ? env.id : (await createEnv()).id,
+      });
+    expect((await sqlStore.getWorkflowRun(run.id))?.metadata).toEqual(
+      status === 'completed' ? { retained: true } : { retained: true, isolation_env_id: env.id }
+    );
+    expect((await sqlStore.getWorkflowRun(run.id))?.status).toBe(status);
+  }
+);
+
 test.each(['path', 'metadata', 'owned'] as const)(
   'SQL resume prefers durable %s checkout over a later conversation binding',
   async channel => {
