@@ -100,8 +100,8 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
         );
         const holder = start('queue', 'host', 2);
         await store.admitResourceStart(holder);
-        const waiting = start('queue', 'host', 2);
-        await store.admitResourceStart(waiting);
+        const waiting = start('queue', 'host', 2, { cwd: holder.launch.execution.cwd });
+        expect(await store.admitResourceStart(waiting)).toMatchObject({ status: 'queued' });
         if (damage === 'missing')
           await db.query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
             holder.launch.run.id,
