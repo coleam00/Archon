@@ -55,6 +55,7 @@ cap. On the simple and continue routes, do the same with the builder's report.
 - On the complex route, read how the shipping pipeline's own review went: `$ARTIFACTS_DIR/review/report.md` and the specialist reports beside it. If a review or correction step of the pipeline failed, or no review report was written, the pipeline's review did not happen: read whatever lens reports exist yourself and treat their open findings as yours. Do not decide `merge` on a complex change whose pipeline review failed; send it back with those findings, or return it to the owner. (The merge gate refuses it anyway.)
 - Run the project's own checks yourself, unless the app check in this run already ran the full set on the exact commit you are reviewing and saved its complete output in `$ARTIFACTS_DIR`: then read that output instead of running them again. How to run the app, if you need to: $INPUTS.runtime
 - Wait for CI with a bound: `gh pr checks <n> --watch --fail-fast` for at most 20 minutes.
+- Finish every check you start before you decide. When you stop your turn to wait for work left running in the background, your verdict is due at once, with that work unfinished. A check longer than one wait runs detached the way the runtime instructions describe, and you keep waiting for it in bounded foreground waits until it ends.
 
 Every finding needs reproducible evidence: a failing command and its output, or a scenario and what it showed. A finding you cannot back with evidence is not a finding. No taste notes.
 
