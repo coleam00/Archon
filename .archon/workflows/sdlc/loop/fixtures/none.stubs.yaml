@@ -5,6 +5,7 @@ pick:
   target: ""
   pr: ""
   confidence: high
+  depth: normal
   area: ""
   reason: "stub: everything open waits on the owner's answer in the decisions issue"
 fixture:

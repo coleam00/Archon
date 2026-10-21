@@ -302,7 +302,9 @@ describe('loop wiring', () => {
     const prompt = readFileSync(resolve(pack, 'loop/commands/loop-check-app.md'), 'utf8');
     expect(prompt).not.toContain('$INPUTS.builder');
     expect(prompt).not.toContain('$INPUTS.ship');
-    expect(prompt).toContain('**Probes.**');
+    expect(prompt).toContain('## How deep: $INPUTS.depth');
+    expect(prompt).toContain('`noticed`');
+    expect(prompt).not.toContain('When unsure, test more');
     expect(prompt).toContain('QUESTION');
   });
 

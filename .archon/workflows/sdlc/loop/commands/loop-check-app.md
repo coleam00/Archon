@@ -23,33 +23,36 @@ If no pull request URL is named above (the line ends at the colon), nothing was 
 
 ## What to test
 
-Read the work item and its `Contract` comment (or its acceptance criteria). That list is what you
-test, not the pull request's description. Also read what the product document and the project's
-documentation say about the area the change touches: the desired outcome and the rules a user
-relies on there are part of what you check, whatever the contract says.
+Read the work item and its `Contract` comment (or its acceptance criteria): that is what you test,
+not the pull request's description. You answer one question: does this change do what the work item
+asks, without breaking what it touches? Exploring the rest of the product is the manager's job, on
+the default branch, not yours.
 
-The contract may list the states this change creates (a new screen, a door that can be shut, a mode,
-an empty list). If it does not, work them out from the work item: every state a user can now be in
-that they could not be in before.
+## How deep: $INPUTS.depth
 
-## Size the check to the change
+The pick chose this depth from the work item and its risk. Stay inside it: every minute past what the
+change needs is a minute another change waits.
 
-Your time is the loop's slowest step, so spend it where this change can break something. Decide the
-depth from the work item and the list of changed files above, not their contents:
+- **light** (nothing a user can see changes: tests, tools, documentation, a refactor whose contract
+  says behaviour is unchanged): build, run the project's checks once, start the app once to confirm
+  it runs, and check each criterion. No probes, no holdout scenarios.
+- **normal** (the default): build, run the project's checks once, and observe each criterion once in
+  the running app through its real input path. Then try up to three things a user would plausibly do
+  with the new behaviour beyond the criteria (probes). Run a holdout scenario only when it exercises
+  the behaviour this change creates or changes.
+- **deep** (a new system, a change across the core of the product, security, data or migrations):
+  also try, in each state the change creates, the actions a user has there; check user-visible
+  criteria in normal mode as well as through any test harness; and run every holdout scenario the
+  changed files could affect.
 
-- **Retest after a send-back or a default-branch merge.** If an earlier `Loop review:` comment on this
-  pull request reports an app check at an older head, and every commit since that head is a merge of
-  the default branch or a change that review asked for, test only what those commits can affect
-  (`git diff --name-only <old head>..<new head>`) and carry the other lines over, with
-  `carried_from` set to the old head. Never carry a line silently: a line not re-observed at this
-  head and not marked as carried is a FAIL.
-- **No user-visible behaviour can change** (only tests, tools, documentation, or a cleanup whose
-  contract says behaviour is unchanged): build, run the project's checks, start the app once and
-  confirm it runs, and check the contract criteria. Run a holdout scenario only if the changed files
-  drive what it exercises.
-- **Anything else:** the full check below.
+If the change plainly reaches further than its depth assumes, say so in `summary` and check at the
+next depth. Do not go deeper for reassurance.
 
-When unsure, test more, not less.
+**Retest after a send-back or a default-branch merge.** If an earlier `Loop review:` comment on this
+pull request reports an app check at an older head, and every commit since that head is a merge of
+the default branch or a change that review asked for, re-observe only what those commits can affect
+(`git diff --name-only <old head>..<new head>`) and carry the other lines over, with `carried_from`
+set to the old head. A line neither re-observed nor marked as carried is a FAIL.
 
 ## Test what would merge
 
@@ -63,12 +66,22 @@ you test:
 
 - Build it and run the app the way a user would, on its real code path rather than a test shortcut. How to run it: $INPUTS.runtime
 - Drive the app through what the runtime instructions provide for that: when they name a driver library or input helpers, use them. Do not copy another run's scripts or expected outputs, and do not use a tool, recording or check that this pull request adds or changes as your evidence for a behaviour: back every behaviour criterion with something you observed through the running app's own input path. Step in batches and cap any single wait at 10 minutes. Run every check in the foreground and wait for it there: when you stop your turn to wait for work left running in the background, your report is due at once, with that work unfinished. A long check should print progress; when one prints nothing for several minutes, look at what it is doing instead of waiting it out. A check that runs longer than one wait is never stopped for time: start it detached the way the runtime instructions describe, and keep waiting for it in bounded foreground waits until it ends. Before running the default branch to show a failure is pre-existing, use results the runtime keeps for that exact default-branch commit, if it keeps any; after a default-branch run, keep yours the same way. When you run the project's full checks, save their complete output in `$ARTIFACTS_DIR`: the reviewer reads it instead of running them again on the same commit.
-- Where the project has a normal mode and a test or harness mode, check user-visible criteria in normal mode too. A feature that only works under the harness is not done. If the runtime gives you no way to drive normal mode, the line is INCOMPLETE and its text says `harness only`.
+- If the builder already ran the project's full checks on exactly the tree you are testing and saved
+  the complete output in `$ARTIFACTS_DIR`, read it instead of running them again.
 - Check every contract criterion against the running app, one by one.
-- **Probes.** For each state the change creates, try every action a user has there, as the runtime exposes them: move into it and through it, interact with it, open each menu or panel from it, use each control, attack or submit, leave and come back, save and reload when the app has saves. One probe line per attempt. Anything that surprises a user is a SURPRISE that names a defect line.
-- **Defects seen.** Write down every behaviour you observe that contradicts the work item's desired outcome, the product document, the documented interface, or what a user would plainly expect, whether or not a contract criterion covers it, and whether or not you were looking for it. A defect is new with this change unless you show the default branch has it too: a default-branch run you made, or a row in the holdout baseline (below). Never read source code to decide that what you observed is intended. Intent comes from the work item, the product document and the documented interface; when they do not settle it, it is a defect and the reviewer decides. Something you noticed but are not sure is a defect (it might be intended, or harmless) is a defect line with verdict `QUESTION`: it does not fail the check, and the reviewer must decide it. Never leave an observation only in `summary`.
+- Probes, as your depth allows: one probe line per attempt. Anything that surprises a user is a
+  SURPRISE that names a defect line.
+- **What this change broke.** Behaviour you observe where this change reaches, that contradicts the
+  work item, the product document, the documented interface or what a user would plainly expect, is
+  a `defect` line: `DEFECT` when the change plausibly caused it, `QUESTION` when you are not sure it is
+  a defect at all (it does not fail the check; the reviewer decides it). Never read source code to
+  decide that what you observed is intended.
+- **What you merely noticed.** Something wrong that this change did not cause (outside what it
+  touches, or the same before it) is not a line and needs no proof: put it in `noticed`, one sentence
+  each, for the manager. Do not run the default branch to classify an observation; run it only when a
+  criterion or a holdout fails and you must know whether this change caused that.
 - Save every piece of evidence (command output, screenshots, measured values, logs) as a file in the run's artifacts directory (`$ARTIFACTS_DIR`), never inside the repository, and cite it by its absolute path on the line it supports, one path per entry. Open every screenshot you cite with your Read tool and describe what it shows: an image you did not look at is not evidence. A later step checks that each cited file was written during this check and that each cited image was opened.
-- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run the scenarios this change could affect: judge from the work item and the list of changed files, and when unsure, run it. List the ones you skipped and why in `summary`. The manager runs the whole set on the default branch on its own schedule. The holdout is private to the reviewers: never quote it, its scenario text, its steps or its thresholds anywhere public (pull requests, issues, commits), and never in your report. A holdout line carries only the scenario id, the verdict and what a user sees.
+- Holdout scenarios: $INPUTS.holdout. If that names a file, read it and run the scenarios your depth calls for (none at light; at normal only those that exercise what this change creates or changes). List the ones you skipped and why in `summary`. The manager runs the whole set on the default branch on its own schedule. The holdout is private to the reviewers: never quote it, its scenario text, its steps or its thresholds anywhere public (pull requests, issues, commits), and never in your report. A holdout line carries only the scenario id, the verdict and what a user sees.
   - Run each scenario exactly as written: a fresh start where it says fresh, the starting values it names, its mode. A run that deviates from its steps is `INCOMPLETE`, which counts as a failure.
   - When a scenario fails, find out whether the default branch fails it the same way. First read `holdout-baseline.md` in the holdout file's directory, if it exists: the manager records there how every scenario ran on the default branch, by commit and date. If it shows the same failure on a default-branch commit from the last 24 hours, cite that row. Otherwise run the scenario on the default branch yourself and cite that run. A pre-existing failure keeps its verdict and puts that citation in `pre_existing`, naming the file that shows it by its absolute path (the baseline file, or your default-branch run); without one it is new.
 - A measurement that depends on timing or frame rate, taken while the machine is loaded (other app instances running, the frame rate below what the check expects), is inconclusive, not a FAIL: say so, rerun it once, and if the load persists report the line `INCOMPLETE` with the reason. When the default branch, run under the same conditions, cannot finish it either, cite that run in `pre_existing`: it is not this change's, and an issue must track it.
@@ -86,12 +99,13 @@ you test:
 Return the structured report:
 
 - `pr`, `head` (the commit you checked out) and `merged_with` (the commit of its merge with the default branch).
-- `lines`, one per thing you checked or saw, each with an `id`, its `kind`, a `verdict`, `text` (what you did and the value or behaviour you saw), `evidence` (absolute paths of the files that show it), `pre_existing`, `defect` and `carried_from` (empty when they do not apply):
+- `lines`, one per thing you checked, each with an `id`, its `kind`, a `verdict`, `text` (what you did and the value or behaviour you saw), `evidence` (absolute paths of the files that show it), `pre_existing`, `defect` and `carried_from` (empty when they do not apply):
   - `criterion` lines `C1`, `C2`, ... for the contract, one per criterion: PASS, FAIL or INCOMPLETE.
   - `holdout` lines `H1`, ... for the scenarios you ran: PASS, FAIL or INCOMPLETE. The text carries only the scenario id and what a user sees.
   - `probe` lines `P1`, ...: OK, or SURPRISE with `defect` naming the defect line it found.
-  - `defect` lines `D1`, ...: DEFECT or QUESTION. A defect the default branch has too keeps the verdict DEFECT and cites its proof in `pre_existing`.
-- `overall`: PASS only when every criterion passed, every holdout passed or fails the same way on the default branch with its citation, and every defect is proven pre-existing. FAIL while anything else stands. A PASS that comes with a caveat ("this does not show X") is not a PASS, and a criterion you could not check is FAIL with the reason, never PASS.
-- `summary`: one paragraph a person reads first: what you tested, what failed, what you skipped and why.
+  - `defect` lines `D1`, ...: DEFECT or QUESTION, for what this change broke or may have broken.
+- `noticed`: one sentence per thing you saw that this change did not cause; empty when nothing.
+- `overall`: PASS only when every criterion passed, every holdout passed or fails the same way on the default branch with its citation, and no DEFECT line stands. FAIL while anything else stands. A PASS that comes with a caveat ("this does not show X") is not a PASS, and a criterion you could not check is FAIL with the reason, never PASS.
+- `summary`: one paragraph a person reads first: what you tested at which depth, what failed, what you skipped and why.
 
 A later step checks, with no model, that every line not carried over cites evidence, that each cited file exists and was written during this check, that each cited image was opened, and that `overall` agrees with the lines.

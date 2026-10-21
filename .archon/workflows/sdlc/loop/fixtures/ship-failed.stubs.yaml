@@ -6,6 +6,7 @@ pick:
   target: https://github.com/example/app/issues/6
   pr: ''
   confidence: high
+  depth: normal
   area: app/
   reason: 'stub: tags need a migration and search across modules'
 ship__triage__triage:
@@ -47,6 +48,7 @@ check-app:
   head: ""
   merged_with: ""
   lines: []
+  noticed: []
   overall: "NO PR"
   summary: "the issue has no open pull request; the pipeline stopped before publishing"
 evidence:

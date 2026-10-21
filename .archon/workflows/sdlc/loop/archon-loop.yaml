@@ -76,9 +76,10 @@ nodes:
         target: { type: string }
         pr: { type: string }
         confidence: { type: string, enum: [high, medium, low] }
+        depth: { type: string, enum: [light, normal, deep] }
         area: { type: string }
         reason: { type: string }
-      required: [route, target, pr, confidence, area, reason]
+      required: [route, target, pr, confidence, depth, area, reason]
 
   # Several runs of this loop may work one repository at once. The claim is the
   # one hard fact between them: the oldest live claim comment on a work item
@@ -168,6 +169,7 @@ nodes:
       head: "$subject.output.head"
       base: "$subject.output.base"
       files: "$subject.output.files"
+      depth: "$pick.output.depth"
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
     output_format:
@@ -190,9 +192,10 @@ nodes:
               defect: { type: string }
               carried_from: { type: string }
             required: [id, kind, verdict, text, evidence, pre_existing, defect, carried_from]
+        noticed: { type: array, items: { type: string } }
         overall: { type: string, enum: [PASS, FAIL, NO PR] }
         summary: { type: string }
-      required: [pr, head, merged_with, lines, overall, summary]
+      required: [pr, head, merged_with, lines, noticed, overall, summary]
 
   # No model: every line of the app check's report must cite evidence written during
   # the check, every cited image must have been opened, and Overall must agree with

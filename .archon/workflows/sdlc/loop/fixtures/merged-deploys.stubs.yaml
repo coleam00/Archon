@@ -4,6 +4,7 @@ pick:
   target: https://github.com/example/app/issues/5
   pr: ''
   confidence: high
+  depth: normal
   area: app/
   reason: 'stub: tags need a migration and search across modules'
 build: 'Built it.
@@ -28,6 +29,7 @@ check-app:
     pre_existing: ""
     defect: ""
     carried_from: ""
+  noticed: []
   overall: "PASS"
   summary: "stub: no defects seen"
 evidence:

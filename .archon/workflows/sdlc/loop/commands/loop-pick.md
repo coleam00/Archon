@@ -54,6 +54,16 @@ Newness alone is not complexity. In a young codebase almost every area is new; a
 
 Say how confident you are. If you would call it `simple` with low confidence, route it `complex`. If you would call it `complex` with low confidence because the issue itself is unclear about what is wanted, do not route it: label it `needs-owner` with the exact question, and choose the next move.
 
+## How deep the app check goes
+
+Choose the depth of the black-box app check from the work item's risk, not from how careful you feel:
+
+- `light`: nothing a user can see changes (tests, tools, documentation, a refactor whose contract says behaviour is unchanged).
+- `normal`: the default, for an ordinary feature or fix a user can see.
+- `deep`: a new system, a change across the core of the product, authentication, security, data or migrations, or an item a `normal` check already let a defect through on.
+
+Checking costs every other change its turn, so `deep` is the exception, not the safe choice.
+
 ## Contract first
 
 Before new work starts on an issue (routes `simple` and `complex`), make sure it has a contract the reviewers can check. If the issue already has a comment headed `Contract`, or its acceptance criteria are concrete and checkable (each one a command, an observable behaviour or a measurable property), leave it. If they are vague, add one comment headed `Contract` that restates each criterion as something checkable, keeping the issue's intent. When you write a `Contract`, end it with a line `States this change creates:` naming each state a user can be in after the change that they could not be in before (a new screen, a closed door, a mode, an empty list); the app check tries every user action in each one. Never change a criterion the owner wrote as a hard requirement, the product document, or the mission; when making the criteria checkable would change what the owner asked for, label the issue `needs-owner` instead and say what needs deciding.
@@ -72,5 +82,6 @@ Return the structured verdict:
 - `target`: the issue URL for new work, or the issue the pull request closes for `continue` (the pull request URL if it closes none). Empty for `none`.
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
+- `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.
 - `area`: the files, directories or modules the work will most likely change (one line, for example `app/notes.py, templates/list.html`). Other runs use it to stay out of your way. Empty for `none`.
 - `reason`: one or two sentences. For `none`, say which owner answers or which closed dependencies would unblock which items.
