@@ -79,6 +79,7 @@ const requestSchema = z.object({
   position: z.number().int().nonnegative(),
 });
 const requestEnvelopeSchema = requestSchema.pick({ resource: true, status: true }).extend({
+  status: z.literal('admitted'),
   launch: z.unknown(),
 });
 const bindingSchema = z.object({
@@ -190,16 +191,14 @@ export function createAdmissionTransaction(
   }
   async function occupancyRun(run: WorkflowRun, resource: string, local: boolean) {
     try {
-      const raw = await read(pathFor('requests', run.id), z.unknown());
-      const envelope = raw === null ? null : requestEnvelopeSchema.parse(raw);
-      local ||= envelope?.status === 'admitted' && envelope.resource === resource;
-      if (local && envelope?.status === 'admitted')
+      const path = pathFor('requests', run.id);
+      const raw = path in documents ? documents[path] : await readJson(join(root, path));
+      const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
+      local ||= envelope?.resource === resource;
+      if (local && envelope)
         return { kind: 'local' as const, run: { ...run, launch: requestSchema.parse(raw).launch } };
       if (!holdsWorkflowPath(run)) return null;
-      const launch =
-        envelope?.status === 'admitted'
-          ? preparedWorkflowLaunchSchema.parse(envelope.launch)
-          : undefined;
+      const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
       return { kind: 'foreign' as const, run: { ...run, launch }, unknown: false };
     } catch (error) {
       if (local || !(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
@@ -572,14 +571,24 @@ export function createFileAdmissionStore(
         return row ? inspect(row) : null;
       }),
     listQueuedResourceStartsForHost: hostId =>
-      query(async () =>
-        Promise.all(
-          (await list('requests', requestSchema))
-            .filter(row => row.hostId === hostId && row.status === 'queued')
-            .sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position)
-            .map(inspect)
-        )
-      ),
+      query(async tx => {
+        const queued: Request[] = [];
+        // Slot queues select candidates without decoding unrelated admitted requests.
+        const slots = await list('slots', z.object({ queue: z.array(z.string()) }));
+        for (const id of slots.flatMap(slot => slot.queue)) {
+          const envelope = await tx.read(
+            pathFor('requests', id),
+            requestSchema.pick({ hostId: true, status: true })
+          );
+          if (!envelope) throw new Error('Queued resource request missing');
+          if (envelope.hostId !== hostId || envelope.status !== 'queued') continue;
+          const row = await tx.request(id);
+          if (!row) throw new Error('Queued resource request missing');
+          queued.push(row);
+        }
+        queued.sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position);
+        return Promise.all(queued.map(inspect));
+      }),
     withdrawQueuedResourceStart: id =>
       write(async tx => {
         const row = await tx.request(id);

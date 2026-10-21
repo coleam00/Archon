@@ -399,6 +399,24 @@ async function finishRun(root: string, id: string): Promise<void> {
   });
 }
 
+async function corruptRequest(
+  root: string,
+  id: string,
+  corruption: 'launch' | 'json' | 'null' | 'queued' | 'skipped' | 'withdrawn'
+): Promise<void> {
+  const path = join(
+    root,
+    'resource/requests',
+    `${createHash('sha256').update(id).digest('hex')}.json`
+  );
+  const row = JSON.parse(await readFile(path, 'utf8'));
+  const value = corruption === 'launch' ? { ...row, launch: {} } : { ...row, status: corruption };
+  await writeFile(
+    path,
+    corruption === 'json' ? '{' : JSON.stringify(corruption === 'null' ? null : value)
+  );
+}
+
 for (const corruption of ['launch', 'json'] as const) {
   for (const status of [
     'pending',
@@ -413,6 +431,7 @@ for (const corruption of ['launch', 'json'] as const) {
       const { root, store } = await fixture();
       const foreign = intent();
       foreign.resource = 'foreign';
+      foreign.hostId = 'foreign-host';
       await store.admitResourceStart(foreign);
       const id = foreign.launch.run.id;
       const active = status === 'pending' || status === 'running' || status === 'paused';
@@ -423,13 +442,7 @@ for (const corruption of ['launch', 'json'] as const) {
         run.working_path = '/test';
         return { result: undefined, changes: { runs: [{ run }] } };
       });
-      const path = join(
-        root,
-        'resource/requests',
-        `${createHash('sha256').update(id).digest('hex')}.json`
-      );
-      const row = JSON.parse(await readFile(path, 'utf8'));
-      await writeFile(path, corruption === 'json' ? '{' : JSON.stringify({ ...row, launch: {} }));
+      await corruptRequest(root, id, corruption);
       const blocked = intent();
       expect(await store.admitResourceStart(blocked)).toMatchObject(
         active ? { status: 'queued', blocker: { kind: 'run', id } } : { status: 'admitted' }
@@ -462,11 +475,17 @@ for (const corruption of ['launch', 'json'] as const) {
       expect(await aliasStore.admitResourceStart(alias)).toMatchObject(
         active ? { status: 'queued', blocker: { kind: 'run', id } } : { status: 'admitted' }
       );
+      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual(
+        active ? [alias.launch.run.id, blocked.launch.run.id] : []
+      );
       if (active) {
         expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual(
           []
         );
         await finishRun(root, id);
+        expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toContain(
+          blocked.launch.run.id
+        );
         expect(
           await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
         ).toMatchObject([{ runId: blocked.launch.run.id }]);
@@ -475,7 +494,7 @@ for (const corruption of ['launch', 'json'] as const) {
   }
 }
 
-test.each(['launch', 'json'] as const)(
+test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn'] as const)(
   'an unknown corrupt foreign checkout (%s) permits independent work but blocks guarded starts',
   async corruption => {
     const { root, store } = await fixture();
@@ -489,13 +508,7 @@ test.each(['launch', 'json'] as const)(
     queued[2]!.launch.execution.isolation = { kind: 'worktree' };
     for (const start of queued) await store.admitResourceStart(start);
     const id = foreign.launch.run.id;
-    const path = join(
-      root,
-      'resource/requests',
-      `${createHash('sha256').update(id).digest('hex')}.json`
-    );
-    const row = JSON.parse(await readFile(path, 'utf8'));
-    await writeFile(path, corruption === 'json' ? '{' : JSON.stringify({ ...row, launch: {} }));
+    await corruptRequest(root, id, corruption);
     for (const isolation of [
       { kind: 'in-place' },
       { kind: 'worktree', branch: 'explicit' },
@@ -549,3 +562,14 @@ test.each(['launch', 'json'] as const)(
     );
   }
 );
+
+for (const corruption of ['launch', 'json', 'null'] as const) {
+  test(`host queued listing validates its own indexed request (${corruption})`, async () => {
+    const { root, store } = await fixture();
+    await store.admitResourceStart(intent());
+    const queued = intent();
+    await store.admitResourceStart(queued);
+    await corruptRequest(root, queued.launch.run.id, corruption);
+    await expect(store.listQueuedResourceStartsForHost('host')).rejects.toThrow();
+  });
+}
