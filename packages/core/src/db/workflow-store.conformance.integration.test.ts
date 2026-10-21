@@ -1,14 +1,14 @@
 // @archon-test-isolated
 import { expect, test } from 'bun:test';
-import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
-import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
-import { WorkflowStatusReadError } from './workflows';
+import {
+  makeSqlConformanceHarness,
+  describeSqlStatusReadConformance,
+} from './workflow-store.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
 const trackTempRoot = trackTempRoots();
@@ -30,46 +30,7 @@ const makeHarness = async () => {
 };
 describeWorkflowStoreConformance('SQLite', makeHarness);
 
-test('status reads validate persisted values without lifecycle writes', async () => {
-  const harness = await makeHarness();
-  try {
-    const { db, store } = harness;
-    const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
-    expect(await store.getWorkflowRunStatus(randomUUID())).toBeNull();
-    for (const status of workflowRunStatusSchema.options) {
-      await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
-        status,
-        run.id,
-      ]);
-      expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
-    }
-    for (const status of ['unexpected', '']) {
-      await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
-        status,
-        run.id,
-      ]);
-      const snapshot = async () => ({
-        rows: (await db.query('SELECT * FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
-          .rows,
-        events: await store.listWorkflowEvents(run.id),
-        head: await store.getWorkflowEventHead(),
-        reports: harness.terminalReports(),
-      });
-      const before = await snapshot();
-      const read = store.getWorkflowRunStatus(run.id);
-      await expect(read).rejects.toBeInstanceOf(WorkflowStatusReadError);
-      await expect(read).rejects.toMatchObject({
-        name: 'WorkflowStatusReadError',
-        workflowRunId: run.id,
-        storedStatus: status,
-        message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
-      });
-      expect(await snapshot()).toEqual(before);
-    }
-  } finally {
-    await harness.close();
-  }
-});
+describeSqlStatusReadConformance(makeHarness);
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();
