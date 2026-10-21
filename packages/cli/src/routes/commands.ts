@@ -142,11 +142,12 @@ export async function runHelp({ positionals }: CliRouteContext): Promise<number>
 
 export async function runChat({ positionals, json }: CliRouteContext): Promise<number> {
   const chatMessage = positionals.slice(1).join(' ');
-  if (json) return await fail(json, 'Chat does not support --json. Use archon chat [message].');
+  if (json) return await fail(json, 'Chat does not support --json. Use archon chat <message>.');
+  if (!chatMessage) return await fail(json, 'Usage: archon chat <message>');
   const { chatCommand } = await loadRoute(() => import('../commands/chat'), {
     database: true,
   });
-  await chatCommand(chatMessage || undefined);
+  await chatCommand(chatMessage);
   return 0;
 }
 

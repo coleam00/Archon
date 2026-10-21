@@ -83,15 +83,12 @@ Start workflows from deployment bindings and inspect durable resource admission.
 | `trigger whoami` | Print the Archon user ID for your CLI identity, to use as a binding's `runAsUserId`. |
 
 
-### `chat [message]`
+### `chat <message>`
 
-Start an interactive orchestrator conversation. An optional message starts the conversation before reading further input. Every turn shares the same conversation, selected project and run-management capabilities as console chat. Use `/setproject <name>` to select or switch projects. Type `/exit` or `/quit`, press Ctrl-C, or end input (Ctrl-D on Unix) to leave.
+Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
 
 ```bash
-archon chat
 archon chat "What does the orchestrator do?"
-printf '/setproject my-app\n/status\n' | archon chat
-archon chat "Summarize my runs" </dev/null  # one response, then exit at EOF
 ```
 
 Chat prints text; `--json` is not supported.
@@ -1853,7 +1850,7 @@ Both work transparently. Most users never need to configure a database.
 
 ```bash
 # One-off AI chat
-archon chat "How does error handling work in this codebase?" </dev/null
+archon chat "How does error handling work in this codebase?"
 
 # Interactive setup wizard
 archon setup

@@ -148,7 +148,7 @@ const commandHelp: HelpEntry[] = [
     spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
     description: 'Start configured workflows and inspect durable resource admission',
   },
-  { command: 'chat', spec: 'chat [message]', description: 'Interactive orchestrator chat' },
+  { command: 'chat', spec: 'chat <message>', description: 'Send a message to the orchestrator' },
   {
     command: 'setup',
     spec: 'setup',
