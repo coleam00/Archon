@@ -1202,3 +1202,87 @@ test.each(['paused', 'failed'] as const)(
     });
   }
 );
+
+test.each(['admission', 'drain', 'paused resume', 'failed resume'] as const)(
+  'a refused historical continuation keeps priority over %s',
+  async operation => {
+    const { root, store, holder, queued, resuming } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    const occupant = intent();
+    occupant.launch.execution.cwd = '/occupant';
+    expect(await store.admitResourceStart(occupant)).toMatchObject({ status: 'admitted' });
+    await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
+      blocker: { kind: 'run', id: occupant.launch.run.id },
+      refusal: 'waiting',
+    });
+    const incoming = intent();
+    incoming.launch.execution.cwd = '/incoming';
+    if (operation === 'drain')
+      expect(await store.admitResourceStart(incoming)).toMatchObject({ status: 'queued' });
+    if (operation === 'failed resume') {
+      await commitModule.commit(root, [resuming.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(resuming.launch.run.id)!, status: 'failed' } }] },
+      }));
+    }
+    await finishRun(root, occupant.launch.run.id);
+    if (operation === 'admission')
+      expect(await store.admitResourceStart(incoming)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+    else if (operation === 'drain')
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+    else
+      await expect(store.resumeWorkflowRun(resuming.launch.run.id)).rejects.toMatchObject({
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+    await finishRun(root, holder.launch.run.id);
+    if (operation === 'admission' || operation === 'drain')
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: incoming.launch.run.id }]);
+    else
+      expect(await store.resumeWorkflowRun(resuming.launch.run.id)).toMatchObject({
+        status: 'running',
+      });
+  }
+);
+
+for (const status of ['paused', 'failed'] as const) {
+  test.each(['document', 'launch', 'both'] as const)(
+    `historical ${status} resume rejects mismatched %s request identity`,
+    async damage => {
+      const { root, store, holder, queued, path, intact } = await releasedHolderFixture(
+        'released-before-upgrade',
+        'intact'
+      );
+      await store.withdrawQueuedResourceStart(queued.launch.run.id);
+      if (status === 'failed')
+        await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+          result: undefined,
+          changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+        }));
+      const damaged = structuredClone(intact);
+      if (damage !== 'launch') damaged.id = crypto.randomUUID();
+      if (damage !== 'document') damaged.launch.run.id = crypto.randomUUID();
+      await writeFile(path, JSON.stringify(damaged));
+      const head = await readFile(join(root, 'head.json'), 'utf8');
+      await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toThrow(
+        'does not identify the resumed run'
+      );
+      expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+      expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe(status);
+      await writeFile(path, JSON.stringify(intact));
+      expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+        status: 'running',
+      });
+    }
+  );
+}

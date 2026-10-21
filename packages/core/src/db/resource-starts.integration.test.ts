@@ -1633,3 +1633,99 @@ for (const phase of ['admission', 'drain'] as const) {
     });
   }
 }
+
+for (const operation of ['admission', 'preparation', 'drain'] as const) {
+  for (const damage of ['valid', 'missing', 'corrupt'] as const) {
+    test(`expired foreign pending checkout permits ${operation} with ${damage} launch`, async () => {
+      const store = createWorkflowStore();
+      const foreign = launch(crypto.randomUUID());
+      const incoming = launch(crypto.randomUUID());
+      incoming.execution.cwd = foreign.execution.cwd;
+      const input = (prepared: PreparedWorkflowLaunch, resource = 'local') => ({
+        resource,
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue' as const,
+        launch: prepared,
+      });
+      await store.admitResourceStart(input(foreign, 'foreign'));
+      await getDatabase().withTransaction(query => lockResourceSlot(query, 'local', 1));
+      if (operation === 'drain')
+        expect(await store.admitResourceStart(input(incoming))).toMatchObject({ status: 'queued' });
+      const preparing =
+        operation === 'preparation' ? await prepareLocalBinding(store, 'local', 1) : null;
+      if (preparing) preparing.launch.execution.cwd = foreign.execution.cwd;
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET started_at = datetime('now', '-10 minutes') WHERE id = $1",
+        [foreign.run.id]
+      );
+      await getDatabase().query(
+        'UPDATE remote_agent_resource_start_requests SET resource_key = $2 WHERE id = $1',
+        [foreign.run.id, 'local']
+      );
+      if (damage === 'missing')
+        await getDatabase().query(
+          'DELETE FROM remote_agent_resource_start_requests WHERE id = $1',
+          [foreign.run.id]
+        );
+      if (damage === 'corrupt')
+        await getDatabase().query(
+          'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+          [foreign.run.id, '{']
+        );
+      if (operation === 'admission')
+        expect(await store.admitResourceStart(input(incoming))).toMatchObject({
+          status: 'admitted',
+        });
+      else if (preparing)
+        expect(await store.completeStartBindingPreparation(preparing)).toMatchObject({
+          status: 'admitted',
+        });
+      else
+        expect(
+          await store.drainResourceStarts({ resource: 'local', hostId: 'host' })
+        ).toMatchObject([{ runId: incoming.run.id }]);
+      expect((await store.getWorkflowRun(foreign.run.id))?.status).toBe('pending');
+    });
+  }
+}
+
+test.each(['fresh pending', 'running', 'paused', 'expired local pending'] as const)(
+  '%s SQL holders retain checkout or capacity ownership',
+  async state => {
+    const store = createWorkflowStore();
+    const holder = launch(crypto.randomUUID());
+    const incoming = launch(crypto.randomUUID());
+    incoming.execution.cwd = holder.execution.cwd;
+    const input = (prepared: PreparedWorkflowLaunch, resource = 'local') => ({
+      resource,
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: prepared,
+    });
+    const local = state === 'expired local pending';
+    await store.admitResourceStart(input(holder, local ? 'local' : 'foreign'));
+    if (state === 'running' || state === 'paused') {
+      await store.claimPendingWorkflowRun(holder.run.id, holder.execution.cwd);
+      if (state === 'paused') await store.updateWorkflowRun(holder.run.id, { status: 'paused' });
+    }
+    if (local) {
+      incoming.execution.cwd = '/independent';
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET started_at = datetime('now', '-10 minutes') WHERE id = $1",
+        [holder.run.id]
+      );
+    } else {
+      await getDatabase().withTransaction(query => lockResourceSlot(query, 'local', 1));
+      await getDatabase().query(
+        'UPDATE remote_agent_resource_start_requests SET resource_key = $2 WHERE id = $1',
+        [holder.run.id, 'local']
+      );
+    }
+    expect(await store.admitResourceStart(input(incoming))).toMatchObject({
+      status: 'queued',
+      blocker: { kind: 'run', id: holder.run.id },
+    });
+  }
+);

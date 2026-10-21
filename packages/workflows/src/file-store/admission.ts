@@ -407,11 +407,14 @@ export function createAdmissionTransaction(
   async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
     const row = await request(run.id);
     if (row?.status !== 'admitted') return null;
+    if (row.id !== run.id || row.launch.run.id !== run.id)
+      throw new Error(`Admitted resource request '${run.id}' does not identify the resumed run`);
     const resource = await slot(row.resource);
     if (await hasForeignSlotMembership(run.id, row.resource))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
+    if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);
     const blocker = resourceResumeBlocker(await occupancy(row.resource), {
       ...run,
       status: run.status,

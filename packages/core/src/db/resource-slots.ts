@@ -226,8 +226,9 @@ export async function resourceStartOccupancy(
     launch: unknown;
     resource_key: string | null;
     foreign_membership: boolean | number;
+    holds_path: boolean | number;
   }>(
-    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key,
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key, w.holds_path,
        EXISTS (
          SELECT 1 FROM remote_agent_resource_slot_holders h
           WHERE h.holder_kind = 'run' AND h.holder_id = CAST(w.id AS TEXT)
@@ -270,7 +271,7 @@ export async function resourceStartOccupancy(
   );
   let unknownForeignCheckoutHolder: string | undefined;
   const foreign = live.rows
-    .filter(row => !isLocal(row))
+    .filter(row => !isLocal(row) && row.holds_path)
     .map(row => {
       const run = { id: String(row.id), working_path: row.working_path };
       if (row.launch === null) {
