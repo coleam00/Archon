@@ -53,29 +53,29 @@ import { createTransactionView } from './transaction-view';
 
 const log = createLogger('file-store.admission');
 
-const runHolderSchema = z.object({ kind: z.literal('run'), id: z.string() });
-const attemptHolderSchema = z.object({ kind: z.literal('attempt'), id: z.string() });
-const admittedSchema = z.array(z.string()).default([]);
-const foreignSlotSchema = z.object({
-  holders: z.array(z.discriminatedUnion('kind', [runHolderSchema, attemptHolderSchema])),
-  admitted: admittedSchema,
+const slotMembershipSchema = z.object({
+  holders: z.array(
+    z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('run'), id: z.string() }),
+      z.object({ kind: z.literal('attempt'), id: z.string(), owner: z.unknown() }),
+    ])
+  ),
+  // Checkout membership survives giving back capacity while paused.
+  admitted: z.array(z.string()).default([]),
 });
 
 /** `source` names the slot document in a malformed attempt owner's error. */
 const slotSchema = (source: string) =>
-  z.object({
+  slotMembershipSchema.extend({
     capacity: z.number().int().positive(),
-    holders: z.array(
-      z.discriminatedUnion('kind', [
-        runHolderSchema,
-        attemptHolderSchema.extend({
-          owner: z.unknown().transform(owner => parseProcessOwner(owner, source)),
-        }),
-      ])
+    holders: slotMembershipSchema.shape.holders.transform(holders =>
+      holders.map(holder =>
+        holder.kind === 'attempt'
+          ? { ...holder, owner: parseProcessOwner(holder.owner, source) }
+          : holder
+      )
     ),
     queue: z.array(z.string()),
-    // Checkout membership survives giving back capacity while paused.
-    admitted: admittedSchema,
   });
 const requestSchema = z.object({
   id: z.string(),
@@ -223,7 +223,7 @@ export function createAdmissionTransaction(
     for (const path of await documentPaths(root, 'slots')) {
       if (path === pathFor('slots', resource)) continue;
       try {
-        const row = await read(path, foreignSlotSchema);
+        const row = await read(path, slotMembershipSchema);
         if (
           row?.admitted.includes(id) ||
           row?.holders.some(holder => holder.kind === 'run' && holder.id === id)

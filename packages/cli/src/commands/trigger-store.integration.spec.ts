@@ -844,6 +844,70 @@ test.each([true, false])(
   }
 );
 
+test('keyed replays fail for every receipt queued on a resource whose drain fails', async () => {
+  const { host, project, configPath, stateRoot, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+  if (!codebase) throw new Error('Expected registered project');
+  const holder = launch(codebase.id);
+  holder.execution.cwd = project;
+  await store.admitResourceStart({
+    resource: 'portable',
+    capacity: 1,
+    hostId: 'host',
+    overlap: 'queue',
+    launch: holder,
+  });
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    const deliveries = ['first', 'second'];
+    for (const deliveryId of deliveries)
+      await triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch);
+    const queued = await store.listQueuedResourceStartsForHost('host');
+    expect(queued).toHaveLength(2);
+    const receipts = await store.listStartReceipts(10);
+    const path = join(
+      stateRoot,
+      'resource',
+      'slots',
+      `${createHash('sha256').update('portable').digest('hex')}.json`
+    );
+    const row = JSON.parse(await readFile(path, 'utf8'));
+    row.capacity = 0;
+    const damaged = JSON.stringify(row);
+    await writeFile(path, damaged);
+    stdout.mockClear();
+    for (const deliveryId of deliveries)
+      await expect(
+        triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch)
+      ).rejects.toThrow("Resource 'portable' drain failed");
+    const failure = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: noDispatch,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ResourceStartDrainError);
+    if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
+    expect(new Set(failure.failures.map(item => item.receiptId))).toEqual(
+      new Set(receipts.map(receipt => receipt.id))
+    );
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+    restore();
+  }
+});
+
 test('a queued start that fails is attributed to the receipt that requested it', async () => {
   const host = hostForTest();
   const store = host.deps.store;

@@ -366,13 +366,18 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     try {
       decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
     } catch (error) {
-      failures.push({
-        resource,
-        error: new Error(
-          `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error }
-        ),
-      });
+      const receiptIds = new Set(
+        queued
+          .filter(request => request.resource === resource)
+          .map(request =>
+            'error' in request ? request.receiptId : receiptIdOfLaunch(request.launch)
+          )
+      );
+      const failure = new Error(
+        `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+      for (const receiptId of receiptIds) failures.push({ resource, receiptId, error: failure });
       return;
     }
     for (const decision of decisions) {
