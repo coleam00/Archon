@@ -32,6 +32,7 @@ const REPORT = 'Round 1: ready';
 
 /** The engine's typed-artifact listing for a run with no typed artifacts yet. */
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
+const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
 const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
 interface Target {
@@ -77,24 +78,24 @@ function publishPr(
 }
 
 describe('publish-pr opens the pull request at most once', () => {
-  it('keeps prepare schema and command aligned with the body pointer publish accepts', () => {
+  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
       nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
     };
-    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties.body).toEqual({
+    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]).toEqual({
       type: ['object', 'null'],
       properties: {
-        type: { type: 'string', enum: [PREPARED_BODY.type] },
+        type: { type: 'string', enum: [pointer.type] },
         run_id: { type: 'string' },
-        path: { type: 'string', enum: [PREPARED_BODY.path] },
+        path: { type: 'string', enum: [pointer.path] },
       },
-      required: Object.keys(PREPARED_BODY),
+      required: Object.keys(pointer),
     });
     const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
     expect(command).toContain(
-      `{"type": "${PREPARED_BODY.type}", "run_id": "$WORKFLOW_ID", "path": "${PREPARED_BODY.path}"}`
+      `{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`
     );
-    expect(command).toContain(`$ARTIFACTS_DIR/${PREPARED_BODY.path}`);
+    expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
   });
 
   it.each(['gh', 'forge'] as const)(
@@ -494,7 +495,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   });
 });
 
-const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
 const { start: START, end: END } = DESCRIPTION_SECTION;
 
 /** publish-pr continuing pull request 42, with a prepared description section. */
@@ -520,6 +520,84 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
     expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`]);
+  });
+
+  it.each(['gh', 'forge'] as const)('preserves fenced and inline marker examples through %s', source => {
+    const live = `Author text.  \n\n\`\`\`md\n${START}\nexample\n${END}\n\`\`\`\nInline: \`${START}\` and \`${END}\`.  \n\n`;
+    const result = publishSection({
+      live, source,
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
+      ] }),
+    });
+    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+    const body = source === 'gh' ? result.bodies[0] : JSON.parse(result.forgeRequests.at(-1) ?? '{}').body;
+    expect(body).toBe(`${live}${START}\n| case | ms |\n| a | 12 |\n${END}\n`);
+  });
+
+  it('preserves trailing authored whitespace exactly', () => {
+    const live = 'Author text.  \n\n';
+    const result = publishSection({ live });
+    expect(result.code).toBe(0);
+    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| a | 12 |\n${END}\n`);
+  });
+
+  it('can publish prepared fenced marker examples again', () => {
+    const section = `\`\`\`md\n${START}\nliteral\n${END}\n\`\`\``;
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+    expect(result.code).toBe(0);
+    const again = publishSection({ live: result.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+  });
+
+  it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('reserved description markers');
+    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
+    expect(result.gh).toEqual([]);
+  });
+
+  it('refuses reserved prepared markers before creating a pull request', () => {
+    const result = publishSection({
+      target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      artifacts: { [DESCRIPTION.path]: `${START}\nnested\n${END}` },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('reserved description markers');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.gh).toEqual([]);
+  });
+
+  it('publishes and reads back the section when creating a pull request', () => {
+    const result = publishSection({ target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } });
+    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
+    expect(result.bodies).toEqual([`A body\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`]);
+    expect(result.gh.at(-1)).toContain('pr view 42');
+  });
+
+  it.each(['gh', 'forge'] as const)('keeps a created PR in the failure report when its description edit fails through %s', source => {
+    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', null),
+        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+        forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
+      ] }),
+      preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('edit unavailable');
+    const report = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
+    });
+    expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
   });
 
   it('replaces only the content between its markers', () => {
@@ -567,6 +645,18 @@ describe('publish-pr writes the description section a delivery round prepared', 
       ref: { repo: PR.repo, number: 42 },
       body: `Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`,
     });
+  });
+
+  it.each([
+    { ...DESCRIPTION, type: 'file' },
+    { ...DESCRIPTION, run_id: 'another-run' },
+    { ...DESCRIPTION, path: 'pr-body.md' },
+  ])('refuses an uncertified description pointer before pushing: %j', pointer => {
+    const result = publishSection({ inputs: { INPUTS_DESCRIPTION: JSON.stringify(pointer) } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('prepare must declare the pr-description.md artifact from this run');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.gh).toEqual([]);
   });
 
   it('refuses a prepared section before pushing when the caller did not allow one', () => {

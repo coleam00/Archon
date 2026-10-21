@@ -15,6 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { PR_CREATE_RECORD } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -198,9 +199,22 @@ export function caveats(
   return discoveries(artifacts, options.listingFile);
 }
 
+/** A create verified before a later description edit failed has no typed output. */
+function createdPr(artifacts: string): { url: string; problem?: string } {
+  const path = join(artifacts, PR_CREATE_RECORD);
+  try {
+    const claim: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const pr = isObject(claim) ? claim.pr : undefined;
+    return { url: isObject(pr) && typeof pr.url === 'string' ? pr.url : '' };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
+    return { url: '', problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 /**
  * The URL of the pull request this run last published, from the engine's
- * typed-artifact listing; empty when it published none. A tail that failed after
+ * typed-artifact listing or its verified creation claim; empty when it published none. A tail that failed after
  * publishing still names its pull request, so the next run continues that one
  * instead of opening another. An unreadable listing is named by `failed`'s summary.
  */
@@ -209,7 +223,7 @@ export function publishedPrUrl(
   options: { readonly listingFile: string | undefined }
 ): string {
   const latest = readTyped<unknown>(options.listingFile, artifacts, 'pull-request').values.at(-1);
-  return isObject(latest) && typeof latest.url === 'string' ? latest.url : '';
+  return isObject(latest) && typeof latest.url === 'string' ? latest.url : createdPr(artifacts).url;
 }
 
 /**
@@ -221,9 +235,11 @@ export function failed(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
 ): string {
+  const { problem } = createdPr(artifacts);
   return (
     'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
     'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
+    (problem ? `\n\n${problem}` : '') +
     caveats(artifacts, options)
   );
 }

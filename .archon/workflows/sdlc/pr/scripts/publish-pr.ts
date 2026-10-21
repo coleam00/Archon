@@ -2,7 +2,7 @@
  * Push the branch, then publish the pull request and record its verified identity.
  *
  * The preceding nodes judged the target and the text and proved the merged tree; this
- * node owns the two writes, the push and the pull request, and proves each landed,
+ * node owns publication, including the push and PR writes, and proves each landed,
  * through whichever source the run selected. When its caller allows it, it also
  * writes the description section the run prepared: between its own markers, keeping
  * every other byte of the description, and read back like every other write. The push comes first and refuses on any failure (./.shared/push.ts), so a
@@ -33,7 +33,7 @@
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { PR_CREATE_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
@@ -49,10 +49,25 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
-function occurrences(haystack: string, needle: string): number[] {
-  const found: number[] = [];
-  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) found.push(at);
-  return found;
+// The renderer distinguishes raw HTML from code but exposes no source offsets.
+function descriptionMarkers(markdown: string): { marker: string; at: number }[] {
+  const candidates: { marker: string; at: number; token: string }[] = [];
+  const tagged = markdown.replace(
+    new RegExp(Object.values(DESCRIPTION_SECTION).join('|'), 'g'),
+    (marker: string, at: number) => {
+      const token = `<!-- archon-description-position-${at} -->`;
+      candidates.push({ marker, at, token });
+      return token;
+    }
+  );
+  const raw: string[] = [];
+  Bun.markdown.render(tagged, {
+    html: html => {
+      raw.push(html);
+      return '';
+    },
+  });
+  return candidates.filter(candidate => raw.some(html => html.includes(candidate.token)));
 }
 
 /**
@@ -62,10 +77,12 @@ function occurrences(haystack: string, needle: string): number[] {
  */
 function withDescriptionSection(live: string, section: string): string {
   const block = `${SECTION_START}\n${section.trim()}\n${SECTION_END}`;
-  const starts = occurrences(live, SECTION_START);
-  const ends = occurrences(live, SECTION_END);
+  const markers = descriptionMarkers(live);
+  const starts = markers.filter(entry => entry.marker === SECTION_START).map(entry => entry.at);
+  const ends = markers.filter(entry => entry.marker === SECTION_END).map(entry => entry.at);
   if (starts.length === 0 && ends.length === 0) {
-    return live.trim() === '' ? `${block}\n` : `${live.trimEnd()}\n\n${block}\n`;
+    const separator = live === '' || live.endsWith('\n\n') ? '' : live.endsWith('\n') ? '\n' : '\n\n';
+    return `${live}${separator}${block}\n`;
   }
   const [start] = starts;
   const [end] = ends;
@@ -93,6 +110,9 @@ function preparedSection(artifacts: string): string | undefined {
   }
   const section = readFileSync(join(artifacts, pointer.path), 'utf8');
   if (section.trim() === '') throw new Error('prepare declared an empty pr-description.md');
+  if (descriptionMarkers(section).length > 0) {
+    throw new Error('pr-description.md contains reserved description markers; put literal examples in Markdown code');
+  }
   return section;
 }
 
@@ -189,7 +209,7 @@ function publish(): PrRecord {
 
   // Killing the script cannot cancel a submitted forge write. Keep this claim even
   // after success: a retry may only reconcile it.
-  const claimPath = join(artifacts, 'pr-create-started');
+  const claimPath = join(artifacts, PR_CREATE_RECORD);
   try {
     writeFileSync(claimPath, JSON.stringify({ repo, headRepo, head }), { flag: 'wx', mode: 0o600 });
   } catch (error) {
@@ -201,7 +221,7 @@ function publish(): PrRecord {
     throw error;
   }
   try {
-    return createPr(
+    const pr = createPr(
       {
         repo,
         headRepo,
@@ -214,6 +234,8 @@ function publish(): PrRecord {
       },
       source
     );
+    writeFileSync(claimPath, JSON.stringify({ repo, headRepo, head, pr }), { mode: 0o600 });
+    return pr;
   } catch (error) {
     // A forge refusal is definite: no write was sent, so the claim would only block
     // a retry. Every other failure may have left a pull request behind.

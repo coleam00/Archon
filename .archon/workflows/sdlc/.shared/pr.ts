@@ -25,6 +25,8 @@ import {
   type QualifiedPr,
 } from './forge.ts';
 
+export const PR_CREATE_RECORD = 'pr-create-started';
+
 export interface PrView {
   readonly pr: PrRecord;
   readonly title: string;

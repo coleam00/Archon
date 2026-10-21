@@ -5,7 +5,7 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -215,6 +215,14 @@ describe("deliver's report after a node failure", () => {
     );
     expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
+  });
+  it('does not claim an unverified create and names an unreadable creation record', () => {
+    expect(failedReport({ artifactsByType: {} }, {
+      'pr-create-started': JSON.stringify({ repo: PR.repo, head: 'feature' }),
+    })).toMatchObject({ reason: 'failed', pr_url: '' });
+    const unreadable = failedReport({ artifactsByType: {} }, { 'pr-create-started': 'invalid JSON' });
+    expect(unreadable).toMatchObject({ reason: 'failed', pr_url: '' });
+    expect(unreadable).toHaveProperty('summary', expect.stringContaining('pr-create-started'));
   });
 });
 
