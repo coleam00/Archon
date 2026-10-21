@@ -1458,7 +1458,7 @@ describe('orchestrator-agent handleMessage', () => {
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          `Path does not exist: ${canonicalPath}`
+          `Could not register project: Path does not exist: ${canonicalPath}`
         );
         expect(mockCreateCodebase).not.toHaveBeenCalled();
         expect(mockUpdateCodebase).not.toHaveBeenCalled();

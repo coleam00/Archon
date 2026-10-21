@@ -24,6 +24,7 @@ test.each([false, true])(
       env: {
         ...process.env,
         ARCHON_HOME: home,
+        DEFAULT_AI_ASSISTANT: 'claude',
         DATABASE_URL: '',
         ARCHON_TELEMETRY_DISABLED: '1',
       },

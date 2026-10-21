@@ -623,13 +623,13 @@ describe('registry', () => {
       expect(opencodeEntries).toHaveLength(1);
     });
 
-    test('declares capabilities (sessionResume, structuredOutput, agents, toolRestrictions, costReporting supported; untranslated node fields and env injection stay off)', () => {
+    test('declares capabilities (sessionResume, structuredOutput, agents, toolRestrictions, costReporting, envInjection supported; untranslated node fields stay off)', () => {
       registerOpencodeProvider();
       const caps = getProviderCapabilities('opencode');
       expect(caps.sessionResume).toBe(true);
       expect(caps.mcp).toBe(false);
       expect(caps.structuredOutput).toBe('enforced');
-      expect(caps.envInjection).toBe(false);
+      expect(caps.envInjection).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(false);
       expect(caps.agents).toBe(true);

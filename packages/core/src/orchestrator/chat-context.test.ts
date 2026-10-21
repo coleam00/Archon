@@ -230,6 +230,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(requestOptions.env).toEqual({
       FILE_SECRET: 'file-value',
       DB_SECRET: 'db-value',
+      ARCHON_WORKFLOW_CODEBASE_ID: 'codebase-1',
     });
   });
 
@@ -264,7 +265,10 @@ describe('discoverAllWorkflows — remote sync', () => {
       'codebase_env_vars_load_failed'
     );
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+    expect(requestOptions.env).toEqual({
+      FILE_SECRET: 'file-value',
+      ARCHON_WORKFLOW_CODEBASE_ID: 'codebase-1',
+    });
   });
 
   test.each(['stub-plugin', 'claude'])(
