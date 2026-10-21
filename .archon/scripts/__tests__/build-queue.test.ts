@@ -132,6 +132,14 @@ describe('the build record', () => {
     expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
+  test('an unresolved create refuses PR selection until a later round identifies the PR', () => {
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    for (const prior of [[], [round('r1', AT)]]) {
+      expect(() => itemPullRequest([...prior, unresolved], TRIAGE, PR.repo)).toThrow('unresolved PR create');
+    }
+    expect(itemPullRequest([unresolved, round('r3', AT)], TRIAGE, PR.repo)).toEqual(PR);
+  });
+
   test('the rounds since a re-triage or a maintainer answer count toward the round cap', () => {
     const rounds = [round('a', '2026-10-16T00:30:00.000Z'), round('b', '2026-10-16T01:30:00.000Z'), round('c', '2026-10-16T02:30:00.000Z')];
     expect(countedRounds(triaged({}, record({ rounds })))).toBe(3);

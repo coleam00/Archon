@@ -673,7 +673,9 @@ describe('publish-pr writes the description section a delivery round prepared', 
       artifacts: existsSync(join(result.artifacts, 'pr-create-verified.json'))
         ? { 'pr-create-verified.json': readFileSync(join(result.artifacts, 'pr-create-verified.json'), 'utf8') }
         : {},
-      preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
+      preload: `import { mkdirSync, utimesSync } from 'node:fs';
+        mkdirSync('{ARTIFACTS}/pr-create-started');
+        utimesSync('{ARTIFACTS}/pr-create-started', 100, 100);`,
     });
     expect(report.code).toBe(0);
     const ending = JSON.parse(report.stdout);
@@ -706,6 +708,16 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.stderr).toContain('pr-create-verified.json');
     expect(result.stderr.match(/EISDIR/g)?.length).toBe(2);
     expect(result.bodies).toEqual([]);
+    const report = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      preload: `import { mkdirSync } from 'node:fs';
+        mkdirSync('{ARTIFACTS}/pr-create-started');
+        mkdirSync('{ARTIFACTS}/pr-create-verified.json');`,
+    });
+    expect(report.code).toBe(0);
+    const ending = JSON.parse(report.stdout);
+    expect(ending).toMatchObject({ ready: false, reason: 'pr_create_unresolved', pr_url: '' });
+    expect(() => itemPullRequest([{ ...ending, run_id: 'run', at: '', delivered: false, artifacts: '' }], undefined, PR.repo)).toThrow('unresolved PR create');
   });
 
   it.each([

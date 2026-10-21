@@ -9,6 +9,7 @@
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import { note } from './io.ts';
+import { PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
@@ -185,6 +186,10 @@ export function itemPullRequest(
   triage: TriageFacts | undefined,
   repo: QualifiedPr['repo']
 ): QualifiedPr | null {
+  const unresolved = rounds.map(round => round.reason).lastIndexOf(PR_CREATE_UNRESOLVED);
+  if (unresolved >= 0 && !rounds.slice(unresolved + 1).some(round => round.pr_url !== '')) {
+    throw new Error(`round ${rounds[unresolved]?.run_id} has an unresolved PR create; reconcile its artifacts and continue that PR explicitly`);
+  }
   const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
   if (url === undefined) {
     return triage?.pull_request == null ? null : { repo, number: triage.pull_request };

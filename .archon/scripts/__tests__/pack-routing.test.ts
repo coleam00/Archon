@@ -279,14 +279,39 @@ describe("deliver's report after a node failure", () => {
     expect(JSON.parse(run.stdout)).toMatchObject({ pr_url: PR_URL, summary: expect.stringContaining('pr-create-verified.json') });
   });
 
-  it('does not claim an unverified create and names an unreadable creation record', () => {
-    expect(failedReport({ artifactsByType: {} }, {
-      'pr-create-started': JSON.stringify({ repo: PR.repo, head: 'feature' }),
-    })).toMatchObject({ reason: 'failed', pr_url: '' });
-    const unreadable = failedReport({ artifactsByType: {} }, { 'pr-create-started': 'invalid JSON' });
-    expect(unreadable).toMatchObject({ reason: 'failed', pr_url: '' });
-    expect(unreadable).toHaveProperty('summary', expect.stringContaining('pr-create-started'));
+  it.each([true, false])('orders an unresolved claim against typed output (claim latest: %s)', claimIsLatest => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ repo: PR.repo, head: 'feature' }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${claimIsLatest ? 100 : 300});
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      ready: false, reason: claimIsLatest ? 'pr_create_unresolved' : 'failed', pr_url: claimIsLatest ? '' : PR_URL,
+    });
   });
+
+  for (const script of ['deliver/scripts/report', 'ship/scripts/report']) {
+    it.each(['unverified', 'unreadable', 'directory'])(
+      'distinguishes an unresolved %s create from no PR', kind => {
+        const run = runPackScript(script, {
+          inputs: { INPUTS_OUTCOME: 'null' },
+          artifacts: kind === 'directory' ? {} : {
+            'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, head: 'feature' }) : 'invalid JSON',
+          },
+          preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
+        });
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '', summary: expect.stringContaining('pr-create-started') });
+      }
+    );
+  }
 });
 
 describe("ship's continued pull request", () => {

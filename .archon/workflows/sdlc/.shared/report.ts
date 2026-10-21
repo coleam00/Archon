@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD } from './pr.ts';
+import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, PR_CREATE_UNRESOLVED } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -207,35 +207,39 @@ function creationRecord(path: string): { url: string; at?: number; problem?: str
     return { url: isObject(pr) && typeof pr.url === 'string' ? pr.url : '', at: modified(path) };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
-    return { url: '', problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
+    return { url: '', at: modified(path), problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
-function createdPr(artifacts: string): { url: string; at?: number; problem?: string } {
+function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
   const records = [PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD].map(name => creationRecord(join(artifacts, name)));
   const latest = records.filter(record => record.url !== '').sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).at(-1);
   const problems = records.flatMap(record => record.problem === undefined ? [] : [record.problem]);
-  return { url: latest?.url ?? '', at: latest?.at, problem: problems.length === 0 ? undefined : problems.join('\n\n') };
+  const claim = records[0];
+  const unresolvedAt = claim?.url === '' && (claim.at !== undefined || claim.problem !== undefined) ? (claim.at ?? Infinity) : undefined;
+  return { url: latest?.url ?? '', at: latest?.at, unresolvedAt, problem: problems.length === 0 ? undefined : problems.join('\n\n') };
 }
 
 /**
- * The URL of the pull request this run last published, from the engine's
- * typed-artifact listing or its verified creation records, ordered by artifact write
- * time; empty when it published none. A tail that failed after publishing still names its pull request, so the next run continues that one
- * instead of opening another. An unreadable listing is named by `failed`'s summary.
+ * Verified publication records outlive failed nodes that produced no typed output.
+ * An unresolved creation claim must not look like permission to open another PR.
  */
-export function publishedPrUrl(
+export function failedPublication(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
-): string {
+): { reason: string; pr_url: string } {
   const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
   const latest = read.values.at(-1);
   const entry = read.entries?.at(-1);
   const created = createdPr(artifacts);
   const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
-  if (isObject(latest) && typeof latest.url === 'string' &&
-    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))) return latest.url;
-  return created.url;
+  const { url, at } = isObject(latest) && typeof latest.url === 'string' &&
+    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))
+    ? { url: latest.url, at: publishedAt } : created;
+  if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
+    return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
+  }
+  return { reason: 'failed', pr_url: url };
 }
 
 /**
@@ -248,9 +252,11 @@ export function failed(
   options: { readonly listingFile: string | undefined }
 ): string {
   const { problem } = createdPr(artifacts);
+  const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
   return (
     'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
     'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
+    (!unresolved ? '' : `\n\nReconcile the PR create recorded at ${join(artifacts, PR_CREATE_RECORD)} before continuing; its identity may not have been saved.`) +
     (problem ? `\n\n${problem}` : '') +
     caveats(artifacts, options)
   );
