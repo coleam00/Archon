@@ -217,19 +217,25 @@ export interface ResourceSlotOccupancy {
   /** `heldCheckouts` of the live runs admitted on the resource. */
   heldCheckouts: ReadonlyMap<string, string>;
   foreignHeldCheckouts: ReadonlyMap<string, string>;
+  /** Oldest foreign holder whose corrupt launch and absent path hide its checkout. */
+  unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
 }
 
-/** The run whose checkout `launch` would fail to lock. */
 function checkoutHolder(
-  slot: Pick<ResourceSlotOccupancy, 'heldCheckouts' | 'foreignHeldCheckouts'>,
+  slot: Pick<
+    ResourceSlotOccupancy,
+    'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder'
+  >,
   launch: PreparedWorkflowLaunch
 ): string | undefined {
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
   return (
     slot.heldCheckouts.get(checkout) ??
-    (readAdmissionCheckoutGuard(launch) ? slot.foreignHeldCheckouts.get(checkout) : undefined)
+    (readAdmissionCheckoutGuard(launch)
+      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
+      : undefined)
   );
 }
 

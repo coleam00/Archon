@@ -187,3 +187,31 @@ test('drains reserve registered aliases in both orders, including read-only and 
     }
   }
 });
+
+test('unknown foreign checkout identity only blocks guarded shared checkouts', () => {
+  const readOnly = launch(false);
+  const branchless = launch();
+  branchless.execution.isolation = { kind: 'worktree' };
+  const occupied = { ...slot(), unknownForeignCheckoutHolder: 'unknown' };
+  for (const incoming of [launch(), launch(true, 'explicit')])
+    expect(resourceStartBlocker(occupied, incoming)).toEqual({ kind: 'run', id: 'unknown' });
+  for (const incoming of [readOnly, branchless])
+    expect(resourceStartBlocker(occupied, incoming)).toBeNull();
+  const guarded = launch();
+  const queue = [guarded, readOnly, branchless].map(launch => ({
+    id: launch.run.id,
+    hostId: 'host',
+    launch,
+  }));
+  expect(drainableStarts({ ...occupied, queue }, 'host')).toEqual(queue.slice(1));
+  const failed = { id: 'failed', metadata: {}, status: 'failed' as const };
+  expect(resourceResumeBlocker({ ...occupied, queue: queue.slice(0, 1) }, failed)).toBeNull();
+  expect(resourceResumeBlocker({ ...occupied, queue }, failed)).toEqual({
+    kind: 'request',
+    id: readOnly.run.id,
+  });
+  expect(resourceStartBlocker({ ...occupied, queue }, branchless)).toEqual({
+    kind: 'request',
+    id: readOnly.run.id,
+  });
+});

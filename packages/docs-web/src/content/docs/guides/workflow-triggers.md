@@ -204,6 +204,8 @@ A drain processes untouched queued requests assigned to one host and admits them
 
 A malformed stored checkout-guard declaration is never admitted. Drains pass over that request and log `resource_start.invalid_queued_guard` with its request ID, so valid queued work can continue. The request stays queued and can be inspected and withdrawn with the trigger CLI. New starts with malformed declarations are rejected before storage.
 
+If a foreign run has both a corrupt stored launch and no recorded working path, admission cannot identify its checkout. Guarded starts targeting an in-place path or explicit branch wait (or skip) with that run named as blocker until its launch is repaired or it ends; read-only starts and branchless worktrees can still proceed. SQL logs `db.foreign_launch_invalid_checkout_unknown` with the foreign run ID.
+
 If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. When a server-hosted start fails this way, the server logs `resource_start.start_failed` with the run ID and the `archon trigger inspect` command to run.
 
 To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel terminates that process and its descendants, then records the run as `cancelled`, which releases the resource. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).

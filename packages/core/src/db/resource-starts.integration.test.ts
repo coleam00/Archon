@@ -1251,10 +1251,14 @@ for (const corruptLaunch of ['{', '{}']) {
 }
 
 for (const corruptLaunch of ['{', '{}']) {
-  test(`foreign launch corruption without a working path fails explicitly: ${corruptLaunch}`, async () => {
+  test(`unknown foreign checkout only blocks potentially conflicting starts: ${corruptLaunch}`, async () => {
     const foreign = launch(crypto.randomUUID());
     const local = launch(crypto.randomUUID());
-    const queued = launch(crypto.randomUUID());
+    const guarded = launch(crypto.randomUUID());
+    const readOnly = launch(crypto.randomUUID());
+    readOnly.run.metadata.admission_checkout_guard = false;
+    const branchless = launch(crypto.randomUUID());
+    branchless.execution.isolation = { kind: 'worktree' };
     const input = (prepared: PreparedWorkflowLaunch, resource = 'local') => ({
       resource,
       capacity: 1,
@@ -1263,20 +1267,104 @@ for (const corruptLaunch of ['{', '{}']) {
       launch: prepared,
     });
     await admitResourceStart(input(foreign, 'foreign'));
-    await admitResourceStart(input(local));
-    await admitResourceStart(input(queued));
+    for (const prepared of [local, guarded, readOnly, branchless])
+      await admitResourceStart(input(prepared));
     await getDatabase().query(
       'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
       [foreign.run.id, corruptLaunch]
     );
-    const message = `Cannot determine checkout held by foreign run '${foreign.run.id}'`;
-    await expect(admitResourceStart(input(launch(crypto.randomUUID()), 'new'))).rejects.toThrow(
-      message
+    for (const template of [readOnly, branchless]) {
+      const independent = { ...template, run: { ...template.run, id: crypto.randomUUID() } };
+      expect(await admitResourceStart(input(independent, independent.run.id))).toMatchObject({
+        status: 'admitted',
+      });
+      const receiptId = crypto.randomUUID();
+      const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+      await acceptStartReceipt({
+        receipt: {
+          id: receiptId,
+          sourceInstanceId: 'unknown-checkout',
+          deliveryId: null,
+          contentDigest: 'local',
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: 'binding',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: '22222222-2222-4222-8222-222222222222',
+            resource: receiptId,
+            capacity: 1,
+            overlap: 'queue',
+            launch: {
+              cwd: template.execution.cwd,
+              workflowName: 'test',
+              inputs: {},
+              isolation: template.execution.isolation,
+            },
+          },
+        ],
+      });
+      expect(await createWorkflowStore().claimStartBindingPreparation(identity)).toBe(true);
+      expect(
+        await completeStartBindingPreparation({
+          ...identity,
+          launch: { ...template, run: { ...template.run, id: crypto.randomUUID() } },
+        })
+      ).toMatchObject({ status: 'admitted' });
+    }
+    for (const isolation of [
+      { kind: 'in-place' as const },
+      { kind: 'worktree' as const, branch: 'explicit' },
+    ]) {
+      for (const overlap of ['queue', 'skip'] as const) {
+        const incoming = launch(crypto.randomUUID());
+        incoming.execution.isolation = isolation;
+        expect(
+          await admitResourceStart({ ...input(incoming, incoming.run.id), overlap })
+        ).toMatchObject({
+          status: overlap === 'queue' ? 'queued' : 'skipped',
+          blocker: { kind: 'run', id: foreign.run.id },
+        });
+      }
+    }
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
+      [local.run.id]
     );
-    await expect(drainResourceStarts({ resource: 'local', hostId: 'host' })).rejects.toThrow(
-      message
+    await expect(resumeWorkflowRun(local.run.id)).rejects.toBeInstanceOf(WorkflowResourceBusyError);
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1",
+      [local.run.id]
     );
-    expect(await getResourceStartRequest(queued.run.id)).toMatchObject({ status: 'queued' });
-    expect(await getWorkflowRun(queued.run.id)).toBeNull();
+    expect((await resumeWorkflowRun(local.run.id)).status).toBe('running');
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [local.run.id]
+    );
+    const drain = () => drainResourceStarts({ resource: 'local', hostId: 'host' });
+    expect(await drain()).toMatchObject([{ runId: readOnly.run.id }]);
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [readOnly.run.id]
+    );
+    expect(await drain()).toMatchObject([{ runId: branchless.run.id }]);
+    expect(await getResourceStartRequest(guarded.run.id)).toMatchObject({ status: 'queued' });
+    expect(await getWorkflowRun(guarded.run.id)).toBeNull();
+    expect((await getWorkflowRun(foreign.run.id))?.status).toBe('pending');
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
+      [branchless.run.id]
+    );
+    expect((await resumeWorkflowRun(branchless.run.id)).status).toBe('running');
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id IN ($1, $2)",
+      [foreign.run.id, branchless.run.id]
+    );
+    expect(await drain()).toMatchObject([{ runId: guarded.run.id }]);
   });
 }

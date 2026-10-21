@@ -253,6 +253,7 @@ export async function resourceStartOccupancy(
     `SELECT codebase_id AS "codebaseId", workflow_id AS branch, working_path AS "workingPath"
        FROM remote_agent_isolation_environments WHERE status = 'active' AND workflow_type = 'task'`
   );
+  let unknownForeignCheckoutHolder: string | undefined;
   const foreign = live.rows
     .filter(row => row.resource_key !== resource)
     .map(row => {
@@ -260,14 +261,16 @@ export async function resourceStartOccupancy(
       if (row.launch === null) return run;
       try {
         return { ...run, launch: parseLaunch(row.launch) };
-      } catch (cause) {
+      } catch {
         // A known execution path still identifies the held checkout and its registered
         // aliases when a foreign launch is corrupt. Never guess without that path.
         if (row.working_path) {
           getLog().error({ runId: run.id }, 'db.foreign_launch_invalid_using_working_path');
           return run;
         }
-        throw new Error(`Cannot determine checkout held by foreign run '${run.id}'`, { cause });
+        getLog().error({ runId: run.id }, 'db.foreign_launch_invalid_checkout_unknown');
+        unknownForeignCheckoutHolder ??= run.id;
+        return run;
       }
     });
   return {
@@ -282,6 +285,7 @@ export async function resourceStartOccupancy(
     })),
     heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
+    unknownForeignCheckoutHolder,
   };
 }
 
