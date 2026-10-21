@@ -38,6 +38,11 @@ inputs:
 
 returns: record
 
+# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
 nodes:
   - id: facts
     script: facts
