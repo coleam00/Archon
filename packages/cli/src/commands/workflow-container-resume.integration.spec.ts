@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
-import { isRunOwnedByThisProcess } from '@archon/core/services/run-live-owner';
+import { isRunOwnedByThisProcess, startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { registerHostProviders } from '@archon/core/providers/register-host-providers';
 import { clearRegistry } from '@archon/providers';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
@@ -209,6 +209,36 @@ test('a stale candidate never restarts or tears down another execution', async (
     expect(executionClaim((await f.store.getWorkflowRun(candidate.id))?.metadata ?? {})).toBe(
       executionClaim(admitted.metadata)
     );
+  });
+});
+
+test('an admitted live-owner collision reports failure and permits ordinary retry', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused();
+    const owner = await startRunLiveOwner(candidate.id);
+    try {
+      const result = await captureCommand({}, () => f.command(candidate));
+      expect(result.status).toBe(1);
+      expect(result.output).toContain('Run live-owner endpoint is already owned:');
+      expect(result.output).not.toContain('already continuing in another process');
+      expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+      expect((await f.store.listWorkflowEvents(candidate.id)).at(-1)?.event_type).toBe(
+        'workflow_failed'
+      );
+      expect(f.resume).toHaveBeenCalledTimes(1);
+      expect(f.execute).not.toHaveBeenCalled();
+      expect(f.accepted).not.toHaveBeenCalled();
+      expect(f.destroy).not.toHaveBeenCalled();
+      expect(f.suspend).not.toHaveBeenCalled();
+      expect(isRunOwnedByThisProcess(candidate.id)).toBe(true);
+    } finally {
+      await owner.close();
+    }
+    const failed = await f.store.getWorkflowRun(candidate.id);
+    if (!failed) throw new Error('Missing failed run');
+    await f.command(failed);
+    expect(f.execute).toHaveBeenCalledTimes(1);
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('completed');
   });
 });
 
