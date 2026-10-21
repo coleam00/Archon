@@ -1,21 +1,30 @@
+import {
+  slotMembershipSchema,
+  slotSchema,
+  requestSchema,
+  queuedRequestSchema,
+  requestEnvelopeSchema,
+  bindingSchema,
+  bindingInspectionSchema,
+  receiptSchema,
+  receiptFieldsSchema,
+  pathFor,
+  deliveryPathFor,
+  type Request,
+  type Slot,
+  type Receipt,
+  type Binding,
+} from './admission-documents';
 import { holdsWorkflowPath } from '../workflow-path-lock';
-import { createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import { createLogger } from '@archon/paths/logger';
-import { isOwnerProvablyGone, parseProcessOwner } from '@archon/paths/process-owner';
+import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
-  resourceStartOverlapSchema,
-  resourceStartRequestStatusSchema,
-  startBindingPreparationStatusSchema,
-  sourceReceiptOutcomeSchema,
-  resourceStartBindingIntentSchema,
-  resourceStartDispositionSchema,
-  sourceReceiptInputSchema,
   sourceReceiptAcceptanceSchema,
   type ResourceStartIntent,
   type ResourceStartDisposition,
@@ -53,78 +62,6 @@ import { createTransactionView } from './transaction-view';
 
 const log = createLogger('file-store.admission');
 
-const slotMembershipSchema = z.object({
-  holders: z.array(
-    z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('run'), id: z.string() }),
-      z.object({ kind: z.literal('attempt'), id: z.string(), owner: z.unknown().optional() }),
-    ])
-  ),
-  // Checkout membership survives giving back capacity while paused.
-  admitted: z.array(z.string()).default([]),
-});
-
-/** `source` names the slot document in a malformed attempt owner's error. */
-const slotSchema = (source: string) =>
-  slotMembershipSchema.extend({
-    capacity: z.number().int().positive(),
-    holders: slotMembershipSchema.shape.holders.transform(holders =>
-      holders.map(holder =>
-        holder.kind === 'attempt'
-          ? { ...holder, owner: parseProcessOwner(holder.owner, source) }
-          : holder
-      )
-    ),
-    queue: z.array(z.string()),
-  });
-const requestSchema = z.object({
-  id: z.string(),
-  resource: z.string(),
-  hostId: z.string(),
-  overlap: resourceStartOverlapSchema,
-  status: resourceStartRequestStatusSchema,
-  blocker: resourceStartDispositionSchema.options[1].shape.blocker.nullable(),
-  launch: preparedWorkflowLaunchSchema,
-  position: z.number().int().nonnegative(),
-});
-function queuedRequestSchema(id: string, slotPath: string) {
-  return requestSchema.refine(
-    row =>
-      row.id === id &&
-      row.launch.run.id === id &&
-      row.status === 'queued' &&
-      pathFor('slots', row.resource) === slotPath,
-    { message: `Queued resource request '${id}' does not belong to resource slot '${slotPath}'` }
-  );
-}
-const requestEnvelopeSchema = requestSchema.pick({ resource: true, status: true }).extend({
-  status: z.literal('admitted'),
-  launch: z.unknown(),
-});
-const bindingSchema = z.object({
-  receiptId: z.string(),
-  bindingId: z.string(),
-  bindingRevision: z.string().nullable(),
-  hostId: z.string().nullable(),
-  status: startBindingPreparationStatusSchema,
-  ownerId: z.string().nullable(),
-  error: z.string().nullable(),
-  intent: resourceStartBindingIntentSchema.nullable(),
-  requestIds: z.array(z.string()),
-});
-const bindingInspectionSchema = bindingSchema.omit({ requestIds: true });
-const receiptFieldsSchema = sourceReceiptInputSchema.strip();
-const receiptSchema = sourceReceiptInputSchema.extend({
-  outcome: sourceReceiptOutcomeSchema,
-  reason: z.string().nullable(),
-  bindings: z.array(bindingSchema),
-  createdAt: z.string(),
-});
-type Request = z.infer<typeof requestSchema>;
-const pathFor = (kind: string, key: string): string =>
-  `resource/${kind}/${createHash('sha256').update(key).digest('hex')}.json`;
-const deliveryPathFor = (sourceInstanceId: string, deliveryId: string): string =>
-  pathFor('deliveries', JSON.stringify([sourceInstanceId, deliveryId]));
 async function documentPaths(root: string, kind: string): Promise<string[]> {
   let names: string[];
   try {
@@ -143,9 +80,6 @@ function disposition(row: Request): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
-type Slot = z.infer<ReturnType<typeof slotSchema>>;
-type Receipt = z.infer<typeof receiptSchema>;
-type Binding = z.infer<typeof bindingSchema>;
 interface BindingIdentity {
   receiptId: string;
   bindingId: string;
@@ -158,7 +92,7 @@ interface AdmissionTransaction {
   request(id: string): Promise<Request | null>;
   receipt(id: string): Promise<Receipt | null>;
   slot(resource: string, capacity?: number): Promise<Slot>;
-  occupancy(resource: string): Promise<ResourceSlotOccupancy>;
+  occupancy(resource: string, launch?: Request['launch']): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
     runs: Map<string, WorkflowRun>
@@ -219,7 +153,11 @@ export function createAdmissionTransaction(
     row.holders = holders;
     return row;
   }
-  async function hasForeignSlotMembership(id: string, resource: string): Promise<boolean> {
+  async function hasForeignSlotMembership(
+    id: string,
+    resource: string,
+    associationKnown = false
+  ): Promise<boolean> {
     for (const path of await documentPaths(root, 'slots')) {
       if (path === pathFor('slots', resource)) continue;
       try {
@@ -230,13 +168,22 @@ export function createAdmissionTransaction(
         )
           return true;
       } catch (error) {
+        // Resume trusts its validated request when historical membership is absent.
+        // Readable contradictions still refuse it; occupancy reports unreadable foreign
+        // membership when that holder's checkout could affect the resume.
+        if (associationKnown) continue;
         throw new Error(`Invalid resource slot membership '${path}'`, { cause: error });
       }
     }
     return false;
   }
-  async function occupancyRun(run: WorkflowRun, resource: string, local: boolean) {
-    const knownForeign = !local && (await hasForeignSlotMembership(run.id, resource));
+  async function occupancyRun(
+    run: WorkflowRun,
+    resource: string,
+    local: boolean,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ) {
     try {
       const path = pathFor('requests', run.id);
       const raw = path in documents ? documents[path] : await readJson(join(root, path));
@@ -250,36 +197,71 @@ export function createAdmissionTransaction(
               .parse(raw).launch,
           },
         };
-      const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
-      if (!knownForeign && envelope?.resource === resource && capacityWaiters([run]).length > 0) {
-        const row = requestSchema
-          .refine(row => row.id === run.id && row.launch.run.id === run.id, {
-            message: `Admitted resource request '${run.id}' does not identify the waiting run`,
-          })
-          .parse(raw);
-        return { kind: 'local' as const, run: { ...run, launch: row.launch } };
-      }
-      // Without a capacity refusal, old released slots have no independent membership.
-      // A readable envelope alone cannot establish capacity membership.
-      if (!knownForeign && envelope)
-        return {
-          kind: 'unknown' as const,
-          run: { ...run, launch: preparedWorkflowLaunchSchema.parse(envelope.launch) },
-        };
-      if (!holdsWorkflowPath(run)) return null;
-      const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
-      return {
-        kind: 'foreign' as const,
-        run: { ...run, launch },
-        unknown: knownForeign && !launch && !run.working_path,
-      };
+      return await nonlocalOccupancyRun(run, resource, raw, checkouts, reusable);
     } catch (error) {
-      if (local) throw error;
-      return corruptForeignOccupancy(run, knownForeign, error);
+      if (local || !(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      return corruptForeignOccupancy(run, await hasForeignSlotMembership(run.id, resource), error);
     }
   }
-  async function corruptForeignOccupancy(run: WorkflowRun, knownForeign: boolean, error: unknown) {
-    if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+  function independentCheckout(
+    run: WorkflowRun,
+    resource: string,
+    raw: unknown,
+    envelope: z.infer<typeof requestEnvelopeSchema> | null,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ): boolean {
+    if (!envelope && run.working_path) {
+      const held = heldCheckouts([run], reusable);
+      if (![...held.keys()].some(key => checkouts.has(key))) return true;
+    }
+    if (envelope && (envelope.resource !== resource || capacityWaiters([run]).length === 0)) {
+      const row = requestSchema.safeParse(raw);
+      if (row.success && row.data.id === run.id && row.data.launch.run.id === run.id) {
+        const held = heldCheckouts([{ ...run, launch: row.data.launch }], reusable);
+        if (held.size > 0 && ![...held.keys()].some(key => checkouts.has(key))) return true;
+      }
+    }
+    return false;
+  }
+  async function nonlocalOccupancyRun(
+    run: WorkflowRun,
+    resource: string,
+    raw: unknown,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ) {
+    const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
+    if (independentCheckout(run, resource, raw, envelope, checkouts, reusable)) return null;
+    const knownForeign = await hasForeignSlotMembership(run.id, resource);
+    if (!knownForeign && envelope?.resource === resource && capacityWaiters([run]).length > 0) {
+      const row = requestSchema
+        .refine(row => row.id === run.id && row.launch.run.id === run.id, {
+          message: `Admitted resource request '${run.id}' does not identify the waiting run`,
+        })
+        .parse(raw);
+      return { kind: 'local' as const, run: { ...run, launch: row.launch } };
+    }
+    // Without a capacity refusal, old released slots have no independent membership.
+    // A readable envelope alone cannot establish capacity membership.
+    if (!knownForeign && envelope)
+      return {
+        kind: 'unknown' as const,
+        run: { ...run, launch: preparedWorkflowLaunchSchema.parse(envelope.launch) },
+      };
+    if (!holdsWorkflowPath(run)) return null;
+    const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
+    return {
+      kind: 'foreign' as const,
+      run: { ...run, launch },
+      unknown: knownForeign && !launch && !run.working_path,
+    };
+  }
+  function corruptForeignOccupancy(
+    run: WorkflowRun,
+    knownForeign: boolean,
+    error: z.ZodError | SyntaxError
+  ) {
     if (!holdsWorkflowPath(run)) return null;
     // A released paused run may still be local. Only proven foreign membership
     // permits the corruption fallback, which allows read-only concurrency.
@@ -297,8 +279,22 @@ export function createAdmissionTransaction(
 
   // Paused runs, and so waiters, live only on run rows: finding them scans every run, as
   // the due scan does.
-  async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
+  async function occupancy(
+    resource: string,
+    launch?: Request['launch']
+  ): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
+    const queue: QueuedStart[] = [];
+    for (const id of row.queue) {
+      const queued = await request(id);
+      if (!queued) throw new Error('Queued resource request missing');
+      queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(queued));
+    }
+    const reusable = await listReusableCheckouts();
+    const checkouts = heldCheckouts(
+      launch ? [...queue, { id: launch.run.id, launch }] : queue,
+      reusable
+    );
     const admittedRuns: (WorkflowRun & { launch: Request['launch'] })[] = [];
     const foreign: (WorkflowRun & { launch?: Request['launch'] })[] = [];
     const possiblyLocal: (WorkflowRun & { launch: Request['launch'] })[] = [];
@@ -312,7 +308,9 @@ export function createAdmissionTransaction(
         run,
         resource,
         row.admitted.includes(run.id) ||
-          row.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
+          row.holders.some(holder => holder.kind === 'run' && holder.id === run.id),
+        checkouts,
+        reusable
       );
       if (holder?.kind === 'local') {
         admittedRuns.push(holder.run);
@@ -323,13 +321,6 @@ export function createAdmissionTransaction(
         if (holder.unknown) unknownForeignCheckoutHolder ??= run.id;
       }
     }
-    const queue: QueuedStart[] = [];
-    for (const id of row.queue) {
-      const queued = await request(id);
-      if (!queued) throw new Error('Queued resource request missing');
-      queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(queued));
-    }
-    const reusable = await listReusableCheckouts();
     return {
       capacity: row.capacity,
       reusableCheckouts: reusable,
@@ -372,7 +363,7 @@ export function createAdmissionTransaction(
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
+    const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -418,12 +409,12 @@ export function createAdmissionTransaction(
     if (row.id !== run.id || row.launch.run.id !== run.id)
       throw new Error(`Admitted resource request '${run.id}' does not identify the resumed run`);
     const resource = await slot(row.resource);
-    if (await hasForeignSlotMembership(run.id, row.resource))
+    if (await hasForeignSlotMembership(run.id, row.resource, true))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);
-    const blocker = resourceResumeBlocker(await occupancy(row.resource), {
+    const blocker = resourceResumeBlocker(await occupancy(row.resource, row.launch), {
       ...run,
       status: run.status,
     });

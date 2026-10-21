@@ -999,12 +999,6 @@ for (const corruption of queuedCorruptions) {
     await store.admitResourceStart(queued);
     await store.admitResourceStart(foreignHolder);
     await store.admitResourceStart(foreignQueued);
-    const slotPath = join(
-      root,
-      'resource/slots',
-      `${createHash('sha256').update('foreign').digest('hex')}.json`
-    );
-    const intactSlot = await readFile(slotPath, 'utf8');
     const path = await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
     const unclassified = !['launch', 'missing-status', 'invalid-status'].includes(corruption);
     const checkListing = async () => {
@@ -1028,12 +1022,6 @@ for (const corruption of queuedCorruptions) {
     await checkListing();
     await finishRun(root, holder.launch.run.id);
     const listed = await checkListing();
-    if (corruption === 'slot-json' || corruption === 'slot-null') {
-      await expect(
-        store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
-      ).rejects.toThrow();
-      await writeFile(slotPath, intactSlot);
-    }
     for (const resource of new Set(
       listed.flatMap(row => ('error' in row ? [] : [row])).map(row => row.resource)
     )) {
@@ -1041,8 +1029,6 @@ for (const corruption of queuedCorruptions) {
         { status: 'admitted', runId: queued.launch.run.id },
       ]);
     }
-    if (corruption === 'slot-json' || corruption === 'slot-null')
-      await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
     expect(await store.listQueuedResourceStartsForHost('foreign-host')).toMatchObject([
       { error: expect.any(Error) },
     ]);
@@ -1288,6 +1274,32 @@ test.each(
   }
 );
 
+test.each(['document', 'launch', 'both'] as const)(
+  'pre-retry admission rejects a historical waiter with mismatched %s identity',
+  async damage => {
+    const { root, store, holder, queued, path, intact } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    await store.updateWorkflowRun(holder.launch.run.id, {
+      metadata: { capacity_wait: { since: '2026-01-02T00:00:00.000Z' } },
+    });
+    const damaged = structuredClone(intact);
+    if (damage !== 'launch') damaged.id = crypto.randomUUID();
+    if (damage !== 'document') damaged.launch.run.id = crypto.randomUUID();
+    await writeFile(path, JSON.stringify(damaged));
+    const incoming = intent();
+    incoming.launch.execution.cwd = '/incoming';
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    await expect(store.admitResourceStart(incoming)).rejects.toThrow(
+      'does not identify the waiting run'
+    );
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+  }
+);
+
 for (const status of ['paused', 'failed'] as const) {
   test.each(['document', 'launch', 'both'] as const)(
     `historical ${status} resume rejects mismatched %s request identity`,
@@ -1322,16 +1334,20 @@ for (const status of ['paused', 'failed'] as const) {
 
 test.each(
   (['admission', 'drain', 'paused resume', 'failed resume'] as const).flatMap(operation =>
-    (['admitted', 'holders', 'json'] as const).map(damage => ({ operation, damage }))
+    (['admitted', 'holders', 'json'] as const).flatMap(damage =>
+      [false, true].map(independent => ({ operation, damage, independent }))
+    )
   )
 )(
-  'damaged foreign slot $damage surfaces its error during $operation',
-  async ({ operation, damage }) => {
+  'damaged foreign slot $damage during $operation with independent=$independent',
+  async ({ operation, damage, independent }) => {
     const { root, store } = await fixture();
     const foreign = { ...intent(), resource: 'foreign' };
+    foreign.launch.run.metadata.admission_checkout_guard = false;
     const contender = intent();
     contender.launch.run.metadata.admission_checkout_guard = false;
     if (operation.includes('resume')) contender.launch.execution.cwd = '/contender';
+    foreign.launch.execution.cwd = contender.launch.execution.cwd;
     if (operation !== 'admission') {
       const occupant = intent();
       occupant.launch.execution.cwd = '/occupant';
@@ -1346,6 +1362,12 @@ test.each(
       }
       await finishRun(root, occupant.launch.run.id);
     }
+    if (independent) {
+      foreign.launch.execution.cwd = '/foreign';
+      const manual = intent().launch.run;
+      await store.createWorkflowRun(manual);
+      await store.claimPendingWorkflowRun(manual.id, '/manual');
+    }
     await store.admitResourceStart(foreign);
     const path = join(
       root,
@@ -1353,7 +1375,8 @@ test.each(
       `${createHash('sha256').update('foreign').digest('hex')}.json`
     );
     const slot = JSON.parse(await readFile(path, 'utf8'));
-    await writeFile(path, damage === 'json' ? '{' : JSON.stringify({ ...slot, [damage]: 42 }));
+    const damagedSlot = damage === 'json' ? '{' : JSON.stringify({ ...slot, [damage]: 42 });
+    await writeFile(path, damagedSlot);
     const head = await readFile(join(root, 'head.json'), 'utf8');
     const attempt = () =>
       operation === 'admission'
@@ -1361,6 +1384,18 @@ test.each(
         : operation === 'drain'
           ? store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
           : store.resumeWorkflowRun(contender.launch.run.id);
+    const expectProgress = async () => {
+      if (operation === 'admission') expect(await attempt()).toMatchObject({ status: 'admitted' });
+      else if (operation === 'drain')
+        expect(await attempt()).toMatchObject([{ runId: contender.launch.run.id }]);
+      else expect(await attempt()).toMatchObject({ status: 'running' });
+    };
+    if (independent) {
+      await expectProgress();
+      expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('pending');
+      expect(await readFile(path, 'utf8')).toBe(damagedSlot);
+      return;
+    }
     await expect(attempt()).rejects.toMatchObject({
       message: `Invalid resource slot membership 'resource/slots/${createHash('sha256').update('foreign').digest('hex')}.json'`,
       cause: expect.any(damage === 'json' ? SyntaxError : ZodError),
@@ -1368,9 +1403,61 @@ test.each(
     expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
     expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('pending');
     await writeFile(path, JSON.stringify(slot));
-    if (operation === 'admission') expect(await attempt()).toMatchObject({ status: 'admitted' });
-    else if (operation === 'drain')
-      expect(await attempt()).toMatchObject([{ runId: contender.launch.run.id }]);
-    else expect(await attempt()).toMatchObject({ status: 'running' });
+    await expectProgress();
   }
 );
+
+test.each(['paused', 'failed'] as const)(
+  'historical %s resume drains independently of unreadable foreign membership',
+  async status => {
+    const { root, store, holder, queued } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    if (status === 'failed')
+      await commitModule.commit(root, [holder.launch.run.id], async runs => ({
+        result: undefined,
+        changes: { runs: [{ run: { ...runs.get(holder.launch.run.id)!, status: 'failed' } }] },
+      }));
+    const foreign = { ...intent(), resource: 'foreign' };
+    foreign.launch.execution.cwd = '/foreign';
+    await store.admitResourceStart(foreign);
+    const path = join(
+      root,
+      'resource/slots',
+      `${createHash('sha256').update('foreign').digest('hex')}.json`
+    );
+    await writeFile(path, '{');
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
+    expect(await readFile(path, 'utf8')).toBe('{');
+    expect((await store.getWorkflowRun(foreign.launch.run.id))?.status).toBe('pending');
+  }
+);
+
+test('unreadable foreign membership remains relevant through a registered checkout alias', async () => {
+  const { root, store } = await fixture();
+  const foreign = { ...intent(), resource: 'foreign' };
+  foreign.launch.execution.cwd = '/foreign';
+  await store.admitResourceStart(foreign);
+  const path = join(
+    root,
+    'resource/slots',
+    `${createHash('sha256').update('foreign').digest('hex')}.json`
+  );
+  await writeFile(path, '{');
+  const reopened = await createFileWorkflowStore({
+    root,
+    listReusableCheckouts: async () => [
+      { codebaseId: 'codebase', branch: 'alias', workingPath: '/foreign' },
+    ],
+  });
+  const contender = intent();
+  contender.launch.execution.isolation = { kind: 'worktree', branch: 'alias' };
+  await expect(reopened.admitResourceStart(contender)).rejects.toThrow(
+    'Invalid resource slot membership'
+  );
+  expect(await reopened.getResourceStartRequest(contender.launch.run.id)).toBeNull();
+});

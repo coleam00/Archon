@@ -728,6 +728,7 @@ for (const corruption of [
     await queueResource('a', corruption === 'launch' ? 3 : 2);
     await queueResource('z', 2);
     for (const id of holders) {
+      if (corruption === 'only-slot-json' && id === holders[0]) continue;
       await store.claimPendingWorkflowRun(id);
       await store.completeWorkflowRun(id, { duration_ms: 1 });
     }
