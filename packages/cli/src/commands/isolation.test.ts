@@ -363,10 +363,10 @@ describe('isolationCompleteCommand', () => {
 
     await isolationCompleteCommand(['feature-branch'], {});
 
-    expect(mockRemoveEnvironment).toHaveBeenCalledWith(row, {
-      force: undefined,
-      deleteRemoteBranch: true,
-    });
+    expect(mockRemoveEnvironment).toHaveBeenCalledWith(
+      { ...row, codebase_default_cwd },
+      { force: undefined, deleteRemoteBranch: true }
+    );
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
   });
 

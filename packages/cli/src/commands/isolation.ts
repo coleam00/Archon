@@ -552,10 +552,7 @@ function reportCompletionResult(
 
 class CompletionRefusal extends Error {}
 
-async function resolveCompletionEnvironment(branch: string): Promise<{
-  env: CompletionEnvironment;
-  registration: IsolationEnvironmentRow;
-} | null> {
+async function resolveCompletionEnvironment(branch: string): Promise<CompletionEnvironment | null> {
   const matches = (await isolationDb.listActive()).filter(
     candidate => candidate.branch_name === branch
   );
@@ -571,19 +568,16 @@ async function resolveCompletionEnvironment(branch: string): Promise<{
   if (!selected) return null;
   const codebase = await getCodebase(selected.codebase_id);
   if (!codebase) throw new CompletionRefusal('environment codebase not found');
-  return {
-    env: { ...selected, codebase_default_cwd: codebase.default_cwd },
-    registration: selected,
-  };
+  return { ...selected, codebase_default_cwd: codebase.default_cwd };
 }
 
 async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let resolved: Awaited<ReturnType<typeof resolveCompletionEnvironment>>;
+  let env: CompletionEnvironment | null;
   try {
-    resolved = await resolveCompletionEnvironment(branch);
+    env = await resolveCompletionEnvironment(branch);
   } catch (error) {
     const err = error as Error;
     if (err instanceof CompletionRefusal) {
@@ -595,12 +589,10 @@ async function completeBranch(
     return 'failed';
   }
 
-  if (!resolved) {
+  if (!env) {
     console.log(`  Not found: ${branch} (no active isolation environment)`);
     return 'notFound';
   }
-
-  const { env, registration } = resolved;
 
   if (!options.force) {
     const blockers = await getCompletionBlockers(env, branch);
@@ -615,7 +607,7 @@ async function completeBranch(
   }
 
   try {
-    const result: RemoveEnvironmentResult = await removeEnvironment(registration, {
+    const result: RemoveEnvironmentResult = await removeEnvironment(env, {
       force: options.force,
       deleteRemoteBranch: options.deleteRemote ?? true,
     });
