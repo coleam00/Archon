@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- The `script:` node no longer warns when a body still uses a literal `$ARGUMENTS`, `$USER_MESSAGE` or `$CONTEXT`. The one-release migration warning from #2115 is gone. A literal user-controlled variable in a `script:` body is not substituted: the text stays in the source, so a quoted reference keeps the literal text and a bare one fails the node. Read it from the environment instead: `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). (#4597)
+- The `script:` node no longer warns when a body still uses a literal `$ARGUMENTS`, `$USER_MESSAGE` or `$CONTEXT`. The one-release migration warning from #2115 is gone. A literal user-controlled variable in a `script:` body is not substituted: the text stays in the source. Read it from the environment instead: `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). (#4597)
 
 ## [0.12.1] - 2026-10-17
 

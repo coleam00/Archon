@@ -60,10 +60,9 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 ## How It Works
 
-1. **Substitute variables.** `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`,
-   `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, and
-   upstream `$nodeId.output` references are substituted into the `script` text
-   before execution. User-controlled workflow variables like `$ARGUMENTS` and
+1. **Substitute variables.** Non-user-controlled [workflow variables](/reference/variables/)
+   and upstream output references are substituted into the `script` text before
+   execution. User-controlled workflow variables like `$ARGUMENTS` and
    `$USER_MESSAGE` are not substituted into a `script:` body: they arrive as
    environment variables instead (`process.env.ARGUMENTS`, `process.env.USER_MESSAGE`
    in bun; `os.environ['ARGUMENTS']`, `os.environ['USER_MESSAGE']` in uv/python), so
