@@ -8,6 +8,14 @@ import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { quoteCommandArg } from '../utils/command-args';
 import {
+  DEFAULT_PROVIDER_CAPS,
+  makeRun,
+  mockFindWorkflowRunsByIdPrefix,
+  mockDispatchBackgroundWorkflow,
+  mockGetCodebase,
+  mockSendQuery,
+  mockRegisterFolder,
+  resetDispatchMocks,
   MockCodebaseNotFoundError,
   MockSessionNotFoundError,
   canonicalizeProjectPath,
@@ -30,7 +38,9 @@ import {
   mockUpdateConversation,
   operator,
 } from '../test/orchestrator-agent-harness';
+import { handleRegisterProject } from './project-commands';
 import { handleMessage } from './orchestrator-agent';
+import { buildOrchestratorSystemAppend } from './prompt-builder';
 
 const trackTempRoot = trackTempRoots();
 
@@ -666,4 +676,118 @@ describe('handleMessage — legacy registration recovery', () => {
       name: 'My-App',
     });
   });
+});
+
+describe('explicit registration syntax', () => {
+  beforeEach(() => {
+    mockRegisterFolder.mockClear();
+    mockListCodebases.mockResolvedValue([]);
+  });
+
+  test.each([
+    ['/register-project --folder demo "/tmp/with spaces"', '/tmp/with spaces'],
+    ["/register-project --folder demo /tmp/O'Brien", "/tmp/O'Brien"],
+  ])('%s reaches folder registration intact', async (command, path) => {
+    expect(await handleRegisterProject(command)).toContain('registered');
+    expect(mockRegisterFolder).toHaveBeenCalledWith(await canonicalizeProjectPath(path), 'demo');
+  });
+
+  test.each([
+    '/register-project',
+    '/register-project --folder demo',
+    '/register-project-backup --folder demo /tmp',
+  ])('%s cannot register', async command => {
+    expect(await handleRegisterProject(command)).toContain('Usage:');
+    expect(mockRegisterFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat adapter project selection and capability transport', () => {
+  beforeEach(resetDispatchMocks);
+
+  for (const adapter of ['slack', 'telegram', 'discord']) {
+    for (const nativeTools of [false, true]) {
+      test(`${adapter} selection scopes subsequent turns (nativeTools=${nativeTools})`, async () => {
+        const providers = await import('@archon/providers');
+        const caps = providers.getProviderCapabilities as ReturnType<typeof mock>;
+        caps.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools });
+        const project = makeNamedCodebase('my-app');
+        let conversation = makeConversation({
+          id: 'db-conversation',
+          platform_type: adapter,
+          platform_conversation_id: 'adapter-thread',
+          codebase_id: null,
+        });
+        mockGetOrCreateConversation.mockImplementation(async () => conversation);
+        mockListCodebases.mockResolvedValue([project]);
+        mockGetCodebase.mockResolvedValue(project);
+        mockGetActiveSession.mockResolvedValue(makeSession({ id: 'old-session' }));
+        mockDeactivateSession.mockClear();
+        mockUpdateConversation.mockImplementation(async (_id, updates) => {
+          conversation = { ...conversation, ...updates };
+        });
+        mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+        const platform = makePlatform();
+        platform.getPlatformType.mockReturnValue(adapter);
+        try {
+          await handleMessage(platform, 'adapter-thread', '/setproject my-app', {
+            actor: operator,
+          });
+          expect(mockUpdateConversation).toHaveBeenCalledWith('db-conversation', {
+            codebase_id: project.id,
+            cwd: null,
+            isolation_env_id: null,
+          });
+          expect(mockDeactivateSession).toHaveBeenCalledWith('old-session', 'project-changed');
+          mockFindWorkflowRunsByIdPrefix.mockReset();
+          mockFindWorkflowRunsByIdPrefix.mockResolvedValue([
+            makeRun({ id: 'run-scoped', codebase_id: project.id }),
+          ]);
+          mockSendQuery.mockImplementationOnce(async function* (_prompt, _cwd, _session, options) {
+            if (nativeTools) {
+              const manage = options?.nativeTools?.find(t => t.name === 'manage_run');
+              const launch = options?.nativeTools?.find(t => t.name === 'invoke_workflow');
+              if (!manage || !launch) throw new Error('Missing scoped chat tools');
+              expect(await manage.handler({ action: 'get', runId: 'run-scoped' })).toContain(
+                'status:'
+              );
+              expect(
+                await launch.handler({
+                  workflow: 'test-workflow',
+                  project: project.name,
+                  prompt: 'Inspect the selected project',
+                })
+              ).toContain('Queued');
+            }
+            yield { type: 'agent_message_chunk', text: 'Ready.' };
+            yield { type: 'result', sessionId: 'new-session' };
+          });
+          await handleMessage(
+            platform,
+            'adapter-thread',
+            'Inspect this run, then launch the workflow',
+            { actor: operator }
+          );
+          expect(buildOrchestratorSystemAppend).toHaveBeenLastCalledWith(
+            expect.objectContaining({ codebase_id: project.id }),
+            [project],
+            expect.any(Array),
+            nativeTools ? 'tools' : 'cli'
+          );
+          if (nativeTools) {
+            expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('run-scoped', project.id);
+            expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+          }
+          const options = mockSendQuery.mock.calls.at(-1)?.[3];
+          expect(options?.nativeTools?.map(t => t.name) ?? []).toEqual(
+            nativeTools
+              ? ['invoke_workflow', 'register_project', 'report_workflow_no_match', 'manage_run']
+              : []
+          );
+        } finally {
+          caps.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+        }
+      });
+    }
+  }
 });

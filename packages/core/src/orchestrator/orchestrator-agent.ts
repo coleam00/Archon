@@ -25,7 +25,12 @@ import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
-import { buildInvokeWorkflowTool, buildRegisterProjectTool, type ChatLaunch } from './chat-tools';
+import {
+  buildInvokeWorkflowTool,
+  buildRegisterProjectTool,
+  buildReportWorkflowNoMatchTool,
+  type ChatLaunch,
+} from './chat-tools';
 import { ensureArchonWorkspacesPath } from '@archon/paths';
 import type { ResolvedWorkflow, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { loadConfig } from '../config/config-loader';
@@ -294,24 +299,16 @@ export async function handleMessage(
       startedAt: Date.now(),
       reported: false,
       failed: false,
-      routed: false,
     };
     const turnInput: ChatTurnInput = {
       turn,
-      commandScan: !caps.nativeTools,
       platform,
       conversationId,
-      originalMessage: message,
-      codebases,
-      workflows: workflowsWithSource,
       aiClient,
       fullPrompt,
       cwd,
       session,
-      isolationHints,
       conversation,
-      actor,
-      issueContext,
       requestOptions,
     };
     try {
@@ -323,7 +320,7 @@ export async function handleMessage(
     } catch (error) {
       // A provider that throws mid-turn never reaches the handler's own report. Count
       // the turn as failed here, once, then let the outer catch tell the user.
-      if (!turn.reported && !turn.routed) {
+      if (!turn.reported) {
         reportChatTurn(turn, {
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
@@ -671,6 +668,7 @@ function attachNativeTools(
         },
       }),
       buildRegisterProjectTool({ registerProject }),
+      buildReportWorkflowNoMatchTool(),
     ];
     if (conversation.codebase_id !== null) {
       tools.push(

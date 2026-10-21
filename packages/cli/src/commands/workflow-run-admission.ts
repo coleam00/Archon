@@ -34,7 +34,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { matchesDetachedLaunch } from '../utils/detached-run-control';
 import { loadWorkflows } from './workflow-list';
 import { resolveLaunchRunConfig } from './workflow-run-config';
-import type { WorkflowRunOptions } from './workflow-shared';
+import { assertInheritedWorkflowCodebase, type WorkflowRunOptions } from './workflow-shared';
 import {
   assertNoWorktreeOptionsForFolder,
   assertResumeWorkingPathExists,
@@ -228,6 +228,10 @@ async function locateContinuation(request: OwnedRunRequest): Promise<{
     } catch (error) {
       resumeLookupError = error as Error;
     }
+  }
+
+  if (continuationRun) {
+    await assertInheritedWorkflowCodebase(host, continuationRun.codebase_id);
   }
 
   // Before anything reads the run's checkout: codebase resolution on a removed

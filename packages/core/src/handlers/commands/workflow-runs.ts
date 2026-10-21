@@ -1,3 +1,4 @@
+import { findProjectRunsByReference } from '../../workflows/run-id';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
@@ -45,18 +46,24 @@ export async function createResumeRequest(
 /**
  * Resolve a run id typed in chat. The worktree-in-use refusal prints the 8-character
  * short id, so the id resolves as a prefix within this conversation's project (a full
- * id is its own prefix). An ambiguous prefix fails; an unmatched one is passed through
- * for the operation to look up, and report if it does not exist.
+ * id is its own prefix). A bound conversation requires a unique project match;
+ * projectless conversations leave resolution to the operation.
  */
 export async function resolveChatRunId(arg: string, conversation: Conversation): Promise<string> {
   if (!conversation.codebase_id) return arg;
-  const matches = await workflowDb.findWorkflowRunsByIdPrefix(arg, conversation.codebase_id);
+  const matches = await findProjectRunsByReference(workflowDb, arg, conversation.codebase_id);
   if (matches.length > 1) {
     throw new Error(
       `Run id '${arg}' matches more than one run in this project. Use more characters or the full id.`
     );
   }
-  return matches[0]?.id ?? arg;
+  const run = matches[0];
+  if (!run) throw new Error(`Workflow run not found in this project: ${arg}`);
+  return run.id;
+}
+
+export async function getActiveChatWorkflowRun(conversation: Conversation) {
+  return workflowDb.getActiveWorkflowRun(conversation.id, conversation.codebase_id ?? undefined);
 }
 
 /** What a run needs from the operator, and the commands that answer it, one line each. */
@@ -90,7 +97,7 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
   try {
     runId = runId
       ? await resolveChatRunId(runId, conversation)
-      : (await workflowDb.getActiveWorkflowRun(conversation.id))?.id;
+      : (await getActiveChatWorkflowRun(conversation))?.id;
     if (!runId) {
       return { success: true, message: 'No active workflow to cancel.' };
     }
@@ -166,7 +173,9 @@ export async function listActiveWorkflowRuns(input: WorkflowCommand): Promise<Co
   const { operations, conversation, surface } = input;
   const cmd = (command: string): string => spell(input, command);
   try {
-    const { runs: activeRuns } = await operations.getWorkflowStatus();
+    const { runs: activeRuns } = await operations.getWorkflowStatus({
+      codebaseId: conversation.codebase_id ?? undefined,
+    });
 
     if (activeRuns.length === 0) {
       return { success: true, message: 'No active workflows.' };

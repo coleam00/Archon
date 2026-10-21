@@ -4,7 +4,7 @@ import type { Codebase, CommandResult, Conversation } from '../../types';
 import * as codebaseDb from '../../db/codebases';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
-import * as workflowDb from '../../db/workflows';
+import { getActiveChatWorkflowRun } from './workflow-runs';
 import { getWorktreeStatusBreakdown } from '../../services/cleanup-service';
 import { getLog } from './log';
 
@@ -202,7 +202,7 @@ async function activeWorkflowSection(
   const cancel = spellWorkflowCommand(surface, 'cancel');
   let msg = '';
   try {
-    const activeWorkflow = await workflowDb.getActiveWorkflowRun(conversation.id);
+    const activeWorkflow = await getActiveChatWorkflowRun(conversation);
     if (activeWorkflow) {
       const timing = calculateWorkflowTiming(activeWorkflow);
 

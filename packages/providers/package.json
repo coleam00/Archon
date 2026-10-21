@@ -234,6 +234,9 @@
       "src/community/opencode/runtime.test.ts"
     ],
     [
+      "src/community/opencode/runtime-cancellation.test.ts"
+    ],
+    [
       "src/community/opencode/session.test.ts"
     ],
     [

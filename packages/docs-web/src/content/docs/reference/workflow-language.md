@@ -1938,9 +1938,13 @@ new run. Adoption and supersede cannot be declared together.
 In chat (Slack, Telegram, Discord, GitHub, Web UI), the assistant sees each workflow's declared
 inputs, asks you for missing required values in conversation, and passes them through its
 `invoke_workflow` tool. The same validation and pre-cost refusal apply. Assistants without
-[in-process native tools](/reference/provider-capabilities/) launch workflows by writing
-`/invoke-workflow` lines, which carry no inputs, so a required-input workflow launched that way
-still refuses up front and points at the CLI and console.
+[in-process native tools](/reference/provider-capabilities/) use the existing CLI after you
+select a project with `/setproject <name>`. They pass declared inputs with
+`archon workflow run <workflow> "<message>" --detach --input name=value` from the
+registered project directory. Copilot/OpenCode launches are headless, use CLI identity, and
+return a run ID for inspection without originating-chat progress or result delivery.
+Assistant prose, including slash-command examples, never launches or registers anything.
+See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
 
 ## Launching a Separate Governed Run with `workflow:`
 

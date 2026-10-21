@@ -5,6 +5,7 @@ import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   attentionProjectForCwd,
+  projectRefForCodebase,
   attentionQueueSource,
   resolveAttentionProject,
 } from '@archon/core/operations/attention-queue';
@@ -21,7 +22,13 @@ import {
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { formatAge, getLog, printJsonWriteError, resolveRunIdArg } from './workflow-shared';
+import {
+  formatAge,
+  getLog,
+  inheritedWorkflowCodebase,
+  printJsonWriteError,
+  resolveRunIdArg,
+} from './workflow-shared';
 
 export interface WorkflowAttentionOptions {
   json?: boolean;
@@ -51,12 +58,27 @@ export async function resolveAttentionRunId(
   return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
 }
 
-/** The scope a list or count covers: `--all`, `--project`, or the working directory's project. */
+/** Chat scope takes precedence over the CLI's explicit or working-directory scope. */
 export async function attentionScope(
   host: WorkflowHost,
   cwd: string,
   opts: Pick<WorkflowAttentionOptions, 'project' | 'all'>
 ): Promise<AttentionQueueScope> {
+  const inherited = await inheritedWorkflowCodebase(host, opts.all);
+  if (inherited) {
+    const project = projectRefForCodebase(inherited);
+    if (opts.project !== undefined) {
+      const requested = await resolveAttentionProject(host.records.codebases, opts.project);
+      if (
+        requested.codebaseId !== null
+          ? requested.codebaseId !== inherited.id
+          : requested.key !== project.key
+      ) {
+        throw new Error('--project cannot override the selected chat project.');
+      }
+    }
+    return { kind: 'project', project };
+  }
   if (opts.all) return { kind: 'all' };
   const project =
     opts.project === undefined

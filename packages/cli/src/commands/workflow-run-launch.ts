@@ -39,6 +39,7 @@ import {
 } from './workflow-shared';
 import {
   assertCodebaseResolvedForIsolation,
+  assertInheritedWorkflowExecutionCwd,
   assertNoWorktreeOptionsForFolder,
   assertWorkflowNotWorktreePinnedForFolder,
   prepareFolderExecution,
@@ -63,17 +64,10 @@ import {
 } from './workflow-run-admission';
 
 /**
- * --detach: hand the whole run to a detached background child. Runs after workflow
- * resolution and flag validation (so unknown-workflow / bad-flag errors surface
- * synchronously to the caller, not lost in the child) and before any *worktree* work
- * (the child creates the worktree).
- *
- * Everything before the fork is the pre-flight (#2872). It exists because a detached
- * launch used to print `Started` before anything that can be refused deterministically
- * had been checked: the child then died on adoption resolution, no run row was ever
- * written, and the only trace was a line inside the child's log. A launch either produces
- * a run id somebody can query, or it fails right here with a non-zero exit. No worktree,
- * clone, or AI cost happens in this process.
+ * Preflight before handing execution to a detached child. Refusals must reach the
+ * caller before `Started`, rather than disappearing into the child's log (#2872).
+ * The parent creates a queryable run; worktree provisioning and execution belong
+ * to the child, which revalidates against the live checkout.
  */
 export async function launchDetachedOwnedRun(
   request: OwnedRunRequest,
@@ -94,10 +88,8 @@ export async function launchDetachedOwnedRun(
         `(${detachResolved.registeredFolder.defaultCwd})`
     );
   }
-  // An isolating run with no project to isolate. The provisioning step enforces it in
-  // whichever process reaches it, which for a detached launch is the child — after the
-  // parent has already printed `Started` (#2872). `options.noWorktree` first, mirroring
-  // provisioning's own branch order.
+  // Refuse before forking; provisioning in the child would fail after the parent
+  // already printed `Started` (#2872).
   if (!options.noWorktree && admission.wantsIsolation) {
     assertCodebaseResolvedForIsolation(detachResolved);
   }
@@ -108,13 +100,22 @@ export async function launchDetachedOwnedRun(
   // letting the child fail after fork.
   assertNoWorktreeOptionsForFolder(detachIsFolder, options);
 
-  // Between-run continuation (#2747): refuse an unresolvable declaration HERE — this
-  // is the exact failure that vanished into a child log. `resolveWorkflowAdoption` is
-  // pure resolution with no filesystem or database mutation, so running it as a
-  // pre-flight costs nothing and the child still re-resolves it against the live
-  // checkout when it starts (its lane binds a worktree this process never touches).
+  // Adoption resolution is read-only; the child re-resolves against the live checkout.
   const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
   if (declaration?.mode === 'adopt') admission.aiConfigurationRun = declaration.adoptedRun;
+  const adoptionLane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  if (
+    detachCodebase?.kind !== 'folder' &&
+    adoptionLane?.kind !== 'checkout-branch' &&
+    (!admission.wantsIsolation || adoptionLane?.kind === 'reuse-worktree')
+  ) {
+    await assertInheritedWorkflowExecutionCwd(
+      host,
+      adoptionLane?.kind === 'reuse-worktree'
+        ? adoptionLane.environment.working_path
+        : (admission.continuationRun?.working_path ?? cwd)
+    );
+  }
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
@@ -278,6 +279,9 @@ export async function prepareForegroundLaunch(
     codebase,
     workspace
   );
+  if (!admission.wantsIsolation && codebase?.kind !== 'folder') {
+    await assertInheritedWorkflowExecutionCwd(host, workspace.workingCwd);
+  }
   const existingBranchEnv =
     admission.wantsIsolation && codebase && options.branchName
       ? await host.records.isolation.findActiveByWorkflow(codebase.id, 'task', options.branchName)

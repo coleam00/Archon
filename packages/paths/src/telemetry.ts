@@ -1,44 +1,18 @@
 /**
- * Anonymous PostHog telemetry for Archon.
+ * Anonymous PostHog usage metrics. README.md owns the event/property inventory.
+ * A random install UUID lives at `${ARCHON_HOME}/telemetry-id`; no user identity,
+ * code, prompts, message content, paths, custom workflow names or error text is sent.
+ * Run references hash the install UUID and run id, allowing joins without sending ids.
+ * Every event disables person profiles and clears the source IP at ingest.
  *
- * Emits a small set of anonymous events — `archon_started` (once per invocation),
- * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
- * AI chat turn), `workflow_invoked` (each workflow start or resume segment),
- * `workflow_completed` / `workflow_failed` / `workflow_cancelled` (each committed
- * terminal transition, reported by the run store), `workflow_approval_resolved`
- * (each human approve/reject decision), and `codebase_registered` (count only) —
- * so maintainers can see active installs, which surfaces and workflows get real
- * usage, and run outcomes. Run events carry `run_ref`, a hash of the install id
- * and the run id, so one run's events join without the run id leaving the
- * machine. No PII, no user identity.
- * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
- * distinct installs.
+ * Any of these disables capture:
+ * - ARCHON_TELEMETRY_DISABLED=1
+ * - DO_NOT_TRACK=1
+ * - CI=true
+ * - POSTHOG_API_KEY=off | 0 | false | disabled | '' (or whitespace-only)
  *
- * Every event carries the privacy invariants `$process_person_profile: false`
- * (anonymous tier — no person profile ever created) and `$ip: ''` (PostHog
- * drops the source IP at ingest). Machine context (os, arch, version,
- * is_binary, install channel, build commit, runtime, is_ci, is_tty) rides along
- * on every event via PostHog super-properties. What is collected is categorical
- * only: workflow name (real for bundled workflows, `"custom"` for user-authored),
- * platform, provider, model, node shape, run outcome/duration, a fixed-enum error class (never
- * raw error text), chat-turn activity (platform + provider + model + outcome),
- * aggregate usage numbers (token counts, cost USD, turn/run duration, loop
- * iterations — numeric totals only), approval decisions (approved/rejected,
- * nothing else), a bare project-registration count, and deployment shape
- * (which adapters are enabled, db kind, auth mode — booleans/enums only).
- * Never sent: code, prompts, message content, conversation ids, file paths,
- * IP, geo, error text, or custom workflow names/descriptions.
- *
- * Opt-out (any one disables telemetry):
- *   - ARCHON_TELEMETRY_DISABLED=1
- *   - DO_NOT_TRACK=1                          (de facto standard)
- *   - CI=true                                 (auto-disabled in CI environments)
- *   - POSTHOG_API_KEY=off | 0 | false | disabled | '' (or whitespace-only)
- *
- * All capture functions are fire-and-forget: telemetry errors are swallowed
- * (logged at `debug`, with the first network failure on a custom POSTHOG_HOST
- * also logged at `warn` so self-hosters notice typo'd hosts). Capture must
- * never crash Archon.
+ * Capture is fire-and-forget and must never crash Archon. Errors log at debug,
+ * with the first network failure on a custom POSTHOG_HOST also logged at warn.
  */
 import { createHash, randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -53,7 +27,7 @@ import { createLogger } from './logger';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 11;
+export const TELEMETRY_SCHEMA_VERSION = 12;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -918,6 +892,22 @@ export function captureArchonActive(props: ArchonStartedProperties): void {
         surface: props.surface,
         schema_version: TELEMETRY_SCHEMA_VERSION,
         ...deploymentShapeWireProps(props),
+      },
+    });
+  });
+}
+
+/** Agent-reported no-fit decisions only; no request text or workflow names leave the install. */
+export function captureWorkflowNoMatch(transport: 'native_tool' | 'cli'): void {
+  if (isTelemetryDisabled()) return;
+  fireAndForget(client => {
+    client.capture({
+      distinctId: getTelemetryId(),
+      event: 'workflow_no_match',
+      properties: {
+        ...PRIVACY_INVARIANTS,
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        transport,
       },
     });
   });
