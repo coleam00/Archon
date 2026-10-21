@@ -8,6 +8,8 @@ import {
   CONFORMANCE_CONVERSATION_ID,
   CONFORMANCE_CODEBASE_ID,
 } from '@archon/workflows/store-conformance';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowStatusReadError } from './workflows';
 import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
@@ -43,6 +45,47 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('SQL status reads validate stored values without lifecycle writes', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    try {
+      const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
+      expect(await store.getWorkflowRunStatus(randomUUID())).toBeNull();
+      for (const status of workflowRunStatusSchema.options) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $2 WHERE id = $1', [
+          run.id,
+          status,
+        ]);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+      }
+      for (const status of ['unexpected', '']) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $2 WHERE id = $1', [
+          run.id,
+          status,
+        ]);
+        const snapshot = async () => ({
+          rows: (await db.query('SELECT * FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
+            .rows,
+          events: await store.listWorkflowEvents(run.id),
+          head: await store.getWorkflowEventHead(),
+          reports: harness.terminalReports(),
+        });
+        const before = await snapshot();
+        const error = await store.getWorkflowRunStatus(run.id).catch(error => error);
+        expect(error).toBeInstanceOf(WorkflowStatusReadError);
+        expect(error).toMatchObject({
+          name: 'WorkflowStatusReadError',
+          workflowRunId: run.id,
+          storedStatus: status,
+          message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
+        });
+        expect(await snapshot()).toEqual(before);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
   test.each([false, true])(
     'source suspension excludes a resume on another connection (resumed=%s)',
     async resumed => {

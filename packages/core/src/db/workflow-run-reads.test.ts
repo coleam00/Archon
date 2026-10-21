@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
@@ -17,6 +18,7 @@ mock.module('./connection', () => ({
 import {
   getWorkflowRun,
   getWorkflowRunStatus,
+  WorkflowStatusReadError,
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
   findChildRuns,
@@ -52,12 +54,26 @@ describe('workflow run reads', () => {
   });
 
   describe('getWorkflowRunStatus', () => {
-    test('returns status for existing workflow run', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
+    test.each(['unexpected', ''])('rejects unsupported status %j', async storedStatus => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: storedStatus }]));
+      const error = await getWorkflowRunStatus('workflow-run-123').catch(error => error);
+      expect(error).toBeInstanceOf(WorkflowStatusReadError);
+      expect(error).toMatchObject({
+        name: 'WorkflowStatusReadError',
+        workflowRunId: 'workflow-run-123',
+        storedStatus,
+        message: `Unsupported workflow run status for run workflow-run-123: ${JSON.stringify(storedStatus)}`,
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test.each(workflowRunStatusSchema.options)('returns supported status %s', async status => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status }]));
 
       const result = await getWorkflowRunStatus('workflow-run-123');
 
-      expect(result).toBe('running');
+      expect(result).toBe(status);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
         ['workflow-run-123']
