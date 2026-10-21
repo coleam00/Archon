@@ -802,9 +802,6 @@ nodes:
       await mkdir(homeDir, { recursive: true });
       process.env.ARCHON_HOME = homeDir;
       delete process.env.ARCHON_DOCKER;
-      // The deprecation warning uses a module-scoped flag; reset between tests
-      // so each case is independent.
-      mockLogger.warn.mockClear();
     });
 
     afterEach(async () => {
@@ -840,6 +837,19 @@ nodes:
       const names = result.workflows.map(w => w.workflow.name);
       expect(names).toContain('home-workflow');
       expect(names).toContain('repo-workflow');
+    });
+
+    it('ignores workflows in the retired nested home directory', async () => {
+      await writeWorkflowFile(
+        homeDir,
+        'retired-home.yaml',
+        'name: retired-home\ndescription: Only in the retired home path\nnodes:\n  - id: check\n    prompt: Check the change\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toEqual([]);
     });
 
     it("classifies home-scoped workflows as source: 'global'", async () => {
