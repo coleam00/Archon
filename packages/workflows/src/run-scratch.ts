@@ -30,7 +30,12 @@ import {
   resolveRunStorageRoot,
   RUN_ARTIFACTS_ENGINE_SUBDIR,
 } from '@archon/paths/archon-paths';
-import { isContainerRun, type WorkflowRun, type WorkflowRunStatus } from './schemas/workflow-run';
+import {
+  isContainerRun,
+  isTerminalRunStatus,
+  type WorkflowRun,
+  type WorkflowRunStatus,
+} from './schemas/workflow-run';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,13 +48,15 @@ function getLog(): ReturnType<typeof createLogger> {
 type ScratchRun = Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>;
 
 /**
- * A store's duty after a terminal write it won: remove scratch when the write ended a run
- * that had no executor left to write it. Never throws.
+ * A store's duty after a terminal write it won: remove scratch when the write moved `run`
+ * from a status with no executor left to write it into a terminal one. A terminal event
+ * appended without that status change ends nothing. Never throws.
  */
 export async function releaseScratchAfterTerminalWrite(
-  run: ScratchRun,
+  run: ScratchRun & Pick<WorkflowRun, 'status'>,
   priorStatus: WorkflowRunStatus
 ): Promise<void> {
+  if (!isTerminalRunStatus(run.status) || run.status === priorStatus) return;
   if (priorStatus === 'paused' || priorStatus === 'failed') await releaseRunScratch(run);
 }
 

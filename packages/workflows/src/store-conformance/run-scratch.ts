@@ -117,10 +117,15 @@ export function describeRunScratchConformance(
       );
     }
 
-    test('a paused run keeps its scratch', async () => {
+    test('a paused run keeps its scratch, even past a bare terminal event', async () => {
       const { id, root, artifactsDir } = await runWithScratch();
       try {
         await getStore().pauseWorkflowRun(id, approval);
+        await getStore().persistWorkflowEvent({
+          workflow_run_id: id,
+          event_type: 'workflow_cancelled',
+        });
+        expect((await getStore().getWorkflowRun(id))?.status).toBe('paused');
         expect(segments(artifactsDir).has('node_modules')).toBe(true);
       } finally {
         await removeTempTree(root);
