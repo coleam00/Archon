@@ -208,10 +208,7 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
     values.config,
     values['config-from-run']
   );
-  if (configOnContinue) {
-    console.error(configOnContinue);
-    return 1;
-  }
+  if (configOnContinue) return await fail(json, configOnContinue);
   const worktreeConflict = worktreeFlagConflict(values);
   if (worktreeConflict) return await fail(json, worktreeConflict);
   const codebaseId = await resolveRunProject(route);
