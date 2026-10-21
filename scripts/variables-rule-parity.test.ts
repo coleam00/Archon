@@ -28,10 +28,9 @@
  * - `ENVIRONMENT_READ_PATTERNS` (`packages/workflows/src/exec-input-validation.ts`) owns the
  *   accessor spellings a copy may document, and the runtime each spelling belongs to.
  *
- * The guard compares names, not prose. It reads a copy as the names it promises and the claims
- * it makes about them, and every check asks the engine what is true and holds the copy to that
- * answer. A check reads the smallest unit its question needs: a promise is read in the sentence
- * that promises it, and a run of a node is read in the paragraph that describes it.
+ * These checks recognize the forms used by the shipped copies; they do not interpret arbitrary
+ * prose. Environment names are checked in sentences naming the user-controlled class, so other
+ * sections can document project configuration and credentials outside the engine's own bag.
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -211,6 +210,20 @@ describe('the user-controlled variable rule', () => {
   test('every environment read a copy documents is a spelling the scanner knows', () => {
     for (const copy of copies) assertDocumentedSpellingsAreKnown(copy);
   });
+
+  test.each(['process.env.ARGUMENTS', "os.environ['ARGUMENTS']"])(
+    'every copy rejects %s as a bash environment accessor',
+    accessor => {
+      for (const copy of copies) {
+        const text = copy.items.map(item => item.text).join('\n\n');
+        const mutated = text.replaceAll('"$ARGUMENTS"', accessor);
+        expect(mutated).not.toBe(text);
+        expect(() =>
+          assertDocumentedSpellingsAreKnown({ ...copy, items: itemsOf(mutated) })
+        ).toThrow(/runtime/);
+      }
+    }
+  );
 
   test('the guard rejects a copy that promises a variable the exec node does not deliver', () => {
     const document = documentOf(

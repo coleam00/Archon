@@ -348,8 +348,8 @@ concurrently.
   `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as
   environment variables (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`,
   `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`, `EXTERNAL_CONTEXT`,
-  `ISSUE_CONTEXT`) — read an environment-delivered value in `bash:` as `"$ARGUMENTS"`
-  and in `script:` via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']`
+  `ISSUE_CONTEXT`). Read an environment-delivered value in `bash:` as `"$ARGUMENTS"`.
+  In `script:` read it via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']`
   (uv/python).
   A `loop_group` body's `bash:` node is the exception: the loop scope splices the
   reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives
