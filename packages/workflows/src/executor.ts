@@ -114,6 +114,8 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
+  deferScratchCleanup?: (cleanup: () => Promise<void>) => void;
   ownedWorktree?: OwnedWorktree;
   preparedAiConfiguration?: PreparedRunAiConfiguration;
   /** Codebase ID for env vars + isolation context. */
@@ -705,7 +707,7 @@ export async function executeWorkflow(
     if (workflowRun && !terminalStatusWriteFailed) {
       // A source release that lost to a cancel skips the backstop but still frees scratch.
       if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
-      await releaseScratchOnExit(deps, workflowRun);
+      await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
   }
 }
@@ -754,10 +756,18 @@ async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<vo
  * executor names that executor as its owner, so `releaseRunScratch` keeps its scratch
  * while that executor may still run.
  */
-async function releaseScratchOnExit(deps: WorkflowDeps, executed: WorkflowRun): Promise<void> {
-  const run = await deps.store.getWorkflowRun(executed.id).catch((err: unknown) => {
-    getLog().warn({ workflowRunId: executed.id, err }, 'executor.exit_scratch_lookup_failed');
-    return null;
-  });
-  if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
+async function releaseScratchOnExit(
+  deps: WorkflowDeps,
+  executed: WorkflowRun,
+  deferCleanup?: ExecuteWorkflowOptions['deferScratchCleanup']
+): Promise<void> {
+  const cleanup = async (): Promise<void> => {
+    const run = await deps.store.getWorkflowRun(executed.id).catch((err: unknown) => {
+      getLog().warn({ workflowRunId: executed.id, err }, 'executor.exit_scratch_lookup_failed');
+      return null;
+    });
+    if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
+  };
+  if (deferCleanup) deferCleanup(cleanup);
+  else await cleanup();
 }

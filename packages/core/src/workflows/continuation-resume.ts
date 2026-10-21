@@ -80,7 +80,10 @@ export async function resumeRunContinuation(
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,
-  options: { actorUserId?: string; resolveProject?: ResolveProject } = {}
+  options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
+    WorkflowResumeOptions,
+    'deferScratchCleanup'
+  > = {}
 ): Promise<ContinuationAdmission> {
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
@@ -99,7 +102,7 @@ export async function resumeRunContinuation(
   if (isContainerRun(run)) {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };
   }
-  const { resolveProject } = options;
+  const { resolveProject, actorUserId, ...executionOptions } = options;
   if (run.codebase_id && !resolveProject) {
     return {
       kind: 'unavailable',
@@ -108,7 +111,7 @@ export async function resumeRunContinuation(
   }
   const context = await resolveContext(run);
   if (context.kind === 'unavailable') return context;
-  const userId = options.actorUserId ?? run.user_id ?? undefined;
+  const userId = actorUserId ?? run.user_id ?? undefined;
   const project: ResolvedProject = resolveProject
     ? await resolveProject(run, { platform: context.platform, userId })
     : { sourceCwd: getArchonWorkspacesPath(), options: {} };
@@ -135,7 +138,7 @@ export async function resumeRunContinuation(
         origin: run.origin ?? undefined,
         run,
         cursor,
-        options: project.options,
+        options: { ...project.options, ...executionOptions },
       });
       if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;

@@ -470,7 +470,6 @@ describe('cold CLI continuation host', () => {
     const deadline = Date.now() + 15_000;
     while (row(f).status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
     expect(row(f).status).toBe('completed');
-    // Completion can precede the pass report while the executor finishes cleanup.
     // Observe the report before SIGTERM, which terminates outright on Windows.
     let pass = await readPass();
     while (pass.accepted === 0) pass = await readPass();
