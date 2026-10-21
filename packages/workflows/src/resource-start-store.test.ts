@@ -104,41 +104,46 @@ test('failed resume ignores foreign-blocked promises but yields to runnable read
   ).toEqual({ kind: 'request', id: 'queued' });
 });
 
-test('malformed guards are rejected before all new start decisions and passed over in stored queues', () => {
-  const malformed = launch();
-  malformed.run.metadata.admission_checkout_guard = 'false';
-  const valid = launch();
-  const queue = [malformed, valid].map(launch => ({ id: launch.run.id, hostId: 'host', launch }));
-  const logs: string[] = [];
-  setLogSink(line => logs.push(line));
-  try {
-    for (const occupied of [
-      slot(),
-      { ...slot(), heldCheckouts: heldCheckouts([{ id: 'local', launch: malformed }]) },
-    ])
-      expect(() => resourceStartBlocker(occupied, malformed)).toThrow('expected a boolean');
-    expect(drainableStarts({ ...slot(), queue }, 'host')).toEqual([queue[1]!]);
-    expect(resourceStartBlocker({ ...slot(), queue }, launch())).toEqual({
-      kind: 'request',
-      id: valid.run.id,
-    });
-    expect(
-      resourceResumeBlocker({ ...slot(), queue }, { id: 'failed', metadata: {}, status: 'failed' })
-    ).toEqual({ kind: 'request', id: valid.run.id });
-    expect(logs).toHaveLength(3);
-    for (const line of logs) {
-      const entry = JSON.parse(line);
-      expect(entry).toMatchObject({
-        level: 50,
-        requestId: malformed.run.id,
-        msg: 'resource_start.invalid_queued_guard',
+for (const guard of ['false', null]) {
+  test(`malformed guard ${String(guard)} is rejected before all new start decisions and passed over in stored queues`, () => {
+    const malformed = launch();
+    malformed.run.metadata.admission_checkout_guard = guard;
+    const valid = launch();
+    const queue = [malformed, valid].map(launch => ({ id: launch.run.id, hostId: 'host', launch }));
+    const logs: string[] = [];
+    setLogSink(line => logs.push(line));
+    try {
+      for (const occupied of [
+        slot(),
+        { ...slot(), heldCheckouts: heldCheckouts([{ id: 'local', launch: malformed }]) },
+      ])
+        expect(() => resourceStartBlocker(occupied, malformed)).toThrow('expected a boolean');
+      expect(drainableStarts({ ...slot(), queue }, 'host')).toEqual([queue[1]!]);
+      expect(resourceStartBlocker({ ...slot(), queue }, launch())).toEqual({
+        kind: 'request',
+        id: valid.run.id,
       });
-      expect(entry.err.message).toContain('expected a boolean');
+      expect(
+        resourceResumeBlocker(
+          { ...slot(), queue },
+          { id: 'failed', metadata: {}, status: 'failed' }
+        )
+      ).toEqual({ kind: 'request', id: valid.run.id });
+      expect(logs).toHaveLength(3);
+      for (const line of logs) {
+        const entry = JSON.parse(line);
+        expect(entry).toMatchObject({
+          level: 50,
+          requestId: malformed.run.id,
+          msg: 'resource_start.invalid_queued_guard',
+        });
+        expect(entry.err.message).toContain('expected a boolean');
+      }
+    } finally {
+      setLogSink(undefined);
     }
-  } finally {
-    setLogSink(undefined);
-  }
-});
+  });
+}
 
 test('local holders project registered path and branch aliases before and after claiming', () => {
   for (const working_path of [undefined, '/shared']) {

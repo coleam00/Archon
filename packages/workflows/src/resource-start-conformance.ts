@@ -92,15 +92,17 @@ export function describeForeignCheckoutAdmission(
     test('malformed guards are rejected before queueing, even behind a local holder', async () => {
       const holder = start('queue', 'host', 3, { cwd: '/shared' });
       await store.admitResourceStart(holder);
-      for (const isolation of [
-        { kind: 'in-place' as const },
-        { kind: 'worktree' as const },
-        { kind: 'worktree' as const, branch: 'lane' },
-      ]) {
-        const incoming = start('queue', 'host', 3, { cwd: '/shared', isolation });
-        incoming.launch.run.metadata.admission_checkout_guard = 'false';
-        await expect(store.admitResourceStart(incoming)).rejects.toThrow('expected a boolean');
-        expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+      for (const guard of ['false', null]) {
+        for (const isolation of [
+          { kind: 'in-place' as const },
+          { kind: 'worktree' as const },
+          { kind: 'worktree' as const, branch: 'lane' },
+        ]) {
+          const incoming = start('queue', 'host', 3, { cwd: '/shared', isolation });
+          incoming.launch.run.metadata.admission_checkout_guard = guard;
+          await expect(store.admitResourceStart(incoming)).rejects.toThrow('expected a boolean');
+          expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+        }
       }
     });
     test('an unclaimed manual run with a known checkout remains an explicit blocker', async () => {
@@ -165,7 +167,7 @@ export function describeForeignCheckoutAdmission(
       });
       expect(await drain()).toEqual([]);
     });
-    for (const guard of [true, false, undefined, null]) {
+    for (const guard of [true, false, undefined]) {
       test(`incoming guard ${String(guard)} applies only to foreign checkout occupancy`, async () => {
         const shared = { cwd: '/conformance/foreign' };
         const manual = await store.createWorkflowRun(launch(undefined, shared).run);

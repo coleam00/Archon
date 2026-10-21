@@ -302,7 +302,6 @@ export interface ResourceStartHost extends WorkflowHost {
 /** A preparation, dispatch, or resource drain failure. Unknown receipt origins omit `receiptId`. */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
-  resource?: string;
   error: unknown;
 }
 
@@ -377,7 +376,7 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
         `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error }
       );
-      for (const receiptId of receiptIds) failures.push({ resource, receiptId, error: failure });
+      for (const receiptId of receiptIds) failures.push({ receiptId, error: failure });
       return;
     }
     for (const decision of decisions) {
@@ -403,7 +402,6 @@ function queuedDrainResources(
   for (const request of queued) {
     if (!('error' in request)) continue;
     failures.push({
-      resource: request.resource,
       receiptId: request.receiptId,
       error: new Error(`Queued request '${request.id}' is invalid`, {
         cause: request.error,

@@ -1640,7 +1640,6 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
     expect(started).toEqual([queued[1]!]);
     expect(error).toBeInstanceOf(ResourceStartDrainError);
     if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
-    expect(error.failures[0]?.resource).toBe('a');
     expect(error.failures[0]?.receiptId).toBe(receiptId);
     expect(await host.deps.store.getWorkflowRun(queued[0]!)).toBeNull();
   });

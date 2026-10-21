@@ -772,20 +772,6 @@ for (const corruption of [
       expect(error).toBeInstanceOf(ResourceStartDrainError);
       if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
       expect(error.failures).toHaveLength(1);
-      expect(error.failures[0]?.resource).toBe(
-        [
-          'only-resource',
-          'only-missing-resource',
-          'json',
-          'missing',
-          'only-null',
-          'only-missing-hostId',
-          'only-slot-json',
-          'only-slot-queue',
-        ].includes(corruption)
-          ? undefined
-          : 'a'
-      );
       const failure = error.failures[0]?.error;
       if (!(failure instanceof Error)) throw new Error('expected original drain error');
       expect(failure.message).toContain('Queued request');

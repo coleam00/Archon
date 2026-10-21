@@ -51,7 +51,7 @@ describe('prepared checkout guard declaration', () => {
           },
         },
       });
-      if (typeof value !== 'boolean' && value !== undefined && value !== null)
+      if (typeof value !== 'boolean' && value !== undefined)
         expect(() => readAdmissionCheckoutGuard(prepared)).toThrow('expected a boolean');
       else expect(readAdmissionCheckoutGuard(prepared)).toBe(value ?? true);
     });

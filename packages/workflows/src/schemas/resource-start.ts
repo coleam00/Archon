@@ -88,7 +88,7 @@ export class AdmissionCheckoutGuardError extends Error {
 /** Older writers did not record the declaration, so their launches remain guarded. */
 export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): boolean {
   const value = launch.run.metadata[ADMISSION_CHECKOUT_GUARD_METADATA_KEY];
-  if (value === undefined || value === null) return true;
+  if (value === undefined) return true;
   if (typeof value !== 'boolean') throw new AdmissionCheckoutGuardError(launch.run.id);
   return value;
 }
