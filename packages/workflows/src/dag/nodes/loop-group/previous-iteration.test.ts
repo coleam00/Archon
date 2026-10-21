@@ -121,6 +121,21 @@ test('iteration one is known empty without persistence', async () => {
   expect(listEventsForRuns).not.toHaveBeenCalled();
 });
 
+for (const eventType of [
+  'node_skipped_prior_success',
+  'node_always_run_reset',
+  'node_prior_cache_invalidated',
+] as const) {
+  test(`${eventType} does not replace execution history or require lineage`, async () => {
+    const cacheRow = { ...event(), event_type: eventType, data: {} };
+    const { run } = fixture([cacheRow, event(), cacheRow]);
+    expect((await restorePreviousIteration(run)).get('work')?.output).toBe('first');
+    await expect(restorePreviousIteration(fixture([cacheRow]).run)).rejects.toThrow(
+      'completed history unavailable'
+    );
+  });
+}
+
 test('an explicit skip supersedes an older completed value', async () => {
   const { run } = fixture([
     event(),

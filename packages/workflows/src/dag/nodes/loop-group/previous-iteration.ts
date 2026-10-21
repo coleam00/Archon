@@ -64,6 +64,12 @@ function selectPreviousIterationRows(
   const latest = new Map<string, WorkflowEventRow>();
   for (const row of rows) {
     if (!row.step_name || !bodyPaths.has(row.step_name)) continue;
+    if (
+      row.event_type === 'node_skipped_prior_success' ||
+      row.event_type === 'node_always_run_reset' ||
+      row.event_type === 'node_prior_cache_invalidated'
+    )
+      continue;
     let record;
     try {
       record = readNodeRecordEvent(row);

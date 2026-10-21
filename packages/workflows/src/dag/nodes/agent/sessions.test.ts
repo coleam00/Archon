@@ -34,6 +34,9 @@ import type {
 import { dagNodeSchema } from '../../../schemas';
 import type { WorkflowDeps } from '../../../deps';
 import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from '../../../store';
+import { waitCompletionEvents } from '../../../store';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import type { WorkflowEventRow } from '../../../schemas/workflow-event';
 
 describe('executeDagWorkflow -- persist_session', () => {
   let testDir: string;
@@ -1932,6 +1935,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       })
     );
     let store = createEscalationStore('addressable-run');
+    const history: WorkflowEventRow[] = [];
     await runAddressableWorkflow(nodes, store);
     for (const iteration of [1, 2]) {
       expect(store.getState().status).toBe('paused');
@@ -1951,7 +1955,32 @@ describe('executeDagWorkflow -- addressable session resume', () => {
             ]
       );
       metadata.wait.resumeAt = '2020-01-01T00:00:00.000Z';
+      const completedWaits = store.clearWorkflowWaitContext.mock.calls.map(
+        ([id, , completion]) => waitCompletionEvents(id, completion).node
+      );
+      history.push(
+        ...[...persistedEvents(store), ...completedWaits].map((event, index) => ({
+          ...event,
+          step_name: event.step_name ?? null,
+          data: event.data ?? {},
+          id: String(history.length + index),
+          step_index: null,
+          created_at: new Date().toISOString(),
+        }))
+      );
       store = createEscalationStore('addressable-run');
+      store.listEventsForRuns.mockImplementation(
+        async (_ids, types) =>
+          new Map([
+            [
+              'addressable-run',
+              history.filter(row => !types || types.some(type => type === row.event_type)),
+            ],
+          ])
+      );
+      store.getDagResumeSnapshot.mockResolvedValue(
+        await foldDagResumeSnapshot(history, 'addressable-run')
+      );
       await executeDagWorkflow(
         dagOptions({
           deps: createMockDeps(store),
