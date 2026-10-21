@@ -385,6 +385,7 @@ async function settleRun(
     Boolean(
       result && ('handedOff' in result || (result.success && 'paused' in result && result.paused))
     );
+  if (keepContainer) deregisterTermination();
   // H2 — preserve the container+volume whenever the un-applied overlay is still the
   // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
   // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
@@ -405,8 +406,7 @@ async function settleRun(
   execution.containerPreserved = keepContainer || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
-  // The signal handlers stay registered through it, so a Ctrl-C here still destroys
-  // a container this process would destroy below.
+  // Retain signal teardown only while this process still owns execution cleanup.
   await execution.progress?.close().catch((drainErr: unknown) => {
     getLog().warn({ err: drainErr as Error, runId }, 'cli.workflow_progress_drain_failed');
     process.stderr.write(

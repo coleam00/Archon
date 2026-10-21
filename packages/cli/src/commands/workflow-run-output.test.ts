@@ -635,7 +635,7 @@ describe('workflowRunCommand — progress rendering', () => {
   type ContainerRunEnd = 'paused' | 'settled' | 'unresolved-writeback' | 'lookup-fails';
 
   /**
-   * A container run that receives SIGTERM during its final progress drain, or with
+   * A container run that receives a signal during its final progress drain, or with
    * `signalAt: 'lookup'` while the CLI reads the settled run's write-back state. Returns
    * how many times the container was destroyed by the time the signal's cleanup settled.
    */
@@ -643,7 +643,8 @@ describe('workflowRunCommand — progress rendering', () => {
     end: ContainerRunEnd,
     signalAt: 'drain' | 'lookup' = 'drain',
     handoffStatus?: WorkflowRunStatus | null,
-    rejection?: 'published' | 'pre-publication'
+    rejection?: 'published' | 'pre-publication',
+    signal: 'SIGINT' | 'SIGTERM' = 'SIGTERM'
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -688,13 +689,20 @@ describe('workflowRunCommand — progress rendering', () => {
     });
     const exitSpy = spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     mockFolderBackendDestroy.mockClear();
-    const sigtermBefore = process.listeners('SIGTERM');
+    const signalBefore = process.listeners(signal);
     const host = createTestWorkflowHost();
+    const initialStatus = handoffStatus === undefined ? 'running' : handoffStatus;
+    let status: WorkflowRunStatus | null = initialStatus;
+    host.deps.store.getWorkflowRunStatus = async () => status;
+    host.deps.store.failWorkflowRun = async () => {
+      status = 'failed';
+      return { failed: true };
+    };
     let destroyedAtSignal = -1;
     const signalOnce = async (): Promise<void> => {
       if (!runSettled || destroyedAtSignal !== -1) return;
-      for (const listener of process.listeners('SIGTERM')) {
-        if (!sigtermBefore.includes(listener)) (listener as () => void)();
+      for (const listener of process.listeners(signal)) {
+        if (!signalBefore.includes(listener)) (listener as () => void)();
       }
       for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
       destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
@@ -741,22 +749,45 @@ describe('workflowRunCommand — progress rendering', () => {
       } else {
         await execution;
       }
-      if (handoffStatus !== undefined || rejection === 'published')
+      if (handoffStatus !== undefined || rejection === 'published' || end === 'paused') {
         expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
+        expect(status).toBe(initialStatus);
+      } else if (rejection === 'pre-publication') {
+        expect(status).toBe('failed');
+      }
     } finally {
       exitSpy.mockRestore();
     }
     return destroyedAtSignal;
   }
 
-  it.each(['published', 'pre-publication'] as const)(
-    'retains cleanup ownership only before publication on a %s rejection, including on a signal',
-    async rejection => {
-      expect(await signalDuringContainerDrain('settled', 'drain', undefined, rejection)).toBe(
-        rejection === 'published' ? 0 : 1
-      );
-    }
-  );
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    it.each(['published', 'handoff', 'paused'] as const)(
+      `${signal} during final drain preserves a running successor after a %s exit`,
+      async exit => {
+        expect(
+          await signalDuringContainerDrain(
+            exit === 'paused' ? 'paused' : 'settled',
+            'drain',
+            exit === 'handoff' ? 'running' : undefined,
+            exit === 'published' ? 'published' : undefined,
+            signal
+          )
+        ).toBe(0);
+      }
+    );
+  }
+
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    it.each(['published', 'pre-publication'] as const)(
+      `${signal} retains cleanup ownership only before publication on a %s rejection`,
+      async rejection => {
+        expect(
+          await signalDuringContainerDrain('settled', 'drain', undefined, rejection, signal)
+        ).toBe(rejection === 'published' ? 0 : 1);
+      }
+    );
+  }
 
   it.each([...workflowRunStatusSchema.options, null])(
     'leaves container cleanup to the successor after handoff (status=%s), including on a signal',

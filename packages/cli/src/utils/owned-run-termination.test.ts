@@ -171,3 +171,61 @@ posixOnly(
     }
   }
 );
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  test(`${signal} cleanup retires while its status read is in flight`, async () => {
+    let resolveStatus!: (status: 'running') => void;
+    const status = new Promise<'running'>(resolve => {
+      resolveStatus = resolve;
+    });
+    let statusReads = 0;
+    let failures = 0;
+    let teardowns = 0;
+    let exited!: () => void;
+    const exitCalled = new Promise<void>(resolve => {
+      exited = resolve;
+    });
+    const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
+    const before = process.listeners(signal);
+    const deregister = registerOwnedRunTermination({
+      store: {
+        getWorkflowRunStatus: async () => {
+          statusReads++;
+          return status;
+        },
+        failWorkflowRun: async () => {
+          failures++;
+          return { failed: true };
+        },
+      },
+      runId: 'run-1',
+      logModule: 'owned-run-termination.test',
+      liveOwner: {
+        close: async () => undefined,
+        isStopRequested: () => false,
+        registerTerminationPreparation: () => () => undefined,
+      },
+      detachedProcessOwner: false,
+      teardown: async () => {
+        teardowns++;
+      },
+    });
+    const handler = process.listeners(signal).find(listener => !before.includes(listener));
+    try {
+      expect(handler).toBeDefined();
+      handler?.(signal);
+      expect(statusReads).toBe(1);
+      deregister();
+      resolveStatus('running');
+      await exitCalled;
+      expect(failures).toBe(0);
+      expect(teardowns).toBe(0);
+      handler?.(signal);
+      expect(statusReads).toBe(1);
+      expect(process.listeners(signal)).not.toContain(handler);
+    } finally {
+      deregister();
+      exitSpy.mockRestore();
+    }
+  });
+}

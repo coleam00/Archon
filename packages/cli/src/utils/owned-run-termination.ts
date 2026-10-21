@@ -43,9 +43,10 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   const unregisterPreparation = detachedTrees
     ? liveOwner.registerTerminationPreparation(() => detachedTrees.prepareTermination())
     : undefined;
+  let registered = true;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
-    if (terminating) return;
+    if (!registered || terminating) return;
     terminating = true;
     log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
@@ -57,16 +58,14 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         return;
       }
       const status = await input.store.getWorkflowRunStatus(runId);
+      if (!registered) return;
       if (status !== 'running') {
         // Externally transitioned (paused at a new gate, completed, cancelled,
         // failed) or never claimed (still pending) — not this handler's to mutate.
         log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
         return;
       }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // status CAS closes the read-then-write window: if the executor commits a gate
-      // pause between the read above and this write, the CAS misses and the run
-      // stays paused.
+      // A running-status CAS also leaves a concurrently committed pause intact.
       await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
         exitReason: 'process_terminated',
         signal,
@@ -81,13 +80,13 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       })
       // After the failed status write: ending a tree first lets the executor fail the
       // run through its own path and win the status write, losing stop_reason.
-      .then(() => nodeTrees?.end())
+      .then(() => (registered ? nodeTrees?.end() : undefined))
       .catch((error: unknown) => {
         console.error(
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
-      .then(() => input.teardown?.(signal))
+      .then(() => (registered ? input.teardown?.(signal) : undefined))
       .catch(() => undefined)
       .then(async () => {
         // A detached cancel already rang the handoff frame and must keep its lease
@@ -112,6 +111,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   process.once('SIGTERM', sigtermHandler);
   process.once('SIGINT', sigintHandler);
   return () => {
+    registered = false;
     process.off('SIGTERM', sigtermHandler);
     process.off('SIGINT', sigintHandler);
     unregisterPreparation?.();
