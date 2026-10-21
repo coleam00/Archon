@@ -4,10 +4,11 @@
  * This guard pins the documents that state the rule and holds each of them to the engine.
  *
  * The copy set is pinned in `COPY_PATHS`, so a document that starts stating the rule and a
- * document that stops stating it are both failures rather than a silent change of the set. The
- * guard runs in the `static` CI job (`scripts/validate.ts`, the `variables-rule` check), which
- * runs on every push and on every pull request that is not a draft, so a copy that joins the
- * set is caught by that check.
+ * document that stops stating it are both failures rather than a silent change of the set. A
+ * document joins the set when it states the rule about a `bash:` or `script:` node. The guard
+ * runs in the `static` CI job (`scripts/validate.ts`, the `variables-rule` check), which runs
+ * on every push to `main` and `dev` and on every pull request that is not a draft, so a copy
+ * that joins the set is caught by that check.
  *
  * Every fact the guard holds a copy to belongs to the engine:
  * - `EXEC_NODE_ENVIRONMENT_NAMES` (`packages/workflows/src/exec-environment.ts`) is the bag an
@@ -33,8 +34,10 @@
  * that promises it, and a run of a node is read in the paragraph that describes it.
  */
 import { describe, expect, test } from 'bun:test';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { type LoopBodyScope, loopScopeTokens } from '../packages/workflows/src/dag/loop-scope';
 import { ENVIRONMENT_READ_PATTERNS } from '../packages/workflows/src/exec-input-validation';
@@ -148,8 +151,9 @@ interface Document {
 }
 
 describe('the user-controlled variable rule', () => {
+  const trackTempRoot = trackTempRoots();
   const documents = shippedDocuments();
-  const copies = documents.filter(isCopy);
+  const copies = copiesOf(documents);
 
   test('the copy set is the pinned one', () => {
     const derived = copies.map(copy => copy.file).sort();
@@ -239,6 +243,24 @@ describe('the user-controlled variable rule', () => {
   test('the guard accepts a copy that reads a variable from the process environment', () => {
     const document = documentOf('A `bash:` node reads "$GITHUB_TOKEN" from the environment.');
     expect(() => assertNamedVariablesAreSubstituted(document)).not.toThrow();
+  });
+
+  test('a document that states the rule in prose joins the copy set', () => {
+    const document = documentOf(
+      'User-controlled workflow variables are passed to `bash:` nodes as environment variables, not spliced into the shell command.'
+    );
+    expect(copiesOf([document]).map(copy => copy.file)).toEqual(['a synthetic copy']);
+  });
+
+  test('the guard reads every Markdown extension the surfaces ship in', () => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'variables-rule-pages-')));
+    writeFileSync(join(root, 'page.md'), '# page\n');
+    writeFileSync(join(root, 'page.mdx'), '# page\n');
+    writeFileSync(join(root, 'notes.txt'), 'not a page\n');
+    const read = pageFiles(root)
+      .map(file => basename(file))
+      .sort();
+    expect(read).toEqual(['page.md', 'page.mdx']);
   });
 });
 
@@ -484,7 +506,7 @@ function shippedDocuments(): Document[] {
 
 /** The pages under a root directory, read from the tree rather than from a list. */
 function pageFiles(root: string): string[] {
-  const entries = readdirSync(join(REPO, root), { recursive: true });
+  const entries = readdirSync(resolve(REPO, root), { recursive: true });
   return entries
     .filter(
       (entry): entry is string =>
@@ -691,6 +713,11 @@ function runtimesInPlay(text: string): Set<string> {
     else for (const runtime of SCRIPT_RUNTIMES) runtimes.add(runtime);
   }
   return runtimes;
+}
+
+/** The documents that state the rule, and so are copies of it. */
+function copiesOf(documents: readonly Document[]): Document[] {
+  return documents.filter(isCopy);
 }
 
 /** Whether a document states the rule, and so is a copy of it. */

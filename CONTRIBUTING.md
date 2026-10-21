@@ -80,9 +80,10 @@ count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `command
 `.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
 the Markdown a test names, bundled skills, generated docs, and the docs manifest. One check
 reads past that list: the user-controlled variable rule's guard reads every Markdown page
-of the docs site and the bundled skill, so it runs on every push and on every pull request
-that is not a draft (`bun run validate --only variables-rule`) rather than only when this
-list names a changed file. A page that starts stating the rule is caught by that check.
+of the docs site and the bundled skill, so it runs on every push to `main` and `dev` and on
+every pull request that is not a draft (`bun run validate --only variables-rule`) rather than
+only when this list names a changed file. A page that starts stating the rule about a
+`bash:` or `script:` node fails that check until the page is pinned in the guard's copy set.
 A conformance test
 requires every tracked Markdown path with a directory named in a test file to run the suite,
 even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
