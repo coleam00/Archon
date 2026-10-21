@@ -179,7 +179,8 @@ export async function presentRunResult(
     }
     printRunUsage(run);
   } else {
-    printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
+    if (result.workflowRunId !== undefined)
+      printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
     printRunUsage(run);
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   }

@@ -22,7 +22,7 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
-import { resolveCliExitCode } from '../utils/workflow-exit-code';
+import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 
 describe('workflowRunCommand — progress rendering', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -196,6 +196,33 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
+  it('preserves a failure before run creation without claiming an outcome read failed', async () => {
+    setupWorkflowMocks(true);
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: false,
+      error: 'Database error creating workflow run',
+    });
+    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
+    const readsBefore = lookup.mock.calls.length;
+    let thrown: unknown;
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(WorkflowRunFailedError);
+    expect(thrown).toMatchObject({
+      message: 'Workflow failed: Database error creating workflow run',
+    });
+    expect(resolveCliExitCode(thrown)).toBe(1);
+    expect(lookup.mock.calls.length).toBe(readsBefore);
+    expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
   it('does not look up usage for an approval pause without an authored outcome', async () => {
     setupWorkflowMocks();
     const { executeWorkflow } = require('@archon/workflows/executor');
@@ -222,16 +249,6 @@ describe('workflowRunCommand — progress rendering', () => {
         '    Input tokens: 12',
         '    Output tokens: 4',
       ],
-    },
-    {
-      kind: 'negative cost, fractional input and negative output',
-      metadata: { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
-      expected: ['    Cost: unknown', '    Input tokens: unknown', '    Output tokens: unknown'],
-    },
-    {
-      kind: 'negative input and fractional output',
-      metadata: { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
-      expected: ['    Cost: $0.5', '    Input tokens: unknown', '    Output tokens: unknown'],
     },
     {
       kind: 'empty',

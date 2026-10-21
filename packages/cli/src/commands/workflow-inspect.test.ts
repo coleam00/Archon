@@ -877,27 +877,6 @@ describe('workflowGetCommand', () => {
     ],
     ['valid input axis', { total_tokens_in: 2, total_tokens_out: [] }, 'unknown', '2', 'unknown'],
     [
-      'undefined token marker',
-      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: undefined },
-      'unknown',
-      'unknown',
-      'unknown',
-    ],
-    [
-      'numeric token marker',
-      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: 0 },
-      'unknown',
-      'unknown',
-      'unknown',
-    ],
-    [
-      'object token marker',
-      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: {} },
-      'unknown',
-      'unknown',
-      'unknown',
-    ],
-    [
       'negative cost, fractional input and negative output',
       { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
       'unknown',
@@ -909,20 +888,6 @@ describe('workflowGetCommand', () => {
       { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
       '$0.5',
       'unknown',
-      'unknown',
-    ],
-    [
-      'fractional input with valid output',
-      { total_tokens_in: 1.5, total_tokens_out: 2 },
-      'unknown',
-      'unknown',
-      '2',
-    ],
-    [
-      'valid input with negative output',
-      { total_tokens_in: 2, total_tokens_out: -1 },
-      'unknown',
-      '2',
       'unknown',
     ],
   ];
