@@ -58,6 +58,14 @@ export type ConnectionEnd =
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
 
+/**
+ * How long a SIGTERMed app-server gets to exit. A Codex already shutting down does not
+ * exit sooner for the signal: on a loaded machine, concurrent Codex processes were seen
+ * taking over six seconds and then exiting 0. Only a Codex that ignores SIGTERM waits
+ * this long, and its caller then reports the process as not ended.
+ */
+const TERM_EXIT_GRACE_MS = 30_000;
+
 /** How much raw stderr a connection buffers, and how much of it becomes evidence. */
 const STDERR_BUFFER_CHARS = 8000;
 const STDERR_EVIDENCE_LINES = 10;
@@ -268,7 +276,7 @@ export class AppServerConnection {
     this.child.stdin.end();
     if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
-    if (!(await this.exitsWithin(graceMs))) {
+    if (!(await this.exitsWithin(TERM_EXIT_GRACE_MS))) {
       getLog().warn({ pid: this.child.pid }, 'codex.app_server_ignored_sigterm');
     }
     return this.endedWith;
