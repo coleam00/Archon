@@ -1132,7 +1132,7 @@ function recordCleanupRemoval(
   result: CleanupOperationResult,
   branchName: string,
   removal: RemoveEnvironmentResult,
-  released?: ReleasedFailedRun
+  released: ReleasedFailedRun | null
 ): void {
   result.warnings.push(...removal.warnings.map(message => ({ branchName, message })));
   if (removal.skippedReason === 'filesystem removal incomplete; environment remains active') {
