@@ -34,6 +34,8 @@ export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
       'check_failed',
     ]),
     detail: z.string().optional(),
+    /** The checkout kept; absent on records written before it was added. */
+    path: z.string().optional(),
   }),
 ]);
 export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;
@@ -100,7 +102,10 @@ export const terminalRecordSchema = z.object({
     }),
   ]),
   artifacts: artifactManifestSchema,
-  /** Present only when the run holds proof that it created its worktree. */
+  /**
+   * Present only when the run holds proof that it created its worktree; on a completed
+   * run, only when that worktree is on the run's own generated branch.
+   */
   worktree_disposition: worktreeDispositionSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

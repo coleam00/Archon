@@ -433,11 +433,12 @@ describe('createWorkflowDeps', () => {
   });
   test('a completed-run worktree loader failure is a check_failed retention', async () => {
     const worktree = completedRunWorktreeDeps(() => Promise.reject(new Error('module missing')));
-    const run = { id: 'run-1' } as Parameters<typeof worktree.assess>[0];
+    const run = { id: 'run-1', working_path: '/wt' } as Parameters<typeof worktree.assess>[0];
     expect(await worktree.assess(run)).toEqual({
       disposition: 'retained',
       reason: 'check_failed',
       detail: 'module missing',
+      path: '/wt',
     });
   });
   test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {

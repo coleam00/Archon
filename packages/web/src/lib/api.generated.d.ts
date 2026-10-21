@@ -6910,6 +6910,7 @@ export interface components {
                   | 'published_branch'
                   | 'check_failed';
                 detail?: string;
+                path?: string;
               };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */

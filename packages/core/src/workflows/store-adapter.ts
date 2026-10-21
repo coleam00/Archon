@@ -262,7 +262,12 @@ export function completedRunWorktreeDeps(
         tools = await load();
       } catch (err) {
         getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_load_failed');
-        return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
+        return {
+          disposition: 'retained',
+          reason: 'check_failed',
+          detail: (err as Error).message,
+          ...(run.working_path ? { path: run.working_path } : {}),
+        };
       }
       return tools.cleanup.assessCompletedRunWorktree(run, tools.store, tools.readers);
     },

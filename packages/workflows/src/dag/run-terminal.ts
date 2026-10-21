@@ -419,7 +419,9 @@ async function completeRun(
   );
 
   // The terminal record already carries the decision. Removing the checkout is cleanup
-  // of terminal data, so a refusal or failure leaves it in place and the run completed.
+  // of terminal data, so a refusal or failure leaves it in place, the run completed, and
+  // the run's output says what was kept.
+  const keptPath = completedRun.working_path ?? '(unknown path)';
   if (worktreeDisposition?.disposition === 'release') {
     try {
       await deps.completedRunWorktree?.release(completedRun);
@@ -429,8 +431,46 @@ async function completeRun(
         { err, workflowRunId: workflowRun.id },
         'workflow.completed_worktree_release_failed'
       );
+      await sendRetentionWarning(ctx, keptPath, `removing it failed (${(err as Error).message})`);
     }
+  } else if (worktreeDisposition?.disposition === 'retained') {
+    const lost = wouldBeLost(worktreeDisposition);
+    if (lost) await sendRetentionWarning(ctx, worktreeDisposition.path ?? keptPath, lost);
   }
+}
+
+/** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */
+function wouldBeLost(
+  disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
+): string | undefined {
+  switch (disposition.reason) {
+    case 'uncommitted_changes':
+      return 'it has uncommitted changes';
+    case 'unpushed_commits':
+      return `it has ${disposition.detail ?? 'commits on no remote'}`;
+    case 'in_use':
+      return `${disposition.detail ?? 'another run'} still uses it`;
+    case 'check_failed':
+      return `the removal check failed (${disposition.detail ?? 'no detail'})`;
+    case 'workspace_retained':
+    case 'resumable':
+    case 'cancelled':
+    case 'published_branch':
+      return undefined;
+  }
+}
+
+async function sendRetentionWarning(
+  ctx: RunTerminalContext,
+  path: string,
+  why: string
+): Promise<void> {
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `⚠️ Kept worktree ${path}: ${why}. It stays listed by \`archon isolation list\`.`,
+    { workflowId: ctx.workflowRun.id }
+  );
 }
 
 /**
