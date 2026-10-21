@@ -147,6 +147,8 @@ describe('post-admission source store rejections', () => {
     const { run, store, error, reached } = await rejectingSource(operation);
     const writeError = new Error('terminal write unavailable');
     store.failWorkflowRun = mock(async () => {
+      expect(store.getWorkflowRunStatus).toHaveBeenCalledTimes(1);
+      expect(store.getWorkflowRunStatus).toHaveBeenCalledWith(run.id);
       throw writeError;
     });
     await withKeepAwakeCheck(async () => {
@@ -164,7 +166,7 @@ describe('post-admission source store rejections', () => {
         exitReason: 'unhandled_error',
       });
       expect(run.status).toBe('running');
-      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).toHaveBeenCalledTimes(1);
       expect(mockEmitter.emit).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: 'workflow_failed' })
       );
