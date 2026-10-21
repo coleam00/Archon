@@ -34,7 +34,7 @@ import {
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
-import { enrollOwnPrs, isOwnPr, SUPERSEDED, supersededReason, supersedeOwnPrs, type Takeover } from '../../.shared/own-prs.ts';
+import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
 import { claimNext, parseOrder, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -120,20 +120,6 @@ function recoveryPickup(snapshot: (pr: QualifiedPr) => PrFacts): Pickup {
 }
 
 /**
- * Settle each claimed own-PR item a build item took over, keeping it out of the sweep:
- * its claim ended after the supersession pass and released it to this pickup.
- */
-function settleTakeovers(docs: readonly WorkItem[], takeoverOf: (doc: WorkItem) => Takeover | null, settled: MergeSettled[]): WorkItem[] {
-  return docs.filter(doc => {
-    const takeover = takeoverOf(doc);
-    if (takeover !== null) {
-      settled.push({ item: doc.subject, pr: takeover.pr, status: 'parked', decision: SUPERSEDED, reason: supersededReason(takeover) });
-    }
-    return takeover === null;
-  });
-}
-
-/**
  * Enrollment only adds work items, so a failed listing must not stop the sweep merging
  * the ones that already exist. Items enrolled before the failure are kept.
  */
@@ -178,13 +164,12 @@ function main(): void {
   requireGh();
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
-  const takeoverOf = supersedeOwnPrs(new Date().toISOString(), runId);
   enrollOrNote(repo, list.ownPrs);
   const snapshot = snapshotReader(maintainers);
   const pickup = recoveryPickup(snapshot);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
-  for (const doc of settleTakeovers(claimAll(limit, order, runId, pickup), takeoverOf, settled)) {
+  for (const doc of claimAll(limit, order, runId, pickup)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
     try {

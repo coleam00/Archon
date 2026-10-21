@@ -25,7 +25,7 @@ import {
 import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
-import { type IntakeRequest, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type GhCommentRow, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -465,6 +465,7 @@ describe('the merge queue scripts', () => {
       { number: 42, url: PR_URL, isDraft: false, headRefName: 'build/7-fix-the-thing-abcdef12' },
       { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true, headRefName: 'wip' },
+      // A build-queue branch no round has recorded yet.
       { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'build/9-add-a-thing-0123abcd' },
       // A hand-opened branch under build/ that the build queue could not have created.
       { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/docs' },
@@ -479,190 +480,22 @@ describe('the merge queue scripts', () => {
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
 
-  test('an own-PR item whose pull request a build item delivers is settled as superseded and never swept', () => {
+  test('an own pull request listed without its head branch is not enrolled', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    seed(at, item());
-    const ownDoc = { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } };
-    seed(at, ownDoc);
-    const picked = run(at, 'facts', {}, { pr: { ownPrs: [] } });
-    const output = ok(picked) as { items: { item: { number: number } }[] };
-    expect(output.items.map(entry => entry.item.number)).toEqual([7]);
-    const merge = stored(at, 42).value?.facts.merge;
-    expect(merge?.status).toBe('parked');
-    expect(merge?.decisions[0]?.decision).toBe('superseded');
-    expect(merge?.decisions[0]?.reason).toContain('work item 7');
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false }] } });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('own-PR enrollment stopped');
+    expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
-  test('an own-PR item left claimed by an ended run is released and superseded; a live claim is held', () => {
-    const ownDoc = (run_id: string) => ({
-      ...newWorkItem({ repo: PR.repo, number: 42 }, AT),
-      claim: { run_id, at: AT, requests: [] },
-      facts: { own_pr: { url: PR_URL, at: AT } },
-    });
-    const ended = install();
-    seed(ended, item());
-    seed(ended, ownDoc('old-run'));
-    const picked = ok(run(ended, 'facts', { INTAKE_RUN_STATUSES: '{"old-run":"failed"}' })) as { items: { item: { number: number } }[] };
-    expect(picked.items.map(entry => entry.item.number)).toEqual([7]);
-    const settled = stored(ended, 42).value;
-    expect(settled?.claim).toBeNull();
-    expect(settled?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
-    expect(settled?.history.map(entry => entry.outcome)).toEqual(['released']);
-
-    // Release and supersession land in one write: no stored state of work/42 is unclaimed and still unsettled.
-    const writes = install();
-    seed(writes, item());
-    seed(writes, ownDoc('old-run'));
-    const logged = `
-const logging = Bun.spawnSync;
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const at = argv.indexOf('state');
-  if (at >= 0 && argv[at + 1] === 'put' && argv[at + 2] === 'work/42') appendFileSync('{ARTIFACTS}/work-42-puts.log', settings.stdin.toString() + '\\n');
-  return logging(argv, settings);
-} });
-`;
-    const written = run(writes, 'facts', { INTAKE_RUN_STATUSES: '{"old-run":"failed"}' }, { preload: logged });
-    ok(written);
-    const puts = readFileSync(join(written.artifacts, 'work-42-puts.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as WorkItem);
-    expect(puts.map(doc => [doc.claim, doc.facts.merge?.status])).toEqual([[null, 'parked']]);
-
-    const live = install();
-    seed(live, item());
-    seed(live, ownDoc('live-run'));
-    const held = ok(run(live, 'facts', { INTAKE_RUN_STATUSES: '{"live-run":"running"}' })) as { items: { item: { number: number } }[] };
-    expect(held.items.map(entry => entry.item.number)).toEqual([7]);
-    expect(stored(live, 42).value?.claim?.run_id).toBe('live-run');
-    expect(stored(live, 42).value?.facts.merge).toBeUndefined();
-  }, 60_000);
-
-  test('a write that lands on an own-PR item during its supersession is kept, and the item is still superseded', () => {
-    const at = install();
-    seed(at, item());
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
-    const request: IntakeRequest = { at: AT, run_id: 'intake-event', action: 'edited', label: null, actor: null, body_digest: null };
-    // The first conditional write to work/42 races an intake request appended just before it.
-    const race = `
-let raced = false;
-const racing = Bun.spawnSync;
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const at = argv.indexOf('state');
-  if (!raced && at >= 0 && argv[at + 1] === 'put' && argv[at + 2] === 'work/42') {
-    raced = true;
-    racing([...argv.slice(0, at), 'state', 'patch', 'work/42'], { ...settings, stdin: Buffer.from(JSON.stringify({ ops: [{ op: 'append', path: '/requests', value: ${JSON.stringify(request)} }] })) });
-  }
-  return racing(argv, settings);
-} });
-`;
-    const output = ok(run(at, 'facts', {}, { preload: race })) as { items: { item: { number: number } }[] };
-    expect(output.items.map(entry => entry.item.number)).toEqual([7]);
-    const settled = stored(at, 42).value;
-    expect(settled?.requests).toEqual([request]);
-    expect(settled?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
-  }, 60_000);
-
-  test('a parked own-PR item a build item takes over records the supersession after its earlier decisions, once', () => {
-    const at = install();
-    seed(at, item());
-    const parked: MergeRecord = {
-      ...merge('parked'),
-      decisions: [{ at: LATER, run_id: 'old-run', decision: 'parked', reason: 'a maintainer parked it', links: [], head: HEAD, reran: false }],
-    };
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT }, merge: parked } });
-    ok(run(at, 'facts', {}));
-    ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"completed"}' }));
-    const decisions = stored(at, 42).value?.facts.merge?.decisions;
-    expect(decisions?.map(entry => [entry.decision, entry.run_id])).toEqual([['parked', 'old-run'], ['superseded', 'run-1']]);
-    expect(decisions?.[1]?.reason).toContain('work item 7');
-  }, 60_000);
-
-  test('ownership compares the repository as well as the number', () => {
+  test('enrollment compares the repository as well as the number', () => {
     const other = { host: PR.repo.host, path: 'someone/else' };
-    const otherUrl = (number: number) => `https://${other.host}/${other.path}/pull/${String(number)}`;
-    const rounds = (url: string) => ({ ...BUILT, status: 'next' as const, rounds: [{ ...BUILT.rounds[0]!, pr_url: url }] });
+    const otherRound = { ...BUILT.rounds[0]!, pr_url: `https://${other.host}/${other.path}/pull/50` };
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    seed(at, { ...item(rounds(otherUrl(42))), subject: { repo: other, number: 7 } });
-    seed(at, { ...item(rounds(otherUrl(50))), subject: { repo: other, number: 8 } });
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
+    seed(at, { ...item({ ...BUILT, status: 'next', rounds: [otherRound] }), subject: { repo: other, number: 8 } });
     const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
     const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true], [50, true]]);
-    expect(stored(at, 42).value?.facts.merge).toBeUndefined();
-  }, 60_000);
-
-  test('a malformed work item or round URL is noted and skipped while the supersession settles the healthy ones', () => {
-    const at = install();
-    seed(at, item({ ...BUILT, status: 'next' }));
-    seed(at, { ...item({ ...BUILT, status: 'next', rounds: [{ ...BUILT.rounds[0]!, pr_url: 'not a url' }] }), subject: { repo: PR.repo, number: 8 } });
-    inProcess(at, () => expect(statePut('work/9', { version: 0 }, stateGet('work/9').revision)).toBe('ok'));
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
-    const picked = run(at, 'facts', {});
-    expect(picked.code).toBe(0);
-    expect(picked.stderr).toContain('work/8');
-    expect(picked.stderr).toContain('work/9');
-    expect((JSON.parse(picked.stdout) as { items: unknown[] }).items).toEqual([]);
-    expect(stored(at, 42).value?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
-  }, 60_000);
-
-  test('only the pull request of a build item\'s latest round supersedes; an earlier round\'s pull request stays an own PR', () => {
-    const at = install();
-    const earlier = { ...BUILT.rounds[0]!, run_id: 'ship-0', pr_url: PR_URL.replace(/42$/, '30') };
-    seed(at, item({ ...BUILT, status: 'next', rounds: [earlier, ...BUILT.rounds] }));
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 30 }, AT), facts: { own_pr: { url: earlier.pr_url, at: AT } } });
-    const output = ok(run(at, 'facts', {})) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[30, true]]);
-    expect(stored(at, 30).value?.facts.merge).toBeUndefined();
-  }, 60_000);
-
-  test('a build item whose latest round names no pull request owns none, so an earlier round\'s pull request enrolls and stays an own PR', () => {
-    const emptyLatest = { ...BUILT, status: 'next' as const, rounds: [...BUILT.rounds, { ...BUILT.rounds[0]!, run_id: 'ship-2', pr_url: '' }] };
-    const ownPrs = [{ number: 42, url: PR_URL, isDraft: false, headRefName: 'fix-the-thing' }];
-    const enrolling = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    seed(enrolling, item(emptyLatest));
-    const enrolled = ok(run(enrolling, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(enrolled.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true]]);
-
-    const existing = install();
-    seed(existing, item(emptyLatest));
-    seed(existing, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT } } });
-    const swept = ok(run(existing, 'facts', {})) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(swept.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[42, true]]);
-    expect(stored(existing, 42).value?.facts.merge).toBeUndefined();
-  }, 60_000);
-
-  test('an own-PR item whose claim ends between supersession and pickup is settled as superseded, not swept', () => {
-    const at = install();
-    seed(at, item({ ...BUILT, status: 'next' }));
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), claim: { run_id: 'owner', at: AT, requests: [] }, facts: { own_pr: { url: PR_URL, at: AT } } });
-    // The owner is running when supersession reads it and has completed when the pickup does.
-    const ending = `
-let reads = 0;
-const ending = Bun.spawnSync;
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const at = argv.indexOf('workflow');
-  if (at >= 0 && argv[at + 1] === 'get' && argv[at + 2] === 'owner') {
-    reads += 1;
-    return { exitCode: 0, stdout: Buffer.from(JSON.stringify({ id: 'owner', status: reads === 1 ? 'running' : 'completed' })), stderr: Buffer.from('') };
-  }
-  return ending(argv, settings);
-} });
-`;
-    const output = ok(run(at, 'facts', {}, { preload: ending })) as { path: string; items: unknown[]; settled: MergeSettled[] };
-    expect(output.items).toEqual([]);
-    expect(output.path).toBe('record');
-    expect(output.settled.map(entry => [entry.item.number, entry.status, entry.decision])).toEqual([[42, 'parked', 'superseded']]);
-    expect(output.settled[0]?.reason).toContain('work item 7');
-  }, 60_000);
-
-  test('a merged own-PR item stays merged when a build item names its pull request', () => {
-    const at = install();
-    seed(at, item({ ...BUILT, status: 'next' }));
-    const merged: MergeRecord = {
-      ...merge('merged'),
-      decisions: [{ at: LATER, run_id: 'old-run', decision: 'merged', reason: 'the gate passed', links: [], head: HEAD, reran: false }],
-    };
-    seed(at, { ...newWorkItem({ repo: PR.repo, number: 42 }, AT), facts: { own_pr: { url: PR_URL, at: AT }, merge: merged } });
-    ok(run(at, 'facts', {}));
-    expect(stored(at, 42).value?.facts.merge).toEqual(merged);
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[50, true]]);
   }, 60_000);
 
   test('a malformed work item is noted and skipped, and own pull requests still enroll', () => {
@@ -673,14 +506,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(picked.code).toBe(0);
     expect(picked.stderr).not.toContain('own-PR enrollment stopped');
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(ownPrs[0]!.url);
-  }, 60_000);
-
-  test('an own pull request listed without its head branch is not enrolled', () => {
-    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false }] } });
-    expect(picked.code).toBe(0);
-    expect(picked.stderr).toContain('own-PR enrollment stopped');
-    expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
   for (const choice of ['park', 'other']) {
@@ -762,7 +587,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('recovery preserves pinned approval and limits claims in configured order', () => {
     const at = install();
     seed(at, parkedOwn());
-    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER, created_at: LATER });
+    seed(at, { ...item(), subject: OTHER, created_at: LATER });
     const sameHead = parkedOwn();
     seed(at, {
       ...sameHead,

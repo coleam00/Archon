@@ -606,17 +606,11 @@ then the project's file, whose lines win where the two conflict.
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet and whose head branch is not one the build queue creates
   (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). A pull request
-  on a build branch belongs to its build item alone until that item is ready. When a
-  build item's latest round names a pull request that already has an unmerged own-PR
-  item, the run settles the own-PR item as superseded before claiming, recording the
-  build item's number, so the sweep never sees it. A claim whose run ended is released
-  in the same write. One a live run still holds stays with that run; once it ends, the
-  pickup that releases the claim records the same supersession instead of sweeping it.
-  A latest round that names no pull request owns none. No build round owns an
-  own-PR pull request, so where another would go back to the build queue (no verdict,
-  a stale one, a conflict, a holding thread, red CI the change caused) the sweep asks
-  instead, naming what is wrong and the command a maintainer can launch, and its
-  question offers no `return`. The record never hands one to the build queue.
+  on a build branch belongs to its build item alone until that item is ready. No build
+  round owns an own-PR pull request, so where another would go back to the build queue
+  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
+  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
+  its question offers no `return`. The record never hands one to the build queue.
   The queue never starts that run itself. An own-PR item answered `park` or `other`
   waits again only when its current head differs from its latest merge decision's
   head. At the same head it stays parked. Merged own-PR items and other kinds of

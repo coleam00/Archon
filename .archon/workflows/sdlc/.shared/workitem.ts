@@ -688,21 +688,24 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
     }
     return item;
   }
-  const doc = released(item.doc, claim, status, at, runId, pickup);
+  const doc: WorkItem = {
+    ...item.doc,
+    claim: null,
+    requests: queued([...claim.requests, ...item.doc.requests]),
+    history: newest([
+      ...item.doc.history,
+      {
+        at,
+        stage: pickup.stage,
+        run_id: runId,
+        outcome: 'released',
+        summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
+      },
+    ]),
+  };
   return statePut(item.name, doc, item.revision) === 'ok'
     ? { ...item, revision: item.revision + 1, doc }
     : item;
-}
-
-/** The document with an ended run's claim released, unwritten, so a caller can record its own decision in the same write. */
-export function released(doc: WorkItem, claim: NonNullable<WorkItem['claim']>, status: string | null, at: string, runId: string, pickup: Pickup): WorkItem {
-  const summary = `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`;
-  return {
-    ...doc,
-    claim: null,
-    requests: queued([...claim.requests, ...doc.requests]),
-    history: newest([...doc.history, { at, stage: pickup.stage, run_id: runId, outcome: 'released', summary }]),
-  };
 }
 
 /** Which items a queue's pickup claims, and what its claim takes from the item. */
