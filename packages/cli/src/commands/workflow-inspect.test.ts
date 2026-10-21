@@ -898,11 +898,32 @@ describe('workflowGetCommand', () => {
       'unknown',
     ],
     [
-      'finite recorded values',
+      'negative cost, fractional input and negative output',
       { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
-      '$-1',
-      '1.5',
-      '-2',
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'negative input and fractional output',
+      { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
+      '$0.5',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'fractional input with valid output',
+      { total_tokens_in: 1.5, total_tokens_out: 2 },
+      'unknown',
+      'unknown',
+      '2',
+    ],
+    [
+      'valid input with negative output',
+      { total_tokens_in: 2, total_tokens_out: -1 },
+      'unknown',
+      '2',
+      'unknown',
     ],
   ];
 

@@ -224,6 +224,16 @@ describe('workflowRunCommand — progress rendering', () => {
       ],
     },
     {
+      kind: 'negative cost, fractional input and negative output',
+      metadata: { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
+      expected: ['    Cost: unknown', '    Input tokens: unknown', '    Output tokens: unknown'],
+    },
+    {
+      kind: 'negative input and fractional output',
+      metadata: { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
+      expected: ['    Cost: $0.5', '    Input tokens: unknown', '    Output tokens: unknown'],
+    },
+    {
       kind: 'empty',
       metadata: {},
       expected: [
