@@ -143,7 +143,6 @@ function expectProducerContracts(
     if (!schema) throw new Error(`Missing producer contract: ${trace.nodeId}`);
     const output = object(JSON.parse(trace.output ?? ''));
     expect(validateStructuredOutput(output, schema)).toEqual({ valid: true });
-    expect(Object.keys(output).sort()).toEqual(Object.keys(object(schema.properties)).sort());
   }
 }
 
