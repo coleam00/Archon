@@ -89,6 +89,7 @@ export async function pauseGateRespectingExternalTransition(
   approvalContext: ApprovalContext,
   options: {
     event: GatePauseEventInput;
+    expectedExecutionClaim: string | null;
     extraMetadata?: Record<string, unknown>;
     failClosed?: boolean;
   }
@@ -96,7 +97,13 @@ export async function pauseGateRespectingExternalTransition(
   const { extraMetadata, failClosed = false } = options;
   approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.event);
+    await deps.store.pauseWorkflowRun(
+      runId,
+      approvalContext,
+      extraMetadata,
+      options.event,
+      options.expectedExecutionClaim
+    );
   } catch (pauseErr) {
     if (failClosed || !(pauseErr instanceof WorkflowRunPauseConflictError)) throw pauseErr;
     const status = await statusAfterPauseFailure(deps.store, runId, pauseErr);

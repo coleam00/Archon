@@ -1,3 +1,4 @@
+import { executionClaim, WorkflowRunExecutionClaimLostError } from '../../../store';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -229,7 +230,10 @@ export async function executeWorkflowNode(
       deps,
       parentRun.id,
       { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
-      { event: serializeNodeStateRecord(suspended) }
+      {
+        event: serializeNodeStateRecord(suspended),
+        expectedExecutionClaim: executionClaim(parentRun.metadata),
+      }
     );
     if (paused.kind !== 'paused') return serializeNodeOutput(execution);
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
@@ -330,7 +334,12 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
+    if (
+      err instanceof WorkflowRunExecutionClaimLostError ||
+      err instanceof TerminalStatusWriteError ||
+      err instanceof NodeEventWriteError
+    )
+      throw err;
 
     // Only a read of the parent's source releases the parent; a child's fault stays the
     // child's, so the launch types those reads (see runChildWorkflow).

@@ -1,3 +1,4 @@
+import { executionClaim } from '../../../store';
 import { waitMessageRenderer } from './attention-message';
 import { sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
@@ -64,7 +65,8 @@ async function pauseWait(
       context,
       continued
         ? { kind: 'continued' }
-        : { kind: 'started', stepName: ctx.stepNamePrefix + node.id }
+        : { kind: 'started', stepName: ctx.stepNamePrefix + node.id },
+      executionClaim(workflowRun.metadata)
     );
     return 'paused';
   } catch (pauseError) {

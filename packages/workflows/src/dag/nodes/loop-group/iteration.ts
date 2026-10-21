@@ -1,3 +1,4 @@
+import { executionClaim } from '../../../store';
 import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -681,7 +682,10 @@ async function pauseAtGroupGate(
     deps,
     workflowRun.id,
     approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
+    {
+      event: serializeNodeStateRecord(suspended),
+      expectedExecutionClaim: executionClaim(workflowRun.metadata),
+    }
   );
   if (paused.kind !== 'paused')
     return {

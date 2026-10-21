@@ -230,10 +230,10 @@ export async function createFileWorkflowStore(
         return { released };
       }),
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
-    pauseWorkflowRun: (id, approval, extra, event) =>
-      write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
-    pauseWorkflowRunForWait: (id, wait, pause) =>
-      write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
+    pauseWorkflowRun: (id, approval, extra, event, claim) =>
+      write([id], view => view.pauseWorkflowRun(id, approval, extra, event, claim)),
+    pauseWorkflowRunForWait: (id, wait, pause, claim) =>
+      write([id], view => view.pauseWorkflowRunForWait(id, wait, pause, claim)),
     withPausedExecution: (id, claim, action) =>
       write([id], view => view.withPausedExecution(id, claim, action)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>

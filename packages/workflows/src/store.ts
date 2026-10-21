@@ -978,13 +978,15 @@ export interface IWorkflowStore
    * container write-back gate's `pending_writeback` marker) so there is never a
    * paused-without-marker window. `event` is committed with the pause, so a decision
    * cannot be followed by a stale node_suspended row and the pause reaches the event
-   * feed; every executor gate pause supplies one.
+   * feed; every executor gate pause supplies one. Executor writers also supply
+   * `expectedExecutionClaim`, compared atomically with the running status.
    */
   pauseWorkflowRun(
     id: string,
     approvalContext: ApprovalContext,
     extraMetadata?: Record<string, unknown>,
-    event?: GatePauseEventInput
+    event?: GatePauseEventInput,
+    expectedExecutionClaim?: string | null
   ): Promise<void>;
   /**
    * Under the same exclusion as resume, run action only for a paused row with the
@@ -1011,12 +1013,14 @@ export interface IWorkflowStore
   ): Promise<{ released: boolean }>;
   /**
    * Pause a running run on a wait, committing `wait_started` for a new wait or
-   * `wait_continued` (`waitContinuedEvent`) for one a resume reached again.
+   * `wait_continued` (`waitContinuedEvent`) for one a resume reached again. Executor
+   * writers supply `expectedExecutionClaim` to exclude a successor execution.
    */
   pauseWorkflowRunForWait(
     id: string,
     waitContext: WorkflowWaitContext,
-    pause: WorkflowWaitPause
+    pause: WorkflowWaitPause,
+    expectedExecutionClaim?: string | null
   ): Promise<void>;
   /**
    * Consume the exact wait cursor and persist its completion snapshot atomically. Both

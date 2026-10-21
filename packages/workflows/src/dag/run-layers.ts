@@ -15,7 +15,7 @@ import {
   readSubrunMetadata,
   isNodeContextResume,
 } from '../schemas';
-import type { PersistedNodeOutput } from '../store';
+import { WorkflowRunExecutionClaimLostError, type PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
@@ -523,6 +523,7 @@ async function recordPreExecutionFailure(
   // Durable-write rejection and a budget refusal must reach run recovery
   // without becoming a node outcome: a refused node never started.
   if (
+    error instanceof WorkflowRunExecutionClaimLostError ||
     error instanceof TerminalStatusWriteError ||
     error instanceof NodeEventWriteError ||
     error instanceof RunBudgetRefusedError

@@ -504,10 +504,15 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
   if (limit === undefined) return false;
   const { wait, cause } = limit;
   try {
-    await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
-      kind: 'started',
-      stepName: wait.nodeId,
-    });
+    await deps.store.pauseWorkflowRunForWait(
+      workflowRun.id,
+      wait,
+      {
+        kind: 'started',
+        stepName: wait.nodeId,
+      },
+      executionClaim(workflowRun.metadata)
+    );
   } catch (pauseError) {
     if (!(pauseError instanceof WorkflowRunPauseConflictError)) throw pauseError;
     // A run cancelled or paused meanwhile keeps that status, exactly as the failure

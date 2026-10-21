@@ -1,3 +1,4 @@
+import { executionClaim } from '../../../store';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -218,7 +219,10 @@ async function suspendOnHeldChildren(
       childRunIds: held.map(([, id]) => id),
       unspawnedItems,
     },
-    { event: serializeNodeStateRecord(suspended) }
+    {
+      event: serializeNodeStateRecord(suspended),
+      expectedExecutionClaim: executionClaim(ctx.workflowRun.metadata),
+    }
   );
   if (paused.kind !== 'paused') return serializeNodeOutput(execution);
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);

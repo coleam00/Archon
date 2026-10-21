@@ -1,3 +1,4 @@
+import { executionClaim } from '../../../store';
 import { executeAgentNode } from '../agent/agent';
 import {
   pauseGateRespectingExternalTransition,
@@ -211,7 +212,10 @@ export async function executeApprovalNode(
     deps,
     workflowRun.id,
     approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
+    {
+      event: serializeNodeStateRecord(suspended),
+      expectedExecutionClaim: executionClaim(workflowRun.metadata),
+    }
   );
   switch (paused.kind) {
     case 'deferred':

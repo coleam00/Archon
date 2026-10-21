@@ -1,3 +1,4 @@
+import { WorkflowRunExecutionClaimLostError } from './store';
 import {
   maybeContinueReleasedFanOut,
   maybeResumeParentRun,
@@ -614,6 +615,12 @@ export async function executeWorkflow(
     if (error instanceof TerminalStatusWriteError) {
       terminalStatusWriteFailed = true;
       throw error;
+    }
+
+    if (error instanceof WorkflowRunExecutionClaimLostError) {
+      executionSegmentStopped = true;
+      getLog().warn({ workflowRunId: workflowRun.id, err: error }, 'workflow_execution_claim_lost');
+      return { success: false, workflowRunId: workflowRun.id, error: error.message };
     }
 
     // Top-level error handler: ensure workflow is marked as failed

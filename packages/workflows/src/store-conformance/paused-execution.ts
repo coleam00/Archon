@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { executionClaim, WorkflowRunExecutionClaimLostError, type IWorkflowStore } from '../store';
+import {
+  executionClaim,
+  WorkflowRunPauseConflictError,
+  WorkflowRunExecutionClaimLostError,
+  type IWorkflowStore,
+} from '../store';
 
 const approval = { nodeId: 'review', type: 'approval' as const, message: 'Review' };
 
@@ -14,6 +19,68 @@ export function describePausedExecutionConformance(getStore: () => IWorkflowStor
       const claimed = await store.claimPendingWorkflowRun(run.id);
       if (!claimed) throw new Error('run was not claimed');
       return claimed;
+    }
+    for (const resumed of [false, true]) {
+      test.each(['gate', 'wait', 'continued-wait'] as const)(
+        `pause publication rejects an old segment after resume (resumed=${resumed}, %s)`,
+        async kind => {
+          const store = getStore();
+          let run = await running();
+          if (resumed) {
+            await store.pauseWorkflowRun(run.id, approval);
+            run = await store.resumeWorkflowRun(run.id);
+          }
+          const claim = executionClaim(run.metadata);
+          const publish = (expected: string | null, id = run.id) =>
+            kind === 'gate'
+              ? store.pauseWorkflowRun(
+                  id,
+                  approval,
+                  { pending_writeback: { envId: 'old' } },
+                  {
+                    workflow_run_id: id,
+                    event_type: 'writeback_requested',
+                    step_name: 'container',
+                    data: {},
+                  },
+                  expected
+                )
+              : store.pauseWorkflowRunForWait(
+                  id,
+                  {
+                    owner: 'node',
+                    nodeId: 'wait',
+                    kind: 'time',
+                    waitingSince: new Date().toISOString(),
+                    resumeAt: new Date().toISOString(),
+                  },
+                  kind === 'continued-wait'
+                    ? { kind: 'continued' }
+                    : { kind: 'started', stepName: 'wait' },
+                  expected
+                );
+          await expect(publish(claim, crypto.randomUUID())).rejects.toBeInstanceOf(
+            WorkflowRunExecutionClaimLostError
+          );
+          await publish(claim);
+          const paused = await store.getWorkflowRun(run.id);
+          const pausedEvents = await store.listWorkflowEvents(run.id);
+          await expect(publish(claim)).rejects.toBeInstanceOf(WorkflowRunPauseConflictError);
+          expect(await store.getWorkflowRun(run.id)).toEqual(paused);
+          expect(await store.listWorkflowEvents(run.id)).toEqual(pausedEvents);
+          const next = await store.resumeWorkflowRun(run.id);
+          const assertRefused = async () => {
+            const before = await store.getWorkflowRun(run.id);
+            const events = await store.listWorkflowEvents(run.id);
+            await expect(publish(claim)).rejects.toBeInstanceOf(WorkflowRunExecutionClaimLostError);
+            expect(await store.getWorkflowRun(run.id)).toEqual(before);
+            expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+          };
+          await assertRefused();
+          await publish(executionClaim(next.metadata));
+          await assertRefused();
+        }
+      );
     }
     test.each([false, true])(
       'accounting compares the segment claim atomically (resumed=%s)',

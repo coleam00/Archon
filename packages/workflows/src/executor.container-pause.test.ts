@@ -881,6 +881,60 @@ describe('container pause segment ownership through the executor', () => {
     );
   }
 
+  for (const { path, nodes, name } of [
+    ...paths.map(path => ({ path, nodes: undefined, name: path })),
+    {
+      path: 'ordinary' as const,
+      nodes: [{ id: 'wait', wait: { duration_ms: 1000 } }],
+      name: 'wait',
+    },
+    ...[{ approval: { message: 'Review' } }, { wait: { duration_ms: 1000 } }].map(node => ({
+      path: 'ordinary' as const,
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            max_iterations: 2,
+            until_bash: 'echo done',
+            nodes: [{ id: 'interaction', ...node }],
+          },
+        },
+      ],
+      name: `nested ${'approval' in node ? 'gate' : 'wait'}`,
+    })),
+  ]) {
+    it(`${name}: stale publication preserves a running successor`, async () => {
+      const f = await setup(path, nodes);
+      let successor: WorkflowRun | undefined;
+      const resumeBeforePublication = async () => {
+        await f.store.pauseWorkflowRun(f.run.id, approval);
+        successor = await f.store.resumeWorkflowRun(f.run.id);
+      };
+      try {
+        const result = await f.execute({
+          pauseWorkflowRun: async (...args) => {
+            await resumeBeforePublication();
+            await f.store.pauseWorkflowRun(...args);
+          },
+          pauseWorkflowRunForWait: async (...args) => {
+            await resumeBeforePublication();
+            await f.store.pauseWorkflowRunForWait(...args);
+          },
+        });
+        expect(result.success).toBe(false);
+        expect(successor).toBeDefined();
+        const next = await f.store.getWorkflowRun(f.run.id);
+        expect(next?.status).toBe('running');
+        expect(next?.metadata).toEqual(successor?.metadata);
+        expect(f.stop).not.toHaveBeenCalled();
+        expect(f.backend.applyChanges).not.toHaveBeenCalled();
+        expect(f.backend.discardChanges).not.toHaveBeenCalled();
+      } finally {
+        f.unsubscribe();
+      }
+    });
+  }
+
   for (const path of paths) {
     it.each([false, true])(
       `${path}: resume wins before cleanup (successor paused=%s)`,

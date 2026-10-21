@@ -1,3 +1,4 @@
+import { WorkflowRunExecutionClaimLostError } from '../../../store';
 import { finalizeLoopFromSignal } from '../../loop-completion';
 import { requireProvider } from '@archon/provider-contract';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
@@ -333,9 +334,8 @@ async function runSettledLoopIteration(
   try {
     return await runLoopIteration(run, state, i);
   } catch (error) {
-    // An iteration reads no node source, reserves no run budget and writes no terminal
-    // status; a failed event write is the only engine error it can raise.
-    if (error instanceof NodeEventWriteError) throw error;
+    if (error instanceof WorkflowRunExecutionClaimLostError || error instanceof NodeEventWriteError)
+      throw error;
     const { ctx, node } = run;
     const message = error instanceof Error ? error.message : String(error);
     getLog().error({ err: error, nodeId: node.id, iteration: i }, 'loop_node.execution_failed');

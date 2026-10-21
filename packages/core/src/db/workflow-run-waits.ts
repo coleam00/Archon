@@ -18,6 +18,8 @@ import {
 import { PAUSE_CAUSE_METADATA_KEY, pauseCauseOfWait } from '@archon/workflows/schemas/pause-cause';
 import {
   WorkflowRunPauseConflictError,
+  executionClaim,
+  WorkflowRunExecutionClaimLostError,
   answeredAttentionWait,
   attentionLabeledEvent,
   labeledAttentionWait,
@@ -55,11 +57,17 @@ function replaceWaitMetadata(paramIndex: number, causeIndex: number): string {
 export async function pauseWorkflowRunForWait(
   id: string,
   waitContext: WorkflowWaitContext,
-  pause: WorkflowWaitPause
+  pause: WorkflowWaitPause,
+  expectedExecutionClaim?: string | null
 ): Promise<void> {
   const parsedWaitContext = workflowWaitContextSchema.parse(waitContext);
   try {
     await getDatabase().withTransaction(async query => {
+      if (expectedExecutionClaim !== undefined) {
+        const run = await lockedRunRow(query, id);
+        if (!run || executionClaim(normalizeMetadata(run.metadata)) !== expectedExecutionClaim)
+          throw new WorkflowRunExecutionClaimLostError(id);
+      }
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'paused', metadata = ${replaceWaitMetadata(2, 3)}
@@ -87,7 +95,11 @@ export async function pauseWorkflowRunForWait(
       }
     });
   } catch (error) {
-    if (error instanceof WorkflowRunPauseConflictError) throw error;
+    if (
+      error instanceof WorkflowRunPauseConflictError ||
+      error instanceof WorkflowRunExecutionClaimLostError
+    )
+      throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_wait_pause_failed');
     throw new Error(`Failed to pause workflow run for wait: ${err.message}`);

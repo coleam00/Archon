@@ -472,6 +472,7 @@ async function raiseWriteBackGate(
         pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) },
       },
       failClosed: true,
+      expectedExecutionClaim,
     }
   );
   getWorkflowEventEmitter().emit({

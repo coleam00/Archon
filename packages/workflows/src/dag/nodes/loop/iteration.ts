@@ -1,3 +1,4 @@
+import { executionClaim } from '../../../store';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -593,7 +594,10 @@ async function pauseAtLoopGate(
     deps,
     workflowRun.id,
     approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
+    {
+      event: serializeNodeStateRecord(suspended),
+      expectedExecutionClaim: executionClaim(workflowRun.metadata),
+    }
   );
   if (paused.kind !== 'paused') {
     if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {

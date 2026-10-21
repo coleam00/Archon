@@ -14,13 +14,15 @@ import {
 } from '@archon/workflows/schemas/pause-cause';
 import {
   WorkflowRunPauseConflictError,
+  executionClaim,
+  WorkflowRunExecutionClaimLostError,
   type GatePauseEventInput,
   type GateResolutionEvent,
   type WorkflowCancellationEventDetails,
 } from '@archon/workflows/store';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
-import { getLog } from './workflow-run-shared';
+import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
@@ -224,10 +226,16 @@ export async function pauseWorkflowRun(
   id: string,
   approvalContext: ApprovalContext,
   extraMetadata?: Record<string, unknown>,
-  event?: GatePauseEventInput
+  event?: GatePauseEventInput,
+  expectedExecutionClaim?: string | null
 ): Promise<void> {
   try {
     await getDatabase().withTransaction(async query => {
+      if (expectedExecutionClaim !== undefined) {
+        const run = await lockedRunRow(query, id);
+        if (!run || executionClaim(normalizeMetadata(run.metadata)) !== expectedExecutionClaim)
+          throw new WorkflowRunExecutionClaimLostError(id);
+      }
       const result = await query(
         `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
@@ -253,7 +261,11 @@ export async function pauseWorkflowRun(
       if (event) await insertWorkflowEvent(query, event);
     });
   } catch (error) {
-    if (error instanceof WorkflowRunPauseConflictError) throw error;
+    if (
+      error instanceof WorkflowRunPauseConflictError ||
+      error instanceof WorkflowRunExecutionClaimLostError
+    )
+      throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
     throw new Error(`Failed to pause workflow run: ${err.message}`);

@@ -409,9 +409,13 @@ export function createTransactionView(
       id,
       approval,
       metadata,
-      event
+      event,
+      claim
     ): ReturnType<IWorkflowStore['pauseWorkflowRun']> => {
+      if (claim !== undefined && !runs.has(id)) throw new WorkflowRunExecutionClaimLostError(id);
       const run = row(id);
+      if (claim !== undefined && executionClaim(run.metadata) !== claim)
+        throw new WorkflowRunExecutionClaimLostError(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
       run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
@@ -806,8 +810,11 @@ export function createTransactionView(
       record(sourceReleasedEvent(id, release));
       return { released: true };
     },
-    pauseWorkflowRunForWait: async (id, wait, pause) => {
+    pauseWorkflowRunForWait: async (id, wait, pause, claim) => {
+      if (claim !== undefined && !runs.has(id)) throw new WorkflowRunExecutionClaimLostError(id);
       const run = row(id);
+      if (claim !== undefined && executionClaim(run.metadata) !== claim)
+        throw new WorkflowRunExecutionClaimLostError(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
       // A wait replaces the previous gate's context, exactly as the SQL store does: a

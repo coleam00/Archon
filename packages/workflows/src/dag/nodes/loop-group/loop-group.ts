@@ -1,3 +1,4 @@
+import { WorkflowRunExecutionClaimLostError } from '../../../store';
 import { safeSendMessage } from '../../../platform-messages';
 import { describeUnmetCompletion } from '../../../executor-shared';
 import { finishNodeExecution } from '../../../node-execution';
@@ -80,6 +81,7 @@ export async function executeLoopGroupNode(
     // Durable-write rejection and an unreadable source belong to run recovery, not a
     // failed node outcome.
     if (
+      error instanceof WorkflowRunExecutionClaimLostError ||
       error instanceof TerminalStatusWriteError ||
       error instanceof NodeEventWriteError ||
       error instanceof RunSourceUnreadableError
