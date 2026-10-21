@@ -29,6 +29,7 @@ import {
   gateCompletionEvent,
   publishGateExecution,
 } from './gate-publishing';
+import { reclaimCancelledRunContainer } from './teardown';
 
 export interface RejectionOperationResult {
   workflowName: string;
@@ -343,6 +344,11 @@ async function rejectGate(
     completedGateEvent === undefined ? [rejectionEvent] : [completedGateEvent, rejectionEvent]
   );
 
+  const cancelled = !plan.willStageRework && !plan.willResolveNewMode;
+  // A paused run has no executor left to tear down its container, and the container
+  // backend removes the run's scratch only with it. A reclaim failure is logged there.
+  if (cancelled) await reclaimCancelledRunContainer(ctx, run);
+
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.
   captureApprovalResolved({ resolution: 'rejected' });
@@ -353,7 +359,7 @@ async function rejectGate(
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
-    cancelled: !plan.willStageRework && !plan.willResolveNewMode,
+    cancelled,
     maxAttemptsReached: plan.maxAttemptsReached,
     writeBack: false,
     newMode: plan.willResolveNewMode,

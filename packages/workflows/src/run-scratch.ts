@@ -5,14 +5,15 @@
  * - Every store calls `releaseRunScratch` after a terminal status write commits and only
  *   when it won that transition, the same duty as terminal telemetry (see
  *   `IWorkflowStore.completeWorkflowRun`). That covers every terminal writer that has no
- *   live executor behind it: cancel while paused, abandon after the owner died, a cancel
- *   that stopped the owner first, conversation reset.
+ *   live executor behind it, outside a container: cancel while paused, abandon after the
+ *   owner died, a cancel that stopped the owner first, conversation reset.
  * - A cancel the executor only observes at its next status check leaves its nodes
  *   writing after that commit, so the executor calls it again when it exits.
  * - A container run is skipped by both: its container mounts the artifacts directory and
  *   lives past the terminal write, and code in it could swap `.archon` for a link between
  *   the check below and `rm`. The container backend calls `removeRunScratch` once the
- *   container is removed.
+ *   container is removed, so every operation that cancels a paused container run
+ *   (abandon, conversation reset, gate reject) reclaims its container.
  *
  * Only the scratch child is removed; the rest of the artifacts directory is the
  * workflow's evidence and is never inspected. The engine directory must be a real
@@ -29,7 +30,7 @@ import {
   resolveRunStorageRoot,
   RUN_ARTIFACTS_ENGINE_SUBDIR,
 } from '@archon/paths/archon-paths';
-import type { WorkflowRun } from './schemas/workflow-run';
+import { isContainerRun, type WorkflowRun } from './schemas/workflow-run';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -41,7 +42,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export async function releaseRunScratch(
   run: Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>
 ): Promise<void> {
-  if (run.metadata.isolation === 'container') {
+  if (isContainerRun(run)) {
     getLog().debug({ workflowRunId: run.id }, 'run_scratch.left_to_container_teardown');
     return;
   }
