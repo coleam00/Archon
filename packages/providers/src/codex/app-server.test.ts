@@ -339,6 +339,10 @@ describe('AppServerConnection', () => {
     const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(5, 20);
     expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
     expect(waits().slice(0, 2)).toEqual([20, 40]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: 'process_still_exiting', waitedMs: 40 }),
+      'codex.app_server_still_exiting'
+    );
   }, 5_000);
 
   test('an unparseable app-server line is logged by length only, never its text', async () => {

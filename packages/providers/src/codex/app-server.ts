@@ -12,6 +12,7 @@ import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
+import type { ProviderLifecycleEvent } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -279,7 +280,14 @@ export class AppServerConnection {
     let waitedMs = 0;
     while (!(await this.exitsWithin(warnMs))) {
       waitedMs += warnMs;
-      getLog().warn({ pid: this.child.pid, waitedMs }, 'codex.app_server_still_exiting');
+      getLog().warn(
+        {
+          pid: this.child.pid,
+          waitedMs,
+          lifecycle: 'process_still_exiting' satisfies ProviderLifecycleEvent,
+        },
+        'codex.app_server_still_exiting'
+      );
     }
     return this.endedWith;
   }
