@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
@@ -221,7 +221,7 @@ describe("the pack's scratch directory", () => {
   });
 
   it('is the only scratch directory the pack commands name', async () => {
-    const engineScratch = `$ARTIFACTS_DIR/${relative('/artifacts', getRunScratchDir('/artifacts'))}/`;
+    const engineScratch = `$ARTIFACTS_DIR/${relative('/artifacts', getRunScratchDir('/artifacts')).split(sep).join('/')}/`;
     const sdlc = join(import.meta.dir, '..', '.archon', 'workflows', 'sdlc');
     const named: string[] = [];
     for await (const file of new Bun.Glob('*/commands/*.md').scan(sdlc)) {
