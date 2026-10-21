@@ -173,7 +173,7 @@ Returns codebases sorted by name. Repository registrations that resolve to the s
 
 If a stored checkout path is invalid or a remote identity cannot be resolved, the affected row is returned unchanged and separately. Each failure logs a warning with the codebase ID, name and original error; healthy rows remain available. Database query failures still return HTTP 500.
 
-When all stored checkout paths validate, [`archon project list --json`](/reference/cli/#projects) returns a complete inventory of registrations without collapsing duplicate remotes. An invalid stored checkout path makes that command fail and must be repaired before it can return the inventory. The API list summarizes duplicate remotes; it does not remove stored rows.
+When all stored checkout paths validate, [`archon project list --json`](/reference/cli/#project-list) returns a complete inventory of registrations without collapsing duplicate remotes. An invalid stored checkout path makes that command fail and must be repaired before it can return the inventory. The API list summarizes duplicate remotes; it does not remove stored rows.
 
 ### Register a Codebase
 
