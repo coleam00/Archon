@@ -72,7 +72,7 @@ function withQueueOther(attention: MergeAttention, item: Item, brief: string): M
       evidence: unavailable,
       confidence: 'high',
       would_change: ownPr
-        ? 'A build round owning this pull request would make return available.'
+        ? 'A build round owning this pull request and a nonblank build brief would make return available.'
         : 'A nonblank build brief would make return available.',
     },
   };

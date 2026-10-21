@@ -1014,12 +1014,17 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(launchOf(calls)).toBeUndefined();
   }, 60_000);
 
-  test.each(['merge', 'return'])("an own pull request's ask recommending %s offers no return and its other parks", recommended => {
+  test.each([
+    { recommended: 'merge', brief: '', name: 'merge with an empty brief' },
+    { recommended: 'return', brief: '', name: 'return with an empty brief' },
+    { recommended: 'return', brief: ' \n ', name: 'return with a whitespace-only brief' },
+    { recommended: 'return', brief: 'Rework PR 42.', name: 'return with a nonblank brief' },
+  ])("an own pull request's ask recommending $name offers no return and its other parks", ({ recommended, brief }) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
     const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention })]);
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief })]);
     const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { attention: string; asked: { attention: MergeAttention } };
     expect(() => checkAttention(asked.asked.attention)).not.toThrow();
     expect(asked.asked.attention.recommendation.choice).toBe(recommended === 'return' ? 'other' : recommended);
@@ -1028,12 +1033,12 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       expect(prepared.recommendation).toMatchObject({
         evidence: 'Return is unavailable because no build round owns this pull request.',
         confidence: 'high',
-        would_change: 'A build round owning this pull request would make return available.',
+        would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
       });
       expect(asked.attention).toContain(prepared.why);
       expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
       expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
-      expect(asked.attention).toContain('What would change it: A build round owning this pull request would make return available.');
+      expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
       for (const part of Object.values(attention.recommendation)) expect(prepared.why).toContain(part);
       expect(prepared.why).toContain(`The sweep originally recommended \`${attention.recommendation.choice}\``);
     } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
