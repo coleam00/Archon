@@ -77,18 +77,29 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       }
       workflow = input.legacyWorkflow;
     }
-    const hydrated = await hydrateResumableRun(this.deps, input.run, input.cursor);
+    let context = { cwd: input.cwd, options: input.options };
+    const prepare = input.prepareExecution;
+    const prepareExecution = prepare
+      ? async (run: WorkflowResumeInput['run']): Promise<void> => {
+          const prepared = await prepare(run);
+          rejectOptions(prepared.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
+          context = { cwd: prepared.cwd, options: prepared.options };
+        }
+      : undefined;
+    const hydrated = prepareExecution
+      ? await hydrateResumableRun(this.deps, input.run, input.cursor, prepareExecution)
+      : await hydrateResumableRun(this.deps, input.run, input.cursor);
     if (hydrated === null) return { accepted: false, reason: 'nothing-to-resume' };
 
     const settled = executeWorkflow(
       this.deps,
       input.platform,
       input.conversationId,
-      input.cwd,
+      context.cwd,
       workflow,
       input.userMessage,
       hydrated.preCreatedRun.origin ?? undefined,
-      { ...input.options, ...hydrated }
+      { ...context.options, ...hydrated }
     ).catch(async (error: unknown) => {
       // Hydration already claimed the row. The executor's early setup can throw
       // before its terminal-write boundary; recovery must work without a server.

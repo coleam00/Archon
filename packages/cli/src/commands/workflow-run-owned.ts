@@ -23,6 +23,7 @@ import {
   type OwnedRunRequest,
 } from './workflow-run-admission';
 import {
+  defersContainerResume,
   launchDetachedOwnedRun,
   prepareForegroundLaunch,
   provisionWorkspace,
@@ -54,8 +55,10 @@ async function runWorkflowWithOwnedSource(
   const launch = await prepareForegroundLaunch(request, admission);
   const lease = new OwnedRunLease(request.detachedProcessOwner);
   try {
-    await provisionWorkspace(launch, lease);
-    await recordConversationLaunch(launch);
+    if (!defersContainerResume(launch)) {
+      await provisionWorkspace(launch, lease);
+      await recordConversationLaunch(launch);
+    }
     return await executeOwnedRun(launch, lease);
   } catch (error) {
     await lease.failUnsubmittedSetupRun(host, error);

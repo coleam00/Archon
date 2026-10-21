@@ -14,7 +14,13 @@ import {
   warnPreservedContainer,
 } from './workflow-isolation';
 import type { PendingWaitContinuation } from './workflow-wait-continuation';
-import type { ForegroundLaunch, RunWorkspace } from './workflow-run-launch';
+import {
+  defersContainerResume,
+  provisionWorkspace,
+  recordConversationLaunch,
+  type ForegroundLaunch,
+  type RunWorkspace,
+} from './workflow-run-launch';
 
 type RunResult = Awaited<ReturnType<IWorkflowEngine['submit']>>;
 type CommonRunOptions = Parameters<IWorkflowEngine['resume']>[0]['options'];
@@ -28,6 +34,7 @@ interface RunExecution {
    * so a signal during the final progress drain does not destroy it.
    */
   containerPreserved: boolean;
+  ownsContainerCleanup: boolean;
 }
 
 /** The container this process tears down: one the folder seam prepared an env for. */
@@ -60,19 +67,25 @@ export async function executeOwnedRun(
     result: undefined,
     progress: undefined,
     containerPreserved: false,
+    ownsContainerCleanup: !defersContainerResume(launch),
   };
-  const deregisterTermination = registerOwnedRunTermination({
-    store: host.deps.store,
-    runId: ownedRunId,
-    logModule: 'cli.workflow',
-    liveOwner: {
-      isStopRequested: () => lease.isStopRequested(),
-      close: () => lease.close(),
-      registerTerminationPreparation: prepare => lease.registerTerminationPreparation(prepare),
-    },
-    detachedProcessOwner: request.detachedProcessOwner,
-    teardown: signal => teardownOnSignal(launch, execution, signal),
-  });
+  let deregisterTermination: (() => void) | undefined;
+  const startExecution = async (): Promise<void> => {
+    await lease.start(ownedRunId);
+    deregisterTermination = registerOwnedRunTermination({
+      store: host.deps.store,
+      runId: ownedRunId,
+      logModule: 'cli.workflow',
+      liveOwner: {
+        isStopRequested: () => lease.isStopRequested(),
+        close: () => lease.close(),
+        registerTerminationPreparation: prepare => lease.registerTerminationPreparation(prepare),
+      },
+      detachedProcessOwner: request.detachedProcessOwner,
+      teardown: signal => teardownOnSignal(launch, execution, signal),
+    });
+    execution.ownsContainerCleanup = true;
+  };
 
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(
@@ -92,8 +105,16 @@ export async function executeOwnedRun(
     // Progress lines render from the run's committed rows, its sub-runs' included.
     // Subscribed before submit or resume so the run's first row cannot be missed.
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
-    await lease.start(ownedRunId);
-    execution.result = await driveRun(launch, lease);
+    const prepareExecution = defersContainerResume(launch)
+      ? async (run: WorkflowRun) => {
+          await provisionWorkspace(launch, lease, run);
+          await recordConversationLaunch(launch);
+          await startExecution();
+          return { cwd: workspace.workingCwd, options: commonRunOptions(launch) };
+        }
+      : undefined;
+    if (!prepareExecution) await startExecution();
+    execution.result = await driveRun(launch, lease, prepareExecution);
   } finally {
     containerTeardownError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
   }
@@ -202,13 +223,16 @@ async function subscribeProgress(
 }
 
 /** Resume the bound run, or submit a fresh one, and wait for it to settle. */
-async function driveRun(launch: ForegroundLaunch, lease: OwnedRunLease): Promise<RunResult> {
-  const commonOptions = commonRunOptions(launch);
+async function driveRun(
+  launch: ForegroundLaunch,
+  lease: OwnedRunLease,
+  prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
+): Promise<RunResult> {
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
-    return resumeRun(launch, resumable, commonOptions);
+    return resumeRun(launch, resumable, prepareExecution);
   }
-  return submitRun(launch, lease, commonOptions);
+  return submitRun(launch, lease, commonRunOptions(launch));
 }
 
 function commonRunOptions(launch: ForegroundLaunch): CommonRunOptions {
@@ -253,7 +277,7 @@ function commonRunOptions(launch: ForegroundLaunch): CommonRunOptions {
 async function resumeRun(
   launch: ForegroundLaunch,
   resumable: WorkflowRun,
-  commonOptions: CommonRunOptions
+  prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
 ): Promise<RunResult> {
   const { request, admission } = launch;
   const { workflowName } = request;
@@ -267,7 +291,8 @@ async function resumeRun(
       userMessage: request.userMessage,
       run: resumable,
       cursor: request.options.continuationCursor,
-      options: commonOptions,
+      options: prepareExecution ? undefined : commonRunOptions(launch),
+      ...(prepareExecution ? { prepareExecution } : {}),
     });
   } catch (error) {
     // The run is intact; only its resource is busy, so say that and nothing else.
@@ -375,7 +400,7 @@ async function settleRun(
   launch: ForegroundLaunch,
   execution: RunExecution,
   runId: string,
-  deregisterTermination: () => void
+  deregisterTermination: (() => void) | undefined
 ): Promise<Error | undefined> {
   const { result } = execution;
   const store = launch.request.host.deps.store;
@@ -398,7 +423,8 @@ async function settleRun(
       container.envId
     );
   }
-  execution.containerPreserved = runPaused || unresolvedWriteback;
+  execution.containerPreserved =
+    !execution.ownsContainerCleanup || runPaused || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
   // The signal handlers stay registered through it, so a Ctrl-C here still destroys
@@ -416,7 +442,7 @@ async function settleRun(
   // failWorkflowRun cleanup must never fire against a settled run (#1123),
   // and removal keeps repeated workflowRunCommand calls in one process from
   // stacking handlers.
-  deregisterTermination();
+  deregisterTermination?.();
 
   if (container && unresolvedWriteback) {
     warnPreservedContainer(container.envId, result?.workflowRunId);

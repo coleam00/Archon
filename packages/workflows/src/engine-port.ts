@@ -56,6 +56,11 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   legacyWorkflow?: ResolvedWorkflow;
   cursor?: WorkflowResumeCursor;
   options?: WorkflowResumeOptions;
+  /** Runs after committed admission; rejection releases only that admission. */
+  prepareExecution?: (run: WorkflowRun) => Promise<{
+    cwd: string;
+    options?: WorkflowResumeOptions;
+  }>;
 }
 
 export type WorkflowResumeAdmission =
