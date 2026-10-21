@@ -119,5 +119,5 @@ artifact.
 
 - [Quickstart](/getting-started/quick-start/)
 - [Configuration](/getting-started/configuration/)
-- [Authoring Workflows](/guides/authoring-workflows/)
+- [Workflow language](/reference/workflow-language/)
 - [API Reference](/reference/api/)

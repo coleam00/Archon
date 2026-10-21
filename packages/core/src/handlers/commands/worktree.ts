@@ -255,20 +255,21 @@ async function removeWorktree(
 
     // Use isolation provider for removal (pass the working path, not UUID)
     const provider = getIsolationProvider();
-    const result = await provider.destroy(isolationEnv.working_path, {
-      force: forceFlag,
-      canonicalRepoPath: toRepoPath(mainPath),
-      creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
-    });
-    if (!result.worktreeRemoved || !result.directoryClean) {
-      return {
-        success: false,
-        message: `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`,
-      };
-    }
+    if (isolationEnv.status === 'active')
+      await isolationEnvDb.withWorktreeRegistration(isolationEnv, async markDestroyed => {
+        const result = await provider.destroy(isolationEnv.working_path, {
+          force: forceFlag,
+          canonicalRepoPath: toRepoPath(mainPath),
+          creationId: readWorktreeCreationId(isolationEnv.metadata) ?? undefined,
+        });
+        if (!result.worktreeRemoved || !result.directoryClean) {
+          throw new Error(
+            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+          );
+        }
 
-    // Update database record status
-    await isolationEnvDb.markWorktreeDestroyed(isolationEnv);
+        await markDestroyed();
+      });
 
     // Clear isolation reference, set cwd to main repo
     await db.updateConversation(conversation.id, {
@@ -392,6 +393,10 @@ async function cleanupWorktrees(
       msg += `No ${cleanupType} worktrees to clean up.\n`;
     }
 
+    for (const { branchName, message } of result.warnings) {
+      msg += `  Warning: ${branchName}: ${message}\n`;
+    }
+
     if (result.skipped.length > 0) {
       msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
       for (const { branchName, reason } of result.skipped) {
@@ -399,14 +404,26 @@ async function cleanupWorktrees(
       }
     }
 
-    // Show updated count
-    const count = await isolationEnvDb.countActiveByCodebase(codebaseId);
-    msg += `\nActive worktrees: ${String(count)}`;
+    msg += result.errors
+      .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
+      .join('');
 
-    return { success: true, message: msg.trim() };
+    msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
+
+    return { success: result.errors.length === 0, message: msg.trim() };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');
     return { success: false, message: `Failed to cleanup: ${err.message}` };
+  }
+}
+
+async function activeWorktreeCountMessage(codebaseId: string): Promise<string> {
+  try {
+    const count = await isolationEnvDb.countActiveByCodebase(codebaseId);
+    return `Active worktrees: ${String(count)}`;
+  } catch (err) {
+    getLog().warn({ err, codebaseId }, 'cmd.worktree_cleanup_count_failed');
+    return `Active worktrees: unavailable (${(err as Error).message})`;
   }
 }

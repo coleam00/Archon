@@ -103,6 +103,10 @@ Only the literal value `false` disables the mention requirement. Mentions that a
 
 ## Usage
 
+Select a registered project by submitting `/setproject <name>` in the conversation or thread where you want to work. To register a local directory first, submit `/register-project [--folder] <name> <path>`, then select it; registration alone does not bind the conversation. Projectless questions still work. Selection applies to that conversation, not every channel.
+
+Once scoped, the assistant launches and manages runs through its native tools (Claude, Codex, Pi) or the existing CLI (Copilot/OpenCode). CLI launches are detached and headless, use CLI identity and return a run ID for inspection; they do not deliver progress or results to the originating chat. See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
+
 The bot responds to:
 - **Direct Messages**: Just send messages directly
 - **Server Channels**: @mention the bot (e.g., `@YourBotName help me with this code`) — or any authorized message when `DISCORD_REQUIRE_MENTION=false`

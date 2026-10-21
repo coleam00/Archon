@@ -1,6 +1,6 @@
 ---
 title: Commands Reference
-description: All slash commands available in Archon adapters including Web UI, Telegram, Slack, Discord, and GitHub.
+description: Archon orchestrator commands and how to submit them, including through a bot mention in Slack threads.
 category: reference
 area: handlers
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-All slash commands available in Archon. Type `/help` in any platform adapter (Web UI, Telegram, Slack, Discord, GitHub) to see this list.
+All orchestrator commands available in Archon. Type `/help` in your conversation to see this list. On Slack, post an @mention carrying the command in the target thread, for example `@your-bot /help` or `@your-bot /setproject <name>`. Raw orchestrator slash commands are not registered with Slack; `/archon <message>` starts a new thread.
 
 ---
 

@@ -276,6 +276,92 @@ test('file host retires only the observed worktree registration', async () => {
   );
 });
 
+test('file cleanup validates the selected registration before invoking removal', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const store = (await createFileWorkflowHost(join(home, 'store'))).records.isolation;
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: home,
+    branch_name: toBranchName('task'),
+  };
+  const original = await store.create(input);
+  const replacement = await store.create(input);
+  let removed = false;
+  await expect(
+    store.withWorktreeRegistration(original, async mark => {
+      removed = true;
+      await mark();
+    })
+  ).rejects.toThrow('changed during cleanup');
+  expect(removed).toBe(false);
+  expect(await store.getById(replacement.id)).toEqual(replacement);
+  await store.withWorktreeRegistration(replacement, async mark => {
+    await mark();
+  });
+  expect((await store.getById(replacement.id))?.status).toBe('destroyed');
+});
+
+test('file worktree cleanup excludes replacement until removal finishes', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-worktree-cleanup-lock-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const root = join(home, 'store');
+  const first = (await createFileWorkflowHost(root)).records.isolation;
+  const second = (await createFileWorkflowHost(root)).records.isolation;
+  const checkout = join(home, 'checkout');
+  await mkdir(checkout);
+  const input = {
+    codebase_id: 'cb',
+    workflow_type: 'task' as const,
+    workflow_id: 'run',
+    working_path: checkout,
+    branch_name: toBranchName('task'),
+  };
+  const observed = await first.create(input);
+  const entered = Promise.withResolvers<boolean>();
+  const release = Promise.withResolvers<void>();
+  const cleanup = first.withWorktreeRegistration(observed, async markDestroyed => {
+    entered.resolve(
+      await access(join(root, 'lock')).then(
+        () => true,
+        () => false
+      )
+    );
+    await release.promise;
+    await rm(checkout, { recursive: true });
+    await markDestroyed();
+  });
+  const lockHeldDuringRemoval = await entered.promise;
+  let published = false;
+  const registration = second.create(input).then(row => {
+    published = true;
+    return row;
+  });
+  try {
+    expect(lockHeldDuringRemoval).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(published).toBe(false);
+    expect(await first.getById(observed.id)).toEqual(observed);
+    await access(checkout);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([cleanup, registration]);
+  }
+  await cleanup;
+  const replacement = await registration;
+  expect(published).toBe(true);
+  expect((await first.getById(observed.id))?.status).toBe('destroyed');
+  expect(await first.getById(replacement.id)).toEqual(replacement);
+  expect(await first.listActive()).toEqual([replacement]);
+  await expect(access(checkout)).rejects.toThrow();
+});
+
 test('file host refuses legacy tokenless replacements within its atomic adoption write', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'legacy-adoption-')));
   process.env.ARCHON_HOME = home;

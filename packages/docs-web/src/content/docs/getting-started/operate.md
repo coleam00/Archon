@@ -195,7 +195,7 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 | Answer | `archon workflow answer <run-id> --occurrence <id> …`, or `respond`, `approve`, `reject` | `POST /api/workflows/runs/<run-id>/answer` |
 | Give up on the run | `archon workflow abandon <run-id>` | `POST /api/workflows/runs/<run-id>/abandon` |
 
-The CLI defaults to the project of the working directory and runs from any directory. Over HTTP there is no working directory, so the default is the install. `--label k=v` is an exact match, and repeated filters must all match. `age` sorts the oldest pause first; `label:<key>` sorts by that label's value as a plain string. A single-run read returns null when the run has no item. The [CLI reference](/reference/cli/#workflow-attention) lists every flag.
+With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch use the selected project regardless of the working directory. Its ID, name or key is accepted by `--project`; other projects and `--all` are rejected. Without explicit chat scope, the CLI defaults to the working directory's project, `--project` names another project and `--all` covers the install. Every `workflow attention` form runs from any directory, registered or not. Over HTTP there is no working directory, so the default is the install. `--label k=v` is an exact match, and repeated filters must all match. `age` sorts the oldest pause first; `label:<key>` sorts by that label's value as a plain string. A single-run read returns null when the run has no item. The [CLI reference](/reference/cli/#workflow-attention) lists every flag.
 
 ### Queue items
 
@@ -233,7 +233,7 @@ The CLI defaults to the project of the working directory and runs from any direc
 
 ### Several items from one workflow
 
-A workflow can [fan out one child per question](/guides/authoring-workflows/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
+A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
 
 ```bash
 archon workflow attention --json --all

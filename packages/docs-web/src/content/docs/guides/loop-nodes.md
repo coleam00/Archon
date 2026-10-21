@@ -283,7 +283,7 @@ references `prompt` does (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.), but it read
 declared input from the environment as `$INPUTS_<UPPER_SNAKE>`, not as `$INPUTS.<name>`.
 Inside an included block `$INPUTS.<name>` is shorthand for that variable; a directly run
 workflow leaves it literal (see
-[Passing values into an included block](/guides/authoring-workflows/#passing-values-into-an-included-block)).
+[Passing values into an included block](/reference/workflow-language/#passing-values-into-an-included-block)).
 In `until_bash`, small output references are single-quoted inline; large outputs use
 an unquoted file-read substitution. Assign each reference to a variable, then quote
 that variable when using it. See the
@@ -291,7 +291,7 @@ that variable when using it. See the
 
 ### `until_field`
 
-Names a property in this node's [`output_format`](/guides/authoring-workflows/) schema.
+Names a property in this node's [`output_format`](/reference/workflow-language/) schema.
 The loop ends on the first iteration whose **validated** payload has that property
 set to exactly `true`.
 
@@ -543,7 +543,7 @@ nodes:
 
 Only `on_error: transient` or omission is supported on loops; `all` is a load error. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
 
-Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration).
+Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/reference/workflow-language/#retry-configuration).
 
 ## Cross-Node Loops with `loop_group`
 
@@ -618,7 +618,7 @@ warning.
 ### Pausing to ask inside the body
 
 To ask for an answer after each pass, end the body in a
-[`wait: attention`](/guides/authoring-workflows/#attention-waits) node. The run pauses
+[`wait: attention`](/reference/workflow-language/#attention-waits) node. The run pauses
 there until someone answers. Then the group checks `until_bash`; if it does not pass,
 the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.output`.
 
@@ -648,7 +648,7 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
   `'approve'` with the quotes included and never matches. See
   [Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script).
 - `$group.output` is the draft, not the answer (see below).
-- Any [form](/guides/authoring-workflows/#attention-waits) works. A `message` wait
+- Any [form](/reference/workflow-language/#attention-waits) works. A `message` wait
   produces only `{ text }`, so with it decide completion from the work instead of the answer.
 - `max_iterations` bounds autonomous iterations. Each answer to the terminal attention
   wait permits one more iteration even past that bound, so this loop runs until
@@ -771,7 +771,7 @@ A body node can also gate on the previous iteration's typed output with `when:`:
 ```
 
 This is a condition reference, not text substitution. On iteration 1 it resolves to
-`''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
+`''`, so the non-empty equality is false. See [Condition Syntax](/reference/workflow-language/#when-condition-syntax).
 
 An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
 entire block. A false gate skips the whole block; when true, each node still follows
@@ -933,7 +933,7 @@ a `loop_group` whose body ends in a `wait: attention` node:
 
 | Legacy | Replacement |
 |---|---|
-| `interactive: true` + `gate_message` | a terminal `wait: { attention: <message>, form: approval }` in the body (or another [form](/guides/authoring-workflows/#attention-waits)) |
+| `interactive: true` + `gate_message` | a terminal `wait: { attention: <message>, form: approval }` in the body (or another [form](/reference/workflow-language/#attention-waits)) |
 | `$LOOP_USER_INPUT` | `$LOOP_PREV.<wait-id>.output.text` |
 | approve with no comment to finalize | `until_bash` that checks the answer, e.g. `decision=$ask.output.decision; [ "$decision" = "approve" ]` |
 | `signal_completes: true` | a `when:` on the wait so it pauses only when the work needs an answer, with `until_bash` deciding completion from the work |
@@ -982,7 +982,7 @@ wait whose `when:` skips it on success, as in the second example under
 
 ## See Also
 
-- [Authoring Workflows](/guides/authoring-workflows/) — full workflow reference
+- [Workflow language](/reference/workflow-language/): the full workflow reference
 - [Per-Node Hooks](/guides/hooks/) — SDK hooks for command/prompt nodes
 - [Per-Node MCP Servers](/guides/mcp-servers/) — external tool integration
 - [Per-Node Skills](/guides/skills/) — skill preloading

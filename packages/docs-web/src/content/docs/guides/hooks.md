@@ -92,7 +92,7 @@ which native hooks run:
 project hooks come from the checked-out branch. Archon never loads
 `.claude/settings.local.json`. `settingSources` also controls CLAUDE.md, skills,
 commands, and agents discovery; see
-[`settingSources`](/guides/authoring-workflows/#claude-sdk-advanced-options).
+[`settingSources`](/reference/workflow-language/#claude-sdk-advanced-options).
 
 A project hook that inspects every `Bash` command, in `.claude/settings.json`:
 

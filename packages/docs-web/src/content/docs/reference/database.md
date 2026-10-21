@@ -122,12 +122,23 @@ With `store: database` (the default), **omit `DATABASE_URL`** from your `.env` f
 
 Every Archon process on a machine shares one SQLite file, and SQLite lets one writer at a
 time hold its lock. When another process holds the lock past the 5-second busy timeout,
-Archon keeps waiting instead of failing: a single statement retries, and a transaction
-rolls back and reruns from the start, with a growing pause of up to 2 seconds between
+replayable operations keep waiting instead of failing: a single statement retries, and a
+transaction rolls back and reruns from the start, with a growing pause of up to 2 seconds between
 attempts. There is no deadline, so a run whose write is waiting stays alive until the lock
 clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every 30
 seconds. A repeating warning points at a process that is holding the lock. Other SQLite
 errors still fail right away.
+
+Worktree cleanup retries its initial registration claim while SQLite is busy. Once
+that claim succeeds, it does not replay the transaction: filesystem deletion cannot
+safely be repeated. A later failure rolls back registration retirement and is reported
+to the caller.
+
+Cleanup holds registration exclusion through local checkout and branch removal.
+Completion and merged cleanup retain remote branches with a warning, including
+with force, because registration ownership cannot be proved after the claim
+commits. No remote deletion runs under the SQLite writer. Enable GitHub's
+**Automatically delete head branches** setting for merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

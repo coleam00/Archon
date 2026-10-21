@@ -111,13 +111,17 @@ export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatu
   return status.data;
 }
 
-export async function getActiveWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
+export async function getActiveWorkflowRun(
+  conversationId: string,
+  codebaseId?: string
+): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'running'
+       ${codebaseId ? 'AND codebase_id = $3' : ''}
        ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
+      codebaseId ? [conversationId, conversationId, codebaseId] : [conversationId, conversationId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;

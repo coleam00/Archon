@@ -7,7 +7,7 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
-import type { WorkflowRunOptions } from './workflow-shared';
+import { resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
 
 /**
  * The run config layer a launch starts with: the sealed layer a detached parent handed
@@ -44,7 +44,8 @@ export async function resolveLaunchRunConfig(
     };
   }
   if (options.configFromRun) {
-    const run = await host.deps.store.getWorkflowRun(options.configFromRun);
+    const runId = await resolveRunIdArg(host, options.configFromRun);
+    const run = await host.deps.store.getWorkflowRun(runId);
     if (!run) throw new Error(`--config-from-run: no workflow run '${options.configFromRun}'.`);
     return workflowRunConfigFromRun(run);
   }

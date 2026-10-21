@@ -14,7 +14,8 @@ Technical reference documentation for Archon internals.
 - **[Architecture](/reference/architecture/)** -- How the packages fit together, with a link to the maintained architecture map
 - **[Archon Directories](/reference/archon-directories/)** -- Directory structure, path resolution, configuration system
 - **[CLI Reference](/reference/cli/)** -- All CLI commands, flags, and usage examples
-- **[Commands Reference](/reference/commands/)** -- Slash commands available in all platform adapters
+- **[Commands Reference](/reference/commands/)** -- Chat commands and how to submit them in each adapter
+- **[Workflow language](/reference/workflow-language/)** -- Workflow fields, node types, gates, composition and result contracts
 - **[Variables Reference](/reference/variables/)** -- Variable substitution in commands and workflows ($ARGUMENTS, $BASE_BRANCH, etc.)
 - **[API Reference](/reference/api/)** -- REST API endpoints for programmatic access
 - **[Database](/reference/database/)** -- Schema, migrations, SQLite/PostgreSQL setup

@@ -628,6 +628,7 @@ describe('CopilotProvider.sendQuery', () => {
     nextCreateSessionResult = session;
     const identity = {
       WORKFLOW_ID: 'run-1',
+      ARCHON_WORKFLOW_CODEBASE_ID: 'selected-project',
       ARCHON_NODE_EXECUTION: '{"runId":"run-1","path":"notes"}',
       ARCHON_CLI_COMMAND: '["/opt/archon/bin/archon"]',
     };

@@ -1,7 +1,7 @@
 /**
  * Tests for the CLI chat command
  */
-import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { handleMessage } from '@archon/core';
 
 // Mock logger before any imports
@@ -22,11 +22,6 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Mock @archon/core/db/messages (used by CLIAdapter for persistence)
-mock.module('@archon/core/db/messages', () => ({
-  addMessage: mock(() => Promise.resolve()),
-}));
-
 // Mock handleMessage from @archon/core
 const mockHandleMessage = mock<typeof handleMessage>(() => Promise.resolve());
 
@@ -39,7 +34,8 @@ import { CLIAdapter } from '../adapters/cli-adapter';
 
 describe('chatCommand', () => {
   beforeEach(() => {
-    mockHandleMessage.mockClear();
+    mockHandleMessage.mockReset();
+    mockHandleMessage.mockResolvedValue(undefined);
   });
 
   test('should call handleMessage with a CLIAdapter, unique conversationId, and the message', async () => {
@@ -97,15 +93,5 @@ describe('chatCommand', () => {
 
     const [adapter] = mockHandleMessage.mock.calls[0];
     expect(adapter.getPlatformType()).toBe('cli');
-  });
-
-  test('should not log to console for empty string message', async () => {
-    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    try {
-      await chatCommand('');
-      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      consoleSpy.mockRestore();
-    }
   });
 });

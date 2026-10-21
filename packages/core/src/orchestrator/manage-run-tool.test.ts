@@ -261,6 +261,17 @@ describe('manage_run — progressive disclosure', () => {
 });
 
 describe('manage_run — reads', () => {
+  test('resolves an undashed full UUID within the selected project', async () => {
+    const id = 'abcdef00-1111-2222-3333-444455556666';
+    mockFindByPrefix.mockImplementation(async (prefix, codebaseId) =>
+      codebaseId === CODEBASE_ID && id.startsWith(prefix.toLowerCase()) ? [makeRun({ id })] : []
+    );
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: id.replaceAll('-', '').toUpperCase() });
+    expect(out).toContain('Run abcdef00');
+    expect(mockFindByPrefix).toHaveBeenLastCalledWith(id, CODEBASE_ID);
+  });
+
   test('list renders runs scoped to the project', async () => {
     mockListDashboardRuns.mockResolvedValue({
       total: 1,
@@ -1325,6 +1336,9 @@ describe('manage_run authorization refusal', () => {
             listActive: unexpected,
             create: unexpected,
             updateStatus: unexpected,
+            withWorktreeRegistration: async () => {
+              throw new Error('Unexpected worktree removal');
+            },
             markWorktreeDestroyed: unexpected,
             updateMetadata: unexpected,
             countActiveByCodebase: unexpected,

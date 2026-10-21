@@ -33,7 +33,12 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import {
+  assertInheritedWorkflowCodebase,
+  inheritedWorkflowCodebase,
+  getLog,
+  type WorkflowRunOptions,
+} from './workflow-shared';
 
 /**
  * Default runner image when `.archon/config.yaml > container.image` is unset.
@@ -283,6 +288,8 @@ export async function resolveRunCodebase(
   if (options.codebaseId && !codebase)
     throw new Error(`Project "${options.codebaseId}" no longer exists.`);
 
+  await assertInheritedWorkflowCodebase(host, codebase?.id);
+
   if (options.registrationBaseBranch !== undefined) {
     if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
       throw new Error('Folder projects have no base branch; remove --base-branch.');
@@ -326,6 +333,15 @@ export async function resolveRunCodebase(
   }
 
   return { codebase, registeredFolder };
+}
+
+export async function assertInheritedWorkflowExecutionCwd(
+  host: WorkflowHost,
+  cwd: string
+): Promise<void> {
+  if (!(await inheritedWorkflowCodebase(host))) return;
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  await assertInheritedWorkflowCodebase(host, codebase?.id);
 }
 
 /**
