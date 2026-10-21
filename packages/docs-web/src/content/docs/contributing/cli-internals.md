@@ -228,31 +228,35 @@ can fail before either write.
 
 ## `isolation list` Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation list                                           │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:19-57  isolationListCommand()                      │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.listAllActiveWithCodebase()            │
-│ - Joins isolation_environments with codebases                   │
-│ - Returns: path, branch, workflow_type, codebase_name,          │
-│            platform, days_since_activity                        │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:30-55  Group by codebase, print table              │
-└─────────────────────────────────────────────────────────────────┘
+```text
+archon isolation list → isolationListCommand()
+  │
+  ├─ @archon/core listEnvironments()
+  │    ├─ isolationDb.listAllActiveWithCodebase()
+  │    ├─ For each codebase: isolationDb.listByCodebaseWithAge()
+  │    │    └─ Reconcile missing worktrees, preserving live-run ownership
+  │    └─ Return environments grouped by codebase and reconciliation totals
+  │
+  ├─ Print worktree details and totals (return early if no codebases)
+  │
+  ├─ @archon/core listContainerEnvironments()
+  │    ├─ isolationDb.listActiveContainerEnvironments()
+  │    └─ getRunByIsolationEnvId() for each container
+  │         └─ Return matched run/status, no match, or lookup-failed
+  │
+  └─ printContainerEnvironments()
+       └─ Print run status, no run (orphan), or run lookup failed
 ```
 
-**Code:** `packages/cli/src/commands/isolation.ts:19-57`
+**Code:** `packages/cli/src/commands/isolation.ts` (`isolationListCommand`,
+`printContainerEnvironments`), `packages/core/src/operations/isolation-operations.ts`
+(`listEnvironments`), `packages/core/src/services/cleanup-service.ts`
+(`listContainerEnvironments`), `packages/core/src/db/workflow-run-reads.ts`
+(`getRunByIsolationEnvId`).
+
+The container listing matches `metadata.isolation_env_id`; no match does not
+establish that cleanup can remove the container. Cleanup checks wider live
+ownership. A failed lookup is logged and displayed as `run lookup failed`.
 
 ---
 

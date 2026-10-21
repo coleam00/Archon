@@ -1448,7 +1448,11 @@ archon isolation list
 
 Groups by codebase, shows branch, workflow type, platform, and days since activity.
 
-Also lists active container environments; `run lookup failed` means ownership could not be determined, rather than that the container has no owning run (`no run (orphan)`).
+Also lists active container environments. `run lookup failed` means the listing's
+environment-ID lookup failed; `no run (orphan)` means no run matched that lookup
+(`metadata.isolation_env_id`). Neither label establishes cleanup eligibility:
+cleanup checks wider live ownership through run metadata, conversation links, and
+same-codebase checkout paths before removing an environment.
 
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
 (branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`). They are tracked and cleaned

@@ -34,11 +34,9 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
 }
 
 /**
- * Find the workflow run that owns a container isolation environment
- * (`metadata.isolation_env_id === envId`, stamped at run creation for container
- * runs). Used by `isolation cleanup` to decide whether a container is reapable:
- * a paused/running run must NOT be pruned. Returns the newest match, or null when
- * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
+ * Find the newest run with `metadata.isolation_env_id === envId` for container
+ * listing. A null result only means no metadata match; cleanup uses
+ * `getLiveRunOwningEnv` to check wider ownership before removing an environment.
  */
 export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
   const extract = getDialect().jsonText('metadata', 'isolation_env_id');
