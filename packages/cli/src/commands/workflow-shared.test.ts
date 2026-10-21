@@ -1,3 +1,4 @@
+import * as chatScope from '../workflow-scope';
 import {
   mockCreateWorkflowEvent,
   mockPersistWorkflowEvent,
@@ -53,8 +54,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
   });
 
   it('requires a project match for full and short IDs in scoped chat CLI commands', async () => {
-    const previous = process.env.ARCHON_WORKFLOW_CODEBASE_ID;
-    process.env.ARCHON_WORKFLOW_CODEBASE_ID = 'cb-1';
+    const scopeSpy = spyOn(chatScope, 'readChatProjectScope').mockReturnValue('cb-1');
     const host = createTestWorkflowHost();
     const find = spyOn(host.deps.store, 'findWorkflowRunsByIdPrefix');
     const run: WorkflowRun = {
@@ -146,7 +146,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       expect(host.deps.store.getWorkflowRun).not.toHaveBeenCalled();
       find.mockResolvedValueOnce([run, { ...run, id: FULL_ID + '-other' }]);
       await expect(resolveRunIdArg(host, '0b1ee8da', '/repo')).rejects.toThrow('selected project');
-      process.env.ARCHON_WORKFLOW_CODEBASE_ID = '';
+      scopeSpy.mockReturnValue('');
       await expect(resolveRunIdArg(host, FULL_ID, '/repo')).rejects.toThrow(
         'must name a registered project'
       );
@@ -154,8 +154,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       expect(mockPersistWorkflowEvent).not.toHaveBeenCalled();
     } finally {
       find.mockRestore();
-      if (previous === undefined) delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
-      else process.env.ARCHON_WORKFLOW_CODEBASE_ID = previous;
+      scopeSpy.mockRestore();
     }
   });
 

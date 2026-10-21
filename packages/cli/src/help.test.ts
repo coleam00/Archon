@@ -290,6 +290,7 @@ Commands:
   help                       Show this help message
 
 Options:
+  --chat-project-id <id>     Confine chat workflow commands to a registered project ID
   --cwd <path>               Override working directory (default: current directory)
   --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
                              isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.

@@ -1,2 +1,2 @@
-/** Selected chat project carried by the CLI provider's execution environment. */
-export const WORKFLOW_CODEBASE_ID_ENV = 'ARCHON_WORKFLOW_CODEBASE_ID';
+/** Explicit selected-project context for chat CLI commands. */
+export const CHAT_PROJECT_ID_ARG = 'chat-project-id';

@@ -3,7 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
+import { CHAT_PROJECT_ID_ARG } from '@archon/paths/workflow-scope';
 
 import {
   INVOKE_WORKFLOW_SCHEMA,
@@ -548,7 +548,7 @@ export function buildRunManagementSection(codebaseId?: string): string {
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
-${codebaseId ? `Prefix every command below with \`${WORKFLOW_CODEBASE_ID_ENV}=${codebaseId}\` so the CLI keeps queries and by-ID operations within the selected project. ` : ''}Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Queries and by-ID operations stay within this project; do not use \`--all\` or select another project with \`--project\`. Ask the user to switch projects with /setproject <name> when needed.
+${codebaseId ? `Add \`--${CHAT_PROJECT_ID_ARG} ${JSON.stringify(codebaseId)}\` to every command below so the CLI keeps queries and by-ID operations within the selected project. ` : ''}Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Queries and by-ID operations stay within this project; do not use \`--all\` or select another project with \`--project\`. Ask the user to switch projects with /setproject <name> when needed.
 
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)

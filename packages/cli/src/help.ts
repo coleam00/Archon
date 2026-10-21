@@ -5,6 +5,7 @@
  * to their enclosing command entry.
  */
 
+import { CHAT_PROJECT_ID_ARG } from '@archon/paths/workflow-scope';
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
 import { attachmentCommands } from './attachment-commands';
@@ -748,12 +749,12 @@ const scopedOnlyHelp: HelpEntry[] = [
   },
 ];
 
-// Hand-curated flag order matching the pre-refactor Options block. Each flag
-// lists its owning (command, subcommand?) tuples; an empty array means
-// "global" — in `archon --help` only, never in a scoped slice. Multi-owner
-// flags (e.g. `--detach`, `--events`, `--force`) deduplicate by spec within
-// each render.
 const orderedFlags: FlagHelp[] = [
+  {
+    spec: `--${CHAT_PROJECT_ID_ARG} <id>`,
+    description: 'Confine chat workflow commands to a registered project ID',
+    owners: [{ command: 'workflow' }],
+  },
   {
     spec: '--cwd <path>',
     description: 'Override working directory (default: current directory)',

@@ -59,29 +59,6 @@ it('plugin rejection guidance lists only public commands', async () => {
   }
 });
 
-describe('chat project execution context', () => {
-  it('preserves inherited scope through both Archon env files', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'archon-chat-scope-'));
-    const home = join(root, 'home');
-    const repo = join(root, 'repo');
-    mkdirSync(home);
-    mkdirSync(join(repo, '.archon'), { recursive: true });
-    const key = 'ARCHON_WORKFLOW_CODEBASE_ID';
-    try {
-      writeFileSync(join(home, '.env'), `${key}=home-project\n`);
-      writeFileSync(join(repo, '.archon/.env'), `${key}=repo-project\n`);
-      for (const scope of ['selected-project', '', undefined]) {
-        const env: NodeJS.ProcessEnv = { ARCHON_HOME: home, [key]: scope };
-        const trusted = await loadCliEnv(repo, { env });
-        expect(env[key]).toBe(scope);
-        expect(trusted[key]).toBe(scope);
-      }
-    } finally {
-      await removeTempTree(root);
-    }
-  });
-});
-
 describe('forge user trust boundary', () => {
   it('resolves a workflow probe without changing the host environment', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-probe-env-'));

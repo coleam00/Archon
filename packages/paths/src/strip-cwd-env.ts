@@ -9,7 +9,6 @@
  *    of its value or source (including shell exports and direnv). A leaked
  *    ANTHROPIC_API_KEY can override Claude subscription auth and incur API
  *    billing; other project keys can override Archon's defaults/environment.
- *    The inherited chat project scope is also preserved across env loading.
  *    Install credentials belong in ~/.archon/.env, loaded after this strip.
  *    Exception: a detached child (--internal-detached-run-config) gets the six
  *    DETACHED_INSTALL_CONTEXT_KEYS restored afterwards from the trusted detached
@@ -24,8 +23,6 @@
  *    Auth vars (CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_USE_BEDROCK,
  *    CLAUDE_CODE_USE_VERTEX) are kept.
  */
-import { CString, dlopen } from 'bun:ffi';
-import { WORKFLOW_CODEBASE_ID_ENV } from './workflow-scope';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import {
@@ -43,31 +40,8 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
-// Bun's dotenv preload only changes its JS environment map. Native getenv still
-// distinguishes actual parent context, including an empty value, from that preload.
-function preserveInheritedWorkflowScope(cwdKeys: Set<string>): void {
-  if (!cwdKeys.has(WORKFLOW_CODEBASE_ID_ENV)) return;
-  const library = dlopen(
-    process.platform === 'win32'
-      ? 'ucrtbase.dll'
-      : process.platform === 'darwin'
-        ? '/usr/lib/libSystem.B.dylib'
-        : 'libc.so.6',
-    { getenv: { args: ['cstring'], returns: 'ptr' } }
-  );
-  try {
-    const pointer = library.symbols.getenv(Buffer.from(`${WORKFLOW_CODEBASE_ID_ENV}\0`));
-    if (pointer === null) return;
-    process.env[WORKFLOW_CODEBASE_ID_ENV] = new CString(pointer).toString();
-    cwdKeys.delete(WORKFLOW_CODEBASE_ID_ENV);
-  } finally {
-    library.close();
-  }
-}
-
 /**
- * Strip keys named in CWD .env files except the inherited chat project scope,
- * whatever their value or source
+ * Strip every key named in CWD .env files, whatever its value or source
  * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
@@ -110,7 +84,6 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     }
   }
 
-  preserveInheritedWorkflowScope(cwdKeys);
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
   }

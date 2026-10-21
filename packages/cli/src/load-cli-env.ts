@@ -1,12 +1,8 @@
-import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
 import { loadArchonEnv } from '@archon/paths/env-loader';
 
 /**
  * Load ~/.archon/.env and <cwd>/.archon/.env into the supplied environment, and
  * return the environment forge plugin processes run with.
- *
- * A selected chat project is inherited execution context: neither env file may
- * replace it or supply it when absent.
  *
  * Inside a run, a token or stored-login redirect the engine set carries the run's
  * identity; neither Archon env file may replace or restore it. An absent key is no
@@ -19,11 +15,6 @@ export async function loadCliEnv(
   options: { env?: NodeJS.ProcessEnv; preserveGithubCredentials?: boolean } = {}
 ): Promise<NodeJS.ProcessEnv> {
   const env = options.env ?? process.env;
-  const workflowScope = env[WORKFLOW_CODEBASE_ID_ENV];
-  const restoreWorkflowScope = (): void => {
-    if (workflowScope === undefined) delete env[WORKFLOW_CODEBASE_ID_ENV];
-    else env[WORKFLOW_CODEBASE_ID_ENV] = workflowScope;
-  };
   const runGithubCredentials =
     (options.preserveGithubCredentials ?? Boolean(env.WORKFLOW_ID))
       ? (
@@ -41,7 +32,6 @@ export async function loadCliEnv(
       // the repository's `.archon/.env` can supply a credential (passed separately) but
       // cannot change the environment an executable plugin runs in.
       for (const [key, value] of runGithubCredentials) env[key] = value;
-      restoreWorkflowScope();
       forgeTrustedEnv = { ...env };
     },
   });
@@ -50,6 +40,5 @@ export async function loadCliEnv(
   if (forgeTrustedEnv.GH_CONFIG_DIR === undefined) delete env.GH_CONFIG_DIR;
   else env.GH_CONFIG_DIR = forgeTrustedEnv.GH_CONFIG_DIR;
   for (const [key, value] of runGithubCredentials) env[key] = value;
-  restoreWorkflowScope();
   return forgeTrustedEnv;
 }

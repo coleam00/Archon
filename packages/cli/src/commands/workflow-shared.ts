@@ -2,7 +2,7 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
-import { WORKFLOW_CODEBASE_ID_ENV } from '@archon/paths/workflow-scope';
+import { readChatProjectScope } from '../workflow-scope';
 
 import type { Conversation } from '@archon/core/schemas/conversation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -282,11 +282,11 @@ const FULL_RUN_ID_RE =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
-  const scope = process.env[WORKFLOW_CODEBASE_ID_ENV];
+  const scope = readChatProjectScope();
   if (scope === undefined) return undefined;
   if (all) throw new Error('--all cannot override the selected chat project.');
   const codebase = scope ? await host.records.codebases.getCodebase(scope) : null;
-  if (!codebase) throw new Error(`${WORKFLOW_CODEBASE_ID_ENV} must name a registered project.`);
+  if (!codebase) throw new Error(`--chat-project-id must name a registered project.`);
   return codebase;
 }
 
@@ -308,7 +308,7 @@ export async function assertInheritedWorkflowCodebase(
  * prefix resolution (getScopedRun): the lookup is scoped to the cwd's
  * codebase, a unique match resolves, and an ambiguous prefix errors.
  *
- * ARCHON_WORKFLOW_CODEBASE_ID requires a unique project-scoped match for every ID.
+ * --chat-project-id requires a unique project-scoped match for every ID.
  * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise project lookup preserves an exact checkout
@@ -324,7 +324,7 @@ export async function resolveRunIdArg(
   requirePrefixMatch = false,
   codebaseId?: string
 ): Promise<string> {
-  const scope = process.env[WORKFLOW_CODEBASE_ID_ENV];
+  const scope = readChatProjectScope();
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (FULL_RUN_ID_RE.test(runId)) return runId;
   if (cwd === undefined && codebaseId === undefined) {
@@ -365,7 +365,7 @@ async function resolveProjectScopedRunId(
   runId: string,
   codebaseId: string
 ): Promise<string> {
-  if (!codebaseId) throw new Error(`${WORKFLOW_CODEBASE_ID_ENV} must name a registered project.`);
+  if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
   const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, codebaseId);
   if (
     matches.length !== 1 ||

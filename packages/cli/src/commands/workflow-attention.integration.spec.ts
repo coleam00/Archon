@@ -1,3 +1,4 @@
+import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,9 +26,11 @@ import { stateCommand } from './state';
 import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 
 const track = trackTempRoots();
+const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
 const priorEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...priorEnv };
+  scopeSpy.mockReturnValue(undefined);
 });
 
 function createHost(): WorkflowHost {
@@ -584,9 +587,8 @@ test.each([
 });
 
 test.each(['beta', 'scratch'])(
-  'inherited chat scope governs every run query from %s',
+  'selected chat scope governs every run query from %s',
   async cwdName => {
-    const { WORKFLOW_CODEBASE_ID_ENV } = await import('@archon/paths/workflow-scope');
     const { workflowStatusCommand, workflowRunsCommand } = await import('./workflow-query');
     const root = track(mkdtempSync(join(tmpdir(), 'chat-query-scope-')));
     process.env.ARCHON_HOME = join(root, 'home');
@@ -631,7 +633,7 @@ test.each(['beta', 'scratch'])(
     const [alpha, beta] = projects;
     const scratch = join(root, 'scratch');
     mkdirSync(scratch);
-    process.env[WORKFLOW_CODEBASE_ID_ENV] = alpha.project.id;
+    scopeSpy.mockReturnValue(alpha.project.id);
     const cwd = cwdName === 'beta' ? beta.project.default_cwd : realpathSync(scratch);
     const status = await captured(async () => {
       await workflowStatusCommand(host, cwd, { json: true });
@@ -717,12 +719,11 @@ test.each(['beta', 'scratch'])(
 );
 
 test.each(['', 'missing-project'])(
-  'invalid inherited scope %j refuses every run query',
+  'invalid selected chat scope %j refuses every run query',
   async scope => {
-    const { WORKFLOW_CODEBASE_ID_ENV } = await import('@archon/paths/workflow-scope');
     const { workflowStatusCommand, workflowRunsCommand } = await import('./workflow-query');
     const host = createHost();
-    process.env[WORKFLOW_CODEBASE_ID_ENV] = scope;
+    scopeSpy.mockReturnValue(scope);
     await expect(workflowStatusCommand(host, process.cwd())).rejects.toThrow('registered project');
     const queries = [
       () => workflowRunsCommand(host, process.cwd(), { json: true }),

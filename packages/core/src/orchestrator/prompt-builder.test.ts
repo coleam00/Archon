@@ -250,7 +250,7 @@ describe('buildOrchestratorSystemAppend', () => {
       'cli'
     );
     expect(scoped.split('## Managing Workflow Runs')).toHaveLength(2);
-    expect(scoped).toContain('ARCHON_WORKFLOW_CODEBASE_ID=cb-1');
+    expect(scoped).toContain('--chat-project-id "cb-1"');
     const native = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,

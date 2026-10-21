@@ -1,3 +1,4 @@
+import * as chatScope from '../workflow-scope';
 import {
   mockLogger,
   mockRunLiveOwnerClose,
@@ -19,6 +20,8 @@ import {
   resolveContainerBackendConfig,
   hasUnresolvedWriteback,
 } from './workflow-isolation';
+
+const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
 
 const git = await import('@archon/git');
 const codebases = await import('@archon/core/db/codebases');
@@ -182,7 +185,7 @@ describe('run codebase resolution', () => {
     { detach: true, codebaseId: child.id },
     { noWorktree: true, folder: true },
   ])('refuses foreign chat launches before registration or execution (%j)', async options => {
-    process.env.ARCHON_WORKFLOW_CODEBASE_ID = parent.id;
+    scopeSpy.mockReturnValue(parent.id);
     (codebases.getCodebase as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
       id === parent.id ? parent : child
     );
@@ -197,7 +200,7 @@ describe('run codebase resolution', () => {
       expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
       expect(executor.executeWorkflow).not.toHaveBeenCalled();
     } finally {
-      delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      scopeSpy.mockReturnValue(undefined);
     }
   });
 
@@ -209,7 +212,7 @@ describe('run codebase resolution', () => {
   ])(
     'refuses a selected project ID executing in a foreign checkout (%j)',
     async ({ detach, pinned }) => {
-      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      scopeSpy.mockReturnValue(child.id);
       (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(parent);
       if (pinned) {
         mockDiscoverWorkflowsWithConfig.mockResolvedValue({
@@ -228,7 +231,7 @@ describe('run codebase resolution', () => {
         expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
         expect(executor.executeWorkflow).not.toHaveBeenCalled();
       } finally {
-        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+        scopeSpy.mockReturnValue(undefined);
       }
     }
   );
@@ -241,7 +244,7 @@ describe('run codebase resolution', () => {
       (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
         { id: 'run-adopted' },
       ]);
-      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      scopeSpy.mockReturnValue(child.id);
       const workingPath = laneKind === 'foreign-worktree' ? '/parent' : `${childRoot}/worktree`;
       (git.findRepoRoot as ReturnType<typeof mock>).mockImplementation(async (path: string) =>
         path === '/parent' ? '/parent' : childRoot
@@ -287,7 +290,7 @@ describe('run codebase resolution', () => {
         );
         expect(executor.executeWorkflow).not.toHaveBeenCalled();
       } finally {
-        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+        scopeSpy.mockReturnValue(undefined);
         jest.useRealTimers();
         spawnSpy.mockRestore();
         (resolveWorkflowAdoption as ReturnType<typeof mock>)
@@ -300,7 +303,7 @@ describe('run codebase resolution', () => {
   it.each([undefined, child.id])(
     'allows a launch in the selected chat checkout (id=%s)',
     async codebaseId => {
-      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      scopeSpy.mockReturnValue(child.id);
       (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
       try {
         await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
@@ -309,13 +312,13 @@ describe('run codebase resolution', () => {
         });
         expectChildExecution();
       } finally {
-        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+        scopeSpy.mockReturnValue(undefined);
       }
     }
   );
 
   it('allows a detached explicit project launch in the selected chat checkout', async () => {
-    process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+    scopeSpy.mockReturnValue(child.id);
     (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
     jest.useFakeTimers();
@@ -332,14 +335,14 @@ describe('run codebase resolution', () => {
     } finally {
       jest.useRealTimers();
       spawnSpy.mockRestore();
-      delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+      scopeSpy.mockReturnValue(undefined);
     }
   });
 
   it.each([false, true])(
     'refuses foreign name-based resume before reading its source (detach=%s)',
     async detach => {
-      process.env.ARCHON_WORKFLOW_CODEBASE_ID = child.id;
+      scopeSpy.mockReturnValue(child.id);
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: 'foreign-run',
@@ -362,7 +365,7 @@ describe('run codebase resolution', () => {
         expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
         expect(executor.executeWorkflow).not.toHaveBeenCalled();
       } finally {
-        delete process.env.ARCHON_WORKFLOW_CODEBASE_ID;
+        scopeSpy.mockReturnValue(undefined);
       }
     }
   );
