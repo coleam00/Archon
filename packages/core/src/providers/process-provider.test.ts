@@ -565,16 +565,22 @@ test('Claude resume and fork retain per-query cost and model across fresh proces
 });
 
 test.each([
-  ['json', 'malformed JSON', 'unknown'],
-  ['payload', 'invalid payload (chunk.name: invalid_type, expected string)', '_archon/chunk'],
+  ['invalid-message', 'json', 'malformed JSON', 'unknown'],
+  [
+    'invalid-message',
+    'payload',
+    'invalid payload (chunk.name: invalid_type, expected string)',
+    '_archon/chunk',
+  ],
+  ['invalid-message-after-exit', 'json', 'malformed JSON', 'unknown'],
 ] as const)(
-  'an invalid %s plugin message surfaces content-free evidence in the error and log',
-  async (variant, detail, message) => {
+  '%s: an invalid %s plugin message surfaces content-free evidence in the error and log',
+  async (mode, variant, detail, message) => {
     const error = spyOn(processLog, 'error').mockImplementation(() => {});
     try {
       let failure: unknown;
       try {
-        await collect(provider('invalid-message', variant).sendQuery('turn', tmpdir()));
+        await collect(provider(mode, variant).sendQuery('turn', tmpdir()));
       } catch (caught) {
         failure = caught;
       }

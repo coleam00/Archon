@@ -238,6 +238,10 @@ function startProcess(
       if (spawnError) return spawnError;
       // Carries only validated protocol values; the exit report would lose both versions.
       if (error instanceof PluginProtocolMismatchError) return error;
+      // A plugin that exits after an invalid line still failed on that line; its exit
+      // report would drop the protocol evidence.
+      if (error instanceof PluginProtocolError && error.reason === 'invalid_message')
+        return protocolFailure(descriptor, log, error);
       if (exited)
         return new ProviderPluginExitedError(
           descriptor.id,

@@ -25,10 +25,24 @@ if (mode === 'mismatch') {
   descriptor.id = process.argv[4] ?? descriptor.id;
   descriptor.version = '2';
 }
-if (mode === 'invalid-message') {
+if (mode === 'invalid-message' || mode === 'invalid-message-after-exit') {
   const variant = process.argv[3];
   if (variant !== 'json' && variant !== 'payload') throw new Error('unknown variant');
-  process.stdout.write(`${invalidMessages[variant]}\n`);
+  const line = `${invalidMessages[variant]}\n`;
+  if (mode === 'invalid-message') process.stdout.write(line);
+  else {
+    // A process that inherits stdout sends the line once the plugin has exited, so the host
+    // reads it with the exit already observed.
+    Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `await Bun.sleep(200); process.stdout.write(${JSON.stringify(line)})`,
+      ],
+      { stdout: 'inherit' }
+    );
+    process.exit(1);
+  }
 }
 if (mode === 'record-pid' || mode === 'hung-models' || mode === 'hung-diagnose')
   writeFileSync(process.argv[3], String(process.pid));
