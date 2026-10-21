@@ -24,6 +24,7 @@ import type { LoopGroupRun } from './loop-group-state';
 import { completeEscalatedResume } from './resume';
 import { createMockStore, createMockDeps, dagOptions, makeWorkflowRun } from '../../test-utils';
 import { restorePreviousIteration } from './previous-iteration';
+import { NODE_STATE_EVENT_TYPES } from '../../../store';
 
 const body = (() => {
   const parsed = dagNodeSchema.parse({ id: 'work', bash: 'echo work' });
@@ -173,6 +174,29 @@ test('missing, legacy and invalid history fail instead of inventing emptiness', 
     'invalid historical execution'
   );
 });
+
+for (const eventType of NODE_STATE_EVENT_TYPES.filter(
+  type =>
+    type !== 'node_skipped_prior_success' &&
+    type !== 'node_always_run_reset' &&
+    type !== 'node_prior_cache_invalidated'
+)) {
+  for (const data of [{ node_output: 'legacy' }, { invocation: {} }]) {
+    test(`${eventType} with ${'invocation' in data ? 'invalid' : 'missing'} metadata is superseded only by later target evidence`, async () => {
+      const opaque = { ...event(), event_type: eventType, data };
+      const current = event([...outer, { groupId: 'grp', iteration: 2 }]);
+      expect(
+        (await restorePreviousIteration(fixture([opaque, event(), current]).run)).get('work')
+          ?.output
+      ).toBe('first');
+      for (const rows of [[opaque], [opaque, current], [event(), opaque, current]]) {
+        await expect(restorePreviousIteration(fixture(rows).run)).rejects.toThrow(
+          'cannot restore iteration 1'
+        );
+      }
+    });
+  }
+}
 
 test('store failure surfaces', async () => {
   const { run, listEventsForRuns } = fixture([]);

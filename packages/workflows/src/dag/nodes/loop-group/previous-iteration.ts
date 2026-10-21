@@ -62,8 +62,10 @@ function selectPreviousIterationRows(
   const lineage = [...ctx.loopGroupPath, { groupId: node.id, iteration }];
   const bodyPaths = new Set(run.bodyNodes.map(body => bodyStepNamePrefix + body.id));
   const latest = new Map<string, WorkflowEventRow>();
-  for (const row of rows) {
+  // Once the target's latest row is found, older opaque records cannot supersede it.
+  for (const row of [...rows].reverse()) {
     if (!row.step_name || !bodyPaths.has(row.step_name)) continue;
+    if (latest.has(row.step_name)) continue;
     if (
       row.event_type === 'node_skipped_prior_success' ||
       row.event_type === 'node_always_run_reset' ||
