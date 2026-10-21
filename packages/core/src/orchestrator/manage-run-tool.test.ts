@@ -1319,7 +1319,6 @@ describe('manage_run authorization refusal', () => {
           listWorkflowRuns: async () => ({ runs: [], total: 0, counts }),
           findWorkflowRunsByIdPrefix: async () => [run],
           persistWorkflowEvent: unexpected,
-          listWorkflowEvents: unexpected,
           cancelWorkflowRun: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,

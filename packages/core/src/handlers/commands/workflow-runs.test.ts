@@ -241,19 +241,6 @@ describe('CommandHandler', () => {
             mockGetActiveWorkflowRun.mockResolvedValueOnce(runningRun(runId));
             mockGetWorkflowRun.mockResolvedValueOnce(runningRun(runId));
             mockRequestDetachedRunStop.mockClear();
-            const eventDb = await import('../../db/workflow-events');
-            (eventDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
-              {
-                id: 'completed-command',
-                created_at: new Date().toISOString(),
-                step_index: null,
-                workflow_run_id: runId,
-                step_name: 'completed',
-                event_type: 'node_completed',
-                data: { type: 'bash' },
-              },
-            ]);
-
             const result = await handleCommand(
               { ...conversationWithCodebase, codebase_id: codebaseId },
               '/workflow cancel',

@@ -41,9 +41,6 @@ export const mockCancelWorkflowRun = mock<IWorkflowStore['cancelWorkflowRun']>((
 export const mockCancelResumableRunsForConversation = mock<
   IWorkflowStore['cancelResumableRunsForConversation']
 >(() => Promise.resolve([]));
-export const mockListWorkflowEvents = mock<IWorkflowStore['listWorkflowEvents']>(() =>
-  Promise.resolve([])
-);
 export const mockFindChildRuns = mock<IWorkflowStore['findChildRuns']>(() => Promise.resolve([]));
 export const mockGetRunAncestry = mock<IWorkflowStore['getRunAncestry']>(() => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
@@ -133,7 +130,6 @@ export const mockPersistWorkflowEvent = mock<
 >(async () => undefined);
 export const store: WorkflowOperationsDeps['store'] = {
   persistWorkflowEvent: mockPersistWorkflowEvent,
-  listWorkflowEvents: mockListWorkflowEvents,
   signalWorkflowWait: mock(async () => ({ signaled: true })),
   deleteWorkflowRun: mock(async () => undefined),
   getWorkflowRun: mockGetWorkflowRun,

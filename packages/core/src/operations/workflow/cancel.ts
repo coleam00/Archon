@@ -1,6 +1,5 @@
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
-import { isExecNodeRecord, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
@@ -184,20 +183,12 @@ async function cooperativeCancel(
 async function hostCommandWarnings(ctx: OperationContext, run: WorkflowRun): Promise<string[]> {
   const warnings: string[] = [];
   if (!isContainerRun(run)) {
-    const events = await ctx.store.listWorkflowEvents(run.id);
-    if (
-      events.some(event => {
-        // A started command can exit while cancellation awaits descendants or its state write.
-        if (event.event_type !== 'node_started' && event.event_type !== 'node_completed')
-          return false;
-        const record = readNodeRecordEvent(event);
-        return record !== undefined && isExecNodeRecord(record);
-      })
-    ) {
-      warnings.push(
-        `Run ${run.id} checkout ${JSON.stringify(run.working_path)}: ${COMPLETED_HOST_COMMAND_WARNING}`
-      );
-    }
+    // History reads cannot exclude commands admitted before the cancellation commits.
+    warnings.push(
+      `Run ${run.id} checkout ${JSON.stringify(run.working_path)}: ${COMPLETED_HOST_COMMAND_WARNING} ` +
+        'Cooperative cancellation cannot rule out host commands starting during cancellation, ' +
+        'including in new descendant runs. Inspect descendant checkouts too.'
+    );
   }
   for (const child of await ctx.store.findChildRuns(run.id)) {
     warnings.push(...(await hostCommandWarnings(ctx, child)));

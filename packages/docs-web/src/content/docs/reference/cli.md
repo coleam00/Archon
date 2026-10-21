@@ -1144,12 +1144,13 @@ who owns the run:
 
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
-  status check. On macOS and Linux, host bash or script nodes that completed or had
-  started when cancellation inspected this run or its sub-runs produce the same
-  possible-background-work warning described below, in `cleanupWarnings` and the
-  cancellation event. Started commands are included because they can finish during
-  cancellation. Each warning identifies the affected run and its recorded checkout,
-  including isolated child and grandchild checkouts.
+  status check. On macOS and Linux, cooperative cancellation reports possible
+  background work for every host run, even when no command appears in its history.
+  Commands can start or complete while cancellation is in progress, so history cannot
+  establish their absence. The warning appears in `cleanupWarnings` and the cancellation
+  event and identifies each known host run and its recorded checkout, including isolated
+  child and grandchild checkouts. Inspect descendant checkouts too: new sub-runs can
+  appear during cancellation. This warning confirms neither command execution nor survivors.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
   contacts that process and stops its owner before recording the run as `cancelled`.
   On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
@@ -1227,7 +1228,7 @@ surface reports a warning identifying the run and environment; inspect the manag
 containers before retrying cleanup. Successful `--json` responses include an optional
 `cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
 output pipes still held by an unsignalled process, and possible untracked background
-work from previously exited host commands; the field is omitted when there are no
+work from started or completed host commands; the field is omitted when there are no
 cleanup warnings. Owner-stop warnings retain run scratch and owned checkouts for
 inspection. Inspect processes using the checkout, verify ownership, and stop any
 leftovers before reusing or removing it. A cleanup warning does not change `ok: true`.

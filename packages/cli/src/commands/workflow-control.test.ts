@@ -1303,15 +1303,6 @@ describe('workflowCancelCommand', () => {
       mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
       mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
 
-      const eventDb = await import('@archon/core/db/workflow-events');
-      (eventDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
-        {
-          workflow_run_id: runId,
-          step_name: 'completed',
-          event_type: 'node_completed',
-          data: { type: 'bash' },
-        },
-      ]);
       await workflowCancelCommand(createTestWorkflowHost(), runId, json);
 
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
