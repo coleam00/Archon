@@ -17,8 +17,9 @@ import type { IWorkflowStore } from '../store';
 import {
   CheckoutReleasedError,
   introducesCheckout,
-  type WorkflowRun,
-} from '../schemas/workflow-run';
+  type RunCheckout,
+} from '../schemas/checkout-ownership';
+import type { WorkflowRun } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -54,9 +55,7 @@ export interface FileWorkflowStoreOptions {
   /** Called under the commit lock; must not enter store recovery or call this store. */
   listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   /** Return the retired managed path under the commit lock, without re-entering the store. */
-  releasedCheckout?: (
-    run: Pick<WorkflowRun, 'working_path' | 'metadata' | 'codebase_id'>
-  ) => Promise<string | undefined>;
+  releasedCheckout?: (run: RunCheckout) => Promise<string | undefined>;
 }
 export async function createFileWorkflowStore(
   options: FileWorkflowStoreOptions
@@ -66,9 +65,7 @@ export async function createFileWorkflowStore(
   const getCodebase = options.getCodebase ?? (async (): Promise<null> => null);
   const getCodebaseEnvVars =
     options.getCodebaseEnvVars ?? (async (): Promise<Record<string, string>> => ({}));
-  async function assertCheckoutAvailable(
-    run: Pick<WorkflowRun, 'working_path' | 'metadata' | 'codebase_id'> | null
-  ): Promise<void> {
+  async function assertCheckoutAvailable(run: RunCheckout | null): Promise<void> {
     const path = run && (await options.releasedCheckout?.(run));
     if (path) throw new CheckoutReleasedError(path);
   }

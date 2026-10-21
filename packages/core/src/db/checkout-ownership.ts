@@ -3,8 +3,8 @@ import {
   CheckoutReleasedError,
   introducesCheckout,
   checkoutEnvironmentReferences,
-  type WorkflowRun,
-} from '@archon/workflows/schemas/workflow-run';
+} from '@archon/workflows/schemas/checkout-ownership';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 export { introducesCheckout };
 import { getDatabaseType } from './connection';
 import type { TransactionQuery } from './resource-slots';

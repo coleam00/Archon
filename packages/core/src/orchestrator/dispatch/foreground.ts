@@ -58,11 +58,7 @@ export async function dispatchForeground(
   let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
   let foregroundSubmitted = false;
   try {
-    if (!willContinueExistingRun && scope.conversation.isolation_env_id) {
-      const priorEnvironment = await sqlIsolation.getById(scope.conversation.isolation_env_id);
-      if (priorEnvironment?.provider === 'worktree' && priorEnvironment.status === 'destroyed')
-        await updateConversation(scope.conversation.id, { isolation_env_id: null });
-    }
+    if (!willContinueExistingRun) await clearRetiredConversationCheckout(scope.conversation);
     if (
       !willContinueExistingRun &&
       workflow.worktree?.enabled !== false &&
@@ -153,6 +149,15 @@ export async function dispatchForeground(
   } finally {
     await setupOwner?.close();
   }
+}
+
+async function clearRetiredConversationCheckout(
+  conversation: DispatchScope['conversation']
+): Promise<void> {
+  if (!conversation.isolation_env_id) return;
+  const environment = await sqlIsolation.getById(conversation.isolation_env_id);
+  if (environment?.provider === 'worktree' && environment.status === 'destroyed')
+    await updateConversation(conversation.id, { isolation_env_id: null });
 }
 
 /** The run row a fresh worktree run is created under before its worktree setup runs. */

@@ -1,3 +1,4 @@
+import { CheckoutReleasedError } from './schemas/checkout-ownership';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -304,6 +305,32 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
       held.set(checkout, start.id);
   }
   return admitted;
+}
+
+/** Classify checkout refusals before admission so they cannot roll back independent starts. */
+export async function drainAvailableStarts(
+  slot: ResourceSlotOccupancy,
+  hostId: string,
+  check: (run: PreparedWorkflowLaunch['run']) => Promise<void>,
+  admit: (start: QueuedStart) => Promise<ResourceStartDisposition>
+): Promise<ResourceStartDrainResult[]> {
+  const decisions: ResourceStartDrainResult[] = [];
+  const available: QueuedStart[] = [];
+  for (const start of slot.queue) {
+    if (start.hostId === hostId) {
+      try {
+        await check(start.launch.run);
+      } catch (error) {
+        if (!(error instanceof CheckoutReleasedError)) throw error;
+        decisions.push({ status: 'failed', requestId: start.id, error });
+        continue;
+      }
+    }
+    available.push(start);
+  }
+  for (const start of drainableStarts({ ...slot, queue: available }, hostId))
+    decisions.push(await admit(start));
+  return decisions;
 }
 
 /**

@@ -1,9 +1,8 @@
 import { lockCheckoutOwnership, assertNewRunCheckoutAvailable } from './checkout-ownership';
-import { CheckoutReleasedError } from '@archon/workflows/schemas/workflow-run';
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
-  drainableStarts,
+  drainAvailableStarts,
   resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
@@ -152,24 +151,12 @@ export async function drainResourceStarts(options: {
   return getDatabase().withTransaction(async query => {
     await lockCheckoutOwnership(query);
     const { capacity } = await lockResourceSlot(query, options.resource);
-    const slot = await resourceStartOccupancy(query, options.resource, capacity);
-    const admitted: ResourceStartDrainResult[] = [];
-    const available = [];
-    for (const start of slot.queue) {
-      if (start.hostId === options.hostId) {
-        try {
-          await assertNewRunCheckoutAvailable(query, start.launch.run);
-        } catch (error) {
-          if (!(error instanceof CheckoutReleasedError)) throw error;
-          admitted.push({ status: 'failed', requestId: start.id, error });
-          continue;
-        }
-      }
-      available.push(start);
-    }
-    for (const start of drainableStarts({ ...slot, queue: available }, options.hostId))
-      admitted.push(await admitExisting(query, options.resource, start));
-    return admitted;
+    return drainAvailableStarts(
+      await resourceStartOccupancy(query, options.resource, capacity),
+      options.hostId,
+      run => assertNewRunCheckoutAvailable(query, run),
+      start => admitExisting(query, options.resource, start)
+    );
   });
 }
 
