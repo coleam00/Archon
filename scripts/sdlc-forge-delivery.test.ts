@@ -244,7 +244,7 @@ it('a description-only round publishes prepared content before review and finish
     '.archon/workflows/sdlc/deliver/fixtures/description-only.stubs.yaml'
   );
   const fixture = parseFixtureFile(readFileSync(fixturePath, 'utf8'), fixturePath);
-  const evidence = '| case | ms |\n| real publisher | 12 |';
+  const evidence = '| case | ms |\n| --- | --- |\n| real publisher | 12 |';
   const authored = 'Written by the author.  \n\n';
 
   for (const loseBinding of [false, true]) {
@@ -319,6 +319,7 @@ const state = JSON.parse(readFileSync(${JSON.stringify(host.statePath)}, 'utf8')
 const pr = state.pulls[0];
 if (pr.head.sha !== ${JSON.stringify(HEAD_SHA)} || pr.body !== ${JSON.stringify(`${authored}${DESCRIPTION_SECTION.start}
 ${evidence}
+
 ${DESCRIPTION_SECTION.end}
 `)}) throw new Error('review did not see prepared description at the published head');
 console.log(${JSON.stringify(JSON.stringify(fixture.stubs.review__scope))});`,

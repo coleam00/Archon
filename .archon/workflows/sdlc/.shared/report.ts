@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_CREATE_RECORD } from './pr.ts';
+import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -200,8 +200,7 @@ export function caveats(
 }
 
 /** A create verified before a later description edit failed has no typed output. */
-function createdPr(artifacts: string): { url: string; problem?: string } {
-  const path = join(artifacts, PR_CREATE_RECORD);
+function creationRecord(path: string): { url: string; problem?: string } {
   try {
     const claim: unknown = JSON.parse(readFileSync(path, 'utf8'));
     const pr = isObject(claim) ? claim.pr : undefined;
@@ -212,9 +211,15 @@ function createdPr(artifacts: string): { url: string; problem?: string } {
   }
 }
 
+function createdPr(artifacts: string): { url: string; problem?: string } {
+  const verified = creationRecord(join(artifacts, PR_CREATE_VERIFIED_RECORD));
+  if (verified.url !== '' || verified.problem !== undefined) return verified;
+  return creationRecord(join(artifacts, PR_CREATE_RECORD));
+}
+
 /**
  * The URL of the pull request this run last published, from the engine's
- * typed-artifact listing or its verified creation claim; empty when it published none. A tail that failed after
+ * typed-artifact listing or its verified creation records; empty when it published none. A tail that failed after
  * publishing still names its pull request, so the next run continues that one
  * instead of opening another. An unreadable listing is named by `failed`'s summary.
  */

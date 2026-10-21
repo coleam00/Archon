@@ -167,10 +167,13 @@ examples and raw HTML containers are literal text; top-level markers are reserve
 for the managed section and are refused in prepared content before pushing. The
 composed body must expose exactly the intended pair before any description edit;
 unclosed fences or HTML containers that hide either delimiter refuse publication.
+A blank line separates the closing delimiter from prepared content, including terminal tables;
+legacy sections whose closing delimiter follows a table row remain replaceable.
 If creation succeeds but a later description edit fails, the failure report still
 names the created PR from its verified creation record. If writing that record
-fails, publication fails and the node error names the verified PR URL for explicit
-continuation. `update-pr-body` corrects the
+fails, publication fails and the verified identity is saved independently in
+`pr-create-verified.json`, which the failure report reads before the original claim.
+The node error also names the verified PR URL for explicit continuation. `update-pr-body` corrects the
 description's stale claims and links the issue once the rounds end. A standalone
 `archon-pr` leaves a continued pull request's description as its author left it:
 its `publish_description` input defaults off. `publish-review` upserts the one marked review

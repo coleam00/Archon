@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { itemPullRequest } from '../../workflows/sdlc/.shared/build';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import { trackTempRoots } from './temp-roots';
 import {
@@ -510,7 +511,7 @@ function publishSection(options: Parameters<typeof publishPr>[0] & { live?: stri
       ...(allowed ? { INPUTS_PUBLISH_DESCRIPTION: 'true' } : {}),
       ...rest.inputs,
     },
-    artifacts: { [DESCRIPTION.path]: '| case | ms |\n| a | 12 |\n', ...rest.artifacts },
+    artifacts: { [DESCRIPTION.path]: '| case | ms |\n| --- | --- |\n| a | 12 |\n', ...rest.artifacts },
   });
 }
 
@@ -519,7 +520,25 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection();
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
-    expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`]);
+    expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
+  });
+
+  it.each([
+    { trailing: '', gap: '\n\n' },
+    { trailing: '\n', gap: '\n' },
+    { trailing: '\n\n', gap: '' },
+  ])('publishes terminal tables and replaces legacy table sections: $trailing', ({ trailing, gap }) => {
+    const table = `| case | ms |\n| --- | --- |\n| a | 12 |${trailing}`;
+    const first = publishSection({ artifacts: { [DESCRIPTION.path]: table } });
+    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
+    expect(first.bodies[0]).toBe(`Written by hand.\n\n${START}\n${table}${gap}${END}\n`);
+    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: table } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+    const legacy = `Author.  \n\n${START}\n${table}${trailing ? '' : '\n'}${END}\nAfter.  \n`;
+    const replaced = publishSection({ live: legacy, artifacts: { [DESCRIPTION.path]: 'Replacement evidence.' } });
+    expect({ code: replaced.code, stderr: replaced.stderr }).toMatchObject({ code: 0 });
+    expect(replaced.bodies).toEqual([`Author.  \n\n${START}\nReplacement evidence.\n\n${END}\nAfter.  \n`]);
   });
 
   it.each(['gh', 'forge'] as const)('preserves fenced and inline marker examples through %s', source => {
@@ -535,14 +554,14 @@ describe('publish-pr writes the description section a delivery round prepared', 
     });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
     const body = source === 'gh' ? result.bodies[0] : JSON.parse(result.forgeRequests.at(-1) ?? '{}').body;
-    expect(body).toBe(`${live}${START}\n| case | ms |\n| a | 12 |\n${END}\n`);
+    expect(body).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
   });
 
   it('preserves trailing authored whitespace exactly', () => {
     const live = 'Author text.  \n\n';
     const result = publishSection({ live });
     expect(result.code).toBe(0);
-    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| a | 12 |\n${END}\n`);
+    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
   });
 
   it('can publish prepared fenced marker examples again', () => {
@@ -561,7 +580,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const live = `Authored.\n\n${section}\n\n`;
     const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
     expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
-    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n') ? '' : '\n'}${END}\n`);
+    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n\n') ? '' : section.endsWith('\n') ? '\n' : '\n\n'}${END}\n`);
     const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
     expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
     expect(again.bodies).toEqual([]);
@@ -604,7 +623,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection({ target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
-    expect(result.bodies).toEqual([`A body\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`]);
+    expect(result.bodies).toEqual([`A body\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
     expect(result.gh.at(-1)).toContain('pr view 42');
   });
 
@@ -649,6 +668,17 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.stderr).toContain(PR_URL);
     expect(result.stderr).toContain('EISDIR');
     expect(result.bodies).toEqual([]);
+    const report = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: existsSync(join(result.artifacts, 'pr-create-verified.json'))
+        ? { 'pr-create-verified.json': readFileSync(join(result.artifacts, 'pr-create-verified.json'), 'utf8') }
+        : {},
+      preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
+    });
+    expect(report.code).toBe(0);
+    const ending = JSON.parse(report.stdout);
+    expect(ending).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
+    expect(itemPullRequest([{ ...ending, run_id: 'run', at: '', delivered: false, artifacts: '' }], undefined, PR.repo)).toEqual(PR);
   });
 
   it.each([
@@ -665,11 +695,11 @@ describe('publish-pr writes the description section a delivery round prepared', 
   it('replaces only the content between its markers', () => {
     const result = publishSection({ live: `Before.\n\n${START}\nold\n${END}\n\nAfter.` });
     expect(result.code).toBe(0);
-    expect(result.bodies).toEqual([`Before.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n\nAfter.`]);
+    expect(result.bodies).toEqual([`Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n\nAfter.`]);
   });
 
   it('writes nothing when the section is already current', () => {
-    const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n` });
+    const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n` });
     expect(result.code).toBe(0);
     expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
   });
@@ -705,7 +735,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.forge[3]).toContain('forge pr.edit-body --json --data-file');
     expect(JSON.parse(result.forgeRequests[3])).toEqual({
       ref: { repo: PR.repo, number: 42 },
-      body: `Written by hand.\n\n${START}\n| case | ms |\n| a | 12 |\n${END}\n`,
+      body: `Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`,
     });
   });
 

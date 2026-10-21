@@ -33,7 +33,7 @@
 
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PR_CREATE_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { PR_CREATE_RECORD, PR_CREATE_VERIFIED_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
   forgeSource,
@@ -49,7 +49,8 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
-// Rendered code is escaped; the HTML parser also excludes comments nested in raw containers.
+// Table cells can contain a legacy closing delimiter emitted without a block separator.
+// Other rendered containers keep literal marker examples out of the managed pair.
 async function descriptionMarkers(markdown: string): Promise<{ marker: string; at: number }[]> {
   const candidates: { marker: string; at: number; token: string }[] = [];
   const tagged = markdown.replace(
@@ -62,12 +63,21 @@ async function descriptionMarkers(markdown: string): Promise<{ marker: string; a
   );
   const comments = new Set<string>();
   const nested = new Set<string>();
+  const tables = new Set<string>();
   await new HTMLRewriter()
-    .on('*', { comments: comment => { nested.add(comment.text); } })
+    .on('*:not(table):not(thead):not(tbody):not(tr):not(th):not(td)', { comments: comment => { nested.add(comment.text); } })
+    .on('table', { comments: comment => { tables.add(comment.text); } })
     .onDocument({ comments: comment => { comments.add(comment.text); } })
     .transform(new Response(Bun.markdown.html(tagged)))
     .text();
-  return candidates.filter(candidate => comments.has(candidate.token) && !nested.has(candidate.token));
+  return candidates.filter(candidate =>
+    comments.has(candidate.token) && !nested.has(candidate.token) &&
+    (!tables.has(candidate.token) || (candidate.marker === SECTION_END && (candidate.at === 0 || markdown[candidate.at - 1] === '\n')))
+  );
+}
+
+function blockSeparator(value: string): string {
+  return value === '' || value.endsWith('\n\n') ? '' : value.endsWith('\n') ? '\n' : '\n\n';
 }
 
 /**
@@ -76,14 +86,14 @@ async function descriptionMarkers(markdown: string): Promise<{ marker: string; a
  * never changed, and a marker that does not pair is refused rather than guessed at.
  */
 async function withDescriptionSection(live: string, section: string): Promise<string> {
-  const block = `${SECTION_START}\n${section}${section.endsWith('\n') ? '' : '\n'}${SECTION_END}`;
+  const block = `${SECTION_START}\n${section}${blockSeparator(section)}${SECTION_END}`;
   const markers = await descriptionMarkers(live);
   let composed: string;
   let blockAt: number;
   const starts = markers.filter(entry => entry.marker === SECTION_START).map(entry => entry.at);
   const ends = markers.filter(entry => entry.marker === SECTION_END).map(entry => entry.at);
   if (starts.length === 0 && ends.length === 0) {
-    const separator = live === '' || live.endsWith('\n\n') ? '' : live.endsWith('\n') ? '\n' : '\n\n';
+    const separator = blockSeparator(live);
     blockAt = live.length + separator.length;
     composed = `${live}${separator}${block}\n`;
   } else {
@@ -166,6 +176,7 @@ function recordCreatedPr(claimPath: string, pr: PrRecord): void {
   try {
     writeFileSync(claimPath, JSON.stringify({ repo: pr.repo, headRepo: pr.head_repo, head: pr.head, pr }), { mode: 0o600 });
   } catch (error) {
+    writeFileSync(join(artifactsDir(), PR_CREATE_VERIFIED_RECORD), JSON.stringify({ pr }), { mode: 0o600 });
     throw new Error(
       `created and verified ${pr.url}, but could not record its identity at ${claimPath}; continue this PR explicitly: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error }

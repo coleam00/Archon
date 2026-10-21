@@ -26,6 +26,7 @@ import {
 } from './forge.ts';
 
 export const PR_CREATE_RECORD = 'pr-create-started';
+export const PR_CREATE_VERIFIED_RECORD = 'pr-create-verified.json';
 
 export interface PrView {
   readonly pr: PrRecord;
