@@ -20,6 +20,9 @@
   },
   "testGroups": [
     [
+      "src/exec-stdin.test.ts"
+    ],
+    [
       "src/exec.test.ts",
       "src/forge.test.ts",
       "src/github-host.test.ts",

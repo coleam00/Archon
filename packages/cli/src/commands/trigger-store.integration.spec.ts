@@ -9,7 +9,8 @@ import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { loadConfig } from '@archon/core/config/config-loader';
 import * as connection from '@archon/core/db/connection';
-import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
+import { SqliteAdapter, sqliteDialect } from '@archon/core/db/adapters/sqlite';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { PostgresAdapter } from '@archon/core/db/adapters/postgres';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import {
@@ -265,6 +266,64 @@ test('trigger withdraw removes queued recorded source and preserves admitted sou
   await triggerCommand(host, 'withdraw', [queued.run.id], {});
   expect((await store.getResourceStartRequest(queued.run.id))?.status).toBe('withdrawn');
   await expect(stat(join(root, 'queued'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('trigger withdraw succeeds when the queued request has an unsupported blocker status', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-withdraw-status-')));
+  const db = new SqliteAdapter(join(root, 'store.db'));
+  const spies = [
+    spyOn(connection, 'getDatabase').mockReturnValue(db),
+    spyOn(connection, 'getDialect').mockReturnValue(sqliteDialect),
+    spyOn(connection, 'getDatabaseType').mockReturnValue('sqlite'),
+  ];
+  try {
+    const original = hostForTest();
+    const store = createWorkflowStore();
+    const host = { ...original, deps: { ...original.deps, store } };
+    const codebaseId = randomUUID();
+    await db.query(
+      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'test', $2)",
+      [codebaseId, root]
+    );
+    const owner = launch(codebaseId);
+    const queued = launch(codebaseId);
+    for (const prepared of [owner, queued]) {
+      await store.admitResourceStart({
+        resource: 'one',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    }
+    await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+      'unexpected',
+      owner.run.id,
+    ]);
+    await expect(store.getResourceStartRequest(queued.run.id)).rejects.toThrow(
+      `Unsupported workflow run status for run ${owner.run.id}: "unexpected"`
+    );
+
+    await triggerCommand(host, 'withdraw', [queued.run.id], {});
+
+    expect(
+      (
+        await db.query('SELECT status FROM remote_agent_resource_start_requests WHERE id = $1', [
+          queued.run.id,
+        ])
+      ).rows
+    ).toEqual([{ status: 'withdrawn' }]);
+    expect(
+      (
+        await db.query('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [
+          owner.run.id,
+        ])
+      ).rows
+    ).toEqual([{ status: 'unexpected' }]);
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+    await db.close();
+  }
 });
 
 test('trigger preparation recovery requires confirmation before releasing the recorded owner', async () => {

@@ -92,7 +92,7 @@ Container pauses are only resumable **from the CLI**, where the Docker backend i
 
 Precedence: `--container` flag > workflow `container.enabled` > config `container.enabled` > off. See [configuration](/reference/configuration/#container-isolation-folder-projects) for the `container:` config block (image, network, memory, pids) and the `container.write_back` workflow policy.
 
-`archon isolation list` shows active container environments with their age. `archon isolation cleanup` reaps containers and volumes of orphaned or unresumable runs older than the threshold. It preserves containers for pending, running, paused, and resumable failed runs, including failed resume setup. To discard a failed run and its retry overlay, use `archon workflow abandon <run-id>`.
+`archon isolation list` shows active container environments with their age. `archon isolation cleanup` reaps containers and volumes older than the threshold only when no claimable run owns the environment and platform policy permits removal. It preserves containers for pending, running, paused, and resumable failed runs, including failed resume setup. The displayed run status or `no run (orphan)` label does not establish eligibility: cleanup checks run metadata, conversation links, and same-codebase checkout paths. If that ownership lookup fails, cleanup reports the error and skips removal. To discard a failed run and its retry overlay, use `archon workflow abandon <run-id>`.
 
 ## Provider support
 

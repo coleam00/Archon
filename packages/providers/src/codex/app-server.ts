@@ -12,6 +12,7 @@ import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
+import type { ProviderLifecycleEvent } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -57,6 +58,14 @@ export class JsonRpcError extends Error {
 export type ConnectionEnd =
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
+
+/**
+ * How often a SIGTERMed app-server that has not exited yet is reported. There is no
+ * deadline: a Codex shutting down on a loaded machine was seen taking several seconds
+ * longer each time load rose, then exiting 0, and a deadline turned that slow cleanup
+ * into a failed node. Cancelling the run stops the provider plugin, which ends the wait.
+ */
+const TERM_EXIT_WARN_MS = 30_000;
 
 /** How much raw stderr a connection buffers, and how much of it becomes evidence. */
 const STDERR_BUFFER_CHARS = 8000;
@@ -260,16 +269,25 @@ export class AppServerConnection {
 
   /**
    * Ends the process: close stdin, which makes app-server exit, then SIGTERM if it has not
-   * exited within `graceMs`. Never SIGKILL: SIGTERM lets Codex stop the commands it
-   * started, while SIGKILL orphans them.
+   * exited within `graceMs`, then wait for the exit however long it takes. Never SIGKILL:
+   * SIGTERM lets Codex stop the commands it started, while SIGKILL orphans them.
    */
-  async shutdown(graceMs: number): Promise<ConnectionEnd | undefined> {
+  async shutdown(graceMs: number, warnMs = TERM_EXIT_WARN_MS): Promise<ConnectionEnd | undefined> {
     if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
     if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
-    if (!(await this.exitsWithin(graceMs))) {
-      getLog().warn({ pid: this.child.pid }, 'codex.app_server_ignored_sigterm');
+    let waitedMs = 0;
+    while (!(await this.exitsWithin(warnMs))) {
+      waitedMs += warnMs;
+      getLog().warn(
+        {
+          pid: this.child.pid,
+          waitedMs,
+          lifecycle: 'process_still_exiting' satisfies ProviderLifecycleEvent,
+        },
+        'codex.app_server_still_exiting'
+      );
     }
     return this.endedWith;
   }
@@ -290,7 +308,8 @@ export class AppServerConnection {
     try {
       message = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      getLog().warn({ line: line.slice(0, 200) }, 'codex.app_server_unparseable_line');
+      // The line can carry model or user text, so only its length is logged.
+      getLog().warn({ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line');
       return;
     }
     const { id, method } = message;
