@@ -504,6 +504,24 @@ describe('the merge queue scripts', () => {
     const settled = stored(ended, 42).value;
     expect(settled?.claim).toBeNull();
     expect(settled?.facts.merge?.decisions.map(entry => entry.decision)).toEqual(['superseded']);
+    expect(settled?.history.map(entry => entry.outcome)).toEqual(['released']);
+
+    // Release and supersession land in one write: no stored state of work/42 is unclaimed and still unsettled.
+    const writes = install();
+    seed(writes, item());
+    seed(writes, ownDoc('old-run'));
+    const logged = `
+const logging = Bun.spawnSync;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const at = argv.indexOf('state');
+  if (at >= 0 && argv[at + 1] === 'put' && argv[at + 2] === 'work/42') appendFileSync('{ARTIFACTS}/work-42-puts.log', settings.stdin.toString() + '\\n');
+  return logging(argv, settings);
+} });
+`;
+    const written = run(writes, 'facts', { INTAKE_RUN_STATUSES: '{"old-run":"failed"}' }, { preload: logged });
+    ok(written);
+    const puts = readFileSync(join(written.artifacts, 'work-42-puts.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as WorkItem);
+    expect(puts.map(doc => [doc.claim, doc.facts.merge?.status])).toEqual([[null, 'parked']]);
 
     const live = install();
     seed(live, item());

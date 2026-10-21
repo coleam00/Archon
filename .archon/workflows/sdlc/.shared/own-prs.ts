@@ -18,7 +18,7 @@ import {
   newWorkItem,
   read,
   type Read,
-  releaseIfTerminal,
+  released,
   type WorkItem,
   workItemName,
 } from './workitem.ts';
@@ -98,8 +98,8 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
  * Settle each own-PR item whose pull request a build item's latest round names, before
  * the pickup claims anything. The build item owns the pull request; the settled item
  * stays on record with the reason and no longer waits for the merge queue. A merged
- * one stays merged. A claim whose run ended is released first, as the pickup would
- * release it; a live or unknown claim is held, and its run still owns the item. A
+ * one stays merged. A claim whose run ended is released in the settling write, as the
+ * pickup would release it; a live or unknown claim is held, and its run still owns the item. A
  * malformed item is noted and skipped. Returns the superseded item numbers.
  */
 export function supersedeOwnPrs(at: string, runId: string): number[] {
@@ -153,6 +153,13 @@ function ownPrOf(item: Read): QualifiedPr | null {
   }
 }
 
+/** Whether the item is already parked with this supersession. */
+function recordsSupersession(doc: WorkItem, reason: string): boolean {
+  // The reason is supersede's own record of the builder, so equality is the check.
+  const last = doc.facts.merge?.decisions.at(-1);
+  return doc.facts.merge?.status === 'parked' && last?.decision === 'superseded' && last.reason === reason;
+}
+
 /**
  * Record the supersession, re-reading on a conflict so a concurrent write is kept. False
  * when a live claim holds the item or it already records this supersession.
@@ -161,17 +168,16 @@ function supersede(item: Read, pr: QualifiedPr, builder: number, at: string, run
   const reason = `superseded: the build queue delivers ${pr.repo.path}#${String(pr.number)} under work item ${String(builder)}`;
   let current: Read | undefined = item;
   for (let attempt = 0; attempt < 3 && current !== undefined && supersedable(current.doc); attempt++) {
+    if (recordsSupersession(current.doc, reason)) return false;
+    // An ended run's claim is released in the same write that settles the item, so the
+    // pickup never sees it unclaimed and unsettled.
     const claim = current.doc.claim;
-    if (claim !== null && claimDisposition(runStatus(claim.run_id)) === 'hold') return false;
-    // The reason is this function's own record of the builder, so equality is the check.
-    const last = current.doc.facts.merge?.decisions.at(-1);
-    if (current.doc.facts.merge?.status === 'parked' && last?.decision === 'superseded' && last.reason === reason) return false;
-    current = releaseIfTerminal(current, at, runId, MERGE_PICKUP);
-    if (current.doc.claim === null) {
-      const entry = { at, run_id: runId, decision: 'superseded', reason, links: [], head: null, reran: false };
-      const next = withMerge(current.doc, { at, run_id: runId, entry, status: 'parked', pr, release: false });
-      if (statePut(current.name, next, current.revision) === 'ok') return true;
-    }
+    const status = claim === null ? null : runStatus(claim.run_id);
+    if (claim !== null && claimDisposition(status) === 'hold') return false;
+    const doc = claim === null ? current.doc : released(current.doc, claim, status, at, runId, MERGE_PICKUP);
+    const entry = { at, run_id: runId, decision: 'superseded', reason, links: [], head: null, reran: false };
+    const next = withMerge(doc, { at, run_id: runId, entry, status: 'parked', pr, release: false });
+    if (statePut(current.name, next, current.revision) === 'ok') return true;
     current = read(item.name);
   }
   if (current === undefined || !supersedable(current.doc)) return false;
