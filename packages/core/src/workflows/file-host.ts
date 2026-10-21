@@ -15,8 +15,8 @@ import {
 import {
   isTerminalRunStatus,
   RESUMABLE_WORKFLOW_STATUSES,
-  ownedWorktreeSchema,
 } from '@archon/workflows/schemas/workflow-run';
+import { checkoutEnvironmentReferences } from '@archon/workflows/schemas/checkout-ownership';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
   WORKTREE_REGISTRATION_ID,
@@ -43,7 +43,6 @@ import { runOwnerLossWatch } from '../services/run-attention-watch';
 import { attentionQueueSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
-const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
 function liveOwner(
   runs: Iterable<WorkflowRun>,
   env: IsolationEnvironmentRow,
@@ -68,8 +67,7 @@ function liveOwner(
         if (time && time.getTime() < Date.now() - release.staleDays * 86_400_000) return false;
       }
       return (
-        run.metadata.isolation_env_id === env.id ||
-        worktreeReferenceSchema.safeParse(run.metadata.owned_worktree).data?.envId === env.id ||
+        checkoutEnvironmentReferences(run.metadata).includes(env.id) ||
         (run.codebase_id === env.codebase_id && run.working_path === env.working_path)
       );
     });
@@ -369,12 +367,11 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         })),
     releasedCheckout: async run => {
       const rows = (await environments()).filter(row => row.provider === 'worktree');
-      const ownedId = worktreeReferenceSchema.safeParse(run.metadata.owned_worktree).data?.envId;
+      const references = checkoutEnvironmentReferences(run.metadata);
       return rows.find(
         row =>
           ((row.codebase_id === run.codebase_id && row.working_path === run.working_path) ||
-            row.id === run.metadata.isolation_env_id ||
-            row.id === ownedId) &&
+            references.includes(row.id)) &&
           !rows.some(
             active =>
               active.status === 'active' &&

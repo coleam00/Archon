@@ -442,7 +442,7 @@ for (const kind of ['sql', 'files'] as const) {
             launch,
           }))!;
       }
-      await isolation.withWorktreeRegistration(env, async mark => mark(), { runOwnership: {} });
+      await isolation.withWorktreeRegistration(env, async mark => mark());
       const before = await store.getResourceStartRequest(launch.run.id);
       await expect(acquire()).rejects.toThrow(env.working_path);
       expect(await store.getWorkflowRun(launch.run.id)).toBeNull();
@@ -733,11 +733,11 @@ test('SQL conversation association is checked under the same checkout exclusion'
     origin: { conversationId },
   });
   await updateConversation(conversationId, { isolation_env_id: env.id });
-  await expect(
-    sql.withWorktreeRegistration(env, async mark => mark(), { runOwnership: {} })
-  ).rejects.toBeInstanceOf(WorktreeInUseError);
+  await expect(sql.withWorktreeRegistration(env, async mark => mark())).rejects.toBeInstanceOf(
+    WorktreeInUseError
+  );
   await sqlStore.cancelWorkflowRun(run.id);
-  await sql.withWorktreeRegistration(env, async mark => mark(), { runOwnership: {} });
+  await sql.withWorktreeRegistration(env, async mark => mark());
   await expect(
     sqlStore.createWorkflowRun({
       workflow_name: 'late-conversation',

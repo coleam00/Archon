@@ -366,7 +366,7 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(
       { ...row, codebase_default_cwd },
-      { force: undefined, runOwnership: {}, deleteRemoteBranch: true }
+      { force: undefined, deleteRemoteBranch: true }
     );
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
   });
@@ -540,7 +540,6 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: false,
-      runOwnership: {},
       deleteRemoteBranch: true,
     });
     expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
@@ -901,7 +900,6 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: false,
-      runOwnership: {},
       deleteRemoteBranch: true,
     });
     expect(consoleErrorSpy).not.toHaveBeenCalledWith('  Blocked: feature-branch');
@@ -1009,7 +1007,6 @@ describe('isolationCompleteCommand', () => {
       expect(mockRemoveEnvironment).toHaveBeenCalledTimes(2);
       expect(mockRemoveEnvironment).toHaveBeenCalledWith(later, {
         force: false,
-        runOwnership: {},
         deleteRemoteBranch: true,
       });
       expect(consoleWarnSpy).toHaveBeenCalledWith(

@@ -613,7 +613,7 @@ async function completeBranch(
   try {
     const result: RemoveEnvironmentResult = await removeEnvironment(env, {
       force: options.force,
-      runOwnership: options.force ? false : {},
+      ...(options.force ? { runOwnership: false as const } : {}),
       deleteRemoteBranch: options.deleteRemote ?? true,
     });
     return reportCompletionResult(branch, result);

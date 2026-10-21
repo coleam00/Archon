@@ -381,12 +381,6 @@ export interface RemoveEnvironmentOptions {
   deleteRemoteBranch?: boolean;
 }
 
-function registrationRunPolicy(
-  options: RemoveEnvironmentOptions | undefined
-): Parameters<IIsolationStore['withWorktreeRegistration']>[2] {
-  return { runOwnership: options?.runOwnership ?? {} };
-}
-
 const NON_WORKTREE_CLEANUP_REASON =
   'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
 
@@ -470,7 +464,7 @@ export async function removeEnvironment(
         if (destroyResult.worktreeRemoved && destroyResult.directoryClean) await markDestroyed();
         return destroyResult;
       },
-      registrationRunPolicy(options)
+      options
     );
 
     const removed = destroyResult.worktreeRemoved && destroyResult.directoryClean;
@@ -1490,9 +1484,7 @@ async function reclaimOwnedWorktree(
     if (await isWorktreeRegistered(repo, path))
       return refuse('checkout is absent but still registered with Git');
     if (env.status !== 'destroyed')
-      await store.withWorktreeRegistration(env, markDestroyed => markDestroyed(), {
-        runOwnership: {},
-      });
+      await store.withWorktreeRegistration(env, markDestroyed => markDestroyed());
     return { warnings: [] };
   }
   if (env.status === 'destroyed')
@@ -1500,25 +1492,21 @@ async function reclaimOwnedWorktree(
   await verify?.beforeClaim(env, repo);
   const user = await readers.getLiveRunOwningEnv(env.id);
   if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
-  return store.withWorktreeRegistration(
-    env,
-    async markDestroyed => {
-      const result = await getIsolationProvider().destroy(path, {
-        canonicalRepoPath: repo,
-        guardedRemoval: {
-          creationId: proof.creationId,
-          beforeRemove: async () => {
-            await verify?.beforeRemove(env, repo);
-            await markDestroyed();
-          },
+  return store.withWorktreeRegistration(env, async markDestroyed => {
+    const result = await getIsolationProvider().destroy(path, {
+      canonicalRepoPath: repo,
+      guardedRemoval: {
+        creationId: proof.creationId,
+        beforeRemove: async () => {
+          await verify?.beforeRemove(env, repo);
+          await markDestroyed();
         },
-      });
-      if (!result.worktreeRemoved || !result.directoryClean)
-        return refuse('filesystem removal incomplete');
-      return { released: { path, branch: env.branch_name }, warnings: result.warnings };
-    },
-    { runOwnership: {} }
-  );
+      },
+    });
+    if (!result.worktreeRemoved || !result.directoryClean)
+      return refuse('filesystem removal incomplete');
+    return { released: { path, branch: env.branch_name }, warnings: result.warnings };
+  });
 }
 
 /**
