@@ -34,6 +34,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
+import { getLog } from './workflow-run-shared';
 import {
   isOwnerProvablyGone,
   parseProcessOwner,
@@ -254,11 +255,21 @@ export async function resourceStartOccupancy(
   );
   const foreign = live.rows
     .filter(row => row.resource_key !== resource)
-    .map(row => ({
-      id: String(row.id),
-      working_path: row.working_path,
-      launch: row.launch === null ? undefined : parseLaunch(row.launch),
-    }));
+    .map(row => {
+      const run = { id: String(row.id), working_path: row.working_path };
+      if (row.launch === null) return run;
+      try {
+        return { ...run, launch: parseLaunch(row.launch) };
+      } catch (cause) {
+        // A known execution path still identifies the held checkout and its registered
+        // aliases when a foreign launch is corrupt. Never guess without that path.
+        if (row.working_path) {
+          getLog().error({ runId: run.id }, 'db.foreign_launch_invalid_using_working_path');
+          return run;
+        }
+        throw new Error(`Cannot determine checkout held by foreign run '${run.id}'`, { cause });
+      }
+    });
   return {
     capacity,
     reusableCheckouts: reusable.rows,

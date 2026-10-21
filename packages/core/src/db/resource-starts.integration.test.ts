@@ -1183,3 +1183,100 @@ test('a persisted malformed guard stays inspectable without stalling independent
     run: { id: malformed.run.id },
   });
 });
+
+for (const corruptLaunch of ['{', '{}']) {
+  test(`foreign launch corruption is confined to its persisted checkout: ${corruptLaunch}`, async () => {
+    const store = createWorkflowStore();
+    const foreign = launch(crypto.randomUUID());
+    const local = launch(crypto.randomUUID());
+    const independent = launch(crypto.randomUUID());
+    const input = (prepared: PreparedWorkflowLaunch, resource = 'local') => ({
+      resource,
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: prepared,
+    });
+    await admitResourceStart(input(foreign, 'foreign'));
+    await store.claimPendingWorkflowRun(foreign.run.id, foreign.execution.cwd);
+    await admitResourceStart(input(local));
+    await store.claimPendingWorkflowRun(local.run.id, local.execution.cwd);
+    expect(await admitResourceStart(input(independent))).toMatchObject({ status: 'queued' });
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+      [foreign.run.id, corruptLaunch]
+    );
+    await createIsolationEnvironment({
+      codebase_id: CODEBASE_ID,
+      workflow_type: 'task',
+      workflow_id: 'foreign-branch',
+      working_path: foreign.execution.cwd,
+      branch_name: toBranchName('foreign-branch'),
+    });
+    const blocked = launch(crypto.randomUUID());
+    blocked.execution.cwd = foreign.execution.cwd;
+    expect(await admitResourceStart(input(blocked, 'blocked'))).toMatchObject({
+      status: 'queued',
+      blocker: { kind: 'run', id: foreign.run.id },
+    });
+    const skipped = launch(crypto.randomUUID());
+    skipped.execution.cwd = foreign.execution.cwd;
+    expect(
+      await admitResourceStart({ ...input(skipped, 'blocked'), overlap: 'skip' })
+    ).toMatchObject({ status: 'skipped', blocker: { kind: 'run', id: foreign.run.id } });
+    const alias = launch(crypto.randomUUID());
+    alias.execution.isolation = { kind: 'worktree', branch: 'foreign-branch' };
+    expect(await admitResourceStart(input(alias, 'alias'))).toMatchObject({
+      status: 'queued',
+      blocker: { kind: 'run', id: foreign.run.id },
+    });
+    const readOnly = launch(crypto.randomUUID());
+    readOnly.execution.cwd = foreign.execution.cwd;
+    readOnly.run.metadata.admission_checkout_guard = false;
+    expect(await admitResourceStart(input(readOnly, 'read-only'))).toMatchObject({
+      status: 'admitted',
+    });
+    await store.claimPendingWorkflowRun(readOnly.run.id, readOnly.execution.cwd);
+    await store.completeWorkflowRun(readOnly.run.id, { duration_ms: 1 });
+    await store.completeWorkflowRun(local.run.id, { duration_ms: 1 });
+    expect(await drainResourceStarts({ resource: 'local', hostId: 'host' })).toMatchObject([
+      { runId: independent.run.id },
+    ]);
+    expect(await drainResourceStarts({ resource: 'blocked', hostId: 'host' })).toEqual([]);
+    await store.completeWorkflowRun(foreign.run.id, { duration_ms: 1 });
+    expect(await drainResourceStarts({ resource: 'blocked', hostId: 'host' })).toMatchObject([
+      { runId: blocked.run.id },
+    ]);
+  });
+}
+
+for (const corruptLaunch of ['{', '{}']) {
+  test(`foreign launch corruption without a working path fails explicitly: ${corruptLaunch}`, async () => {
+    const foreign = launch(crypto.randomUUID());
+    const local = launch(crypto.randomUUID());
+    const queued = launch(crypto.randomUUID());
+    const input = (prepared: PreparedWorkflowLaunch, resource = 'local') => ({
+      resource,
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: prepared,
+    });
+    await admitResourceStart(input(foreign, 'foreign'));
+    await admitResourceStart(input(local));
+    await admitResourceStart(input(queued));
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+      [foreign.run.id, corruptLaunch]
+    );
+    const message = `Cannot determine checkout held by foreign run '${foreign.run.id}'`;
+    await expect(admitResourceStart(input(launch(crypto.randomUUID()), 'new'))).rejects.toThrow(
+      message
+    );
+    await expect(drainResourceStarts({ resource: 'local', hostId: 'host' })).rejects.toThrow(
+      message
+    );
+    expect(await getResourceStartRequest(queued.run.id)).toMatchObject({ status: 'queued' });
+    expect(await getWorkflowRun(queued.run.id)).toBeNull();
+  });
+}

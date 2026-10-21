@@ -141,7 +141,7 @@ worktree:                        # Optional: pin isolation behavior regardless o
 mutates_checkout: false          # Optional: assert this workflow does not write to its checkout,
                                  #   so the engine skips the path-exclusive lock and N runs of it
                                  #   can share one working directory. Defaults to true (take the
-                                 #   lock, serialize runs on the same path). See
+                                 #   lock, prevent overlapping execution on the same path). See
                                  #   [Running sub-runs side by side](#running-sub-runs-side-by-side).
 budget:                          # Optional: ceiling on the run's TOTAL work and spend (not
   max_work_units: 20             #   concurrency). The engine refuses to start new work once a
@@ -1598,10 +1598,13 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
   matter.
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
-  one working path, and the path lock **rejects** a second run on that path outright — it
-  does not queue it. So concurrent state writes cannot arise there in the first place; the
-  second invocation fails fast with "This worktree is in use" and the operator re-runs it
-  afterwards.
+  one working path. With the default `mutates_checkout: true`, direct executor dispatch
+  rejects a second run on a held path with "This worktree is in use"; the operator must
+  re-run it afterwards. Trigger admission instead queues or skips the request according
+  to `overlap`, naming the holding run as its blocker. See
+  [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+  `mutates_checkout: false` bypasses the executor's path lock, so it does not prevent
+  concurrent state writes.
 
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
@@ -2478,7 +2481,9 @@ nodes:
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
-lock, serialize runs on the same path). It is author-declared on purpose — the author of a
+lock, prevent overlapping execution on the same path). Direct executor dispatch rejects a
+run on a held path; [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
+queues or skips it according to `overlap`. It is author-declared on purpose — the author of a
 review or research workflow is the one who knows it only reads. Children launched by
 separate `workflow:` nodes still compete for the path lock unless they declare it.
 Children of the same `fan_out:` node and their nested sub-runs may share the checkout
