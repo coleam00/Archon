@@ -19,16 +19,12 @@
  * workflow's evidence and is never inspected.
  */
 
-import { execFile } from 'node:child_process';
-import { lstat, realpath } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
-import { promisify } from 'node:util';
+import { rm } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import {
   getRunArtifactsDirForRoot,
   getRunScratchDir,
   resolveRunStorageRoot,
-  RUN_ARTIFACTS_ENGINE_SUBDIR,
 } from '@archon/paths/archon-paths';
 import {
   isContainerRun,
@@ -36,8 +32,6 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
-
-const execFileAsync = promisify(execFile);
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -85,50 +79,20 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
  * nothing of it can still write into `artifactsDir`. Never throws; failures are logged
  * with `logContext`.
  *
- * Something that outlived the run could still replace `.archon` or the run directory
- * with a link, so no path through them is trusted at the moment of removal. `rm` runs
- * in a child whose working directory is first proven to be the run's own `.archon`:
- * `pwd -P` names the directory the child actually holds, and `rm -rf scratch` then
- * resolves from that directory, not from a path, and never follows a link below it.
- * The physical path is anchored at the runs directory, which holds every run and is
- * not part of any one run's artifacts.
+ * A recursive `rm` does not follow symlinks inside the tree, so a link a node left in
+ * scratch is removed, not its target.
  */
 export async function removeRunScratch(
   artifactsDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
-  if (process.platform === 'win32') {
-    // No removal here is confined against a replaced parent, so scratch is kept.
-    getLog().debug({ ...logContext, artifactsDir }, 'run_scratch.windows_unsupported');
-    return;
-  }
-  const engineDir = join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR);
+  const scratchDir = getRunScratchDir(artifactsDir);
   try {
-    if (!(await exists(getRunScratchDir(artifactsDir)))) return;
-    const expected = join(
-      await realpath(dirname(artifactsDir)),
-      basename(artifactsDir),
-      RUN_ARTIFACTS_ENGINE_SUBDIR
-    );
-    await execFileAsync(
-      '/bin/sh',
-      ['-c', '[ "$(pwd -P)" = "$1" ] || exit 3; exec rm -rf -- scratch', 'sh', expected],
-      { cwd: engineDir }
-    );
+    await rm(scratchDir, { recursive: true, force: true });
   } catch (error) {
     getLog().warn(
-      { ...logContext, err: error as Error, path: engineDir },
+      { ...logContext, err: error as Error, path: scratchDir },
       'run_scratch.remove_failed'
     );
-  }
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
-    throw error;
   }
 }

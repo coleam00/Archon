@@ -214,7 +214,7 @@ describe('cancelWorkflow', () => {
 
   // The stopped owner's nodes can no longer write, so its scratch goes; an output holder
   // that outlived the stop still could.
-  test.skipIf(process.platform === 'win32').each([
+  test.each([
     [[], false],
     [['An output holder is still running.'], true],
   ] as const)('a stop with warnings %p keeps the run’s scratch: %p', async (warnings, kept) => {

@@ -109,12 +109,9 @@ export function describeRunScratchConformance(
       });
     }
     for (const [path, transition] of fromPaused) {
-      test.skipIf(process.platform === 'win32')(
-        `a paused run cancelled by ${path} keeps its evidence and loses its scratch checkout`,
-        async () => {
-          expect(await afterTransition(true, transition, 'cancelled')).toEqual({ released: true });
-        }
-      );
+      test(`a paused run cancelled by ${path} keeps its evidence and loses its scratch checkout`, async () => {
+        expect(await afterTransition(true, transition, 'cancelled')).toEqual({ released: true });
+      });
     }
 
     test('a paused run keeps its scratch, even past a bare terminal event', async () => {

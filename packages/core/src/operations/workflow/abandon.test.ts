@@ -572,7 +572,7 @@ describe('abandonWorkflow', () => {
 
   // A top-level run's owner on this host that no longer answers is gone. One on another
   // host, or the root process a sub-run executes in, may still be writing its scratch.
-  test.skipIf(process.platform === 'win32').each([
+  test.each([
     ['a top-level run on this host', hostname(), null, false],
     ['a top-level run on another host', 'other-host', null, true],
     ['a sub-run on this host', hostname(), 'parent-run', true],

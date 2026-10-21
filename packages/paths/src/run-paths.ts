@@ -112,8 +112,7 @@ export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
  * A run's scratch directory: `$ARTIFACTS_DIR/.archon/scratch`. A workflow puts
  * throwaway checkouts, dependency installs and other reproducible bulk here,
  * and Archon removes it once the run is completed, failed or cancelled and
- * nothing of the run can still write there (`@archon/workflows/run-scratch`;
- * not on Windows).
+ * nothing of the run can still write there (`@archon/workflows/run-scratch`).
  * Evidence a later node or the operator reads goes anywhere else in
  * `$ARTIFACTS_DIR`, which is kept.
  */
