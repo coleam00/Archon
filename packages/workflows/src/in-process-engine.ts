@@ -78,22 +78,21 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       }
       workflow = input.legacyWorkflow;
     }
-    let context = { cwd: input.cwd, options: input.options };
+    let context: Pick<WorkflowResumeInput, 'cwd' | 'options'> = {
+      cwd: input.cwd,
+      options: input.options,
+    };
     const prepare = input.prepareExecution;
     const prepareExecution = prepare
       ? async (run: WorkflowResumeInput['run']): Promise<void> => {
           const prepared = await prepare(run);
           rejectOptions(prepared.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
-          const options = { ...input.options, ...prepared.options };
-          if (
-            prepared.options &&
-            ('execContext' in prepared.options || 'container' in prepared.options)
-          ) {
-            options.execContext = prepared.options.execContext;
-            options.container = prepared.options.container;
-          }
-          resolveRunExecutionMode(options.execContext, options.container, run.metadata);
-          context = { cwd: prepared.cwd, options };
+          resolveRunExecutionMode(
+            prepared.options?.execContext,
+            prepared.options?.container,
+            run.metadata
+          );
+          context = prepared;
         }
       : undefined;
     const hydrated = prepareExecution

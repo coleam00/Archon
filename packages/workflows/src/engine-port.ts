@@ -58,9 +58,8 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   options?: WorkflowResumeOptions;
   /**
    * Runs after committed admission; rejection releases only that admission.
-   * Returned options override supplied options by key; omitted keys retain their values.
-   * `execContext` and `container` are replaced together when either key is supplied.
-   * The resulting isolation context is validated before execution.
+   * Returns the full execution context, replacing the caller's cwd and options.
+   * The returned options and isolation context are validated before execution.
    */
   prepareExecution?: (run: WorkflowRun) => Promise<{
     cwd: string;

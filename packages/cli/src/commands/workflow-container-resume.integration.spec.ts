@@ -391,50 +391,8 @@ test('invalid prepared options undo admission before execution', async () => {
   });
 });
 
-test.each([false, true])(
-  'preparation preserves caller container options (partial: %s)',
-  async partial => {
-    await fixture(async f => {
-      const candidate = await f.paused();
-      const admission = await f.host.engine.resume({
-        platform: new CLIAdapter(),
-        conversationId: 'resume-proof',
-        cwd: f.cwd,
-        userMessage: '',
-        run: candidate,
-        legacyWorkflow: makeTestResolvedWorkflow({
-          name: 'resume',
-          nodes: [{ id: 'second', bash: 'echo second' }],
-        }),
-        options: {
-          execContext: { kind: 'container', containerId: 'restarted' },
-          container: {
-            envId: f.envId,
-            writeBack: 'auto',
-            backend: {
-              suspend: f.suspend,
-              prepareSuspend: async () => async () => undefined,
-              finalize: async () => ({ requiresApproval: false }),
-              applyChanges: f.apply,
-              discardChanges: f.discard,
-            },
-          },
-        },
-        prepareExecution: async () => ({
-          cwd: f.cwd,
-          ...(partial ? { options: { codebaseId: candidate.codebase_id ?? undefined } } : {}),
-        }),
-      });
-      if (!admission.accepted) throw new Error('Expected admission');
-      expect(await admission.settled).toMatchObject({ success: true });
-      expect(f.execute).toHaveBeenCalledTimes(1);
-      expect(f.execute.mock.calls[0]?.[0]).toEqual({ kind: 'container', containerId: 'restarted' });
-    });
-  }
-);
-
 test.each(['execContext', 'container', 'both'] as const)(
-  'preparation replaces container isolation as a unit (%s)',
+  'preparation validates the returned container context (%s)',
   async field => {
     await fixture(async f => {
       const candidate = await f.paused(field === 'both' ? 'approved' : undefined);
