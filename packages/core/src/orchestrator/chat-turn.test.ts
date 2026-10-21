@@ -94,6 +94,7 @@ describe('stale session ID clearing on error_during_execution', () => {
         expect(mockCaptureChatTurn).toHaveBeenCalledWith(
           expect.objectContaining({ outcome: 'failed', tokensIn: 300, tokensOut: 30 })
         );
+        expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
         expect(mockCaptureChatTurn.mock.calls[0]?.[0]?.costUsd).toBeCloseTo(0.3);
         const footer = platform.sendResultFooter.mock.calls[0]?.[1];
         expect(footer?.cost).toBeCloseTo(0.3);
@@ -543,6 +544,7 @@ describe('chat turn telemetry', () => {
       };
       await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
+      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
       const footer = platform.sendResultFooter.mock.calls[0]?.[1];
       expect(footer?.cost).toBeCloseTo(0.3);
       expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
@@ -568,49 +570,74 @@ describe('chat turn telemetry', () => {
     expect(arg?.tokensOut).toBeUndefined();
   });
 
-  test('captures a failed chat turn when the AI returns an error result', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        platform: 'web',
-        provider: 'claude',
-        outcome: 'failed',
-        durationMs: expect.any(Number),
-      })
-    );
-  });
-
   for (const mode of ['stream', 'batch'] as const) {
-    test(`captures exactly one failed chat turn when the provider throws mid-turn (${mode})`, async () => {
-      mockGetOrCreateConversation.mockReturnValueOnce(
-        Promise.resolve(makeConversation({ codebase_id: null }))
-      );
-      mockSendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'partial' };
-        throw new Error('provider subprocess exited');
-      });
-      const platform = makePlatform();
-      platform.getStreamingMode.mockImplementation(() => mode);
+    for (const exit of ['result', 'throw'] as const) {
+      test.each(['known', 'unknown', 'none'] as const)(
+        `${mode}: retains %s usage on a provider ${exit} failure`,
+        async usage => {
+          mockSendQuery.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'partial' };
+            if (usage !== 'none') {
+              yield { type: 'result', cost: 0.125, tokens: { input: 100, output: 10 } };
+            }
+            if (usage === 'unknown') yield { type: 'result', tokensUnknown: true };
+            if (exit === 'throw') throw new Error('provider subprocess exited');
+            yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+          });
+          const platform = makePlatform();
+          platform.getStreamingMode.mockReturnValue(mode);
+          await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
-      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-        expect.objectContaining({ platform: 'web', provider: 'claude', outcome: 'failed' })
+          expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+          expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+              platform: 'web',
+              provider: 'claude',
+              outcome: 'failed',
+              durationMs: expect.any(Number),
+              costUsd: usage === 'none' ? undefined : 0.125,
+              tokensIn: usage === 'known' ? 100 : undefined,
+              tokensOut: usage === 'known' ? 10 : undefined,
+            })
+          );
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'conv-1',
+            expect.stringContaining(
+              exit === 'throw' ? 'provider subprocess exited' : 'error_max_turns'
+            )
+          );
+        }
       );
-      // The user still hears about it from the outer handler.
-      expect(platform.sendMessage).toHaveBeenCalled();
-    });
+    }
+    test.each([false, true])(
+      `${mode}: includes error-result usage once (tokensUnknown=%s)`,
+      async tokensUnknown => {
+        mockSendQuery.mockImplementation(async function* () {
+          yield { type: 'result', cost: 0.125, tokens: { input: 100, output: 10 } };
+          yield {
+            type: 'result',
+            isError: true,
+            errorSubtype: 'error_max_turns',
+            cost: 0.25,
+            tokens: { input: 200, output: 20 },
+            ...(tokensUnknown ? { tokensUnknown: true as const } : {}),
+          };
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+
+        expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outcome: 'failed',
+            costUsd: 0.375,
+            tokensIn: tokensUnknown ? undefined : 300,
+            tokensOut: tokensUnknown ? undefined : 30,
+          })
+        );
+      }
+    );
   }
 });
 
