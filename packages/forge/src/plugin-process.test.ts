@@ -103,7 +103,7 @@ test.each(['plugin.cmd', 'plugin.bat'])('refuses shell shim %s without execution
   expect(result.exitCode).toBeNull();
 });
 
-test('passes the configured GitHub origin without ambient credentials to forge plugins', () => {
+test('excludes the GitHub origin and ambient credentials from generic plugin environments', () => {
   expect(
     pluginProcessEnv(
       {
@@ -115,7 +115,6 @@ test('passes the configured GitHub origin without ambient credentials to forge p
       'selected-token'
     )
   ).toEqual({
-    GITHUB_URL: 'http://ghes.example.test:8080',
     ARCHON_FORGE_TOKEN: 'selected-token',
   });
 });

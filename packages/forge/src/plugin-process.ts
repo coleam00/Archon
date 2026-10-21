@@ -37,7 +37,6 @@ const SAFE_ENV = new Set([
   'LC_ALL',
   'LC_CTYPE',
   'TZ',
-  'GITHUB_URL',
 ]);
 
 export function pluginProcessEnv(env: NodeJS.ProcessEnv, token?: string): NodeJS.ProcessEnv {
@@ -62,6 +61,7 @@ export async function runPluginProcess(
     env: NodeJS.ProcessEnv;
     stdin?: string;
     token?: string;
+    githubUrl?: string;
     timeoutMs?: number;
     maxOutputBytes?: number;
     signal?: AbortSignal;
@@ -101,7 +101,10 @@ export async function runPluginProcess(
     try {
       child = spawn(argv.command, [...argv.args, ...operationArgs], {
         detached: process.platform !== 'win32',
-        env: pluginProcessEnv(options.env, options.token),
+        env: {
+          ...pluginProcessEnv(options.env, options.token),
+          ...(options.githubUrl !== undefined ? { GITHUB_URL: options.githubUrl } : {}),
+        },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
         timeout: (options.timeoutMs ?? FORGE_PLUGIN_TIMEOUT_MS) + 5_000,
