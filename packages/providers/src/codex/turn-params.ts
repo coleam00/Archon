@@ -165,7 +165,7 @@ export function buildThreadConfig(
 /**
  * The thread config that turns off every tool Codex adds from its own config. Codex has no
  * single "no tools" switch, so this turns each one off; an unknown `features` key is accepted
- * silently. A model catalog entry's tools win over it; see `TOOL_FREE_MODEL_CATALOG`. The
+ * silently. A model catalog entry's tools win over it; see `toolFreeModelCatalog`. The
  * real-binary test in `scope.boundary.test.ts` pins it on the bundled Codex.
  */
 export const TOOL_FREE_THREAD_CONFIG: CodexConfig = {
@@ -188,33 +188,43 @@ export const TOOL_FREE_THREAD_CONFIG: CodexConfig = {
 };
 
 /**
- * The model catalog the tool-free turn's process loads in place of the user's. It lists only
- * a placeholder, so the turn's model runs on Codex's fallback metadata and the catalog's own
- * tools (`tool_mode`, `experimental_supported_tools`, `apply_patch_tool_type`) leave the
- * request; thread config cannot do this, because Codex loads the catalog per process. Codex
- * rejects an empty catalog and an entry missing any field below.
+ * The model catalog the tool-free turn's process loads in place of the user's: one entry for
+ * `model` with no tools, so the catalog's own tools (`tool_mode`, `experimental_supported_tools`,
+ * `apply_patch_tool_type`) leave the request; thread config cannot do this, because Codex
+ * loads the catalog per process. Codex rejects an empty catalog and an entry missing any
+ * field below.
+ *
+ * `contextWindow` is the window Codex reported for the tool turn, already net of its reserve,
+ * so the entry keeps all of it. It decides whether Codex compacts the thread before the turn:
+ * at 90% of it, slightly before the tool turn's own threshold. Without it the entry has no
+ * window and Codex does not compact, as on a tool turn that reported none.
  *
  * A catalog entry's `multi_agent_version: v2` is persisted with the thread, so its
  * collaboration tools stay on the final request. The real-binary test in
  * `scope.boundary.test.ts` pins both on the bundled Codex.
  */
-export const TOOL_FREE_MODEL_CATALOG = {
-  models: [
-    {
-      slug: 'archon-tool-free-placeholder',
-      display_name: 'archon-tool-free-placeholder',
-      supported_reasoning_levels: [],
-      shell_type: 'disabled',
-      visibility: 'hide',
-      supported_in_api: false,
-      priority: 0,
-      support_verbosity: false,
-      truncation_policy: { mode: 'tokens', limit: 0 },
-      experimental_supported_tools: [],
-      base_instructions: '',
-    },
-  ],
-};
+export function toolFreeModelCatalog(model: string, contextWindow: number | undefined): JsonValue {
+  return {
+    models: [
+      {
+        slug: model,
+        display_name: model,
+        supported_reasoning_levels: [],
+        shell_type: 'disabled',
+        visibility: 'hide',
+        supported_in_api: false,
+        priority: 0,
+        support_verbosity: false,
+        truncation_policy: { mode: 'tokens', limit: 10000 },
+        experimental_supported_tools: [],
+        base_instructions: '',
+        ...(contextWindow !== undefined
+          ? { context_window: contextWindow, effective_context_window_percent: 100 }
+          : {}),
+      },
+    ],
+  };
+}
 
 /**
  * Whether a structured-output turn on `model` runs its tools first and gets a separate

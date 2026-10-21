@@ -690,6 +690,24 @@ describe('Codex capability scope on the real binary', () => {
     testTimeout(20_000)
   );
 
+  // The final turn's process does not load the user's catalog entry, so it must still
+  // compact by that entry's context window, not by Codex's fallback window.
+  test.each([
+    { contextWindow: 10_000, inputTokens: 9_000, requests: 3 },
+    { contextWindow: 1_000_000, inputTokens: 300_000, requests: 2 },
+  ])(
+    'the schema turn compacts by the tool turn’s context window: $inputTokens of $contextWindow tokens sends $requests requests',
+    async ({ contextWindow, inputTokens, requests }) => {
+      const result = await withUserCatalog(
+        { ...CATALOG_TOOLS, context_window: contextWindow },
+        () => runSplitCall(inputTokens)
+      );
+      expect(result.structuredOutput).toEqual(ANSWER);
+      expect(modelRequests).toHaveLength(requests);
+    },
+    testTimeout(20_000)
+  );
+
   test(
     'a named plugin that is not installed fails misconfigured before any model request',
     async () => {
@@ -733,17 +751,20 @@ interface SplitRequest {
   evidence: boolean;
 }
 
+const ANSWER = { summary: 'done' };
+
 /**
  * Runs an `output_format` node on a model listed in `toolFreeStructuredOutputModels`: the
- * stub answers the tool turn with a marker and the final turn with the JSON answer. Asserts
- * the call's shape and returns its two model requests.
+ * stub answers the tool turn with a marker and every later request with the JSON answer,
+ * each reporting `inputTokens` used.
  */
-async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
-  const answer = { summary: 'done' };
+async function runSplitCall(
+  inputTokens: number
+): Promise<Extract<MessageChunk, { type: 'result' }>> {
   let responses = 0;
   modelReply = () => {
     const index = responses++;
-    const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(answer);
+    const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(ANSWER);
     const item = {
       type: 'message',
       id: `msg_${String(index)}`,
@@ -758,7 +779,11 @@ async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
           id: `resp_${String(index)}`,
           status: 'completed',
           output: [item],
-          usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: 5,
+            total_tokens: inputTokens + 5,
+          },
         },
       },
     ];
@@ -767,7 +792,7 @@ async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
       { headers: { 'content-type': 'text/event-stream' } }
     );
   };
-  const result = resultOf(
+  return resultOf(
     await runRequest({
       assistantConfig: { model: 'stub-model', toolFreeStructuredOutputModels: ['stub-model'] },
       nodeConfig: {
@@ -780,8 +805,13 @@ async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
       },
     })
   );
+}
+
+/** `runSplitCall` with little context used. Asserts the call's shape and returns its two model requests. */
+async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
+  const result = await runSplitCall(10);
   expect(result.failure).toBeUndefined();
-  expect(result.structuredOutput).toEqual(answer);
+  expect(result.structuredOutput).toEqual(ANSWER);
   const requests = modelRequests.map(({ body }) => ({
     tools: requestTools(body),
     format: (JSON.parse(body) as { text?: { format?: unknown } }).text?.format,
