@@ -46,7 +46,7 @@ function schemaShape(schema: Schema): Shape {
     if (type === 'object' && schema.properties !== undefined) {
       if (schema.additionalProperties !== undefined) expect(schema.additionalProperties).toBe(false);
       const properties = schema.properties;
-      expect((schema.required ?? []).filter(key => !(key in properties))).toEqual([]);
+      expect((schema.required ?? []).filter(key => !Object.hasOwn(properties, key))).toEqual([]);
       return { fields: Object.fromEntries(Object.entries(schema.properties).sort(([a], [b]) => a.localeCompare(b))
         .map(([name, child]) => [name, { required: schema.required?.includes(name) ?? false, shape: schemaShape(child) }])) };
     }
@@ -91,6 +91,10 @@ test('the complete sweep output conforms to the recorder contract', () => {
   expect(sweeps).toHaveLength(1);
   const schema = sweeps[0]?.output_format;
   if (schema === undefined) throw new Error('Missing sweep.output_format');
+  // TypeScript's number cannot express the positive integer PR identifier contract.
+  expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
+    type: 'integer', minimum: 1,
+  });
   const file = resolve(pack, '.shared/merge.ts');
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,
@@ -104,3 +108,13 @@ test('the complete sweep output conforms to the recorder contract', () => {
   if (sweep === undefined) throw new Error('Missing exported Sweep consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
 });
+
+test.each([...Object.getOwnPropertyNames(Object.prototype), 'missing_field'])(
+  'rejects undeclared required property %s, including inside arrays', key => {
+    const schema: Schema = {
+      type: 'object', properties: { value: { type: 'string' } }, required: [key],
+    };
+    expect(() => schemaShape(schema)).toThrow();
+    expect(() => schemaShape({ type: 'array', items: schema })).toThrow();
+  }
+);
