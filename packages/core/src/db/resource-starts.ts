@@ -29,7 +29,7 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDialect } from './connection';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
@@ -47,6 +47,12 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
+}
+
+// Different resource rows can reserve the same checkout. Hold one transaction lock
+// across occupancy and publication; SQLite already serializes writers.
+async function lockCheckoutReservations(query: Query): Promise<void> {
+  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -89,6 +95,7 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
+  await lockCheckoutReservations(query);
   const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -144,6 +151,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
     const { capacity } = await lockResourceSlot(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];

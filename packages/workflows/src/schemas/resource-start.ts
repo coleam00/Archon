@@ -76,12 +76,20 @@ export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchV2Sche
 
 export const ADMISSION_CHECKOUT_GUARD_METADATA_KEY = 'admission_checkout_guard';
 
+export class AdmissionCheckoutGuardError extends Error {
+  constructor(readonly requestId: string) {
+    super(
+      `Invalid ${ADMISSION_CHECKOUT_GUARD_METADATA_KEY} for request '${requestId}': expected a boolean`
+    );
+    this.name = 'AdmissionCheckoutGuardError';
+  }
+}
+
 /** Older writers did not record the declaration, so their launches remain guarded. */
 export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): boolean {
   const value = launch.run.metadata[ADMISSION_CHECKOUT_GUARD_METADATA_KEY];
   if (value === undefined || value === null) return true;
-  if (typeof value !== 'boolean')
-    throw new Error(`Invalid ${ADMISSION_CHECKOUT_GUARD_METADATA_KEY}: expected a boolean`);
+  if (typeof value !== 'boolean') throw new AdmissionCheckoutGuardError(launch.run.id);
   return value;
 }
 

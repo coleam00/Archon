@@ -1,3 +1,4 @@
+export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
   describeForeignCheckoutAdmission,
@@ -934,6 +935,29 @@ export function describeWorkflowStoreConformance(
         { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
       ]);
       expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+    });
+    test('preparation rejects a malformed guard without completing its binding', async () => {
+      const input = acceptance();
+      await store.acceptStartReceipt(input);
+      const identity = {
+        receiptId: input.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      await store.claimStartBindingPreparation(identity);
+      const prepared = launch();
+      prepared.run.metadata.admission_checkout_guard = 'false';
+      await expect(
+        store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).rejects.toThrow('expected a boolean');
+      expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+      expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+        bindings: [{ status: 'preparing' }],
+      });
+      prepared.run.metadata.admission_checkout_guard = true;
+      expect(
+        await store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).toMatchObject({ status: 'admitted' });
     });
     test('receipt deduplication compares verified content and preparation has one owner', async () => {
       const store = harness.store,

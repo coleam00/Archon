@@ -89,6 +89,20 @@ export function describeForeignCheckoutAdmission(
         expect(await drain()).toMatchObject([{ status: 'admitted', runId: queued.launch.run.id }]);
       });
     }
+    test('malformed guards are rejected before queueing, even behind a local holder', async () => {
+      const holder = start('queue', 'host', 3, { cwd: '/shared' });
+      await store.admitResourceStart(holder);
+      for (const isolation of [
+        { kind: 'in-place' as const },
+        { kind: 'worktree' as const },
+        { kind: 'worktree' as const, branch: 'lane' },
+      ]) {
+        const incoming = start('queue', 'host', 3, { cwd: '/shared', isolation });
+        incoming.launch.run.metadata.admission_checkout_guard = 'false';
+        await expect(store.admitResourceStart(incoming)).rejects.toThrow('expected a boolean');
+        expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+      }
+    });
     test('an unclaimed manual run with a known checkout remains an explicit blocker', async () => {
       const shared = { cwd: '/conformance/pending' };
       const manual = await store.createWorkflowRun({

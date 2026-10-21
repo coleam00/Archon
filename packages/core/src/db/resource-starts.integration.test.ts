@@ -1148,3 +1148,38 @@ for (const branchFirst of [false, true]) {
     ]);
   });
 }
+
+test('a persisted malformed guard stays inspectable without stalling independent queued work', async () => {
+  const holder = launch(crypto.randomUUID());
+  const malformed = launch(crypto.randomUUID());
+  malformed.execution.cwd = holder.execution.cwd;
+  const independent = launch(crypto.randomUUID());
+  for (const prepared of [holder, malformed, independent])
+    await admitResourceStart({
+      resource: 'resource',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: prepared,
+    });
+  malformed.run.metadata.admission_checkout_guard = 'false';
+  await getDatabase().query(
+    'UPDATE remote_agent_resource_start_requests SET launch = $2 WHERE id = $1',
+    [malformed.run.id, JSON.stringify(malformed)]
+  );
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+    [holder.run.id]
+  );
+  expect(await drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject([
+    { runId: independent.run.id },
+  ]);
+  expect(await getResourceStartRequest(malformed.run.id)).toMatchObject({
+    status: 'queued',
+    launch: { run: { metadata: { admission_checkout_guard: 'false' } } },
+  });
+  expect(await getWorkflowRun(malformed.run.id)).toBeNull();
+  expect(await withdrawQueuedResourceStart(malformed.run.id)).toMatchObject({
+    run: { id: malformed.run.id },
+  });
+});

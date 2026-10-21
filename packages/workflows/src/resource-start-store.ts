@@ -1,4 +1,5 @@
-import { readAdmissionCheckoutGuard } from './schemas/resource-start';
+import { createLogger } from '@archon/paths';
+import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
@@ -232,13 +233,31 @@ function checkoutHolder(
   );
 }
 
+function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
+  return slot.queue.filter(start => {
+    try {
+      readAdmissionCheckoutGuard(start.launch);
+      return true;
+    } catch (error) {
+      if (!(error instanceof AdmissionCheckoutGuardError)) throw error;
+      // Keep the corrupt request inspectable and withdrawable, without letting it
+      // stall valid work. Never infer a guard value from malformed persisted data.
+      createLogger('resource-start').error(
+        { err: error, requestId: start.id },
+        'resource_start.invalid_queued_guard'
+      );
+      return false;
+    }
+  });
+}
+
 /**
  * The queued requests that could run now, oldest first. A request whose checkout a live
  * run holds keeps its place and is passed over until the checkout frees, so FIFO holds
  * per checkout and the slot goes to the next request that can run.
  */
 function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
-  return slot.queue.filter(start => checkoutHolder(slot, start.launch) === undefined);
+  return validQueuedStarts(slot).filter(start => checkoutHolder(slot, start.launch) === undefined);
 }
 
 /** What keeps a new start request for `launch` from being admitted now. */
@@ -246,6 +265,7 @@ export function resourceStartBlocker(
   slot: ResourceSlotOccupancy,
   launch: PreparedWorkflowLaunch
 ): ResourceBlocker | null {
+  readAdmissionCheckoutGuard(launch);
   // An older request that could run keeps FIFO even when a slot is free.
   const older = runnableQueue(slot)[0];
   if (older) return { kind: 'request', id: older.id };
@@ -266,7 +286,7 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
   const free = slot.capacity - slot.holders.length - slot.waiters.length;
   const held = new Map(slot.heldCheckouts);
   const admitted: QueuedStart[] = [];
-  for (const start of slot.queue) {
+  for (const start of validQueuedStarts(slot)) {
     if (admitted.length >= free) break;
     if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
     if (start.hostId !== hostId) break;

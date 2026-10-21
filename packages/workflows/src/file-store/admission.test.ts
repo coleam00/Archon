@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -359,3 +360,33 @@ for (const version of [1, 2] as const) {
     });
   }
 }
+
+test('a persisted malformed guard stays inspectable without stalling independent queued work', async () => {
+  const { root, store } = await fixture();
+  const holder = intent(),
+    malformed = intent(),
+    independent = intent();
+  independent.launch.execution.cwd = '/independent';
+  await store.admitResourceStart(holder);
+  await store.admitResourceStart(malformed);
+  await store.admitResourceStart(independent);
+  const id = malformed.launch.run.id;
+  const path = join(
+    root,
+    'resource/requests',
+    `${createHash('sha256').update(id).digest('hex')}.json`
+  );
+  const row = JSON.parse(await readFile(path, 'utf8'));
+  row.launch.run.metadata.admission_checkout_guard = 'false';
+  await writeFile(path, JSON.stringify(row));
+  await store.cancelWorkflowRun(holder.launch.run.id);
+  expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject([
+    { runId: independent.launch.run.id },
+  ]);
+  expect(await store.getResourceStartRequest(id)).toMatchObject({
+    status: 'queued',
+    launch: { run: { metadata: { admission_checkout_guard: 'false' } } },
+  });
+  expect(await store.getWorkflowRun(id)).toBeNull();
+  expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ run: { id } });
+});

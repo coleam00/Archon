@@ -1,7 +1,8 @@
 // @archon-test-isolated
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { resourceStartFixtures } from '@archon/workflows/store-conformance';
 import { executionClaim } from '@archon/workflows/store';
 import {
   describeWorkflowStoreConformance,
@@ -43,6 +44,87 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  for (const firstMode of ['admit', 'drain'] as const) {
+    for (const secondMode of ['admit', 'drain'] as const) {
+      test(`checkout reservations serialize across resources: ${firstMode}/${secondMode}`, async () => {
+        const harness = await makeHarness();
+        const { store, db } = harness;
+        const { start } = resourceStartFixtures(
+          CONFORMANCE_CODEBASE_ID,
+          CONFORMANCE_CONVERSATION_ID
+        );
+        const first = start('queue', 'first', 2, { cwd: '/shared' });
+        const second = { ...start('queue', 'second', 2, { cwd: '/shared' }), resource: 'other' };
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let firstOperation: Promise<unknown> | undefined;
+        let secondOperation: Promise<unknown> | undefined;
+        let interception: ReturnType<typeof spyOn> | undefined;
+        try {
+          const holder = await store.createWorkflowRun({
+            ...first.launch.run,
+            id: randomUUID(),
+            working_path: '/shared',
+          });
+          for (const [mode, intent] of [
+            [firstMode, first],
+            [secondMode, second],
+          ] as const)
+            if (mode === 'drain')
+              expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'queued' });
+          await store.cancelWorkflowRun(holder.id);
+          const transaction = db.withTransaction.bind(db);
+          let intercepted = false;
+          interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+            transaction(query =>
+              callback(async <T>(sql: string, params?: unknown[]) => {
+                const result = await query<T>(sql, params);
+                if (!intercepted && sql.includes('SELECT w.id, w.status, w.metadata')) {
+                  intercepted = true;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return result;
+              })
+            )
+          );
+          const perform = (mode: 'admit' | 'drain', intent: typeof first) =>
+            mode === 'admit'
+              ? store.admitResourceStart(intent)
+              : store.drainResourceStarts({ resource: intent.resource, hostId: intent.hostId });
+          firstOperation = perform(firstMode, first);
+          await entered.promise;
+          secondOperation = perform(secondMode, second);
+          let blocked = false;
+          for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+            const result = await db.query<{ blocked: boolean }>(
+              `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+            );
+            blocked = result.rows[0]?.blocked ?? false;
+          }
+          expect(blocked).toBe(true);
+          release.resolve();
+          await Promise.all([firstOperation, secondOperation]);
+          expect(await store.getResourceStartRequest(first.launch.run.id)).toMatchObject({
+            status: 'admitted',
+          });
+          expect(await store.getResourceStartRequest(second.launch.run.id)).toMatchObject({
+            status: 'queued',
+          });
+          expect(await store.getWorkflowRun(second.launch.run.id)).toBeNull();
+          await store.cancelWorkflowRun(first.launch.run.id);
+          expect(
+            await store.drainResourceStarts({ resource: second.resource, hostId: second.hostId })
+          ).toMatchObject([{ runId: second.launch.run.id }]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([firstOperation, secondOperation]);
+          interception?.mockRestore();
+          await harness.close();
+        }
+      });
+    }
+  }
   test.each([false, true])(
     'source suspension excludes a resume on another connection (resumed=%s)',
     async resumed => {
