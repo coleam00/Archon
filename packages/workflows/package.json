@@ -9,6 +9,7 @@
     "./run-credential-env": "./src/run-credential-env.ts",
     "./run-paths": "./src/run-paths.ts",
     "./run-source": "./src/run-source.ts",
+    "./resume-transition": "./src/resume-transition.ts",
     "./resume-preparation": "./src/resume-preparation.ts",
     "./run-resume": "./src/run-resume.ts",
     "./executor": "./src/executor.ts",

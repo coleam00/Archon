@@ -1,3 +1,4 @@
+import { describeResumeTransitionConformance } from './store-conformance/resume-transition';
 import { describeResumePreparationConformance } from './store-conformance/resume-preparation';
 export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
@@ -1279,6 +1280,7 @@ export function describeWorkflowStoreConformance(
     test('pending claim has exactly one winner and stamps the checkout', async () => {
       await assertWorkflowClaimRace(store);
     });
+    describeResumeTransitionConformance(() => harness);
     test('resume audits a legacy metadata-only error and ignores empty errors', async () => {
       for (const error of ['legacy failure', '', null]) {
         const run = await running(store, { metadata: { error } });

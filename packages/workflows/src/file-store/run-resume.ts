@@ -1,56 +1,20 @@
+import { resumeTransition } from '../resume-transition';
 import type { WorkflowRun } from '../schemas/workflow-run';
-import {
-  CAPACITY_WAIT_METADATA_KEY,
-  isScheduledWorkflowResume,
-  pausedUsageLimitWait,
-  TOOL_CALL_ATTENTION_METADATA_KEY,
-  SOURCE_RELEASE_METADATA_KEY,
-} from '../schemas/workflow-run';
-import {
-  EXECUTION_CLAIM_METADATA_KEY,
-  workflowUnpausedEvent,
-  type WorkflowEventInput,
-} from '../store';
+import type { WorkflowEventInput } from '../store';
 
 export function resumeRun(
   run: WorkflowRun,
   record: (input: WorkflowEventInput) => void
 ): WorkflowRun {
-  const id = run.id;
-  const scheduled = run.metadata.scheduled_resume;
-  const error =
-    typeof run.metadata.error === 'string' && run.metadata.error !== '' ? run.metadata.error : null;
-  if (run.status === 'failed' || error !== null)
-    record({
-      workflow_run_id: id,
-      event_type: 'workflow_resumed',
-      data: error === null ? {} : { error },
-    });
-  if (run.status === 'paused') record(workflowUnpausedEvent(id));
-  // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-  if (pausedUsageLimitWait(run)) delete run.metadata.wait;
-  if (
-    run.status === 'failed' &&
-    isScheduledWorkflowResume(scheduled) &&
-    scheduled.triggeredAt === undefined
-  ) {
-    run.metadata.scheduled_resume = { ...scheduled, triggeredAt: new Date().toISOString() };
-    record({
-      workflow_run_id: id,
-      event_type: 'quota_resume_triggered',
-      data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-    });
+  const { metadataPatch, events } = resumeTransition(run);
+  for (const [key, value] of Object.entries(metadataPatch)) {
+    if (value === null) delete run.metadata[key];
+    else run.metadata[key] = value;
   }
-  delete run.metadata.error;
-  delete run.metadata.stop_reason;
-  Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
-  delete run.metadata.continuation_retry_at;
-  Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
-  Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
+  for (const event of events) record(event);
   run.status = 'running';
   run.completed_at = null;
   run.started_at = new Date();
-  run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
   run.last_activity_at = new Date();
   return structuredClone(run);
 }

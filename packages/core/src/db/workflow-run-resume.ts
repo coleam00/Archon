@@ -9,14 +9,11 @@ import {
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
-import type { ScheduledWorkflowResume, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { resumeTransition } from '@archon/workflows/resume-transition';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CAPACITY_WAIT_METADATA_KEY,
-  RUN_STOP_REASON_METADATA_KEY,
-  SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
-  isScheduledWorkflowResume,
-  pausedUsageLimitWait,
   readCapacityWait,
   workflowRunStatusSchema,
 } from '@archon/workflows/schemas/workflow-run';
@@ -28,7 +25,6 @@ import {
   WorkflowResourceBusyError,
   pauseCursorMatches,
   resumeCursorMatches,
-  workflowUnpausedEvent,
   type PauseCursor,
   type WorkflowResumeCursor,
 } from '@archon/workflows/store';
@@ -62,23 +58,6 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
-}
-
-/**
- * Extract a non-empty `metadata.error` string from a raw column value, or null
- * when there is nothing worth preserving. SQLite stores metadata as JSON TEXT
- * and Postgres returns a parsed object (same split normalizeWorkflowRun handles),
- * so both shapes are accepted; absent / null / non-string / empty / unparseable
- * all collapse to null.
- */
-function readMetadataError(raw: unknown): string | null {
-  const error = normalizeMetadata(raw).error;
-  return typeof error === 'string' && error !== '' ? error : null;
-}
-
-function readScheduledResume(raw: unknown): ScheduledWorkflowResume | null {
-  const scheduled = normalizeMetadata(raw).scheduled_resume;
-  return isScheduledWorkflowResume(scheduled) ? scheduled : null;
 }
 
 export async function findResumableRun(
@@ -158,31 +137,6 @@ export async function findResumableRunByParentConversation(
   }
 }
 
-function resumeMetadata(prior: Pick<WorkflowRunRow, 'status' | 'metadata'> | undefined) {
-  const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
-  const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
-  // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-  const usageLimitWait =
-    prior?.status === 'paused' &&
-    pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
-      undefined;
-  const metadataPatch = {
-    ...(usageLimitWait ? { wait: null } : {}),
-    [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
-    error: null,
-    [RUN_STOP_REASON_METADATA_KEY]: null,
-    continuation_retry_at: null,
-    [CAPACITY_WAIT_METADATA_KEY]: null,
-    [SOURCE_RELEASE_METADATA_KEY]: null,
-    [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
-    ...(scheduled !== null && triggeredAt !== null
-      ? { scheduled_resume: { ...scheduled, triggeredAt } }
-      : {}),
-  };
-
-  return { metadataPatch, scheduled, triggeredAt };
-}
-
 function storedResumeTimestamp(value: Date | null): string | null {
   if (value === null) return null;
   const iso = value.toISOString();
@@ -260,24 +214,24 @@ export async function resumeWorkflowRun(
         [id]
       );
       const prior = priorRows.rows[0];
+      if (!prior) return { rowCount: 0 };
       if (
         cursor !== undefined &&
-        (prior === undefined ||
-          !resumeCursorMatches(
-            {
-              status: workflowRunStatusSchema.parse(prior.status),
-              metadata: normalizeMetadata(prior.metadata),
-            },
-            cursor
-          ))
+        !resumeCursorMatches(
+          {
+            status: workflowRunStatusSchema.parse(prior.status),
+            metadata: normalizeMetadata(prior.metadata),
+          },
+          cursor
+        )
       )
         return { rowCount: 0 };
       let acquiredResource: string | undefined;
-      const resourceKey = prior?.resource_key ?? undefined;
-      const status = prior?.status;
+      const resourceKey = prior.resource_key ?? undefined;
+      const status = prior.status;
       if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
         const { capacity } = await lockResourceSlot(query, resourceKey);
-        const metadata = normalizeMetadata(prior?.metadata);
+        const metadata = normalizeMetadata(prior.metadata);
         const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
         const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
         if (blocker) {
@@ -303,8 +257,11 @@ export async function resumeWorkflowRun(
         if (!occupancy.holders.some(holder => holder.id === id)) acquiredResource = resourceKey;
         await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
-      const clearedError = readMetadataError(prior?.metadata);
-      const { metadataPatch, scheduled, triggeredAt } = resumeMetadata(prior);
+      const { metadataPatch, events } = resumeTransition({
+        id,
+        status: workflowRunStatusSchema.parse(prior.status),
+        metadata: normalizeMetadata(prior.metadata),
+      });
 
       const result = await query(
         `UPDATE remote_agent_workflow_runs
@@ -327,29 +284,7 @@ export async function resumeWorkflowRun(
 
       if (result.rowCount === 0) return { rowCount: 0 as const };
       const eventIds: string[] = [];
-      if (prior?.status === 'failed' || clearedError !== null) {
-        // Same `{ error }` payload shape workflow_failed uses, so every consumer
-        // that already reads an error off a workflow_* event keeps working.
-        eventIds.push(
-          await insertWorkflowEvent(query, {
-            workflow_run_id: id,
-            event_type: 'workflow_resumed',
-            data: clearedError === null ? {} : { error: clearedError },
-          })
-        );
-      }
-      if (prior?.status === 'paused') {
-        eventIds.push(await insertWorkflowEvent(query, workflowUnpausedEvent(id)));
-      }
-      if (scheduled !== null && triggeredAt !== null) {
-        eventIds.push(
-          await insertWorkflowEvent(query, {
-            workflow_run_id: id,
-            event_type: 'quota_resume_triggered',
-            data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-          })
-        );
-      }
+      for (const event of events) eventIds.push(await insertWorkflowEvent(query, event));
       const selected = await query<WorkflowRunRow>(
         'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
@@ -359,10 +294,7 @@ export async function resumeWorkflowRun(
       const admitted = normalizeWorkflowRun(row);
       return {
         admitted,
-        undo:
-          prepare && prior
-            ? resumePreparationUndo(normalizeWorkflowRun(prior), admitted)
-            : undefined,
+        undo: prepare ? resumePreparationUndo(normalizeWorkflowRun(prior), admitted) : undefined,
         eventIds,
         acquiredResource,
       };

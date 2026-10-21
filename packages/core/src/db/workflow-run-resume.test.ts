@@ -191,7 +191,7 @@ describe('workflow run resume', () => {
     test('updates run to running, clears completed_at, and returns updated row', async () => {
       const updatedRun = { ...mockWorkflowRun, status: 'running' as const, completed_at: null };
       // Pre-CAS read of the metadata about to be cleared (no prior error here)
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       // UPDATE query returns rowCount 1
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       // SELECT query returns the updated row
@@ -238,7 +238,7 @@ describe('workflow run resume', () => {
       // hours-old) started_at and sorts ahead of any currently-active holder
       // in the older-wins tiebreaker — slipping past the lock and causing
       // two active workflows on the same working_path.
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
@@ -254,7 +254,7 @@ describe('workflow run resume', () => {
       // The flip to 'running' must only match a row that is still resumable —
       // failed/paused, or a stale 'running' orphan — so two concurrent resumers
       // can't both win and double-claim the worktree.
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
@@ -284,7 +284,9 @@ describe('workflow run resume', () => {
       // the only record that a legacy run ever failed — no workflow_failed/node_failed
       // event was written on that legacy path (#2348). The clear must not lose it.
       mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ metadata: { error: 'Process terminated (SIGTERM)' } }])
+        createQueryResult([
+          { status: 'running', metadata: { error: 'Process terminated (SIGTERM)' } },
+        ])
       );
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1)); // CAS wins
       mockQuery.mockResolvedValueOnce(createQueryResult([])); // event INSERT
@@ -375,7 +377,9 @@ describe('workflow run resume', () => {
       // but its UPDATE matched nothing, so it must write NOTHING at all —
       // otherwise a lost race still emits an audit event for a clear it never did.
       mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ metadata: { error: 'Process terminated (SIGTERM)' } }])
+        createQueryResult([
+          { status: 'running', metadata: { error: 'Process terminated (SIGTERM)' } },
+        ])
       );
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0)); // CAS loses
       mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }])); // probe
@@ -393,8 +397,6 @@ describe('workflow run resume', () => {
     test('throws when no row matched and the run is gone (not found)', async () => {
       // Pre-CAS read finds nothing (row already deleted)
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      // UPDATE returns rowCount 0
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
       // Probe SELECT finds no row → deleted
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -404,7 +406,7 @@ describe('workflow run resume', () => {
     });
 
     test('throws "not resumable" when the run was concurrently activated (CAS miss)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       // UPDATE matches nothing because the row is already 'running'
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
       // Probe SELECT reveals the current status
@@ -416,7 +418,7 @@ describe('workflow run resume', () => {
     });
 
     test('throws on database error during the disambiguation probe', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0)); // UPDATE matched nothing
       mockQuery.mockRejectedValueOnce(new Error('Connection lost')); // probe fails
 
@@ -426,7 +428,7 @@ describe('workflow run resume', () => {
     });
 
     test('throws on database error during UPDATE', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
 
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
@@ -445,7 +447,7 @@ describe('workflow run resume', () => {
     });
 
     test('throws on database error during SELECT after UPDATE', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       // UPDATE succeeds
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       // SELECT fails
@@ -457,7 +459,7 @@ describe('workflow run resume', () => {
     });
 
     test('throws when row vanishes between UPDATE and SELECT', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ metadata: {} }]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       // UPDATE succeeds (rowCount 1)
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       // SELECT returns nothing (row deleted between statements)
