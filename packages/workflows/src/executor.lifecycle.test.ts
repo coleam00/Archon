@@ -511,6 +511,34 @@ describe('scratch on exit', () => {
     );
   });
 
+  it.each([false, true])(
+    'host can report before draining scratch cleanup (failed=%p)',
+    async failed => {
+      const root = trackTempRoot(join(WS, '_cwd', `deferred-scratch-${crypto.randomUUID()}`));
+      const run = makeRun({
+        status: failed ? 'failed' : 'completed',
+        output_root: root,
+        metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
+      });
+      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      mkdirSync(scratch, { recursive: true });
+      if (failed) mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('DAG failed'));
+      const cleanups: (() => Promise<void>)[] = [];
+      const result = await startWorkflow({
+        store: makeStore({
+          getWorkflowRun: mock(async () => run),
+          getWorkflowRunStatus: mock(async () => run.status),
+        }),
+        options: { deferScratchCleanup: cleanup => cleanups.push(cleanup) },
+      });
+      expect(result.success).toBe(!failed);
+      expect(cleanups).toHaveLength(1);
+      expect(existsSync(scratch)).toBe(true);
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      expect(existsSync(scratch)).toBe(false);
+    }
+  );
+
   // A parent resumed in its child's process publishes no owner endpoint; a release in
   // this process must still see it executing.
   it('holds its run as executing in this process until it exits', async () => {

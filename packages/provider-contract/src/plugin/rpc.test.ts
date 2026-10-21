@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { z } from 'zod';
 import { connectProvider } from './connect';
 import { descriptor } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
@@ -34,6 +35,29 @@ test('framing rejects malformed JSON, UTF-8, envelopes and unterminated final li
   await malformed([encode({ method: 'missing-jsonrpc' })], 1);
   await malformed([new TextEncoder().encode('{}')], 1);
   await malformed([encode({ jsonrpc: '2.0', id: 999, result: {} })], 1);
+});
+
+test('line evidence names a method only when the connection handles it', async () => {
+  const evidence = async (value: unknown): Promise<unknown> => {
+    const rpc = new PluginRpc({
+      readable: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encode(value));
+          controller.close();
+        },
+      }),
+      writable: new WritableStream(),
+    });
+    rpc.on('_test', () => undefined);
+    const error: unknown = await rpc.done.catch((e: unknown) => e);
+    await rpc.close();
+    expect(error).toBeInstanceOf(PluginProtocolError);
+    expect(String(error)).not.toContain('private-line-secret');
+    return (error as PluginProtocolError).evidence?.message;
+  };
+  expect(await evidence({ jsonrpc: '1.0', method: '_test' })).toBe('_test');
+  expect(await evidence({ jsonrpc: '1.0', method: 'private-line-secret' })).toBe('unknown');
+  expect(await evidence({ jsonrpc: '1.0', id: 'private-line-secret' })).toBe('unknown');
 });
 
 test('the size cap counts bytes across reads, including multibyte text', async () => {
@@ -231,4 +255,44 @@ test('the exact line-byte limit is accepted and oversized outbound messages fail
     rpc.notify('_ignored', { text: 'a'.repeat(PROVIDER_PLUGIN_MAX_MESSAGE_BYTES) })
   ).rejects.toBeInstanceOf(PluginProtocolError);
   await rpc.close();
+});
+
+test('payload explanations name schema paths and issue codes, never values or plugin keys', () => {
+  const rpc = new PluginRpc({ readable: new ReadableStream(), writable: new WritableStream() });
+  const failure = (schema: z.ZodType, value: unknown): PluginProtocolError => {
+    try {
+      rpc.parse(schema, value);
+    } catch (error) {
+      if (error instanceof PluginProtocolError) return error;
+      throw error;
+    }
+    throw new Error('expected parse to fail');
+  };
+  const record = failure(z.object({ env: z.record(z.string(), z.string()) }), {
+    env: { 'secret key': 5 },
+  });
+  expect(record.detail).toBe('invalid payload (env.*: invalid_type, expected string)');
+  const strict = failure(z.strictObject({ a: z.string() }), { a: 'x', 'secret key': 1 });
+  expect(strict.detail).toBe('invalid payload (<root>: unrecognized_keys)');
+  expect(`${record.message}${strict.message}`).not.toContain('secret');
+  void rpc.close();
+});
+
+test('a response that fails its schema carries its line evidence and rejects only its request', async () => {
+  const pair = streamPair();
+  const host = new PluginRpc(pair.host);
+  const agent = new PluginRpc(pair.provider);
+  agent.handle('x', () => ({ n: 'secret' }));
+  agent.handle('y', () => 'ok');
+  const line = JSON.stringify({ jsonrpc: '2.0', id: 0, result: { n: 'secret' } });
+  const error = await host.request('x', {}, z.object({ n: z.number() })).catch(e => e);
+  expect(error).toBeInstanceOf(PluginProtocolError);
+  expect(error).toMatchObject({
+    detail: 'invalid payload (n: invalid_type, expected number)',
+    evidence: { bytes: new TextEncoder().encode(line).byteLength, message: 'x response' },
+  });
+  expect(await host.request('y', {})).toBe('ok');
+  await host.close();
+  await agent.done;
+  await agent.close();
 });

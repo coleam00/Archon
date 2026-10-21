@@ -625,7 +625,8 @@ then the project's file, whose lines win where the two conflict.
   read resets that sequence even if later work fails. An unreadable own-PR park stays
   parked; it is not an answered park. To reconsider an answered own-PR park, facts
   reads its snapshot before claiming and reuses it in the sweep. A failed recovery
-  read leaves that unclaimed item unchanged and reports the error.
+  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default
@@ -657,12 +658,16 @@ then the project's file, whose lines win where the two conflict.
   refuses every merge. Red in code no recent merge touched gets one rerun of its failed
   jobs; red after that, or red in code a recent merge touched, is raised to a
   maintainer, naming the pull requests merged since it was last green, with a revert
-  or fix-forward recommendation.
-- **Record.** The `record` script refuses a sweep that decided a pull request this
-  run did not claim, because that item belongs to another run. It also refuses a
+  or fix-forward recommendation. An unreadable default branch permits no sweep or merge;
+  independent bookkeeping completes before the run fails with the read diagnostic.
+- **Record.** When the default branch could not be read, `record` writes the independent
+  settlements, releasing only claims it still owns. Open companions remain unchanged;
+  the next pickup releases their claims after the run fails. It makes no further forge
+  reads and fails with the original diagnostic and any settlement write failures.
+  Otherwise, the `record` script skips and reports a decision for a pull request this
+  run did not claim, because that item belongs to another run. It refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question or, on a pull request a build round owns, without the brief a `return`
-  answer starts from, and a red default branch the sweep neither re-ran nor raised: the pull
+  question, and a red default branch the sweep neither re-ran nor raised: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -684,8 +689,15 @@ then the project's file, whose lines win where the two conflict.
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. Every pull-request item also offers `other`; for a build item, it returns
-  the pull request to the build queue with the answer's text as the ruling. A red default branch is only
+  links. A build-owned ask with a blank brief still raises its question, with all
+  return effects omitted and an explanation that no build brief was supplied. A
+  removed recommendation becomes `other` so the operator can record a ruling,
+  with evidence, confidence and a change condition describing that park choice.
+  The same rule applies when an own pull request's return choice is removed.
+  Every pull-request item also offers `other`; for a build item with a nonblank
+  brief, it returns the pull request to the build queue with the answer's text as
+  the ruling. Without a brief, `other` records the text and parks until the build
+  queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config and its `order`,
   `limit` and `merge_method`) merges it once the

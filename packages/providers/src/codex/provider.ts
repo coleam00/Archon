@@ -97,7 +97,7 @@ const codexSessionId = {
 
 /**
  * How long the app-server gets to answer a cancel's interrupt, then to exit after stdin
- * closes, then again after SIGTERM.
+ * closes before it is sent SIGTERM.
  */
 const SHUTDOWN_GRACE_MS = 3000;
 
@@ -239,7 +239,7 @@ export class CodexProvider implements IAgentProvider {
 
   /**
    * @param spawner starts the app-server process; tests pass a fake.
-   * @param shutdownGraceMs each cancel and shutdown wait; tests shorten it.
+   * @param shutdownGraceMs the interrupt wait and the wait before SIGTERM; tests shorten it.
    */
   constructor(
     private readonly spawner?: Spawner,

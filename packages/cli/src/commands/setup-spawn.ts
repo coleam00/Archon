@@ -73,9 +73,9 @@ async function spawnMacTerminal(
   command: string,
   env: NodeJS.ProcessEnv | undefined
 ): Promise<SpawnResult> {
-  // Escape single quotes in path for AppleScript
-  const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
+  const shellCommand = `cd '${repoPath.replaceAll("'", "'\"'\"'")}' && ${command}`;
+  const appleScriptString = shellCommand.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+  const script = `tell application "Terminal" to do script "${appleScriptString}"`;
 
   if (await trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore', env })) {
     return { success: true };
@@ -138,11 +138,15 @@ async function spawnLinuxTerminal(
 
   // Try xterm (fallback, available on most systems)
   if (
-    await trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
-      detached: true,
-      stdio: 'ignore',
-      env,
-    })
+    await trySpawn(
+      'xterm',
+      ['-e', 'bash', '-c', `cd -- "$1" && ${setupCmd}`, 'archon-setup', repoPath],
+      {
+        detached: true,
+        stdio: 'ignore',
+        env,
+      }
+    )
   ) {
     return { success: true };
   }

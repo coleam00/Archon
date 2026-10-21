@@ -9,7 +9,8 @@
  * gate pauses its run while sibling nodes in the same layer still execute, and a CLI
  * stopped by a signal records `failed` before it ends its node trees.
  * - The executor releases scratch when it exits and the run is terminal; its nodes have
- *   stopped by then.
+ *   stopped by then. A host may defer deletion until it reports the settled outcome,
+ *   then drain cleanup before sleeping or shutting down.
  * - Cancel, abandon, a conversation reset and a cancelling gate reject release the
  *   scratch of the runs they cancelled. Where the owner proof fails, scratch is kept: an
  *   owner on another host, a recorded owner process still alive, or an output holder a
