@@ -4,6 +4,10 @@
  */
 import type { RunActor } from '../run-authorization';
 import { mock } from 'bun:test';
+import { mkdirSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../../schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -199,6 +203,28 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
     checkout_baseline: null,
     ...overrides,
   };
+}
+
+/**
+ * A paused run whose recorded owner is this process, which is not executing it, with a
+ * scratch checkout on disk under `outputRoot`.
+ */
+export function makeRunWithScratch(
+  outputRoot: string,
+  overrides: Partial<WorkflowRun> = {}
+): { run: WorkflowRun; checkout: string } {
+  const run = makePausedRun({
+    output_root: outputRoot,
+    ...overrides,
+    metadata: {
+      ...makePausedRun().metadata,
+      execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+      ...overrides.metadata,
+    },
+  });
+  const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(outputRoot, run.id)), 'repro');
+  mkdirSync(join(checkout, '.git'), { recursive: true });
+  return { run, checkout };
 }
 
 export function makeDashboardRun(

@@ -58,6 +58,7 @@ import type {
 import {
   SUBRUN_METADATA_KEYS,
   isApprovalContext,
+  isTerminalRunStatus,
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   type ContinuationMode,
@@ -67,6 +68,7 @@ import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-recor
 import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { enterRunExecution, releaseRunScratch } from './run-scratch';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
 
@@ -357,6 +359,7 @@ export async function executeWorkflow(
   // best-effort semantics). Source establishment is inside the paired window;
   // its stopped results also release through this try's finally.
   keepAwake.acquire();
+  const leaveRunExecution = enterRunExecution(workflowRun.id);
   // Set by every path that observes a rejected terminal status write — one arriving
   // from the DAG or a sub-run (the catch below), and the catch's own recovery write.
   // The finally-block backstop reads it: a second write over a channel that just
@@ -698,40 +701,63 @@ export async function executeWorkflow(
     // may throw — so it always pairs with the acquire above this try, on every
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
-    // Defensive backstop: if the workflow run is still 'running' after all
-    // normal and exceptional code paths, flip it to 'failed' to prevent zombie
-    // accumulation. Guards against any future code path that exits without
-    // calling failWorkflowRun (e.g. a generator cleanup that exits without
-    // throwing). Only fires when the process stays alive long enough to run
-    // this finally — see #1561 for the originating zombie-state incident.
-    if (workflowRun && !terminalStatusWriteFailed && !sourceExecutionStopped) {
-      const runId = workflowRun.id;
-      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
-        // A failed lookup leaves status unknown, not missing or finalized. Preserve the
-        // prior result/error rather than guessing a terminal transition from this read.
-        getLog().warn(
-          {
-            workflowRunId: runId,
-            operation: 'getWorkflowRunStatus',
-            err,
-            recovery:
-              'The finalization check could not run. Restore store access and inspect the run ' +
-              'with archon workflow get <run-id>. After checking ownership, use ' +
-              'archon workflow abandon <run-id> only if the run should be stopped or discarded.',
-          },
-          'executor.backstop_status_read_failed'
-        );
-        return null;
-      });
-      if (backstopStatus === 'running') {
-        getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
-        await requireTerminalStatusWrite(
-          deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs', {
-            exitReason: 'not_finalized',
-          }),
-          { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
-        );
-      }
+    leaveRunExecution();
+    if (workflowRun && !terminalStatusWriteFailed) {
+      // A source release that lost to a cancel skips the backstop but still frees scratch.
+      if (!sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
+      await releaseScratchOnExit(deps, workflowRun);
     }
   }
+}
+
+/**
+ * Defensive backstop: if the workflow run is still 'running' after all normal and
+ * exceptional code paths, flip it to 'failed' to prevent zombie accumulation. Guards
+ * against any future code path that exits without calling failWorkflowRun (e.g. a
+ * generator cleanup that exits without throwing). Only fires when the process stays
+ * alive long enough to run the executor's finally — see #1561 for the originating
+ * zombie-state incident.
+ */
+async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<void> {
+  const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
+    // A failed lookup leaves status unknown, not missing or finalized. Preserve the
+    // prior result/error rather than guessing a terminal transition from this read.
+    getLog().warn(
+      {
+        workflowRunId: runId,
+        operation: 'getWorkflowRunStatus',
+        err,
+        recovery:
+          'The finalization check could not run. Restore store access and inspect the run ' +
+          'with archon workflow get <run-id>. After checking ownership, use ' +
+          'archon workflow abandon <run-id> only if the run should be stopped or discarded.',
+      },
+      'executor.backstop_status_read_failed'
+    );
+    return null;
+  });
+  if (backstopStatus === 'running') {
+    getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs', {
+        exitReason: 'not_finalized',
+      }),
+      { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
+    );
+  }
+}
+
+/**
+ * The executor releases the scratch of every run it ends or sees ended while executing:
+ * a terminal write it did not make (a cooperative cancel, a fan-out cancel) commits while
+ * its nodes may still write. They have stopped now. A run released and resumed by another
+ * executor names that executor as its owner, so `releaseRunScratch` keeps its scratch
+ * while that executor may still run.
+ */
+async function releaseScratchOnExit(deps: WorkflowDeps, executed: WorkflowRun): Promise<void> {
+  const run = await deps.store.getWorkflowRun(executed.id).catch((err: unknown) => {
+    getLog().warn({ workflowRunId: executed.id, err }, 'executor.exit_scratch_lookup_failed');
+    return null;
+  });
+  if (run && isTerminalRunStatus(run.status)) await releaseRunScratch(run);
 }

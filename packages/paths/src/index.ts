@@ -60,6 +60,7 @@ export {
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
   RUN_ARTIFACTS_ENGINE_SUBDIR,
+  getRunScratchDir,
   isRunArtifactsEngineEntry,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
