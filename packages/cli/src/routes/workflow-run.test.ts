@@ -42,6 +42,7 @@ type InvocationOptions = {
   missingToken?: boolean;
   explicitSource?: boolean;
   sourceFile?: boolean;
+  claimBeforeFailure?: boolean;
 };
 
 async function createDetachedRows(host: WorkflowHost, options: InvocationOptions) {
@@ -108,6 +109,13 @@ async function invoke(
     process.env.ARCHON_DETACHED_RUN_OWNER = options.detachedOwner === false ? '' : '1';
     process.env.ARCHON_DETACHED_LAUNCH_TOKEN = options.missingToken ? '' : 'launch-token';
     const { otherLaunch, handedOver } = await createDetachedRows(host, options);
+    if (options.claimBeforeFailure) {
+      const fail = host.deps.store.failWorkflowRun.bind(host.deps.store);
+      spyOn(host.deps.store, 'failWorkflowRun').mockImplementation(async (id, error, options) => {
+        await host.deps.store.claimPendingWorkflowRun(id);
+        return fail(id, error, options);
+      });
+    }
     const list = spyOn(host.records.codebases, 'listCodebaseClaims').mockImplementation(
       async () => {
         if (options.lookupError) throw new Error('registry unavailable');
@@ -433,5 +441,21 @@ test.each([false, true])(
       status: 'failed',
       metadata: { stop_reason: { reason: 'launch_failed' } },
     });
+  }
+);
+
+test.each(['source', 'project'])(
+  'startup %s refusal preserves a concurrent execution claim',
+  async refusal => {
+    const result = await invoke(refusal === 'project' ? { project: 'missing' } : {}, [], {
+      explicitSource: refusal === 'source',
+      detachedStatus: 'pending',
+      claimBeforeFailure: true,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.run).not.toHaveBeenCalled();
+    expect(result.storedRun?.status).toBe('running');
+    expect(result.storedRun?.metadata.error).toBeUndefined();
+    expect(result.storedRun?.metadata.stop_reason).toBeUndefined();
   }
 );

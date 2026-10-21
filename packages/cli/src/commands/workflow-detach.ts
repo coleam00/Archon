@@ -329,15 +329,14 @@ export async function recordDetachedChildStartupFailure(
   error: Error
 ): Promise<void> {
   const { detachedRunId, detachedProcessOwner, launchToken } = request;
-  if (detachedRunId === undefined || !detachedProcessOwner) return;
+  if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
     const row = await host.deps.store.getWorkflowRun(detachedRunId);
     if (row?.status !== 'pending' || !matchesDetachedLaunch(row.metadata, launchToken)) return;
-    if ((await host.deps.store.getWorkflowRunStatus(detachedRunId)) !== 'pending') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
-      { exitReason: 'launch_failed' }
+      { exitReason: 'launch_failed', pendingLaunchToken: launchToken }
     );
   } catch (dbError) {
     getLog().error(

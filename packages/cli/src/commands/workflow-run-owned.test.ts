@@ -1717,7 +1717,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
         'pending-child',
         expect.stringContaining(message),
-        { exitReason: 'launch_failed' }
+        { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
       );
       expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
       expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();

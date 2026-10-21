@@ -1077,7 +1077,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
       'run-precreated',
       expect.stringContaining('Detached run failed to start'),
-      { exitReason: 'launch_failed' }
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
     );
   });
 
@@ -1209,7 +1209,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
         expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
           preCreatedRow.id,
           expect.stringContaining('Detached run failed to start'),
-          { exitReason: 'launch_failed' }
+          { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
         );
       } else {
         expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
