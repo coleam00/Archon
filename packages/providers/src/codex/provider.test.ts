@@ -735,6 +735,14 @@ describe('CodexProvider', () => {
       );
     });
 
+    test('a spawn failure is logged without the abnormal-exit lifecycle tag', async () => {
+      await run(providerWith({ spawnError: 'ENOENT' }).provider);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.not.objectContaining({ lifecycle: expect.anything() }),
+        'codex.app_server_abnormal_exit'
+      );
+    });
+
     test('lost observation after the result never invents an end or settles', async () => {
       const { provider, server } = providerWith({
         notifications: [itemStarted(subAgentActivity('started')), turnCompleted('completed')],

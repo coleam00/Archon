@@ -520,7 +520,9 @@ export class CodexProvider implements IAgentProvider {
       getLog().error(
         {
           err: connection.closedError(end),
-          lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
+          ...(end.kind === 'exited' && {
+            lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
+          }),
         },
         'codex.app_server_abnormal_exit'
       );
