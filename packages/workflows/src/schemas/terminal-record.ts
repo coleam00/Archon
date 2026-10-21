@@ -34,8 +34,6 @@ export const worktreeDispositionSchema = z.discriminatedUnion('disposition', [
       'check_failed',
     ]),
     detail: z.string().optional(),
-    /** The checkout kept; absent on records written before it was added. */
-    path: z.string().optional(),
   }),
 ]);
 export type WorktreeDisposition = z.infer<typeof worktreeDispositionSchema>;

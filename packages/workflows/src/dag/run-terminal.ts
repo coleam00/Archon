@@ -435,7 +435,7 @@ async function completeRun(
     }
   } else if (worktreeDisposition?.disposition === 'retained') {
     const lost = wouldBeLost(worktreeDisposition);
-    if (lost) await sendRetentionWarning(ctx, worktreeDisposition.path ?? keptPath, lost);
+    if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
 }
 

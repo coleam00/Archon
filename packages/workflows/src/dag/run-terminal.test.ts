@@ -1078,7 +1078,7 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
     disposition: WorktreeDisposition | null,
     release: () => Promise<void> = async () => {},
     readRun: (id: string) => Promise<WorkflowRun | null> = async id =>
-      makeWorkflowRun(id, { metadata: { owned_worktree: proof } })
+      makeWorkflowRun(id, { working_path: '/wt', metadata: { owned_worktree: proof } })
   ): Promise<{
     order: string[];
     store: MockWorkflowStore;
@@ -1147,7 +1147,6 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
       disposition: 'retained',
       reason: 'unpushed_commits',
       detail: '2 commit(s) on no remote',
-      path: '/wt',
     };
     const { order, store, released, warnings } = await complete(retained);
 
@@ -1165,7 +1164,6 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
     const { warnings } = await complete({
       disposition: 'retained',
       reason: 'workspace_retained',
-      path: '/wt',
     });
 
     expect(warnings).toEqual([]);

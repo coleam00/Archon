@@ -682,9 +682,9 @@ remote, whether or not the branch was published, so the engine removes it after 
 completion write, keeping the local and remote branch. The record is written before the
 removal, so a removal that is refused because work appeared in the meantime, or that
 fails, leaves the checkout and the run's output says so. Otherwise it is
-`{ "disposition": "retained", "reason": ... }` with an optional `detail` and the kept
-checkout's `path`. A completed run whose checkout is kept for uncommitted changes,
-unpushed commits, another run or a failed check also prints a warning naming the path:
+`{ "disposition": "retained", "reason": ... }` with an optional `detail`. A completed
+run whose checkout is kept for uncommitted changes, unpushed commits, another run or a
+failed check also prints a warning naming the path:
 
 | Reason | Meaning |
 |---|---|
@@ -1579,7 +1579,7 @@ completes, if the checkout is clean and every commit on its HEAD and branch is o
 remote. A published branch does not keep it. The removal keeps the local and remote
 branch, so the run can still be adopted. Otherwise the worktree stays, the run prints a
 warning naming the path and what removing it would lose, and the run's
-`terminal_record.worktree_disposition` records the reason and path (see
+`terminal_record.worktree_disposition` records the reason (see
 [`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
 when its run ends: `--merged` removes it after its pull request merges (or closes, with
 `--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a

@@ -1401,9 +1401,8 @@ export async function assessCompletedRunWorktree(
   try {
     const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
     if (!isGeneratedTaskBranch(env)) return null;
-    const path = env.working_path;
     if (retainsWorkspace(env.created_by_platform)) {
-      return { disposition: 'retained', reason: 'workspace_retained', path };
+      return { disposition: 'retained', reason: 'workspace_retained' };
     }
     // The completing run is still claimable here; release refuses any other claimant.
     const user = await readers.getLiveRunOwningEnv(env.id, undefined, run.id);
@@ -1412,19 +1411,12 @@ export async function assessCompletedRunWorktree(
         disposition: 'retained',
         reason: 'in_use',
         detail: `run ${user.id} (${user.status})`,
-        path,
       };
     }
-    const local = await judgeLocalCompletedWorktree(env, repo);
-    return local.disposition === 'retained' ? { ...local, path } : local;
+    return await judgeLocalCompletedWorktree(env, repo);
   } catch (err) {
     getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
-    return {
-      disposition: 'retained',
-      reason: 'check_failed',
-      detail: (err as Error).message,
-      ...(run.working_path ? { path: run.working_path } : {}),
-    };
+    return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
   }
 }
 

@@ -650,7 +650,6 @@ describe('completed run worktree release', () => {
       disposition: 'retained',
       reason: 'unpushed_commits',
       detail: '1 commit(s) on no remote',
-      path: env.working_path,
     });
   });
 
@@ -659,7 +658,6 @@ describe('completed run worktree release', () => {
     expect(await assess()).toEqual({
       disposition: 'retained',
       reason: 'uncommitted_changes',
-      path: env.working_path,
     });
   });
 
@@ -727,7 +725,6 @@ describe('completed run worktree release', () => {
       disposition: 'retained',
       reason: 'in_use',
       detail: `run ${other} (${otherStatus})`,
-      path: env.working_path,
     });
   });
 
@@ -737,7 +734,6 @@ describe('completed run worktree release', () => {
       disposition: 'retained',
       reason: 'check_failed',
       detail: 'creation proof does not match its isolation record',
-      path: env.working_path,
     });
   });
 
