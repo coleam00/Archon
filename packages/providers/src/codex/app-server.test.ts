@@ -318,6 +318,16 @@ describe('AppServerConnection', () => {
     await AppServerConnection.start(BINARY, [], {}, hangs.spawner).shutdown(20);
     expect(signals).toEqual(['SIGTERM']);
   });
+
+  test('shutdown has no deadline after SIGTERM: a Codex still exiting is awaited until it exits', async () => {
+    // A Codex on a loaded machine keeps exiting long after SIGTERM, then exits 0. Waiting
+    // through several warning intervals must still return that clean exit.
+    const slow = rawChild(child => {
+      setTimeout(() => child.emit('close', 0, null), 120);
+    });
+    const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(5, 20);
+    expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
+  });
 });
 
 describe('Codex native credential check', () => {
