@@ -48,6 +48,26 @@ describe('CommandHandler', () => {
     expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
   });
 
+  test.each(['cancel', 'resume', 'abandon', 'approve', 'reject', 'respond', 'get'])(
+    'refuses a foreign full run ID for /workflow %s before any global lookup',
+    async command => {
+      const id = 'abcdef00-1111-2222-3333-444455556666';
+      mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
+
+      const result = await handleCommand(
+        makeConversation({ codebase_id: 'cb-1' }),
+        `/workflow ${command} ${id} approve`,
+        operator
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Workflow run not found');
+      expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenLastCalledWith(id, 'cb-1');
+      expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   describe('handleCommand', () => {
     describe('/workflow reset-sessions', () => {
       test('auto-scopes the reset to the current conversation', async () => {
@@ -290,15 +310,13 @@ describe('CommandHandler', () => {
 
       test('does not show a run that belongs to another project', async () => {
         mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([]);
-        mockGetWorkflowRun.mockResolvedValueOnce(
-          makeWorkflowRun({ id: 'run-other', codebase_id: 'other-project' })
-        );
         const conversation = makeConversation({ ...baseConversation, codebase_id: 'codebase-123' });
 
         const result = await handleCommand(conversation, '/workflow get run-other', operator);
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Workflow run not found');
+        expect(mockGetWorkflowRun).not.toHaveBeenCalled();
       });
 
       test('reports a missing run', async () => {
@@ -312,6 +330,38 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow status', () => {
+      test.each(['cb-1', null])('lists only the selected scope (%s)', async codebaseId => {
+        const runs = [
+          makeDashboardRun({ id: 'own-run', codebase_id: 'cb-1' }),
+          makeDashboardRun({ id: 'foreign-run', codebase_id: 'cb-2' }),
+        ];
+        mockListDashboardRuns.mockImplementationOnce(async options => {
+          const visible = runs.filter(
+            run => !options?.codebaseId || run.codebase_id === options.codebaseId
+          );
+          return { runs: visible, total: visible.length, counts: EMPTY_DASHBOARD_COUNTS };
+        });
+
+        const result = await handleCommand(
+          makeConversation({ codebase_id: codebaseId }),
+          '/workflow status',
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('own-run');
+        if (codebaseId) {
+          expect(result.message).not.toContain('foreign-run');
+        } else {
+          expect(result.message).toContain('foreign-run');
+        }
+        expect(mockListDashboardRuns).toHaveBeenLastCalledWith({
+          status: ['running', 'paused'],
+          limit: 50,
+          ...(codebaseId ? { codebaseId } : {}),
+        });
+      });
+
       test('should show all running workflows', async () => {
         const startedAt = new Date(Date.now() - 2 * 60 * 1000);
         mockListDashboardRuns.mockResolvedValueOnce({
