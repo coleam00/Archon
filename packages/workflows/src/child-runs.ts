@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
@@ -22,7 +23,7 @@ import {
 import type { ResolvedWorkflow, WorkflowRun } from './schemas';
 import { SUBRUN_METADATA_KEYS } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import {
@@ -494,10 +495,10 @@ export async function runChildWorkflow(
       }
       return childOutcomeFromRun(finalChild);
     } catch (err) {
-      if (err instanceof TerminalStatusWriteError) throw err;
+      if (isWorkflowExecutionInterruption(err)) throw err;
 
       // Ordinary setup/read-back failures become failed child outcomes after cleanup.
-      // A terminal write rejection escapes instead: cleanup may not have released the lock.
+      // Lifecycle interruptions escape: compensation cannot establish a terminal outcome.
       //
       // Wedge guard (symmetric to continueBlockedRun's post-CAS handler): a throw in
       // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token

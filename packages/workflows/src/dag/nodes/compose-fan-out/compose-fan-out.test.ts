@@ -167,6 +167,65 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     });
   }
 
+  it('keeps a failed child durable when its settled parent status is unreadable', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: work\nnodes:\n  - id: work\n    prompt: Work.'
+    );
+    const store = createMockStore();
+    const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+      name: 'WorkflowStatusReadError',
+      rawStatus: 'unsupported',
+    });
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      if (
+        persistedEvents(store).some(
+          event =>
+            event.event_type === 'node_failed' && event.data?.type === 'compose_fan_out_instance'
+        )
+      )
+        throw cause;
+      return 'running';
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      throw new Error('Child work failed');
+    });
+    const error: unknown = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'unreadable-parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('failed-child-unreadable-parent'),
+      })
+    ).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ParentStatusReadError);
+    if (!(error instanceof ParentStatusReadError))
+      throw new Error('Expected lifecycle interruption');
+    expect(error.cause).toBe(cause);
+    const failures = persistedEvents(store).filter(event => event.event_type === 'node_failed');
+    expect(failures).toHaveLength(2);
+    expect(failures.some(event => event.data?.type === 'compose_fan_out_instance')).toBe(true);
+    expect(failures.some(event => event.data?.error === 'Child work failed')).toBe(true);
+    expect(
+      persistedEvents(store)
+        .filter(event => event.step_name === 'fan')
+        .map(event => event.event_type)
+    ).toEqual(['node_started']);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
   for (const status of [...workflowRunStatusSchema.options, null]) {
     it(`keeps the supported post-instance parent status behavior (${status})`, async () => {
       await writeBlock(

@@ -491,13 +491,15 @@ describe('scratch on exit', () => {
     const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
     mkdirSync(join(checkout, '.git'), { recursive: true });
     const cause = new Error('Unsupported parent status');
-    mockExecuteDagWorkflow.mockRejectedValueOnce(new ParentStatusReadError(run.id, 'fan', cause));
+    const interruption = new ParentStatusReadError(run.id, 'fan', cause);
+    mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
     const store = makeStore({
       getWorkflowRun: mock(async () => run),
       getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
     });
 
-    await expect(startWorkflow({ store })).rejects.toBe(cause);
+    await expect(startWorkflow({ store })).rejects.toBe(interruption);
+    expect(interruption.cause).toBe(cause);
 
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();

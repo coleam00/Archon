@@ -10,6 +10,8 @@ import {
 } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
+import { ParentStatusReadError } from './parent-status-read';
+import { continueBlockedRun } from './parent-resume';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile, rm, readFile, chmod } from 'fs/promises';
@@ -56,6 +58,135 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  for (const caller of ['child', 'child fan-out', 'engine resume', 'automatic resume'] as const) {
+    for (const persistent of [false, true]) {
+      it(`preserves unreadable composed parent through ${caller} (persistent=${persistent})`, async () => {
+        await writeWorkflow(
+          'block',
+          `name: block
+description: work
+nodes:
+  - id: work
+    prompt: work
+`
+        );
+        await writeWorkflow(
+          'target',
+          `name: target
+description: composed parent
+nodes:
+  - id: fan
+    include: block
+    fan_out:
+      items: '[1]'
+      as: item
+      join: all_success
+`
+        );
+        await writeWorkflow(
+          'outer',
+          `name: outer
+description: enclosing parent
+nodes:
+  - id: sub
+    workflow: target
+${caller === 'child fan-out' ? "    fan_out:\n      items: '[1]'\n      as: item\n" : ''}`
+        );
+        const store = new InMemoryStore();
+        const deps = makeDeps(store);
+        const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+          name: 'WorkflowStatusReadError',
+          rawStatus: 'unsupported',
+        });
+        const readStatus = store.getWorkflowRunStatus;
+        let rejected = false;
+        let readsAfterRejection = 0;
+        store.getWorkflowRunStatus = async id => {
+          const settled = store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.data?.type === 'compose_fan_out_instance'
+          );
+          if (rejected) readsAfterRejection++;
+          if (settled && (!rejected || persistent)) {
+            rejected = true;
+            throw cause;
+          }
+          return readStatus(id);
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const cancel = spyOn(store, 'cancelWorkflowRun');
+        const complete = spyOn(store, 'completeWorkflowRun');
+        const pause = spyOn(store, 'pauseWorkflowRun');
+        let execution: Promise<unknown>;
+        if (caller === 'child' || caller === 'child fan-out') {
+          execution = executeWorkflow(
+            deps,
+            makePlatform(),
+            'test',
+            cwd,
+            await discover('outer'),
+            'goal'
+          );
+        } else {
+          const run = await store.createWorkflowRun({
+            workflow_name: 'target',
+            user_message: '',
+            working_path: cwd,
+          });
+          await store.updateWorkflowRun(run.id, {
+            status: 'paused',
+            metadata: {
+              approval: {
+                type: 'child_workflow',
+                nodeId: 'fan',
+                childRunId: 'finished-child',
+                message: 'waiting',
+              },
+            },
+          });
+          const paused = await store.getWorkflowRun(run.id);
+          if (!paused) throw new Error('Missing paused run');
+          if (caller === 'engine resume') {
+            const admission = await new InProcessWorkflowEngine(deps).resume({
+              platform: makePlatform(),
+              conversationId: 'test',
+              cwd,
+              userMessage: '',
+              run: paused,
+              legacyWorkflow: await discover('target'),
+            });
+            if (!admission.accepted) throw new Error('Resume was not admitted');
+            execution = admission.settled;
+          } else {
+            execution = continueBlockedRun(
+              deps,
+              makePlatform(),
+              'test',
+              paused,
+              async () => {},
+              {}
+            );
+          }
+        }
+        const error: unknown = await execution.catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(ParentStatusReadError);
+        if (!(error instanceof ParentStatusReadError))
+          throw new Error('Expected lifecycle interruption');
+        expect(error.cause).toBe(cause);
+        expect(rejected).toBe(true);
+        expect(readsAfterRejection).toBe(0);
+        expect([...store.runs.values()].every(run => run.status === 'running')).toBe(true);
+        expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+        expect(fail).not.toHaveBeenCalled();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+        expect(pause).not.toHaveBeenCalled();
+      });
+    }
+  }
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'child source recovery',

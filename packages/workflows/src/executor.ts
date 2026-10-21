@@ -614,7 +614,7 @@ export async function executeWorkflow(
         'workflow.parent_status_read_failed'
       );
       getWorkflowEventEmitter().unregisterRun(workflowRun.id);
-      throw error.cause;
+      throw error;
     }
     if (sourceExecutionStopped) throw error;
     if (error instanceof TerminalStatusWriteError) {

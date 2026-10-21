@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -17,7 +18,6 @@ import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { WorkflowNode, WorkflowRun } from '../../../schemas';
 import { readSubrunMetadata } from '../../../schemas';
-import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
@@ -330,7 +330,7 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
+    if (isWorkflowExecutionInterruption(err) || err instanceof NodeEventWriteError) throw err;
 
     // Only a read of the parent's source releases the parent; a child's fault stays the
     // child's, so the launch types those reads (see runChildWorkflow).

@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { resolveContinuationWorkflow } from './run-source';
@@ -22,7 +23,7 @@ import {
 } from './attention-watch';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 
 function rejectOptions(
   options: ExecuteWorkflowOptions | undefined,
@@ -93,7 +94,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       // Hydration already claimed the row. The executor's early setup can throw
       // before its terminal-write boundary; recovery must work without a server.
       if (
-        !(error instanceof TerminalStatusWriteError) &&
+        !isWorkflowExecutionInterruption(error) &&
         (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
       ) {
         await requireTerminalStatusWrite(
