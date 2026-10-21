@@ -266,10 +266,10 @@ archon isolation cleanup [days] (default: 7)
   ├─ findStaleEnvironments(days)
   │    └─ Filter provider = 'worktree'
   │         └─ For each stale worktree:
-  │              ├─ Skip environments owned by resumable runs
+  │              ├─ Skip pending/running/paused owners; release failed owners after the stale window
   │              ├─ Skip any with a commit on no remote (getCleanupRunLock)
   │              └─ Claim the observed registration, excluding replacement and acquisition
-  │                   ├─ Final owner veto under the claim (including pending/running/paused)
+  │                   ├─ Final owner veto under the claim, applying the same failed-run stale policy
   │                   └─ provider.destroy(path, options)
   │                        └─ Mark destroyed only after complete removal
   │

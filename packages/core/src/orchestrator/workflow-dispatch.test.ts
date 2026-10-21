@@ -63,11 +63,13 @@ import {
 } from '../test/orchestrator-agent-harness';
 import { SqliteAdapter } from '../db/adapters/sqlite';
 import { assertNewRunCheckoutAvailable } from '../db/checkout-ownership';
+import * as conversationDb from '../db/conversations';
 import { handleMessage } from './orchestrator-agent';
 import { continueResolvedGateRun } from './workflow-dispatch';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 
 const trackTempRoot = trackTempRoots();
+const mockClearConversationCheckout = spyOn(conversationDb, 'clearConversationCheckout');
 
 // ─── Workflow dispatch routing ────────────────────────────────────────────────
 
@@ -98,7 +100,10 @@ describe('workflow dispatch routing', () => {
     };
   }
 
-  beforeEach(resetDispatchMocks);
+  beforeEach(() => {
+    resetDispatchMocks();
+    mockClearConversationCheckout.mockReset();
+  });
 
   test.each(['fresh', 'checkout-branch'] as const)(
     'a %s foreground setup clears a retired conversation checkout before insertion',
@@ -141,13 +146,14 @@ describe('workflow dispatch routing', () => {
             status: 'destroyed',
           })
         );
-        mockUpdateConversation.mockImplementation(async (id, updates) => {
-          if (updates.isolation_env_id === undefined) return;
+        mockClearConversationCheckout.mockImplementation(async (id, expectedEnvId) => {
           await database.query(
-            'UPDATE remote_agent_conversations SET isolation_env_id = $1 WHERE id = $2',
-            [updates.isolation_env_id, id]
+            'UPDATE remote_agent_conversations SET isolation_env_id = NULL WHERE id = $1 AND isolation_env_id = $2',
+            [id, expectedEnvId]
           );
+          return { ...conversation, isolation_env_id: null };
         });
+        await mkdir(retiredPath);
         if (lane === 'checkout-branch')
           mockResolveWorkflowAdoption.mockResolvedValueOnce({
             adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
@@ -169,6 +175,7 @@ describe('workflow dispatch routing', () => {
           actor: operator,
           ...(lane === 'checkout-branch' ? { workflowAdoptRunId: 'prior-run' } : {}),
         });
+        expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBeNull();
         expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
         expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
         expect(mockFailPreparedRun).not.toHaveBeenCalled();
@@ -181,11 +188,30 @@ describe('workflow dispatch routing', () => {
           ).rows[0]?.isolation_env_id
         ).toBeNull();
       } finally {
-        mockUpdateConversation.mockImplementation(async () => {});
         await database.close();
       }
     }
   );
+
+  test('fresh foreground resolution uses the concurrent replacement checkout', async () => {
+    const conversation = makeDispatchConversation({ isolation_env_id: 'retired-env' });
+    mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    mockAdoptedEnvironment.mockResolvedValueOnce(
+      makeIsolationEnvironment({ id: 'retired-env', status: 'destroyed' })
+    );
+    mockClearConversationCheckout.mockResolvedValueOnce({
+      ...conversation,
+      isolation_env_id: 'new-env',
+    });
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
+    expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
+    expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe('new-env');
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+  });
 
   test('a terminal status write failure during worktree preparation is not retried', async () => {
     const { IsolationBlockedError } = await import('@archon/isolation');

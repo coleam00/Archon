@@ -142,6 +142,21 @@ export async function getOrCreateConversation(
   return created.rows[0];
 }
 
+export async function clearConversationCheckout(
+  id: string,
+  expectedEnvironmentId: string
+): Promise<Conversation> {
+  assertPublicConversation(id);
+  await pool.query(
+    `UPDATE remote_agent_conversations SET isolation_env_id = NULL, updated_at = ${getDialect().now()}
+     WHERE id = $1 AND isolation_env_id = $2`,
+    [id, expectedEnvironmentId]
+  );
+  const conversation = await getConversationById(id);
+  if (!conversation) throw new ConversationNotFoundError(id);
+  return conversation;
+}
+
 export async function updateConversation(
   id: string,
   updates: UpdateConversationInput

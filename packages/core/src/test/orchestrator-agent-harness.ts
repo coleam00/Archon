@@ -47,8 +47,6 @@ mock.module('../workflows/branch-launch-source', () => ({
 
 export const operator: RunActor = { kind: 'operator' };
 
-// ─── Mock setup (ALL mocks must come before the module under test import) ────
-
 export const mockSyncWorkspace = mock<typeof Git.syncWorkspace>(() =>
   Promise.resolve({
     branch: toBranchName('main'),
@@ -173,6 +171,7 @@ mock.module('../db/conversations', () => ({
   getConversationByPlatformId: mockGetConversationByPlatformId,
   detachConversationProject: mockDetachConversationProject,
   updateConversation: mockUpdateConversation,
+  clearConversationCheckout: mock<typeof ConversationDb.clearConversationCheckout>(),
   touchConversation: mock(() => Promise.resolve()),
 }));
 

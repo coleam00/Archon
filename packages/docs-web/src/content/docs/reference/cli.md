@@ -1559,8 +1559,7 @@ A **failed** run keeps its environment only until its outcome is settled:
 
 The output names each failed run whose environment it removed, with the reason:
 `merged`, `PR closed`, or `stale`. Removal leaves the run's status unchanged. Resuming
-it afterwards fails with `the working path from the run no longer exists`; start a
-fresh run. To discard a failed run sooner, use `workflow abandon`.
+it afterwards fails with `Checkout '<path>' was released; start a fresh run.` To discard a failed run sooner, use `workflow abandon`.
 
 Age alone never removes work that exists nowhere else. The stale sweep, here and in the
 server's scheduled cleanup and chat `/worktree cleanup stale`, keeps any environment whose

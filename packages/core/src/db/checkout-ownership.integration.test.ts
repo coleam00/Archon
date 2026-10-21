@@ -44,7 +44,9 @@ mock.module('./connection', () => ({
 }));
 const sql = await import('./isolation-environments');
 const { createWorkflowStore } = await import('../workflows/store-adapter');
-const { updateConversation } = await import('./conversations');
+const { updateConversation, clearConversationCheckout, getConversationById } = await import(
+  './conversations'
+);
 const prior = Object.fromEntries(
   ['ARCHON_HOME', 'DATABASE_URL', 'GITHUB_APP_ID'].map(key => [key, process.env[key]])
 );
@@ -746,5 +748,56 @@ test('SQL conversation association is checked under the same checkout exclusion'
   await updateConversation(conversationId, { isolation_env_id: null });
   await expect(updateConversation(conversationId, { isolation_env_id: env.id })).rejects.toThrow(
     env.working_path
+  );
+});
+
+test.each([false, true])(
+  'SQL conditional checkout clear preserves replacement=%s and its pending owner',
+  async replacement => {
+    const codebase = randomUUID();
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [codebase, codebase, root]
+    );
+    const createEnv = () =>
+      sql.create({
+        codebase_id: codebase,
+        workflow_type: 'task',
+        workflow_id: randomUUID(),
+        working_path: join(root, randomUUID()),
+        branch_name: toBranchName(randomUUID()),
+        metadata: {},
+      });
+    const retired = await createEnv();
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $1, $2)`,
+      [conversationId, retired.id]
+    );
+    await sql.withWorktreeRegistration(retired, async mark => mark());
+    const current = replacement ? await createEnv() : null;
+    if (current) await updateConversation(conversationId, { isolation_env_id: current.id });
+    const run = current
+      ? await sqlStore.createWorkflowRun({
+          workflow_name: 'pending-owner',
+          user_message: '',
+          origin: { conversationId },
+        })
+      : null;
+    const conversation = await clearConversationCheckout(conversationId, retired.id);
+    expect(conversation.isolation_env_id).toBe(current?.id ?? null);
+    expect((await getConversationById(conversationId))?.isolation_env_id).toBe(current?.id ?? null);
+    if (current && run) {
+      await expect(
+        sql.withWorktreeRegistration(current, async mark => mark())
+      ).rejects.toBeInstanceOf(WorktreeInUseError);
+      expect((await sqlStore.getWorkflowRun(run.id))?.status).toBe('pending');
+    }
+  }
+);
+
+test('SQL conditional checkout clear refuses a missing conversation', async () => {
+  await expect(clearConversationCheckout(randomUUID(), randomUUID())).rejects.toThrow(
+    'Conversation not found:'
   );
 });
