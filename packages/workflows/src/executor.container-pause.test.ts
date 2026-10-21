@@ -904,8 +904,9 @@ describe('container pause segment ownership through the executor', () => {
     );
   }
 
-  for (const { path, nodes, name } of stalePublicationCases) {
-    it(`${name}: stale publication preserves a running successor`, async () => {
+  it.each(stalePublicationCases)(
+    '$name: stale publication preserves a running successor',
+    async ({ path, nodes }) => {
       const f = await setup(path, nodes);
       let successor: WorkflowRun | undefined;
       const resumeBeforePublication = async () => {
@@ -934,8 +935,8 @@ describe('container pause segment ownership through the executor', () => {
       } finally {
         f.unsubscribe();
       }
-    });
-  }
+    }
+  );
 
   for (const path of paths) {
     it.each([false, true])(
