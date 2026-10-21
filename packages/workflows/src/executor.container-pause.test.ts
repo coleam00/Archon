@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +20,8 @@ import { executionClaim, type IWorkflowStore } from './store';
 import type { ContainerWriteBackBackend } from './container-context';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 
+import * as untilBash from './dag/nodes/loop-group/until-bash';
+
 const roots = trackTempRoots();
 const approval = { nodeId: 'review', type: 'approval' as const, message: 'Review' };
 const summary = {
@@ -34,7 +36,7 @@ const summary = {
 const paths = ['ordinary', 'writeback', 'unresolved'] as const;
 type PausePath = (typeof paths)[number];
 
-async function setup(path: PausePath) {
+async function setup(path: PausePath, ordinaryNodes?: unknown[]) {
   const root = roots(await mkdtemp(join(tmpdir(), 'container-pause-')));
   setMockArtifactHome(root);
   const store = await createFileWorkflowStore({ root: join(root, 'store') });
@@ -73,7 +75,7 @@ async function setup(path: PausePath) {
       description: 'Pause fixture',
       nodes:
         path === 'ordinary'
-          ? [{ id: 'review', approval: { message: 'Review' } }]
+          ? (ordinaryNodes ?? [{ id: 'review', approval: { message: 'Review' } }])
           : [{ id: 'work', bash: 'echo done' }],
     })
   );
@@ -144,6 +146,88 @@ describe('container pause segment ownership through the executor', () => {
       }
     }
   );
+  for (const suspension of [
+    { approval: { message: 'Review' } },
+    { wait: { duration_ms: 3_600_000 } },
+  ]) {
+    for (const nested of [false, true]) {
+      it.each(['resume-before-read', 'resume-after-read', 'read-failure'] as const)(
+        `ordinary ${'approval' in suspension ? 'gate' : 'wait'} (nested=${nested}): %s retains publication`,
+        async order => {
+          const leaf = { id: 'review', ...suspension };
+          const group = (id: string, nodes: unknown[]) => ({
+            id,
+            loop_group: { max_iterations: 2, until_bash: 'echo MUST_NOT_RUN', nodes },
+          });
+          const pauseNode = nested ? group('outer', [group('inner', [leaf])]) : leaf;
+          const f = await setup('ordinary', [
+            pauseNode,
+            { id: 'after', bash: 'echo MUST_NOT_RUN', depends_on: [pauseNode.id] },
+          ]);
+          const completion = spyOn(untilBash, 'runGroupUntilBash');
+          let published = false;
+          let statusReadsAfterPublication = 0;
+          let successor: WorkflowRun | undefined;
+          const publishedPause = async () => {
+            published = true;
+            if (order === 'resume-before-read')
+              successor = await f.store.resumeWorkflowRun(f.run.id);
+          };
+          try {
+            const result = await f.execute({
+              pauseWorkflowRun: async (...args) => {
+                await f.store.pauseWorkflowRun(...args);
+                await publishedPause();
+              },
+              pauseWorkflowRunForWait: async (...args) => {
+                await f.store.pauseWorkflowRunForWait(...args);
+                await publishedPause();
+              },
+              getWorkflowRunStatus: async id => {
+                if (published) {
+                  statusReadsAfterPublication++;
+                  if (order === 'read-failure' && statusReadsAfterPublication === 1)
+                    throw new Error('status read unavailable after publication');
+                }
+                const status = await f.store.getWorkflowRunStatus(id);
+                if (published && order === 'resume-after-read' && successor === undefined) {
+                  successor = await f.store.resumeWorkflowRun(id);
+                }
+                return status;
+              },
+            });
+            expect(published).toBe(true);
+            if (order === 'resume-after-read')
+              expect(statusReadsAfterPublication).toBeGreaterThan(0);
+            expect(result).toMatchObject({ success: true, paused: true });
+            const row = await f.store.getWorkflowRun(f.run.id);
+            expect(row?.status).toBe(order === 'read-failure' ? 'paused' : 'running');
+            expect(executionClaim(row?.metadata ?? {})).toBe(
+              executionClaim((successor ?? f.run).metadata)
+            );
+            expect(f.stop).toHaveBeenCalledTimes(order === 'read-failure' ? 1 : 0);
+            const events = await f.store.listWorkflowEvents(f.run.id);
+            expect(
+              events.some(e =>
+                ['workflow_failed', 'workflow_completed', 'loop_iteration_completed'].includes(
+                  e.event_type
+                )
+              )
+            ).toBe(false);
+            expect(events.some(e => e.step_name === 'after')).toBe(false);
+            if (nested) {
+              expect(events.filter(e => e.event_type === 'loop_iteration_started')).toHaveLength(2);
+              expect(completion).not.toHaveBeenCalled();
+            }
+          } finally {
+            completion.mockRestore();
+            f.unsubscribe();
+          }
+        }
+      );
+    }
+  }
+
   for (const path of paths) {
     it.each([false, true])(
       `${path}: resume wins before cleanup (successor paused=%s)`,

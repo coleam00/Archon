@@ -68,15 +68,15 @@ export async function runLoopGroupIteration(
   recordIterationStarted(run, i);
 
   const body = bodyIteration(run, state, i);
-  await runLayers(body.iterCtx);
+  const bodyStop = await runLayers(body.iterCtx);
   addIterationUsage(run, body.iterCtx, i);
 
-  // A body approval/cancel node may have paused or cancelled the run mid-iteration.
-  // `paused` is tolerated (a sibling gate in the same iteration layer) — mirror
-  // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
-  // means the loop must stop now, skipping snapshot/completion handling for this
-  // iteration. Re-check before proceeding.
-  const postBodyStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  // A body's pause belongs to this segment even if resume has advanced the row.
+  // Without that boundary, terminal changes still stop iteration completion.
+  const postBodyStatus =
+    bodyStop === 'paused'
+      ? bodyStop
+      : await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
   // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
   if (!shouldContinueStreamingForStatus(postBodyStatus)) {
     const effectiveStatus = postBodyStatus ?? 'deleted';
@@ -102,7 +102,7 @@ export async function runLoopGroupIteration(
 
   const halted =
     (await failedBody(run, state, i, body)) ??
-    (await suspendedBody(run, state, i, body, postBodyStatus));
+    (await suspendedBody(run, state, i, body, postBodyStatus, bodyStop === 'paused'));
   if (halted !== undefined) return halted;
 
   const origin = ctx.interactionAdmission?.failure();
@@ -383,7 +383,8 @@ async function suspendedBody(
   state: LoopGroupState,
   i: number,
   body: BodyRun,
-  postBodyStatus: string | null
+  postBodyStatus: string | null,
+  stopAtPause: boolean
 ): Promise<LoopGroupBodyResult | undefined> {
   if (postBodyStatus !== 'paused') return undefined;
   const running: LoopGroupBodyResult = {
@@ -408,7 +409,10 @@ async function suspendedBody(
       return { ...running, ...(suspensionPoint !== undefined ? { suspensionPoint } : {}) };
     }
   }
-  if (run.bodyNodes.some(n => canSuspend(n) && scopedNodeOutputs.get(n.id)?.state === 'running')) {
+  if (
+    stopAtPause ||
+    run.bodyNodes.some(n => canSuspend(n) && scopedNodeOutputs.get(n.id)?.state === 'running')
+  ) {
     return running;
   }
   return undefined;

@@ -58,14 +58,29 @@ async function settleSequentially(
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
- * state (paused/cancelled/deleted). Returns the observed stop reason so top-level
- * cleanup preserves the pause boundary even if resume has already acquired the run.
+ * state (paused/cancelled/deleted). Successful pause writes also stop this segment:
+ * resume can acquire the run before the next status read.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stopped' | undefined> {
-  // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
+  // Nested walkers inherit these wrappers, so a body's publication also stops its parent.
+  let pausePublished = false;
+  const deps: RunLayersContext['deps'] = {
+    ...ctx.deps,
+    store: {
+      ...ctx.deps.store,
+      pauseWorkflowRun: async (...args) => {
+        await ctx.deps.store.pauseWorkflowRun(...args);
+        pausePublished = true;
+      },
+      pauseWorkflowRunForWait: async (...args) => {
+        await ctx.deps.store.pauseWorkflowRunForWait(...args);
+        pausePublished = true;
+      },
+    },
+  };
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     await ctx.toolAttention.refresh();
@@ -96,6 +111,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stop
     for (const phase of phases) {
       const layerHadFailure = await runLayerPhase(
         ctx,
+        deps,
         phase,
         isParallelLayer,
         serializeLayer,
@@ -109,7 +125,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stop
 
     await ctx.afterLayer?.();
 
-    const stop = await stopsBetweenLayers(ctx, layerIdx);
+    const stop = await stopsBetweenLayers(ctx, layerIdx, pausePublished);
     if (stop !== undefined) return stop;
   }
   return undefined;
@@ -117,6 +133,7 @@ export async function runLayers(ctx: RunLayersContext): Promise<'paused' | 'stop
 
 async function runLayerPhase(
   ctx: RunLayersContext,
+  deps: RunLayersContext['deps'],
   layer: readonly DagNode[],
   isParallelLayer: boolean,
   serializeLayer: boolean,
@@ -131,6 +148,7 @@ async function runLayerPhase(
       async (): Promise<LayerNodeResult> => {
         const nodeCtx: RunLayersContext = {
           ...ctx,
+          deps,
           currentExecution: undefined,
           interactionAdmission: peers?.[index].admission ?? ctx.interactionAdmission,
           guardedLayerSnapshots,
@@ -671,11 +689,17 @@ async function aggregateLayerResults(
 
 async function stopsBetweenLayers(
   ctx: RunLayersContext,
-  layerIdx: number
+  layerIdx: number,
+  pausePublished: boolean
 ): Promise<'paused' | 'stopped' | undefined> {
+  const publishedStop =
+    pausePublished && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause'
+      ? 'paused'
+      : undefined;
   // Check for non-running status between DAG layers (cancellation, deletion, pause)
   try {
     const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+    if (publishedStop !== undefined) return publishedStop;
     if (dagStatus === null || dagStatus !== 'running') {
       const effectiveStatus = dagStatus ?? 'deleted';
       if (
@@ -715,5 +739,5 @@ async function stopsBetweenLayers(
       'dag.status_check_failed'
     );
   }
-  return undefined;
+  return publishedStop;
 }
