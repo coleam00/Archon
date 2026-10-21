@@ -57,9 +57,22 @@ describe('executeDagWorkflow -- workflow: node', () => {
     await removeTempTree(testDir);
   });
 
-  it.each([false, true])(
-    'counts persisted child usage once across parent replay (malformed=%s)',
-    async malformed => {
+  it.each([
+    { label: 'valid', malformed: false, counters: { total_tokens_out: 10 } },
+    { label: 'invalid axis', malformed: true, counters: { total_tokens_out: 'unreadable' } },
+    {
+      label: 'null marker',
+      malformed: true,
+      counters: { total_tokens_out: 10, total_tokens_unknown: null },
+    },
+    {
+      label: 'string marker',
+      malformed: true,
+      counters: { total_tokens_out: 10, total_tokens_unknown: 'false' },
+    },
+  ])(
+    'counts persisted child usage once across parent replay ($label)',
+    async ({ malformed, counters }) => {
       await writeBlock(
         'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
         'child-workflow'
@@ -72,7 +85,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
             parent_node_id: 'sub',
             summary: 'child output',
             total_tokens_in: 100,
-            total_tokens_out: malformed ? 'unreadable' : 10,
+            ...counters,
             total_cost_usd: 0.3,
           },
         }),
@@ -112,6 +125,74 @@ describe('executeDagWorkflow -- workflow: node', () => {
       expect(store.completeWorkflowRun).toHaveBeenCalledTimes(2);
     }
   );
+
+  it('retains cancelled child uncertainty alongside valid sibling usage on re-entry', async () => {
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    store.findChildRuns.mockResolvedValue([
+      makeWorkflowRun('valid-child', {
+        status: 'completed',
+        metadata: {
+          parent_node_id: 'sibling',
+          summary: 'done',
+          total_tokens_in: 20,
+          total_tokens_out: 2,
+          total_cost_usd: 0.2,
+        },
+      }),
+      makeWorkflowRun('cancelled-child', {
+        status: 'cancelled',
+        metadata: {
+          parent_node_id: 'sub',
+          total_tokens_in: 100,
+          total_tokens_out: 'unreadable',
+          total_cost_usd: 0.3,
+        },
+      }),
+    ]);
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+      throw new Error('Settled child must not be run again');
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('cancelled-child-reentry'),
+        workflow: {
+          name: 'parent',
+          nodes: [
+            { id: 'sibling', kind: 'workflow', workflow: 'child-workflow' },
+            { id: 'sub', kind: 'workflow', workflow: 'child-workflow', depends_on: ['sibling'] },
+          ],
+        },
+        runChildWorkflow,
+      })
+    );
+    expect(runChildWorkflow).not.toHaveBeenCalled();
+    expect(eventsOf(store)).toContainEqual({
+      event_type: 'node_completed',
+      step_name: 'sibling',
+      data: expect.objectContaining({ tokens: { input: 20, output: 2 }, cost_usd: 0.2 }),
+    });
+    expect(eventsOf(store)).toContainEqual({
+      event_type: 'node_failed',
+      step_name: 'sub',
+      data: expect.objectContaining({ failure_kind: 'cancelled', cost_usd: 0.3 }),
+    });
+    expect(runUsageWrites(store)).toEqual([
+      expect.objectContaining({
+        total_tokens_unknown: true,
+        total_tokens_in: null,
+        total_tokens_out: null,
+        total_cost_usd: 0.5,
+      }),
+    ]);
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it.each(['node', 'terminal'] as const)(
     'mixed child fan-out rejections preserve the %s write failure',

@@ -1,4 +1,5 @@
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
+import { hasUnknownTokenTotal } from '../schemas/run-usage';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
@@ -113,7 +114,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     typeof output === 'number' &&
     Number.isFinite(output);
   const tokensUnknown =
-    md.total_tokens_unknown === true ||
+    hasUnknownTokenTotal(md) ||
     ((Object.hasOwn(md, 'total_tokens_in') || Object.hasOwn(md, 'total_tokens_out')) &&
       !hasValidTokens);
   const cacheRead =
