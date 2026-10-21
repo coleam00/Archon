@@ -35,6 +35,7 @@ import {
   addResourceSlotHolder,
   lockResourceSlot,
   resourceStartOccupancy,
+  parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
@@ -456,6 +457,7 @@ export async function listQueuedResourceStartsForHost(
   );
   return result.rows.map(row => {
     try {
+      parseQueuedResourceStart(row);
       return inspectRequest(row);
     } catch (error) {
       return {

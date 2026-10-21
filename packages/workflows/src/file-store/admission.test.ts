@@ -6,7 +6,6 @@ import * as pathModule from 'node:path';
 import { tmpdir } from 'node:os';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { setLogSink } from '@archon/paths/logger';
 import { WorkflowResourceBusyError, WorkflowNotResumableError } from '../store';
 import type { ResourceStartIntent } from '../schemas/resource-start';
 import { createFileWorkflowStore } from './store';
@@ -805,7 +804,7 @@ async function checkLocalHolderDecisions(context: ReleasedHolderFixture) {
     await expect(
       store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
     ).rejects.toThrow();
-  if (corruption === 'intact' && !unknownMembership) {
+  if (corruption === 'intact' || (unknownMembership && context.readable)) {
     await store.resumeWorkflowRun(resuming.launch.run.id);
     await store.pauseWorkflowRunForWait(resuming.launch.run.id, wait, {
       kind: 'started',
@@ -863,7 +862,7 @@ test.each(
     const context = await releasedHolderFixture(membership, corruption);
     await checkLocalHolderDecisions(context);
     await checkForeignHolderDecisions(context);
-    const { root, store, holder, queued, resuming, wait, cursor, slotPath, path } = context;
+    const { root, store, holder, queued, wait, cursor, path } = context;
     if (context.unknownMembership && context.readable) {
       const independent = { ...intent(), resource: 'independent' };
       independent.launch.execution.cwd = '/independent';
@@ -884,10 +883,6 @@ test.each(
     }
     await writeFile(path, JSON.stringify(context.intact));
     if (membership === 'released-before-upgrade') {
-      await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toThrow();
-      const repairedSlot = JSON.parse(await readFile(slotPath, 'utf8'));
-      repairedSlot.admitted = [holder.launch.run.id, resuming.launch.run.id];
-      await writeFile(slotPath, JSON.stringify(repairedSlot));
       expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
         status: 'running',
       });
@@ -1004,34 +999,38 @@ for (const corruption of queuedCorruptions) {
     await store.admitResourceStart(foreignHolder);
     await store.admitResourceStart(foreignQueued);
     const path = await corruptQueuedDocument(root, foreignQueued.launch.run.id, corruption);
-    const logs: string[] = [];
-    setLogSink(line => logs.push(line));
-    try {
-      expect((await store.listQueuedResourceStartsForHost('host')).map(row => row.id)).toEqual([
+    const unclassified = !['launch', 'missing-status', 'invalid-status'].includes(corruption);
+    const checkListing = async () => {
+      const listed = await store.listQueuedResourceStartsForHost('host');
+      expect(listed.filter(row => !('error' in row)).map(row => row.id)).toEqual([
         queued.launch.run.id,
       ]);
-      await finishRun(root, holder.launch.run.id);
-      const listed = await store.listQueuedResourceStartsForHost('host');
-      expect(listed.map(row => row.id)).toEqual([queued.launch.run.id]);
-      for (const resource of new Set(
-        listed.flatMap(row => ('error' in row ? [] : [row])).map(row => row.resource)
-      )) {
-        expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
-          { status: 'admitted', runId: queued.launch.run.id },
-        ]);
+      const failures = listed.filter(row => 'error' in row);
+      expect(failures).toHaveLength(unclassified ? 1 : 0);
+      if (unclassified) {
+        expect(failures[0]?.error).toBeInstanceOf(Error);
+        expect(failures[0]?.resource).toBeUndefined();
+        const failure = failures[0]!;
+        if (!('error' in failure) || !(failure.error instanceof Error))
+          throw new Error('expected listing failure');
+        expect(failure.error.message).toContain(path);
+        expect(failure.error.cause).toBeInstanceOf(Error);
       }
-      if (!['launch', 'missing-status', 'invalid-status'].includes(corruption)) {
-        expect(logs.map(line => JSON.parse(line))).toContainEqual(
-          expect.objectContaining({
-            document: path,
-            msg: 'queued_start_document_invalid_listing_omitted',
-          })
-        );
-        expect(await store.listQueuedResourceStartsForHost('foreign-host')).toEqual([]);
-      }
-    } finally {
-      setLogSink(undefined);
+      return listed;
+    };
+    await checkListing();
+    await finishRun(root, holder.launch.run.id);
+    const listed = await checkListing();
+    for (const resource of new Set(
+      listed.flatMap(row => ('error' in row ? [] : [row])).map(row => row.resource)
+    )) {
+      expect(await store.drainResourceStarts({ resource, hostId: 'host' })).toMatchObject([
+        { status: 'admitted', runId: queued.launch.run.id },
+      ]);
     }
+    expect(await store.listQueuedResourceStartsForHost('foreign-host')).toMatchObject([
+      { error: expect.any(Error) },
+    ]);
     expect(await store.getWorkflowRun(foreignQueued.launch.run.id)).toBeNull();
     expect(await store.getWorkflowRun(foreignHolder.launch.run.id)).toMatchObject({
       status: 'pending',
@@ -1178,5 +1177,28 @@ test.each([
     expect(await store.drainResourceStarts({ resource: 'guarded', hostId: 'host' })).toMatchObject([
       { runId: guarded.launch.run.id },
     ]);
+  }
+);
+
+test.each(['paused', 'failed'] as const)(
+  'an intact pre-upgrade released %s run resumes without slot repair',
+  async status => {
+    const { root, store, holder, queued } = await releasedHolderFixture(
+      'released-before-upgrade',
+      'intact'
+    );
+    if (status === 'failed') {
+      await commitModule.commit(root, [holder.launch.run.id], async runs => {
+        const run = runs.get(holder.launch.run.id)!;
+        return { result: undefined, changes: { runs: [{ run: { ...run, status: 'failed' } }] } };
+      });
+      await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toBeInstanceOf(
+        WorkflowResourceBusyError
+      );
+      await store.withdrawQueuedResourceStart(queued.launch.run.id);
+    }
+    expect(await store.resumeWorkflowRun(holder.launch.run.id)).toMatchObject({
+      status: 'running',
+    });
   }
 );

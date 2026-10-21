@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
   ResourceSlotCapacityConflictError,
@@ -244,34 +245,32 @@ export async function resourceStartOccupancy(
       ORDER BY w.started_at, w.id`,
     [resource]
   );
-  const queued = await query<{ id: string; host_id: string; launch: unknown }>(
-    `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
+  const queued = await query<Record<string, unknown>>(
+    `SELECT id, host_id, resource_key, status, launch FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
   );
-  const liveRuns = live.rows
-    .filter(row => holding.has(String(row.id)) || row.resource_key === resource)
-    .map(row => {
-      if (row.resource_key !== resource)
-        throw new Error(
-          `Resource '${resource}' holder '${row.id}' has no matching admitted request`
-        );
-      return {
-        id: String(row.id),
-        status: row.status,
-        metadata: parseJsonObject(row.metadata) ?? {},
-        working_path: row.working_path,
-        launch: parseLaunch(row.launch),
-      };
-    });
+  const isLocal = (row: (typeof live.rows)[number]) =>
+    holding.has(String(row.id)) || (!row.foreign_membership && row.resource_key === resource);
+  const liveRuns = live.rows.filter(isLocal).map(row => {
+    if (row.resource_key !== resource)
+      throw new Error(`Resource '${resource}' holder '${row.id}' has no matching admitted request`);
+    return {
+      id: String(row.id),
+      status: row.status,
+      metadata: parseJsonObject(row.metadata) ?? {},
+      working_path: row.working_path,
+      launch: parseLaunch(row.launch),
+    };
+  });
   const reusable = await query<ReusableCheckout>(
     `SELECT codebase_id AS "codebaseId", workflow_id AS branch, working_path AS "workingPath"
        FROM remote_agent_isolation_environments WHERE status = 'active' AND workflow_type = 'task'`
   );
   let unknownForeignCheckoutHolder: string | undefined;
   const foreign = live.rows
-    .filter(row => !holding.has(String(row.id)) && row.resource_key !== resource)
+    .filter(row => !isLocal(row))
     .map(row => {
       const run = { id: String(row.id), working_path: row.working_path };
       if (row.launch === null) {
@@ -300,11 +299,7 @@ export async function resourceStartOccupancy(
     reusableCheckouts: reusable.rows,
     holders,
     waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
-    queue: queued.rows.map(row => ({
-      id: String(row.id),
-      hostId: String(row.host_id),
-      launch: parseLaunch(row.launch),
-    })),
+    queue: queued.rows.map(row => parseQueuedResourceStart(row, resource)),
     heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
     unknownForeignCheckoutHolder,
@@ -313,4 +308,26 @@ export async function resourceStartOccupancy(
 
 function parseLaunch(value: unknown): PreparedWorkflowLaunch {
   return preparedWorkflowLaunchSchema.parse(typeof value === 'string' ? JSON.parse(value) : value);
+}
+
+const queuedResourceStartSchema = z
+  .object({
+    id: z.string().min(1),
+    host_id: z.string().min(1),
+    resource_key: z.string().min(1),
+    status: z.literal('queued'),
+    launch: z.preprocess(
+      value => (typeof value === 'string' ? JSON.parse(value) : value),
+      preparedWorkflowLaunchSchema
+    ),
+  })
+  .refine(row => row.id === row.launch.run.id, {
+    message: 'Queued request and launch run IDs disagree',
+  });
+
+export function parseQueuedResourceStart(value: unknown, resource?: string) {
+  const row = queuedResourceStartSchema.parse(value);
+  if (resource !== undefined && row.resource_key !== resource)
+    throw new Error(`Queued request '${row.id}' does not belong to resource '${resource}'`);
+  return { id: row.id, hostId: row.host_id, launch: row.launch };
 }

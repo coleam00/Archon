@@ -410,11 +410,6 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     if (await hasForeignSlotMembership(run.id, row.resource))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
-    if (
-      !resource.admitted.includes(run.id) &&
-      !resource.holders.some(holder => holder.kind === 'run' && holder.id === run.id)
-    )
-      throw new Error(`Admitted resource membership unknown for run '${run.id}'`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     const blocker = resourceResumeBlocker(await occupancy(row.resource), {
@@ -494,14 +489,12 @@ export function createFileAdmissionStore(
   async function queueCandidate<S extends z.ZodType>(
     path: string,
     schema: S
-  ): Promise<z.output<S> | null> {
+  ): Promise<{ data: z.output<S> } | { error: Error }> {
     try {
-      return schema.parse(await readJson(join(root, path)));
+      return { data: schema.parse(await readJson(join(root, path))) };
     } catch (error) {
       if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
-      // Keep corrupt candidates stored for repair without blocking independent resources.
-      log.error({ document: path }, 'queued_start_document_invalid_listing_omitted');
-      return null;
+      return { error: new Error(`Invalid queued document '${path}'`, { cause: error }) };
     }
   }
   async function receiptIdForRequest(id: string): Promise<string | undefined> {
@@ -513,7 +506,12 @@ export function createFileAdmissionStore(
       });
     for (const path of await documentPaths(root, 'receipts')) {
       const receipt = await queueCandidate(path, schema);
-      if (receipt?.bindings.some(binding => binding.requestIds.includes(id))) return receipt.id;
+      if ('error' in receipt) {
+        log.error({ document: path }, 'queued_start_receipt_invalid_attribution_unknown');
+        continue;
+      }
+      if (receipt.data.bindings.some(binding => binding.requestIds.includes(id)))
+        return receipt.data.id;
     }
     return undefined;
   }
@@ -706,14 +704,21 @@ export function createFileAdmissionStore(
         const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];
         for (const path of await documentPaths(root, 'slots')) {
           const slot = await queueCandidate(path, slotSchema(path).pick({ queue: true }));
-          if (!slot) continue;
-          for (const [position, id] of slot.queue.entries()) {
+          if ('error' in slot) {
+            queued.push({ inspection: { id: path, error: slot.error }, position: 0 });
+            continue;
+          }
+          for (const [position, id] of slot.data.queue.entries()) {
             const envelope = await queueCandidate(
               pathFor('requests', id),
               requestSchema.pick({ hostId: true }).extend({ resource: z.unknown().optional() })
             );
-            if (!envelope || envelope.hostId !== hostId) continue;
-            queued.push(await inspectQueuedRequest(path, id, envelope.resource, position));
+            if ('error' in envelope) {
+              queued.push({ inspection: { id, error: envelope.error }, position });
+              continue;
+            }
+            if (envelope.data.hostId !== hostId) continue;
+            queued.push(await inspectQueuedRequest(path, id, envelope.data.resource, position));
           }
         }
         queued.sort(

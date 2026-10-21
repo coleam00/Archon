@@ -677,6 +677,10 @@ for (const corruption of [
   'json',
   'missing',
   'only-launch',
+  'only-null',
+  'only-missing-hostId',
+  'only-slot-json',
+  'only-slot-queue',
   'only-resource',
   'only-missing-resource',
   'only-missing-id',
@@ -721,26 +725,31 @@ for (const corruption of [
         }
       }
     };
-    await queueResource('a', corruption.startsWith('only-') ? 2 : 3);
+    await queueResource('a', corruption === 'launch' ? 3 : 2);
     await queueResource('z', 2);
     for (const id of holders) {
       await store.claimPendingWorkflowRun(id);
       await store.completeWorkflowRun(id, { duration_ms: 1 });
     }
     const damagedId = queued[0]!;
+    const slotDamage = corruption.startsWith('only-slot-');
     const path = join(
       root,
-      'resource/requests',
-      `${createHash('sha256').update(damagedId).digest('hex')}.json`
+      slotDamage ? 'resource/slots' : 'resource/requests',
+      `${createHash('sha256')
+        .update(slotDamage ? 'a' : damagedId)
+        .digest('hex')}.json`
     );
     const damageRequest = async (): Promise<void> => {
       if (corruption === 'missing') await fs.unlink(path);
-      else if (corruption === 'json') await writeFile(path, '{');
+      else if (corruption === 'json' || corruption === 'only-slot-json') await writeFile(path, '{');
+      else if (corruption === 'only-null') await writeFile(path, 'null');
       else {
         const row = JSON.parse(await readFile(path, 'utf8'));
         if (corruption.startsWith('only-missing-'))
           delete row[corruption.slice('only-missing-'.length)];
         else if (corruption === 'only-resource') row.resource = null;
+        else if (corruption === 'only-slot-queue') row.queue = 42;
         else row.launch = {};
         await writeFile(path, JSON.stringify(row));
       }
@@ -760,15 +769,24 @@ for (const corruption of [
     if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
     expect(error.failures).toHaveLength(1);
     expect(error.failures[0]?.resource).toBe(
-      corruption === 'only-resource' || corruption === 'only-missing-resource' ? undefined : 'a'
+      [
+        'only-resource',
+        'only-missing-resource',
+        'json',
+        'missing',
+        'only-null',
+        'only-missing-hostId',
+        'only-slot-json',
+        'only-slot-queue',
+      ].includes(corruption)
+        ? undefined
+        : 'a'
     );
     const failure = error.failures[0]?.error;
     if (!(failure instanceof Error)) throw new Error('expected original drain error');
-    expect(failure.message).toContain(
-      corruption === 'launch' || corruption.startsWith('only-')
-        ? `Queued request '${damagedId}' is invalid`
-        : "Resource 'a' drain failed"
-    );
+    expect(failure.message).toContain('Queued request');
+    if (slotDamage) expect(failure.message).toContain('resource/slots/');
+    else expect(failure.message).toContain(damagedId);
     expect(failure.cause).toBeInstanceOf(Error);
     expect(await store.getWorkflowRun(damagedId)).toBeNull();
     if (before !== undefined) expect(await readFile(path, 'utf8')).toBe(before);
