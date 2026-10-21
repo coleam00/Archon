@@ -811,9 +811,16 @@ that can still claim it, or a commit its pull request did not carry stays and is
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 
-A worktree that never opened a pull request is not its concern. A completed run removes
-its own worktree when the checkout is clean, every commit is on a remote, and the branch
-was never published; otherwise the run's terminal record says why it stayed.
+Who removes each checkout:
+
+- Intake, triage, discoveries, the merge queue, forge check and this workflow create no
+  worktree. They run in the launch checkout as it stands, so point a binding's `cwd` at a
+  checkout that tracks the default branch.
+- A run that creates a worktree on its own run-named branch, such as a build round,
+  removes it when the run completes if the checkout is clean and every commit is on a
+  remote; its pushed branch counts. The branch stays. Otherwise the run reports what
+  removing it would lose, and the checkout stays listed by `archon isolation list`.
+- A worktree launched with `--branch` waits for this workflow's merged sweep.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
 installs that run only the CLI. The pack installs no binding. A native schedule starts a
