@@ -1,6 +1,7 @@
 import type { WorkflowHost } from './host-store';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { getArchonWorkspacesPath } from '@archon/paths';
+import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -16,7 +17,8 @@ export async function resumeWorkflowContinuation(
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,
-  actorUserId?: string
+  actorUserId?: string,
+  executionOptions: Pick<WorkflowResumeOptions, 'deferScratchCleanup'> = {}
 ): Promise<ContinuationAdmission> {
   const resolveProject: ResolveProject = async (run, resumer) => {
     const codebase = run.codebase_id
@@ -44,6 +46,7 @@ export async function resumeWorkflowContinuation(
     };
   };
   return resumeRunContinuation(host, runId, resolveContext, cursor, {
+    ...executionOptions,
     actorUserId,
     resolveProject,
   });
