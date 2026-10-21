@@ -89,6 +89,9 @@ Route by intent:
 - **Merge only what was reviewed.** When you merge a pull request by hand, pin the
   merge to the reviewed head (`gh pr merge <n> --match-head-commit <sha>`), read the
   open review threads first, and sync your checkout afterwards.
+- **Author agent-first.** In a workflow you write, an agent node with typed output
+  judges, scripts read facts and act at boundaries, and YAML only wires them.
+  `authoring/authoring-workflows.md` ("Agent-first") has the rule and an example.
 
 ## Gotchas
 

@@ -106,17 +106,84 @@ Work through these questions in order, with the user where marked:
 9. **Validate** before any real run. None of these steps spends on a model:
 
    ```bash
-   archon validate workflows <name>                        # schema, references, command files
-   archon workflow run <name> --dry-run --stubs-init <pack>/<name>/fixtures/<case>.stubs.yaml
-   archon workflow run <name> --dry-run --stubs <pack>/<name>/fixtures/<case>.stubs.yaml
-   archon workflow test <name>                             # every declared fixture
+   archon validate workflows <name>                    # schema, references, command files
+   archon workflow run <name> --dry-run --stubs-init stubs.yaml   # scratch stub scaffold
+   archon workflow run <name> --dry-run --stubs stubs.yaml
+   archon workflow test <name>                         # every declared fixture
    ```
 
-   `--stubs-init` writes a stub scaffold to fill in. A dry run walks the graph with
-   stubbed node outputs and prints each node's resolved provider and model; add
-   `--exec-code` only for trusted `bash:` and `script:` nodes. Then make a planted
+   `--stubs-init` writes a stub scaffold to fill in. Keep it outside `fixtures/`: a
+   dry-run stub file is not a fixture. A fixture file declares a `fixture:` block, and
+   `--stubs` refuses it ("this is a fixture file; run it with 'workflow test'"). Copy
+   the stub values you need into a fixture and run it with `workflow test`. A dry run
+   walks the graph with stubbed node outputs and prints each node's resolved provider
+   and model; add `--exec-code` only for trusted `bash:` and `script:` nodes. Then make a planted
    bad case fail: a fixture that never went red proves nothing. Finish with one real
    run on a genuine task.
+
+## Agent-first: who decides what
+
+Archon's rule is **YAML coordinates. Code computes. Agents judge.** Give each kind
+of work to the one that does it well:
+
+- **Agents judge.** Reading a comment, a diff, a ticket or a CI log and deciding what
+  it means is a prompt node that returns a small typed result (`output_format`).
+  A script that tries the same judgment freezes one guess into code.
+- **Scripts give facts and act at boundaries.** A script reads the forge, git, files
+  or the CLI and hands the agent facts, or performs the write the agent decided.
+  It never re-judges what the agent already judged. Compute in a `bash:` or
+  `script:` node only when the rule is genuinely fixed (parsing JSON, counting,
+  comparing heads) or a typed invariant must hold before an irreversible action.
+- **YAML coordinates.** It holds topology, gates on typed fields, joins, sessions and
+  waits. Do not grow `when:` into logic; compute the decision in a node and gate on
+  its field.
+- **Natural language is not a wire format.** Never regex or keyword-match prose,
+  whether a user's message, an agent's output or a vendor's error text, to decide
+  what happens next. Let an agent read it and return a typed value.
+
+Bad: a script classifies a review comment with a pattern, and the pattern is the
+decision.
+
+```yaml
+- id: classify
+  bash: |
+    if printf '%s' "$COMMENT" | grep -qiE 'lgtm|approve|ship it'; then echo ready; else echo changes; fi
+- id: merge
+  depends_on: [classify]
+  when: "$classify.output == 'ready'"
+  script: merge
+  runtime: bun
+```
+
+Good: an agent reads the comment and returns a typed verdict, and the script only
+acts on it.
+
+```yaml
+- id: verdict
+  prompt: |
+    Read the review comment in $ARTIFACTS_DIR/comment.md. Decide whether the
+    reviewer approves merging this change as it stands.
+  output_format:
+    type: object
+    properties:
+      ready: { type: boolean }
+      reason: { type: string }
+    required: [ready, reason]
+- id: merge
+  depends_on: [verdict]
+  when: "$verdict.output.ready == true"
+  script: merge
+  runtime: bun
+```
+
+Test at the same seams. A script gets a test at its tool boundary: it writes an issue
+once, reads back a pushed head, merges only what was approved. Agent judgment is
+checked by outcome, through dry-run fixtures (`archon workflow test`) and real runs,
+never by a test that pins a prompt's wording, the YAML's shape or the route a run
+takes. Do not retest what the engine owns (`when:`, includes, loops, output
+validation). In an Archon checkout, `.archon/workflow-language-constitution.md` and
+`.archon/workflows/sdlc/CONSTITUTION.md` (sections 1 to 5 and 13) state these rules
+in full.
 
 ## Start simple, then adapt to what runs teach
 
