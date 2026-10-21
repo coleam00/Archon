@@ -15,11 +15,11 @@ import { type OrchestratorDispatch, persistUploadedFiles } from './api-message-d
 import { authorizeDispatchConversation } from './api-request-auth';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { dispatchResponseSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunLaunchJsonSchema,
+  workflowRunLaunchMultipartSchema,
+} from './schemas/workflow-run-launch.schemas';
 
-// Body validation is handled manually below (multipart vs JSON
-// branching), mirroring sendMessageRoute. The OpenAPI spec describes the
-// shapes via the description; declaring `request.body` would force JSON
-// validation to run on multipart payloads and reject them.
 const runWorkflowRoute = createRoute({
   method: 'post',
   path: '/api/workflows/{name}/run',
@@ -43,6 +43,13 @@ const runWorkflowRoute = createRoute({
     '`metadata.continuation.mode: "supersede"` on the new run.',
   request: {
     params: z.object({ name: z.string() }),
+    body: {
+      required: true,
+      content: {
+        'application/json': { schema: workflowRunLaunchJsonSchema },
+        'multipart/form-data': { schema: workflowRunLaunchMultipartSchema },
+      },
+    },
   },
   responses: {
     200: {
@@ -486,16 +493,12 @@ async function launchWorkflowRun(
 export function registerWorkflowRunLaunchRoute(app: OpenAPIHono, deps: RunLaunchDeps): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
 
-  // POST /api/workflows/:name/run - Run a workflow via the orchestrator
-  //
-  // Accepts either:
-  //   - application/json: { conversationId, message, inputs?, tiers?, aliases? }
-  //   - multipart/form-data: those maps JSON-encoded + files[] (≤5, ≤10MB each)
-  //
-  // Multipart matches /api/conversations/:id/message so the console's draft
-  // run input can attach screenshots / stack traces / paste-blobs the same
-  // way a freeform chat message can.
-  registerOpenApiRoute(runWorkflowRoute, async c => {
+  app.openAPIRegistry.registerPath(runWorkflowRoute);
+  // Hono installs validators for both media types when body is required. Keep
+  // manual parsing and its error order, while publishing the complete contract.
+  const { body: _body, ...request } = runWorkflowRoute.request;
+  const runtimeRoute = { ...runWorkflowRoute, request, hide: true };
+  registerOpenApiRoute(runtimeRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
