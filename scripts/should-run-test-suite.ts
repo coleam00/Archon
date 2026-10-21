@@ -21,7 +21,8 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
  *   - `reference/variables.md` and `guides/script-nodes.md` state the user-controlled variable
- *     rule, which `scripts/variables-rule-parity.test.ts` holds to the engine. The guard reads
+ *     rule, which `scripts/variables-rule-parity.test.ts` pins for review and checks against
+ *     engine-owned names and accessors. The guard reads
  *     every page of the docs site, so the conformance rule below is what lists these two.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.

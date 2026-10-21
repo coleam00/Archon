@@ -1,7 +1,7 @@
 /**
  * The rule about user-controlled variables in an exec node ships as prose: the docs site's
  * pages and the bundled `archon-cli` skill, which `archon skill add` writes to every install.
- * This guard pins the documents that state the rule and holds each of them to the engine.
+ * This guard pins rule statements for review and checks their names against the engine.
  *
  * The copy set is pinned in `COPY_PATHS`, so a document that starts stating the rule and a
  * document that stops stating it are both failures rather than a silent change of the set. A
@@ -10,7 +10,7 @@
  * on every push to `main` and `dev` and on every pull request that is not a draft, so a copy
  * that joins the set is caught by that check.
  *
- * Every fact the guard holds a copy to belongs to the engine:
+ * Name and accessor checks derive their vocabulary from the engine:
  * - `EXEC_NODE_ENVIRONMENT_NAMES` (`packages/workflows/src/exec-environment.ts`) is the bag an
  *   exec node delivers, and the authority a copy's class delivery is held to: the project's
  *   configured environment reaches the same subprocess, but it is not the class's delivery;
@@ -19,18 +19,18 @@
  *   out — comes from the engine, not from the copies that name it;
  * - `CONTEXT_VAR_PATTERN_STR` (the same module) is the engine's one context variable with
  *   three spellings, so a copy may name any of them for that member of the class;
- * - `loopScopeTokens` (`packages/workflows/src/dag/loop-scope.ts`) is the engine's second
- *   substitution channel: a `loop_group` body's `bash:` source receives the loop reply,
- *   shell-quoted, so the guard asks the engine about that channel too;
  * - `inputEnvKey` (`packages/workflows/src/schemas/dag-node.ts`) owns the `with:` binding
  *   prefix, a channel of its own that the exec node's bag does not carry;
  * - `execNodeSchema` (the same module) owns the runtimes a `script:` node dispatches under;
  * - `ENVIRONMENT_READ_PATTERNS` (`packages/workflows/src/exec-input-validation.ts`) owns the
  *   accessor spellings a copy may document, and the runtime each spelling belongs to.
  *
- * These checks recognize the forms used by the shipped copies; they do not interpret arbitrary
- * prose. Environment names are checked in sentences naming the user-controlled class, so other
- * sections can document project configuration and credentials outside the engine's own bag.
+ * `variables-rule-statements.json` pins the text of rule items naming the class and an exec
+ * kind, with whitespace normalized. Changes require reviewing and updating that fixture; the
+ * guard does not infer whether prose affirms or denies substitution. Name/accessor checks
+ * recognize the forms used by the shipped copies, not arbitrary prose. Environment names are
+ * checked in sentences naming the user-controlled class, so other sections can document project
+ * configuration and credentials outside the engine's own bag.
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -38,13 +38,13 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
-import { type LoopBodyScope, loopScopeTokens } from '../packages/workflows/src/dag/loop-scope';
 import { ENVIRONMENT_READ_PATTERNS } from '../packages/workflows/src/exec-input-validation';
 import { execNodeSchema, inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
 import {
   CONTEXT_VAR_PATTERN_STR,
   substituteWorkflowVariables,
 } from '../packages/workflows/src/workflow-variables';
+import pinnedStatements from './variables-rule-statements.json';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -59,12 +59,7 @@ const PAGE_EXTENSIONS = ['.md', '.mdx'];
  * The documents that state the rule. Pinned, so a document that starts stating the rule and a
  * document that stops stating it are both failures rather than a silent change of the set.
  */
-const COPY_PATHS = [
-  '.claude/skills/archon-cli/authoring/node-reference.md',
-  '.claude/skills/archon-cli/authoring/variables.md',
-  'packages/docs-web/src/content/docs/guides/script-nodes.md',
-  'packages/docs-web/src/content/docs/reference/variables.md',
-];
+const COPY_PATHS = Object.keys(pinnedStatements);
 
 /** The `with:` binding channel's env prefix, read from the engine that owns it. */
 const BINDING_PREFIX = inputEnvKey('');
@@ -103,22 +98,6 @@ const TEMPLATE_REFERENCE = /\$([A-Z_][A-Z0-9_]*)/g;
  * `$INPUTS.<name>` — and names no variable of its own. A dot that ends a sentence does not.
  */
 const STRUCTURED_REFERENCE = /^\.(?:[A-Za-z_<])/;
-
-/** The words a copy uses to say that a value is spliced into a source. */
-const SUBSTITUTION = /\b(?:substitut|splic|interpolat|embed|inlin|past)/i;
-
-/**
- * A negation that governs the substitution word: the claim that the class is not spliced
- * into the source. A negation that merely sits near the word says nothing about it.
- */
-const NEGATED_SUBSTITUTION =
-  /\b(?:not|never|no|neither|nor|without)\b[\s*_`"'-]{0,4}(?:[a-z]+-)?(?:substitut|splic|interpolat|embed|inlin|past)/i;
-
-/**
- * A negation anywhere in a sentence. The sentence then states the opposite of the claim it
- * carries, and the guard holds the copy to what the engine does rather than to the wording.
- */
-const NEGATION = /\b(?:not|never|no|neither|nor|without|instead of|rather than|no longer)\b/i;
 
 /**
  * The phrase the copies use for the class. A sentence that uses it is the one that calls the
@@ -183,16 +162,47 @@ describe('the user-controlled variable rule', () => {
     assertCopiesNameTheEngineClass(copies);
   });
 
-  test('every copy states that the variables are not substituted into the source', () => {
-    for (const copy of copies) assertStatesTheSubstitutionRule(copy);
+  test('the pinned rule statements have not changed without review', () => {
+    for (const copy of copies) assertPinnedRuleStatements(copy);
   });
 
-  test('no copy denies a splice the engine makes', () => {
-    for (const copy of copies) assertNoFalseSubstitutionDenial(copy);
+  test('the guard rejects a contradictory script substitution statement in every copy', () => {
+    for (const copy of copies) {
+      const mutated = {
+        ...copy,
+        items: [
+          ...copy.items,
+          ...itemsOf('In a `script:` node, `$ARGUMENTS` is embedded in the script source.'),
+        ],
+      };
+      expect(() => assertPinnedRuleStatements(mutated)).toThrow();
+    }
   });
 
-  test('no copy says a user-controlled value is spliced into a source that the engine does not splice', () => {
-    for (const copy of copies) assertNoFalseSubstitutionClaim(copy);
+  test('the guard rejects editing or removing a pinned rule item in every copy', () => {
+    for (const copy of copies) {
+      const target = copy.items.find(item => item.text.includes('loop scope splices'));
+      expect(target).toBeDefined();
+      const edited = {
+        ...copy,
+        items: copy.items.map(item =>
+          item === target ? { ...item, text: `${item.text} Changed rule.` } : item
+        ),
+      };
+      const removed = { ...copy, items: copy.items.filter(item => item !== target) };
+      expect(() => assertPinnedRuleStatements(edited)).toThrow();
+      expect(() => assertPinnedRuleStatements(removed)).toThrow();
+    }
+  });
+
+  test('the pinned statements allow whitespace-only changes in every copy', () => {
+    for (const copy of copies) {
+      const reflowed = {
+        ...copy,
+        items: copy.items.map(item => ({ ...item, text: item.text.replace(/\s+/g, '\n') })),
+      };
+      expect(() => assertPinnedRuleStatements(reflowed)).not.toThrow();
+    }
   });
 
   test('every name a copy calls user-controlled is one the engine leaves out of a source', () => {
@@ -320,92 +330,17 @@ function assertCopiesNameTheEngineClass(copies: readonly Document[]): void {
   }
 }
 
-/** A copy must state that the user-controlled variables are not spliced into the source. */
-function assertStatesTheSubstitutionRule(document: Document): void {
-  const states = classSentences(document).some(sentence => NEGATED_SUBSTITUTION.test(sentence));
-  if (!states) {
-    throw new Error(
-      `${document.file} does not say the user-controlled variables are not substituted into the source`
-    );
-  }
+/** Pin rule prose for review rather than attempting to classify its meaning. */
+function ruleStatements(document: Document): string[] {
+  return document.items
+    .filter(item => speaksAboutClass(item.text) && surfacesOf(item.text).size > 0)
+    .map(item => item.text.replace(/\s+/g, ' ').trim());
 }
 
-/**
- * A copy that denies a splice the engine makes is wrong for one surface. The engine splices
- * the loop reply into a `loop_group` body's `bash:` source, shell-quoted, so a copy that says
- * the user-controlled variables are never spliced has to name that exception.
- */
-function assertNoFalseSubstitutionDenial(document: Document): void {
-  for (const item of document.items) {
-    for (const sentence of denialsIn(item)) {
-      for (const kind of surfacesOf(item.text)) {
-        assertSpliceIsStated(document, kind, sentence);
-      }
-    }
-  }
-}
-
-/** The sentences of an item that deny a splice of the class. */
-function denialsIn(item: Item): string[] {
-  return item.sentences.filter(
-    sentence => speaksAboutClass(sentence) && NEGATED_SUBSTITUTION.test(sentence)
-  );
-}
-
-/** A copy that denies a splice the engine makes has to name that splice. */
-function assertSpliceIsStated(document: Document, kind: ExecKind, sentence: string): void {
-  const spliced = splicedByEngine(kind);
-  if (spliced.length === 0) return;
-  if (spliced.every(name => statesSplice(document, name, kind))) return;
-  throw new Error(
-    `${document.file} denies the splice of ${spliced.join(', ')} into a ${kind} source, which the engine does do: ${sentence}`
-  );
-}
-
-/** The class names the engine splices into a source of a kind. */
-function splicedByEngine(kind: ExecKind): string[] {
-  return [...USER_CONTROLLED].filter(name => engineSplices(name, kind));
-}
-
-/**
- * A copy that says a user-controlled value is spliced into a source must name one the engine
- * does splice. The engine has two channels: the workflow variables a shell-safe substitution
- * leaves out, and the loop scope that splices a reply into a `loop_group` body's source.
- */
-function assertNoFalseSubstitutionClaim(document: Document): void {
-  for (const sentence of classSentences(document)) {
-    if (!splicesIntoASource(sentence)) continue;
-    for (const name of classNames(sentence)) {
-      if (splicesIntoSource(name, sentence)) continue;
-      throw new Error(
-        `${document.file} says ${name} is spliced into the source, which the engine does not do: ${sentence}`
-      );
-    }
-  }
-}
-
-/** Whether a sentence says that a value goes into a source. */
-function splicesIntoASource(sentence: string): boolean {
-  if (NEGATION.test(sentence)) return false;
-  return /\binto\b[^.]*\b(?:source|code|script|command)\b/i.test(sentence);
-}
-
-/** Whether the engine splices `$name` into a source the sentence talks about. */
-function splicesIntoSource(name: string, sentence: string): boolean {
-  const kinds = surfacesOf(sentence);
-  if (kinds.size === 0) return engineSplices(name, 'bash') || engineSplices(name, 'script');
-  return [...kinds].every(kind => engineSplices(name, kind));
-}
-
-/** Whether a copy states that the engine splices a variable into a source of a kind. */
-function statesSplice(document: Document, name: string, kind: ExecKind): boolean {
-  return classSentences(document).some(
-    sentence =>
-      !NEGATION.test(sentence) &&
-      SUBSTITUTION.test(sentence) &&
-      classNames(sentence).has(name) &&
-      surfacesOf(sentence).has(kind)
-  );
+function assertPinnedRuleStatements(document: Document): void {
+  const pinned = Object.entries(pinnedStatements).find(([file]) => file === document.file);
+  if (pinned === undefined) throw new Error(`No pinned rule statements for ${document.file}`);
+  expect(ruleStatements(document)).toEqual(pinned[1]);
 }
 
 /** Every name a copy calls user-controlled must be one the engine leaves out of a source. */
@@ -622,39 +557,6 @@ function substitutes(name: string, shellSafe: boolean): boolean {
       stateDir: 'state',
       typedArtifactsFile: 'artifacts.json',
       adoptedRunDir: 'adopted',
-    }
-  );
-  return prompt !== `$${name}`;
-}
-
-/**
- * Whether the engine splices `$name` into a source of a kind. The engine has two channels: the
- * workflow variables a shell-safe substitution leaves out, and the loop scope that splices a
- * reply into a `loop_group` body's source. The loop scope quotes the reply for a `bash:` source
- * and leaves it literal for a `script:` one, so the answer depends on the surface.
- */
-function engineSplices(name: string, kind: ExecKind): boolean {
-  const scope: LoopBodyScope = { loopPrevOutputs: undefined, loopUserInput: 'the reply' };
-  const { prompt } = substituteWorkflowVariables(
-    `$${name}`,
-    'run',
-    'message',
-    'artifacts',
-    'main',
-    'docs',
-    'issue',
-    '',
-    '',
-    '',
-    {
-      shellSafe: true,
-      stateDir: 'state',
-      typedArtifactsFile: 'artifacts.json',
-      adoptedRunDir: 'adopted',
-      references: {
-        before: loopScopeTokens(scope, kind === 'bash' ? 'shell' : 'script'),
-        after: [],
-      },
     }
   );
   return prompt !== `$${name}`;

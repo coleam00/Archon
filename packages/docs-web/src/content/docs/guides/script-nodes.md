@@ -67,8 +67,10 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    `$USER_MESSAGE` are not substituted into a `script:` body: they arrive as
    environment variables instead (`process.env.ARGUMENTS`, `process.env.USER_MESSAGE`
    in bun; `os.environ['ARGUMENTS']`, `os.environ['USER_MESSAGE']` in uv/python), so
-   user-controlled text never becomes script source — see
-   [Environment and Isolation](#environment-and-isolation).
+   these workflow-variable values stay out of script source — see
+   [Environment and Isolation](#environment-and-isolation). Upstream output
+   references are still substituted as raw text into script source and may
+   contain user-influenced content.
 2. **Detect inline vs named.** If the `script` value contains a newline or any
    shell metacharacter (see [Inline vs Named Scripts](#inline-vs-named-scripts)
    below), it's treated as inline code. Otherwise it's treated as a named-script

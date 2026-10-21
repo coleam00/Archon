@@ -83,7 +83,11 @@ reads past that list: the user-controlled variable rule's guard reads every Mark
 of the docs site and the bundled skill, so it runs on every push to `main` and `dev` and on
 every pull request that is not a draft (`bun run validate --only variables-rule`) rather than
 only when this list names a changed file. A page that starts stating the rule about a
-`bash:` or `script:` node fails that check until the page is pinned in the guard's copy set.
+`bash:` or `script:` node fails that check until the page is pinned in the guard's copy set. The
+rule items are pinned in `scripts/variables-rule-statements.json`, with whitespace normalized.
+When editing them, review their meaning against the engine and update the fixture alongside
+the documentation. The guard checks names and accessors against the engine; it does not
+interpret substitution claims in prose.
 A conformance test
 requires every tracked Markdown path with a directory named in a test file to run the suite,
 even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
