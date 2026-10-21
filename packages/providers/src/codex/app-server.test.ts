@@ -4,8 +4,9 @@ import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
 
+const log = createMockLogger();
 mock.module('@archon/paths', () => ({
-  createLogger: mock(() => createMockLogger()),
+  createLogger: mock(() => log),
 }));
 
 import {
@@ -325,8 +326,15 @@ describe('AppServerConnection', () => {
     const slow = rawChild(child => {
       setTimeout(() => child.emit('close', 0, null), 120);
     });
+    log.warn.mockClear();
     const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(5, 20);
     expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
+    // Each warning interval that passes reports how long the exit has been awaited.
+    const waits = log.warn.mock.calls
+      .filter(([, event]) => event === 'codex.app_server_still_exiting')
+      .map(([fields]) => (fields as { waitedMs: number }).waitedMs);
+    expect(waits.length).toBeGreaterThanOrEqual(2);
+    expect(waits).toEqual(waits.map((_, index) => (index + 1) * 20));
   });
 });
 

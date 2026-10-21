@@ -300,7 +300,8 @@ export class AppServerConnection {
     try {
       message = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      getLog().warn({ line: line.slice(0, 200) }, 'codex.app_server_unparseable_line');
+      // The line can carry model or user text, so only its length is logged.
+      getLog().warn({ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line');
       return;
     }
     const { id, method } = message;
