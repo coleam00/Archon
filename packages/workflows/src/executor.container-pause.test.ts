@@ -318,14 +318,12 @@ describe('container pause segment ownership through the executor', () => {
             if (!paused) throw new Error('Missing pause');
             expect(paused.outcome).toBe(writeFailure === 'both' ? null : 'succeeded');
             if (writeFailure === 'both') {
-              expect(
-                mockLogFn.mock.calls.some(
-                  ([data, site]) =>
-                    site === 'dag.authored_outcome_persist_failed_during_unwind' &&
-                    data.err instanceof Error &&
-                    data.err.message === 'Secondary outcome write rejected'
-                )
-              ).toBe(true);
+              expect(mockLogFn).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  err: expect.objectContaining({ message: 'Secondary outcome write rejected' }),
+                }),
+                'dag.authored_outcome_persist_failed_during_unwind'
+              );
             }
             expect(
               (await f.store.listWorkflowEvents(f.run.id)).some(
