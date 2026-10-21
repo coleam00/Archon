@@ -44,6 +44,7 @@ const foldedPageRedirects = {
   '/getting-started/what-archon-is-not/': '/getting-started/why-archon/',
   '/getting-started/concepts/': '/getting-started/why-archon/',
   '/getting-started/overview/': '/getting-started/quick-start/',
+  '/guides/attention-queue/': '/getting-started/operate/',
 };
 
 export default defineConfig({

@@ -1,3 +1,4 @@
+import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
@@ -9,7 +10,6 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { adoptRegisteredWorktree } from '@archon/core/operations/workflow-adoption';
-import { startRunLiveOwner, type RunLiveOwner } from '@archon/core/services/run-live-owner';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -20,10 +20,6 @@ import {
   createRegisteredWorktree,
   type RegisteredWorktree,
 } from '@archon/core/workflows/registered-worktree';
-import {
-  requireTerminalStatusWrite,
-  TerminalStatusWriteError,
-} from '@archon/workflows/terminal-status-write';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
@@ -43,6 +39,7 @@ import {
 } from './workflow-shared';
 import {
   assertCodebaseResolvedForIsolation,
+  assertInheritedWorkflowExecutionCwd,
   assertNoWorktreeOptionsForFolder,
   assertWorkflowNotWorktreePinnedForFolder,
   prepareFolderExecution,
@@ -67,17 +64,10 @@ import {
 } from './workflow-run-admission';
 
 /**
- * --detach: hand the whole run to a detached background child. Runs after workflow
- * resolution and flag validation (so unknown-workflow / bad-flag errors surface
- * synchronously to the caller, not lost in the child) and before any *worktree* work
- * (the child creates the worktree).
- *
- * Everything before the fork is the pre-flight (#2872). It exists because a detached
- * launch used to print `Started` before anything that can be refused deterministically
- * had been checked: the child then died on adoption resolution, no run row was ever
- * written, and the only trace was a line inside the child's log. A launch either produces
- * a run id somebody can query, or it fails right here with a non-zero exit. No worktree,
- * clone, or AI cost happens in this process.
+ * Preflight before handing execution to a detached child. Refusals must reach the
+ * caller before `Started`, rather than disappearing into the child's log (#2872).
+ * The parent creates a queryable run; worktree provisioning and execution belong
+ * to the child, which revalidates against the live checkout.
  */
 export async function launchDetachedOwnedRun(
   request: OwnedRunRequest,
@@ -98,10 +88,8 @@ export async function launchDetachedOwnedRun(
         `(${detachResolved.registeredFolder.defaultCwd})`
     );
   }
-  // An isolating run with no project to isolate. The provisioning step enforces it in
-  // whichever process reaches it, which for a detached launch is the child — after the
-  // parent has already printed `Started` (#2872). `options.noWorktree` first, mirroring
-  // provisioning's own branch order.
+  // Refuse before forking; provisioning in the child would fail after the parent
+  // already printed `Started` (#2872).
   if (!options.noWorktree && admission.wantsIsolation) {
     assertCodebaseResolvedForIsolation(detachResolved);
   }
@@ -112,13 +100,22 @@ export async function launchDetachedOwnedRun(
   // letting the child fail after fork.
   assertNoWorktreeOptionsForFolder(detachIsFolder, options);
 
-  // Between-run continuation (#2747): refuse an unresolvable declaration HERE — this
-  // is the exact failure that vanished into a child log. `resolveWorkflowAdoption` is
-  // pure resolution with no filesystem or database mutation, so running it as a
-  // pre-flight costs nothing and the child still re-resolves it against the live
-  // checkout when it starts (its lane binds a worktree this process never touches).
+  // Adoption resolution is read-only; the child re-resolves against the live checkout.
   const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
   if (declaration?.mode === 'adopt') admission.aiConfigurationRun = declaration.adoptedRun;
+  const adoptionLane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  if (
+    detachCodebase?.kind !== 'folder' &&
+    adoptionLane?.kind !== 'checkout-branch' &&
+    (!admission.wantsIsolation || adoptionLane?.kind === 'reuse-worktree')
+  ) {
+    await assertInheritedWorkflowExecutionCwd(
+      host,
+      adoptionLane?.kind === 'reuse-worktree'
+        ? adoptionLane.environment.working_path
+        : (admission.continuationRun?.working_path ?? cwd)
+    );
+  }
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
@@ -282,6 +279,9 @@ export async function prepareForegroundLaunch(
     codebase,
     workspace
   );
+  if (!admission.wantsIsolation && codebase?.kind !== 'folder') {
+    await assertInheritedWorkflowExecutionCwd(host, workspace.workingCwd);
+  }
   const existingBranchEnv =
     admission.wantsIsolation && codebase && options.branchName
       ? await host.records.isolation.findActiveByWorkflow(codebase.id, 'task', options.branchName)
@@ -507,51 +507,6 @@ function assertLaunchTargetsFolderRules(
     admission.pinnedEnabled,
     admission.workflow.name
   );
-}
-
-/**
- * The run's live-owner lease and the setup run this launch created. Worktree setup or
- * execution starts the lease, whichever comes first; it closes once.
- */
-export class OwnedRunLease {
-  private liveOwner: RunLiveOwner | undefined;
-  private closing: Promise<void> | undefined;
-  private readonly detachedProcessOwner: boolean;
-  /** The row worktree setup created; failed as `launch_failed` if execution never takes it. */
-  setupRun: WorkflowRun | undefined;
-  executionSubmitted = false;
-
-  constructor(detachedProcessOwner: boolean) {
-    this.detachedProcessOwner = detachedProcessOwner;
-  }
-
-  async start(runId: string): Promise<void> {
-    this.liveOwner ??= await startRunLiveOwner(runId, {
-      ...(this.detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
-    });
-  }
-
-  isStopRequested(): boolean {
-    return this.liveOwner?.isStopRequested() ?? false;
-  }
-
-  close(): Promise<void> {
-    if (!this.liveOwner) return Promise.resolve();
-    this.closing ??= this.liveOwner.close();
-    return this.closing;
-  }
-
-  /** A setup run nothing executed would otherwise stay `pending` forever. */
-  async failUnsubmittedSetupRun(host: WorkflowHost, error: unknown): Promise<void> {
-    const setupRun = this.setupRun;
-    if (!setupRun || this.executionSubmitted || error instanceof TerminalStatusWriteError) return;
-    await requireTerminalStatusWrite(
-      host.deps.store.failWorkflowRun(setupRun.id, (error as Error).message, {
-        exitReason: 'launch_failed',
-      }),
-      { workflowRunId: setupRun.id, site: 'cli.worktree_setup_failed' }
-    );
-  }
 }
 
 /** Provision the workspace the run executes in: folder seam, worktree, or the checkout itself. */

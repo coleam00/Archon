@@ -61,7 +61,7 @@ archon workflow get <run-id>      # one run: status, nodes and outcome
 archon workflow attention         # runs paused for your decision
 ```
 
-A run that needs a decision pauses as an attention item. Answer it with `archon workflow respond <run-id> <decision> "<reason>"`. See [The attention queue](/guides/attention-queue/).
+A run that needs a decision pauses as an attention item. Answer it with `archon workflow respond <run-id> <decision> "<reason>"`. See [Operate runs](/getting-started/operate/).
 
 To browse runs in a browser instead, start the Web UI with `archon serve`.
 
@@ -110,5 +110,5 @@ BRIEF
 ## Next steps
 
 - [Build your first workflow](/getting-started/first-workflow/)
-- [SDLC pack workflows](/reference/sdlc-workflows/): the bundled software factory, from intake to merge
+- [Set up the SDLC factory](/getting-started/sdlc-factory/): the bundled software factory, from issue to merge
 - [Configuration](/getting-started/configuration/): project settings and environment variables

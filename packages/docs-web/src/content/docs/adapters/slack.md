@@ -98,7 +98,7 @@ Two slash commands give the team an alternative to @mention:
 
 | Command | What it does |
 | --- | --- |
-| `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
+| `/archon <message>` | Starts a new thread in the current channel. To continue an existing thread, post `@archon <message>` in that thread. |
 | `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `respond <id> <decision> [text]`, `abandon <id>`, `resume <id>`. |
 
 For each command:
@@ -176,6 +176,12 @@ SLACK_STREAMING_MODE=batch  # batch (default) | stream
 For streaming mode details, see [Configuration](/getting-started/configuration/).
 
 ## Usage
+
+Select a registered project by posting `@your-bot /setproject <name>` in the target thread. To register a local directory first, post `@your-bot /register-project [--folder] <name> <path>`, then select it; registration alone does not bind the conversation. Projectless questions still work. Selection applies to that conversation, not every channel.
+
+Slack registers `/archon` and `/archon-workflow`, not raw `/setproject` or `/register-project` slash commands. `/archon <message>` creates a new thread; use an @mention in the existing thread to scope that conversation.
+
+Once scoped, the assistant launches and manages runs through its native tools (Claude, Codex, Pi) or the existing CLI (Copilot/OpenCode). CLI launches are detached and headless, use CLI identity and return a run ID for inspection; they do not deliver progress or results to the originating chat. See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
 
 ### @Mention in Channels
 

@@ -50,6 +50,9 @@ async function setup(
           throw new Error('unused');
         },
         updateStatus: async () => {},
+        withWorktreeRegistration: async () => {
+          throw new Error('Unexpected worktree removal');
+        },
         markWorktreeDestroyed: async () => {},
         updateMetadata: async () => undefined,
         countActiveByCodebase: async () => 0,

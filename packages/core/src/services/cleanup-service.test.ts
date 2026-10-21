@@ -164,6 +164,11 @@ const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>();
 const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>();
 const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>();
 mock.module('@archon/git', () => ({
+  getGitCheckoutIdentity: async () => ({
+    gitDir: '/workspace/repo',
+    commonGitDir: '/workspace/repo',
+    linkedWorktree: false,
+  }),
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
   execFileAsync: mock(() => Promise.resolve({ stdout: '', stderr: '' })),
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
@@ -211,6 +216,10 @@ mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mock(() => Promise.resolve()),
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
+  withWorktreeRegistration: async (
+    env: IsolationEnvironmentRow,
+    remove: Parameters<typeof IsolationEnvironmentDb.withWorktreeRegistration>[1]
+  ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
   isSettleableRunStatus: (status: string) => status === 'failed',
   getById: mockGetById,
@@ -341,6 +350,9 @@ describe('reclaimContainerEnv', () => {
         throw new Error('Unexpected create');
       },
       updateStatus: async () => {},
+      withWorktreeRegistration: async () => {
+        throw new Error('Unexpected worktree removal');
+      },
       markWorktreeDestroyed: async () => {},
       updateMetadata: async () => undefined,
       countActiveByCodebase: async () => 0,
@@ -424,10 +436,16 @@ describe('cleanupContainerEnvironments', () => {
   });
 });
 
+async function selectedEnvironment(): Promise<IsolationEnvironmentRow> {
+  const env = await mockGetById('env-1');
+  if (!env) throw new Error('Missing selected environment fixture');
+  return env;
+}
+
 describe('removeEnvironment', () => {
   test('refuses container removal even with force', async () => {
     mockGetById.mockResolvedValue(makeEnvironment({ provider: 'container' }));
-    const result = await removeEnvironment('env-1', { force: true });
+    const result = await removeEnvironment(await selectedEnvironment(), { force: true });
     expect(result.skippedReason).toContain('not a worktree');
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
@@ -442,13 +460,12 @@ describe('removeEnvironment', () => {
       })
     );
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).toHaveBeenCalledWith('/path/that/does/not/exist', {
       force: undefined,
       branchName: 'issue-187',
       canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: undefined,
     });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
@@ -464,7 +481,9 @@ describe('removeEnvironment', () => {
       new Error("fatal: cannot change to '/path/exists/but/git/fails': No such file or directory")
     );
 
-    await expect(removeEnvironment('env-1')).rejects.toThrow('No such file or directory');
+    await expect(removeEnvironment(await selectedEnvironment())).rejects.toThrow(
+      'No such file or directory'
+    );
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 
@@ -479,7 +498,7 @@ describe('removeEnvironment', () => {
       warnings: [warning],
     });
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(result).toEqual({ worktreeRemoved: true, branchDeleted: false, warnings: [warning] });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
@@ -487,28 +506,23 @@ describe('removeEnvironment', () => {
     );
   });
 
-  test.each([
-    { config: {}, remote: 'origin' },
-    { config: { worktree: { remote: 'upstream' } }, remote: 'upstream' },
-  ])('deletes the remote branch on the configured remote ($remote)', async ({ config, remote }) => {
-    mockLoadRepoConfig.mockResolvedValue(config);
-    mockGetById.mockResolvedValue(
-      makeEnvironment({ working_path: '/workspace/worktrees/pr-99', branch_name: 'feature-branch' })
-    );
-
-    await removeEnvironment('env-1', { deleteRemoteBranch: true });
-
-    expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-99', {
-      force: undefined,
-      branchName: 'feature-branch',
-      canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: true,
-      remote,
-    });
-    expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'env-1' })
-    );
-  });
+  test.each([false, true])(
+    'retains remote refs without ownership proof (force=%s)',
+    async force => {
+      mockGetById.mockResolvedValue(makeEnvironment());
+      const result = await removeEnvironment(await selectedEnvironment(), {
+        force,
+        deleteRemoteBranch: true,
+      });
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.warnings.join(' ')).toContain('Remote branch retained');
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
+      );
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalled();
+    }
+  );
 
   test.each([
     {
@@ -525,12 +539,11 @@ describe('removeEnvironment', () => {
       })
     );
 
-    await removeEnvironment('env-1');
+    await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/operator-branch', {
       force: undefined,
       canonicalRepoPath: '/workspace/repo',
-      deleteRemoteBranch: undefined,
     });
     expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'env-1' })
@@ -542,7 +555,7 @@ describe('removeEnvironment', () => {
     mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValue(true);
 
-    const result = await removeEnvironment('env-1');
+    const result = await removeEnvironment(await selectedEnvironment());
 
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
@@ -560,7 +573,7 @@ describe('removeEnvironment', () => {
     const failure = new Error('status unavailable');
     mockHasUncommittedChanges.mockRejectedValueOnce(failure);
 
-    await expect(removeEnvironment('env-1')).rejects.toBe(failure);
+    await expect(removeEnvironment(await selectedEnvironment())).rejects.toBe(failure);
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -585,7 +598,7 @@ describe('removeEnvironment', () => {
         warnings: [],
         [field]: false,
       });
-      const result = await removeEnvironment('env-1');
+      const result = await removeEnvironment(await selectedEnvironment());
       expect(result.skippedReason).toContain('filesystem removal incomplete');
       expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
     }
@@ -647,7 +660,7 @@ describe('runScheduledCleanup', () => {
   );
 
   test.each(['github', RETAINING_PLATFORM])(
-    'removes merged branches and their remote branch (%s)',
+    'removes merged branches while retaining remote refs (%s)',
     async platformId => {
       scheduledSweepFinds(sweptWorktreeEnv('pr-99', { created_by_platform: platformId }));
       mockWorktreeExists.mockResolvedValue(true);
@@ -660,9 +673,47 @@ describe('runScheduledCleanup', () => {
         force: false,
         branchName: 'pr-99',
         canonicalRepoPath: '/workspace/repo',
-        deleteRemoteBranch: true,
-        remote: 'origin',
       });
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
+      );
+    }
+  );
+
+  test.each(
+    (['path missing', 'merged', 'stale'] as const).flatMap(sweep =>
+      (['worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )(
+    'scheduled $sweep cleanup reports incomplete $failure and continues',
+    async ({ sweep, failure }) => {
+      scheduledSweepFinds(
+        ...['broken', 'later'].map(branch => sweptWorktreeEnv(branch, { created_at: daysAgo(30) }))
+      );
+      mockWorktreeExists.mockResolvedValue(sweep !== 'path missing');
+      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+
+      const report = await runScheduledCleanup();
+
+      expect(report.errors).toEqual([
+        { id: 'env-broken', error: 'filesystem removal incomplete; environment remains active' },
+      ]);
+      expect(report.skipped).toEqual([]);
+      expect(report.removed).toEqual([`env-later (${sweep})`]);
+      expect(report.releasedFailedRuns).toEqual([]);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledTimes(1);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-later' })
+      );
     }
   );
 
@@ -1092,7 +1143,13 @@ describe('cleanup environment configuration', () => {
 
     const result = await service.cleanupStaleWorktrees(env.codebase_id, '/workspace/repo');
 
-    expect(result).toEqual({ removed: [], skipped: [], releasedFailedRuns: [] });
+    expect(result).toEqual({
+      errors: [],
+      removed: [],
+      skipped: [],
+      warnings: [],
+      releasedFailedRuns: [],
+    });
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -1247,10 +1304,48 @@ describe('cleanupMergedWorktrees', () => {
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
     expect(result.removed).toEqual(['before', 'after']);
-    expect(result.skipped).toEqual([
-      { branchName: 'broken', reason: 'settled owner query failed' },
-    ]);
+    expect(result.errors).toEqual([{ branchName: 'broken', error: 'settled owner query failed' }]);
     expect(result.releasedFailedRuns).toEqual([]);
+  });
+
+  test.each(
+    (['merged', 'stale'] as const).flatMap(sweep =>
+      (['throw', 'worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )('$sweep cleanup records $failure as an error and continues', async ({ sweep, failure }) => {
+    const envs = ['broken', 'later'].map(branch =>
+      makeEnvironmentWithAge({
+        ...worktreeEnv(branch),
+        created_by_platform: 'slack',
+        days_since_activity: 30,
+      })
+    );
+    mergedSweepFinds(...envs);
+    mockListByCodebaseWithAge.mockResolvedValue(envs);
+    mockIsBranchMerged.mockResolvedValue(true);
+    if (failure === 'throw') mockDestroy.mockRejectedValueOnce(new Error('removal refused'));
+    else
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+    const cleanup = sweep === 'merged' ? cleanupMergedWorktrees : cleanupStaleWorktrees;
+    const result = await cleanup('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual(['later']);
+    expect(result.skipped).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        branchName: 'broken',
+        error:
+          failure === 'throw'
+            ? 'removal refused'
+            : 'filesystem removal incomplete; environment remains active',
+      },
+    ]);
   });
 
   test('removes merged branches without uncommitted changes', async () => {
@@ -1264,6 +1359,10 @@ describe('cleanupMergedWorktrees', () => {
     expect(result.skipped).toHaveLength(0);
     expect(mockDestroy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/merged-branch',
+      expect.objectContaining({ branchName: 'merged-branch' })
+    );
+    expect(mockDestroy).not.toHaveBeenCalledWith(
+      expect.any(String),
       expect.objectContaining({ deleteRemoteBranch: true })
     );
   });
@@ -1307,14 +1406,14 @@ describe('cleanupMergedWorktrees', () => {
   test.each([
     { check: 'isBranchMerged', mock: mockIsBranchMerged },
     { check: 'isPatchEquivalent', mock: mockIsPatchEquivalent },
-  ])('logs a warn before skipping an environment when $check fails', async ({ mock }) => {
+  ])('logs a warning and reports an error when $check fails', async ({ mock }) => {
     mergedSweepFinds(worktreeEnv('flaky-branch'));
     mock.mockRejectedValue(new Error('network unreachable'));
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
-    expect(result.skipped).toEqual([
-      { branchName: 'flaky-branch', reason: 'merge check failed: network unreachable' },
+    expect(result.errors).toEqual([
+      { branchName: 'flaky-branch', error: 'merge check failed: network unreachable' },
     ]);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ branchName: 'flaky-branch', repoPath: '/workspace/repo' }),
@@ -1396,10 +1495,10 @@ describe('cleanupMergedWorktrees', () => {
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
-    expect(result.skipped).toEqual([
+    expect(result.errors).toEqual([
       {
         branchName: 'head-missing',
-        reason: expect.stringContaining('merge check failed: Failed to fetch PR head'),
+        error: expect.stringContaining('merge check failed: Failed to fetch PR head'),
       },
     ]);
     expect(mockGetById).not.toHaveBeenCalled();
@@ -1562,17 +1661,15 @@ describe('onConversationClosed', () => {
       label: 'merged',
       options: { merged: true },
       metadata: {},
-      remoteDeletion: { deleteRemoteBranch: true, remote: 'origin' },
     },
     {
       label: 'not merged',
       options: undefined,
       metadata: { worktree_branch_created: true },
-      remoteDeletion: { deleteRemoteBranch: undefined },
     },
   ])(
-    'deletes the remote branch only when the conversation closed as merged ($label)',
-    async ({ options, metadata, remoteDeletion }) => {
+    'retains the remote branch when the conversation closes ($label)',
+    async ({ options, metadata }) => {
       conversationUses(
         makeEnvironment({
           working_path: '/workspace/worktrees/pr-100',
@@ -1582,12 +1679,15 @@ describe('onConversationClosed', () => {
       );
 
       await onConversationClosed('github', 'owner/repo#100', options);
+      expect(mockDestroy).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ deleteRemoteBranch: true })
+      );
 
       expect(mockDestroy).toHaveBeenCalledWith('/workspace/worktrees/pr-100', {
         force: false,
         branchName: 'feature-x',
         canonicalRepoPath: '/workspace/repo',
-        ...remoteDeletion,
       });
     }
   );
@@ -1652,6 +1752,22 @@ describe('cleanupStaleWorktrees', () => {
       );
     }
   );
+
+  test('preserves provider warnings for a removed stale worktree', async () => {
+    const env = staleWorktree({ created_by_platform: 'web', days_since_activity: 100 });
+    mockDestroy.mockResolvedValueOnce({
+      worktreeRemoved: true,
+      directoryClean: true,
+      branchDeleted: false,
+      remoteBranchDeleted: null,
+      warnings: ['Local branch retained'],
+    });
+    const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual([env.branch_name]);
+    expect(result.warnings).toEqual([
+      { branchName: env.branch_name, message: 'Local branch retained' },
+    ]);
+  });
 
   test('skips retain-policy worktrees even if old', async () => {
     staleWorktree({ created_by_platform: RETAINING_PLATFORM, days_since_activity: 100 });
@@ -1737,7 +1853,9 @@ describe('cleanup after a chat plugin is removed', () => {
     const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
     expect(stale).toEqual({
+      errors: [],
       removed: [],
+      warnings: [],
       skipped: [{ branchName: env.branch_name, reason }],
       releasedFailedRuns: [],
     });
@@ -1762,7 +1880,9 @@ describe('cleanup after a chat plugin is removed', () => {
 
   test('explicit environment removal reports an unknown platform', async () => {
     mockGetById.mockResolvedValue(makeEnvironment({ created_by_platform: UNKNOWN_PLATFORM }));
-    expect((await removeEnvironment('env-1')).skippedReason).toBe(UNKNOWN_PLATFORM_REASON);
+    expect((await removeEnvironment(await selectedEnvironment())).skippedReason).toBe(
+      UNKNOWN_PLATFORM_REASON
+    );
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
@@ -1845,6 +1965,43 @@ describe('failed-run lock release', () => {
       'refs/heads/stale-failed',
     ]);
   });
+
+  test.each(
+    (['merged', 'stale'] as const).flatMap(sweep =>
+      (['worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )(
+    'scheduled $sweep cleanup does not report a failed-run release after incomplete $failure',
+    async ({ sweep, failure }) => {
+      const env = staleEnv();
+      scheduledSweepFinds(env);
+      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      releasedByTheSweep();
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+
+      const report = await runScheduledCleanup();
+
+      expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith(
+        env.id,
+        sweep === 'merged' ? { kind: 'settled' } : { kind: 'stale', staleDays: 14 }
+      );
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+      expect(report.errors).toEqual([
+        { id: env.id, error: 'filesystem removal incomplete; environment remains active' },
+      ]);
+      expect(report.skipped).toEqual([]);
+      expect(report.removed).toEqual([]);
+      expect(report.releasedFailedRuns).toEqual([]);
+      expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
+    }
+  );
 
   test('the stale sweep keeps a released failed run whose commits are on no remote', async () => {
     mockListAllActiveWithCodebase.mockResolvedValue([staleEnv()]);

@@ -1,19 +1,11 @@
 /**
- * Help rendering — structured data plus a renderer. The data is split into
- * three tables so the global help output stays byte-identical to the
- * pre-refactor template literal (the original Commands block, Options block,
- * and Examples block are each hand-curated and do not follow a natural entry
- * iteration order).
- *
- * `commandHelp` lists one entry per Commands-block line in the order they
- * appear. `orderedFlags` lists every flag in the pre-refactor Options block
- * order, with `owners` naming each flag's (command, subcommand) tuples; an
- * empty `owners` array marks the flag as global (only in `archon --help`).
- * `orderedExamples` lists every example in the pre-refactor Examples block
- * order with the same owner model. `renderHelp(...)` selects entries and
- * filters the flag and example lists by owner for scoped slices.
+ * Help tables preserve an explicit display order. Commands, flags and examples
+ * carry owners so renderHelp can select the matching scoped slice.
+ * An empty flag owners array means global help only; scoped-only flags belong
+ * to their enclosing command entry.
  */
 
+import { CHAT_PROJECT_ID_ARG } from '@archon/paths/workflow-scope';
 import { userRoleSchema } from '@archon/core/schemas/user';
 import type { ForgeRequest } from '@archon/forge/operations';
 import { attachmentCommands } from './attachment-commands';
@@ -246,7 +238,7 @@ const commandHelp: HelpEntry[] = [
         description:
           'Stream readable changes until stopped; the open set comes first\n' +
           'A degraded warning means coverage may have gaps. Repair and replay:\n' +
-          'https://archon.diy/guides/attention-queue/#stream-the-queue',
+          'https://archon.diy/getting-started/operate/#stream-the-queue',
       },
       {
         spec: '--after <cursor>',
@@ -386,7 +378,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'complete',
     spec: 'complete <branch> [...]',
-    description: 'Complete branch lifecycle (remove worktree + branches)',
+    description: 'Remove worktree and local branch; retain remote branch',
   },
   {
     command: 'serve',
@@ -497,6 +489,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'reset',
     spec: 'telemetry reset',
     description: 'Rotate the anonymous install UUID',
+  },
+  {
+    command: 'telemetry',
+    subcommand: 'no-match',
+    spec: 'telemetry no-match',
+    description: 'Record an agent decision that no workflow fits',
   },
   {
     command: 'validate',
@@ -751,12 +749,12 @@ const scopedOnlyHelp: HelpEntry[] = [
   },
 ];
 
-// Hand-curated flag order matching the pre-refactor Options block. Each flag
-// lists its owning (command, subcommand?) tuples; an empty array means
-// "global" — in `archon --help` only, never in a scoped slice. Multi-owner
-// flags (e.g. `--detach`, `--events`, `--force`) deduplicate by spec within
-// each render.
 const orderedFlags: FlagHelp[] = [
+  {
+    spec: `--${CHAT_PROJECT_ID_ARG} <id>`,
+    description: 'Confine chat workflow commands to a registered project ID',
+    owners: [{ command: 'workflow' }],
+  },
   {
     spec: '--cwd <path>',
     description: 'Override working directory (default: current directory)',

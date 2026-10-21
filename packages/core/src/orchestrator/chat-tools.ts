@@ -1,5 +1,5 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureWorkflowNoMatch } from '@archon/paths';
 import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import {
   resolveTopLevelInputs,
@@ -34,8 +34,7 @@ export interface ChatLaunch {
 
 /**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
- * Case-insensitive. Shared by the command scan and `invoke_workflow`, so both resolve a
- * project name the same way.
+ * Project names are case-insensitive.
  */
 export function findCodebaseByName(
   codebases: readonly Codebase[],
@@ -147,7 +146,7 @@ function describeInputs(inputs: Record<string, string>): string {
 /**
  * The `invoke_workflow` native tool. Resolves the workflow, project and declared inputs at
  * call time and queues the launch; the orchestrator dispatches it once the turn ends, through
- * the same path the command scan uses, so gates (including the inputs gate, which validates
+ * the shared dispatch path, so gates (including the inputs gate, which validates
  * the map again before any cost), isolation hints and foreground/background choice stay
  * identical. Dispatching inside the call would block the agent loop for a whole
  * foreground workflow.
@@ -167,7 +166,6 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
         if (projectName === '') return 'invoke_workflow: project is required.';
         if (prompt === '') return 'invoke_workflow: prompt is required.';
 
-        // Exact name, as the command scan requires.
         const entry = ctx.workflows.find(w => w.workflow.name === workflowName);
         if (entry === undefined) {
           const names = ctx.workflows.map(w => w.workflow.name).join(', ');
@@ -201,7 +199,7 @@ export function buildInvokeWorkflowTool(ctx: InvokeWorkflowContext): NativeTool 
       } catch (e: unknown) {
         const err = toError(e);
         getLog().error({ err }, 'chat_tools.invoke_workflow_failed');
-        return `invoke_workflow error: ${err.message}`;
+        throw err;
       }
     },
   };
@@ -246,8 +244,27 @@ export function buildRegisterProjectTool(ctx: {
       } catch (e: unknown) {
         const err = toError(e);
         getLog().error({ err, projectName }, 'chat_tools.register_project_failed');
-        return `Could not register project: ${err.message}`;
+        throw err;
       }
+    },
+  };
+}
+
+export const REPORT_WORKFLOW_NO_MATCH_TOOL_NAME = 'report_workflow_no_match';
+
+export function buildReportWorkflowNoMatchTool(): NativeTool {
+  let reported = false;
+  return {
+    name: REPORT_WORKFLOW_NO_MATCH_TOOL_NAME,
+    description:
+      'Report that the user wants work done but no available workflow fits. Do not use for ordinary questions or missing project/input details.',
+    inputSchema: defineNativeToolInputSchema({ properties: {}, required: [] }),
+    handler: async () => {
+      if (!reported) {
+        captureWorkflowNoMatch('native_tool');
+        reported = true;
+      }
+      return 'No workflow match recorded. Explain the closest option and its limits, workflow authoring for repeatable work, or a coding agent for one-off work.';
     },
   };
 }

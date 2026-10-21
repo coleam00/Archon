@@ -51,7 +51,7 @@ Details: [publishing plugins](../packages/docs-web/src/content/docs/guides/publi
 ### Module layout
 
 - **DAG execution.** [`workflows/src/dag-executor.ts`](../packages/workflows/src/dag-executor.ts) keeps the `executeDagWorkflow` entry. The layer walker, node dispatch and shared execution code live in [`workflows/src/dag/`](../packages/workflows/src/dag/), with one folder per node type under [`dag/nodes/`](../packages/workflows/src/dag/nodes/). Each module's tests sit beside it.
-- **Chat turn.** [`core/src/orchestrator/orchestrator-agent.ts`](../packages/core/src/orchestrator/orchestrator-agent.ts) keeps the `handleMessage` entry. Request preparation, conversation context, project commands, the slash-command scan, workflow dispatch and the AI turn itself live in sibling modules under [`core/src/orchestrator/`](../packages/core/src/orchestrator/). Each module's tests sit beside it, sharing mocks from [`core/src/test/orchestrator-agent-harness.ts`](../packages/core/src/test/orchestrator-agent-harness.ts).
+- **Chat turn.** [`core/src/orchestrator/orchestrator-agent.ts`](../packages/core/src/orchestrator/orchestrator-agent.ts) keeps the `handleMessage` entry. Request preparation, conversation context, project commands, typed chat tools, workflow dispatch and the AI turn itself live in sibling modules under [`core/src/orchestrator/`](../packages/core/src/orchestrator/). Each module's tests sit beside it, sharing mocks from [`core/src/test/orchestrator-agent-harness.ts`](../packages/core/src/test/orchestrator-agent-harness.ts).
 - **HTTP API.** [`server/src/routes/api.ts`](../packages/server/src/routes/api.ts) is an ordered list of per-area registrars, each in an `api.<area>.ts` module beside it.
 
 ## Target state

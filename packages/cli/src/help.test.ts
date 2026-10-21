@@ -256,7 +256,7 @@ Commands:
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  complete <branch> [...]    Remove worktree and local branch; retain remote branch
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill add [path]           Add archon-cli into .claude/skills and .agents/skills
   provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
@@ -283,12 +283,14 @@ Commands:
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
+  telemetry no-match         Record an agent decision that no workflow fits
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
+  --chat-project-id <id>     Confine chat workflow commands to a registered project ID
   --cwd <path>               Override working directory (default: current directory)
   --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
                              isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.

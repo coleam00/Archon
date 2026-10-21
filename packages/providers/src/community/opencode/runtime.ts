@@ -48,8 +48,7 @@ async function startEmbeddedOpencode(
   createOpencode: (
     options: Record<string, unknown>
   ) => Promise<{ client: unknown; server: { url: string; close(): void } }>,
-  startupPort: number,
-  signal?: AbortSignal
+  startupPort: number
 ): Promise<{ client: unknown; server: { url: string; close(): void } }> {
   // Clear any pre-existing OpenCode server credential env vars so the embedded
   // server uses the random password generated in buildEmbeddedServerConfig rather
@@ -62,11 +61,12 @@ async function startEmbeddedOpencode(
     delete process.env.OPENCODE_SERVER_USERNAME;
   }
 
+  // The SDK binds startup signals for the process lifetime; caller cancellation
+  // belongs to acquisition and sessions, while the final release owns shutdown.
   return await createOpencode({
     hostname: '127.0.0.1',
     port: startupPort,
     timeout: OPENCODE_START_TIMEOUT_MS,
-    signal,
     config: buildEmbeddedServerConfig(startupPort),
   });
 }
@@ -205,14 +205,10 @@ export async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<Embe
         let lastError: unknown;
 
         for (let attempt = 0; attempt < OPENCODE_START_MAX_RETRIES; attempt += 1) {
-          if (signal?.aborted) {
-            throw new Error('OpenCode runtime startup aborted');
-          }
-
           const startupPort = pickRandomStartupPort();
 
           try {
-            runtime = await startEmbeddedOpencode(createOpencode, startupPort, signal);
+            runtime = await startEmbeddedOpencode(createOpencode, startupPort);
             break;
           } catch (error) {
             lastError = error;
@@ -251,9 +247,33 @@ export async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<Embe
     })();
   }
 
-  const runtime = await embeddedRuntimePromise;
-  runtime.refCount += 1;
-  return runtime;
+  const acquisition = embeddedRuntimePromise.then(runtime => {
+    runtime.refCount += 1;
+    return runtime;
+  });
+  if (!signal) return await acquisition;
+
+  return await new Promise<EmbeddedRuntime>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('OpenCode runtime startup aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+
+    acquisition.then(
+      runtime => {
+        signal.removeEventListener('abort', onAbort);
+        if (signal.aborted) {
+          releaseEmbeddedRuntime(runtime);
+          onAbort();
+        } else {
+          resolve(runtime);
+        }
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
 }
 
 export function releaseEmbeddedRuntime(runtime: EmbeddedRuntime): void {

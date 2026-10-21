@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { terminateTree } from '@archon/paths/plugin-process';
+import { confirmProcessGroupsGone, terminateTree } from '@archon/paths/plugin-process';
+import { DetachedNodeProcesses, type PreparedNodeTermination } from './detached-node-processes';
 import { retainStreamTail } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { CONTAINER_ENV_DENYLIST } from '@archon/provider-contract';
@@ -130,12 +131,19 @@ export function redactSubprocessError(
   return e;
 }
 
-interface NodeProcessRecorder {
+interface SharedNodeProcessRecorder {
+  mode: 'shared';
   /** Each in-flight node's root PID, with the function that disarms its owner-death watcher. */
   roots: Map<number, () => void>;
   ended: boolean;
 }
+type NodeProcessRecorder = SharedNodeProcessRecorder | DetachedNodeProcesses;
 let nodeProcessRecorder: NodeProcessRecorder | undefined;
+
+interface RecordedNodeTrees {
+  end(): Promise<void>;
+  release(): void;
+}
 
 /**
  * Record the root of every host node subprocess this process starts, so its trees can
@@ -151,14 +159,31 @@ let nodeProcessRecorder: NodeProcessRecorder | undefined;
  * - `archon serve` ends one run's trees through each node's `abortSignal` when that run
  *   stops, and never calls `end()`.
  *
- * A detached owner must not record: the cancel controller ends its nodes by killing the
- * owner's process group, which a node in its own group would escape.
+ * Detached POSIX owners use explicit parent-side termination preparation instead of an
+ * owner-death watcher: a watcher cannot know whether the command leader was reaped.
  *
  * `end()` refuses every later node subprocess, so a sibling or retry the executor
  * starts while the owner exits never runs.
  */
-export function recordNodeProcessTrees(): { end(): Promise<void>; release(): void } {
-  const recorder: NodeProcessRecorder = { roots: new Map(), ended: false };
+export function recordNodeProcessTrees(options: { mode: 'detached-posix' }): RecordedNodeTrees & {
+  prepareTermination(): PreparedNodeTermination;
+};
+export function recordNodeProcessTrees(): RecordedNodeTrees;
+export function recordNodeProcessTrees(options?: { mode: 'detached-posix' }): RecordedNodeTrees & {
+  prepareTermination?: () => PreparedNodeTermination;
+} {
+  if (options) {
+    const recorder = new DetachedNodeProcesses();
+    nodeProcessRecorder = recorder;
+    return {
+      end: () => recorder.end(),
+      prepareTermination: () => recorder.prepareTermination(),
+      release: () => {
+        if (nodeProcessRecorder === recorder) nodeProcessRecorder = undefined;
+      },
+    };
+  }
+  const recorder: SharedNodeProcessRecorder = { mode: 'shared', roots: new Map(), ended: false };
   nodeProcessRecorder = recorder;
   return {
     end: async () => {
@@ -209,13 +234,14 @@ function recordNodeProcess(
 ): void {
   const rootPid = child.pid;
   if (!recorder || rootPid === undefined) return;
+  if (recorder.mode === 'detached-posix') {
+    recorder.record(child);
+    return;
+  }
   const disarm =
     process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
   recorder.roots.set(rootPid, disarm);
-  // The node is in flight until `close`: a root that exits while a background job still
-  // holds its output has not settled. `stop` does not signal that group, but the owner's
-  // interrupt (`end()`) still can: the kernel does not reuse the root PID while its group
-  // exists.
+  // Output held by a child keeps the node in flight after the root exits.
   child.once('close', () => {
     recorder.roots.delete(rootPid);
     disarm();
@@ -239,6 +265,36 @@ interface SubprocessRetention {
   label: string;
 }
 
+type SubprocessOptions = {
+  cwd: string;
+  /** Absent means no deadline: the subprocess runs until it exits. */
+  timeout?: number;
+  /**
+   * A host node body: its deadline ends the node's whole tree before the timeout is
+   * reported. On POSIX that needs the node's own process group, which only a recording
+   * owner gives it. Detached POSIX CLI owners also record command groups and confirm
+   * their disappearance. Without a recorder, the deadline ends only the root.
+   */
+  endTreeOnTimeout?: true;
+  /**
+   * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
+   * host node. Unrecorded processes remain in their owner's group; a container node's
+   * command is not ended.
+   */
+  abortSignal?: AbortSignal;
+  env: NodeJS.ProcessEnv;
+  protectedEnvKeys?: readonly string[];
+  protectedCredentialValues?: readonly string[];
+  retention: SubprocessRetention | { standalone: true };
+} & (
+  | {
+      /** Host setup: stdin belongs to the owner-death lifeline, never a payload. */
+      ownProcessGroup?: true;
+      input?: never;
+    }
+  | { ownProcessGroup?: never; input?: string }
+);
+
 /**
  * Run a deterministic subprocess (bash/script node body, loop `until_bash`) under
  * the given execution context.
@@ -255,37 +311,11 @@ export async function runSubprocess(
   execContext: ExecutionContext,
   cmd: string,
   args: string[],
-  options: {
-    cwd: string;
-    /** Absent means no deadline: the subprocess runs until it exits. */
-    timeout?: number;
-    /**
-     * A host node body: its deadline ends the node's whole tree before the timeout is
-     * reported. On POSIX that needs the node's own process group, which only a recording
-     * owner gives it; an unrecorded POSIX node shares its owner's group, which
-     * `archon workflow cancel` kills to end a detached run, so its deadline still ends the
-     * root only.
-     */
-    endTreeOnTimeout?: true;
-    /**
-     * Its run stopped: end the node's whole tree with SIGKILL. Honored only for a recorded
-     * host node. An unrecorded (detached) node is ended by its owner's group kill; a
-     * container node's command is not ended.
-     */
-    abortSignal?: AbortSignal;
-    env: NodeJS.ProcessEnv;
-    protectedEnvKeys?: readonly string[];
-    protectedCredentialValues?: readonly string[];
-    retention: SubprocessRetention | { standalone: true };
-  } & (
-    | {
-        /** Host setup: stdin belongs to the owner-death lifeline, never a payload. */
-        ownProcessGroup?: true;
-        input?: never;
-      }
-    | { ownProcessGroup?: never; input?: string }
-  )
+  options: SubprocessOptions
 ): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
+  if (execContext.kind === 'host' && nodeProcessRecorder?.mode === 'detached-posix') {
+    assertRecorderActive(nodeProcessRecorder);
+  }
   if (options.ownProcessGroup && execContext.kind === 'container') {
     throw new Error('Owned subprocess groups require host execution');
   }
@@ -316,30 +346,7 @@ export async function runSubprocess(
             }),
             { timeout: options.timeout, input: options.input }
           )
-        : options.ownProcessGroup
-          ? await execOwnedProcessGroup(cmd, args, {
-              cwd: options.cwd,
-              timeout: options.timeout,
-              env: subprocessEnv,
-            })
-          : nodeProcessRecorder || (options.endTreeOnTimeout && process.platform === 'win32')
-            ? await execOwnedProcessGroup(cmd, args, {
-                cwd: options.cwd,
-                timeout: options.timeout,
-                env: subprocessEnv,
-                input: options.input,
-                node: {
-                  recorder: nodeProcessRecorder,
-                  endTreeOnTimeout: options.endTreeOnTimeout === true,
-                  abortSignal: options.abortSignal,
-                },
-              })
-            : await execFileAsync(cmd, args, {
-                cwd: options.cwd,
-                timeout: options.timeout,
-                env: subprocessEnv,
-                input: options.input,
-              });
+        : await execHostSubprocess(cmd, args, options, subprocessEnv);
 
     result.stderr = redactCredentialValues(result.stderr, credentialValues);
     // Retention is the EVIDENCE copy, taken from a redacted-then-capped copy of the
@@ -385,6 +392,31 @@ export async function runSubprocess(
   }
 }
 
+function execHostSubprocess(
+  cmd: string,
+  args: string[],
+  options: SubprocessOptions,
+  env: NodeJS.ProcessEnv
+): Promise<{ stdout: string; stderr: string }> {
+  const shared = { cwd: options.cwd, timeout: options.timeout, env };
+  if (options.ownProcessGroup) return execOwnedProcessGroup(cmd, args, shared);
+  const recorded =
+    nodeProcessRecorder && (nodeProcessRecorder.mode === 'shared' || options.endTreeOnTimeout);
+  const windowsBody = options.endTreeOnTimeout && process.platform === 'win32';
+  if (recorded || windowsBody) {
+    return execOwnedProcessGroup(cmd, args, {
+      ...shared,
+      input: options.input,
+      node: {
+        recorder: nodeProcessRecorder,
+        endTreeOnTimeout: options.endTreeOnTimeout === true,
+        abortSignal: options.abortSignal,
+      },
+    });
+  }
+  return execFileAsync(cmd, args, { ...shared, input: options.input });
+}
+
 // Explicit <&0 keeps bash from replacing the background watcher's stdin with /dev/null.
 // Only the owner holds the write end; EOF covers even SIGKILL, without signal handlers.
 const SETUP_LIFELINE =
@@ -416,6 +448,23 @@ interface NodeProcessOptions {
   abortSignal?: AbortSignal;
 }
 
+function assertRecorderActive(recorder: NodeProcessRecorder | undefined): void {
+  if (recorder?.ended || (recorder?.mode === 'detached-posix' && recorder.held)) {
+    throw new Error('The run owner is terminating; node subprocess not started');
+  }
+}
+
+async function endDetachedNodeTree(
+  recorder: DetachedNodeProcesses,
+  pgid: number,
+  signal: NodeJS.Signals
+): Promise<void> {
+  const group = recorder.signal(pgid, signal);
+  if (!group.leaderReaped && group.signalError && group.signalError !== 'ESRCH')
+    throw new Error(`Could not signal node group ${pgid} (${group.signalError})`);
+  await confirmProcessGroupsGone([pgid], TERMINATION_CONFIRM_MS);
+}
+
 /** Exported for tests, which mock it where a Windows bash or script node runs through it. */
 export async function execOwnedProcessGroup(
   cmd: string,
@@ -428,7 +477,7 @@ export async function execOwnedProcessGroup(
 ): Promise<{ stdout: string; stderr: string }> {
   const { node } = options;
   const recorder = node?.recorder;
-  if (recorder?.ended) throw new Error('The run owner is terminating; node subprocess not started');
+  assertRecorderActive(recorder);
   const posix = process.platform !== 'win32';
   const lifeline = posix && !node;
   const child = spawn(cmd, lifeline ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
@@ -449,6 +498,13 @@ export async function execOwnedProcessGroup(
   let termination: Promise<void> | undefined;
   let terminationError: Error | undefined;
   const endTree = (pid: number, signal: NodeJS.Signals): void => {
+    if (recorder?.mode === 'detached-posix') {
+      termination = endDetachedNodeTree(recorder, pid, signal).catch((error: unknown) => {
+        terminationError = error instanceof Error ? error : new Error(String(error));
+        if (!exited) child.kill('SIGKILL');
+      });
+      return;
+    }
     termination = terminateTree(pid, signal).catch((error: unknown) => {
       terminationError = error instanceof Error ? error : new Error(String(error));
       // `close` waits for the root, so a root left running would hang the caller. SIGKILL,
@@ -458,7 +514,8 @@ export async function execOwnedProcessGroup(
   };
   const stop = (whole: boolean): void => {
     // Never signal a group after its leader exited: that PID may already be reused.
-    if (termination || exited || child.pid === undefined) return;
+    if (termination || child.pid === undefined) return;
+    if (exited && recorder?.mode !== 'detached-posix') return;
     if (!whole) {
       child.kill('SIGTERM');
       return;
@@ -471,25 +528,31 @@ export async function execOwnedProcessGroup(
     failure ??= error;
     stop(false);
   });
+  const closeOutput = (): void => {
+    const destroy = (): void => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    };
+    if (recorder?.mode === 'detached-posix') {
+      void Promise.resolve(termination)
+        .then(() => recorder.waitForOutput(child))
+        .then(destroy);
+    } else destroy();
+  };
   const timer =
     options.timeout === undefined
       ? undefined
       : setTimeout(() => {
           timedOut = true;
           stop(!node || node.endTreeOnTimeout);
-          child.stdout?.destroy();
-          child.stderr?.destroy();
+          closeOutput();
         }, options.timeout);
   const abortSignal = recorder ? node?.abortSignal : undefined;
   const abort = (): void => {
     cancelled = true;
     clearTimeout(timer);
-    // Unlike `stop`, a POSIX abort still signals a group whose root exited: until `close`,
-    // a background job can hold that group, and its PID stays reserved while the group
-    // lives. Windows reserves no PID once the root exits, so taskkill could end a reused one.
     if (!termination && rootPid !== undefined && (posix || !exited)) endTree(rootPid, 'SIGKILL');
-    child.stdout?.destroy();
-    child.stderr?.destroy();
+    closeOutput();
   };
   if (abortSignal?.aborted) abort();
   else abortSignal?.addEventListener('abort', abort, { once: true });
@@ -503,9 +566,8 @@ export async function execOwnedProcessGroup(
         code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
       });
       clearTimeout(timer);
-      stop(!node);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
+      stop(!node || recorder?.mode === 'detached-posix');
+      closeOutput();
     }
   };
   child.stdout?.on('data', (chunk: Buffer) => collect('stdout', chunk));
@@ -531,6 +593,10 @@ export async function execOwnedProcessGroup(
   abortSignal?.removeEventListener('abort', abort);
   child.stdin?.destroy();
   await termination;
+  if (recorder?.mode === 'detached-posix') {
+    await recorder.waitForRelease();
+    recorder.forget(child);
+  }
   if (lifeline && child.pid !== undefined) {
     try {
       await confirmGroupGone(child.pid);

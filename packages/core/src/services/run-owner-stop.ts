@@ -1,3 +1,5 @@
+import { confirmProcessGroupsGone } from '@archon/paths/plugin-process';
+import type { RunOwnerPreparedStop } from './run-owner-preparation';
 import {
   requestRunLiveOwnerStop,
   RunLiveOwnerStopUnavailableError,
@@ -15,10 +17,14 @@ import { openWindowsRunJob, type WindowsRunJob } from './windows-run-job';
 
 const POLL_INTERVAL_MS = 50;
 
+export interface DetachedRunStopReport {
+  warnings: string[];
+}
+
 export interface DetachedRunStopTarget {
   /** The detached owner's PID, as the owner itself reported it. */
   readonly pid: number;
-  stop(): Promise<void>;
+  stop(): Promise<DetachedRunStopReport>;
   release(): void;
 }
 
@@ -56,14 +62,17 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
 
   return {
     pid: lease.pid,
-    stop: async (): Promise<void> => {
+    stop: async (): Promise<DetachedRunStopReport> => {
       let windowsJob: WindowsRunJob | undefined;
       try {
         // Opened before committing, so a refused stop announces no handoff. The open
         // handle keeps the job reachable even if the owner exits before the kill.
         if (process.platform === 'win32') windowsJob = openOwnerWindowsJob(lease);
-        await lease.commit();
+        const prepared = await lease.commit();
+        if (prepared && process.platform !== 'win32')
+          return await stopPreparedOwner(lease, prepared);
         await terminateDetachedProcessTree(lease.pid, () => lease.isLive(), windowsJob);
+        return { warnings: [] };
       } finally {
         windowsJob?.close();
         lease.release();
@@ -157,4 +166,22 @@ async function terminateDetachedProcessTree(
   if (!(await waitUntilGone(() => processGroupExists(pid), TERMINATION_CONFIRM_MS))) {
     throw new Error(`Detached workflow process group ${String(pid)} is still running`);
   }
+}
+
+async function stopPreparedOwner(
+  lease: RunLiveOwnerStopLease,
+  prepared: RunOwnerPreparedStop
+): Promise<DetachedRunStopReport> {
+  if (lease.pid === process.pid || !lease.isLive())
+    throw new Error('Detached owner has no live termination lease');
+  process.kill(-lease.pid, 'SIGKILL');
+  const live = prepared.groups.filter(group => !group.leaderReaped);
+  await confirmProcessGroupsGone(
+    [lease.pid, ...live.map(group => group.pgid)],
+    TERMINATION_CONFIRM_MS
+  );
+  const failed = live.find(group => group.signalError && group.signalError !== 'ESRCH');
+  if (failed)
+    throw new Error(`Could not signal node group ${String(failed.pgid)} (${failed.signalError})`);
+  return { warnings: prepared.warnings };
 }

@@ -101,9 +101,9 @@ for the background-start admission and observation cutoff rules.
 - **In-process native tools** — the provider can register Archon `NativeTool`s for a
   turn. It gates auto-injection of Archon's `invoke_workflow` and `register_project` tools
   into every chat, and of `manage_run` into project-scoped chat. Providers without it
-  launch workflows and register projects by writing `/invoke-workflow` and
-  `/register-project` lines that Archon reads from the reply; those lines cannot supply a
-  workflow's declared inputs.
+  use the existing CLI for run launch and management after project selection.
+  These launches are detached and headless, with CLI identity and no originating-chat
+  delivery. Registration requires an explicit user command; assistant prose has no effects.
 
 For per-provider field-level notes (YAML syntax, caveats), see the
 [AI Assistants guide](/getting-started/ai-assistants/).

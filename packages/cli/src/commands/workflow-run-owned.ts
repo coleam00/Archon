@@ -1,3 +1,4 @@
+import { OwnedRunLease } from '../utils/owned-run-lease';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { withCapturedSource } from '@archon/workflows/run-source';
 import {
@@ -23,7 +24,6 @@ import {
 } from './workflow-run-admission';
 import {
   launchDetachedOwnedRun,
-  OwnedRunLease,
   prepareForegroundLaunch,
   provisionWorkspace,
   recordConversationLaunch,

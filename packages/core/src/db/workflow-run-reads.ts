@@ -2,8 +2,9 @@
  * Point reads of workflow runs: lookups by id, conversation, path, parent and
  * worker platform id. Re-exported from the `./workflows` entry.
  */
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
+  workflowRunStatusSchema,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -78,27 +79,45 @@ export async function findWorkflowRunsByIdPrefix(
   }
 }
 
-export async function getWorkflowRunStatus(id: string): Promise<string | null> {
-  try {
-    const result = await pool.query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
+export class WorkflowStatusReadError extends Error {
+  override readonly name = 'WorkflowStatusReadError';
+
+  constructor(
+    readonly workflowRunId: string,
+    readonly storedStatus: string
+  ) {
+    super(
+      `Unsupported workflow run status for run ${workflowRunId}: ${JSON.stringify(storedStatus)}`
     );
-    return result.rows[0]?.status ?? null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'db.workflow_run_get_status_failed');
-    throw new Error(`Failed to get workflow run status: ${err.message}`);
   }
 }
 
-export async function getActiveWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
+export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null> {
+  const result = await pool
+    .query<{ status: string }>('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [id])
+    .catch((error: unknown) => {
+      const err = error as Error;
+      getLog().error({ err }, 'db.workflow_run_get_status_failed');
+      throw new Error(`Failed to get workflow run status: ${err.message}`);
+    });
+  const row = result.rows[0];
+  if (!row) return null;
+  const status = workflowRunStatusSchema.safeParse(row.status);
+  if (!status.success) throw new WorkflowStatusReadError(id, row.status);
+  return status.data;
+}
+
+export async function getActiveWorkflowRun(
+  conversationId: string,
+  codebaseId?: string
+): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'running'
+       ${codebaseId ? 'AND codebase_id = $3' : ''}
        ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
+      codebaseId ? [conversationId, conversationId, codebaseId] : [conversationId, conversationId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;

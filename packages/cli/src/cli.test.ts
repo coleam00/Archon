@@ -1976,8 +1976,8 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when chat is invoked with no message', () => {
-    const { status, envelope } = spawnJsonError(['chat', '--json']);
+  it.each(['', 'hello'])('refuses unsupported chat JSON output with message %j', message => {
+    const { status, envelope } = spawnJsonError(['chat', message, '--json']);
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
