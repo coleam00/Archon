@@ -334,7 +334,12 @@ describe('run live owner', () => {
           process.platform === 'win32'
             ? /owner did not commit the termination lease/
             : /owner (?:ended|closed) before committing termination/;
-        await expect(lease.commit()).rejects.toThrow(expectedFailure);
+        const outcome = await lease.commit().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(outcome).toBeInstanceOf(Error);
+        expect(outcome).toMatchObject({ message: expect.stringMatching(expectedFailure) });
       } finally {
         lease.release();
       }
@@ -499,6 +504,11 @@ describe('detached owner preparation', () => {
   test.each([
     ['malformed', '{"group":{"pgid":"invalid","leaderReaped":true}}', 'Invalid input'],
     ['oversized', 'x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
+    [
+      'contradictory group',
+      '{"group":{"pgid":1,"leaderReaped":true,"signalError":"EPERM"}}',
+      'Invalid input',
+    ],
     ['mixed', '{"warning":"held output","group":{"pgid":1,"leaderReaped":false}}', 'Invalid input'],
   ])(
     'rejects %s preparation frames instead of acknowledging a stop',
@@ -534,7 +544,13 @@ describe('detached owner preparation', () => {
       await listen(server, path);
       const lease = await requestRunLiveOwnerStop(runId);
       try {
-        await expect(lease.commit()).rejects.toThrow(expectedError);
+        // Await pipe I/O before Bun's matchers, which synchronously pump the event loop.
+        const outcome = await lease.commit().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(outcome).toBeInstanceOf(Error);
+        expect(outcome).toMatchObject({ message: expect.stringContaining(expectedError) });
         expect(requests).toEqual(['stop', 'terminate']);
       } finally {
         lease.release();

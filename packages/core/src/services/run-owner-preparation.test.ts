@@ -16,6 +16,9 @@ test.each([
   { warning: 'held output', extra: true },
   { group: liveGroup, extra: true },
   { group: reapedGroup, extra: true },
+  { group: { ...liveGroup, extra: true } },
+  { group: { ...reapedGroup, extra: true } },
+  { group: { ...reapedGroup, signalError: 'EPERM' } },
 ])('rejects ambiguous or unknown preparation facts without changing the report: %j', frame => {
   const report: RunOwnerPreparedStop = { groups: [], warnings: [] };
   expect(() => readPreparationFrame(JSON.stringify(frame), report)).toThrow();
@@ -24,8 +27,17 @@ test.each([
 
 test('retains each supported preparation fact', () => {
   const report: RunOwnerPreparedStop = { groups: [], warnings: [] };
-  for (const frame of [{ warning: 'held output' }, { group: liveGroup }, { group: reapedGroup }]) {
+  const failedSignal = { ...liveGroup, signalError: 'EPERM' };
+  for (const frame of [
+    { warning: 'held output' },
+    { group: liveGroup },
+    { group: reapedGroup },
+    { group: failedSignal },
+  ]) {
     readPreparationFrame(JSON.stringify(frame), report);
   }
-  expect(report).toEqual({ groups: [liveGroup, reapedGroup], warnings: ['held output'] });
+  expect(report).toEqual({
+    groups: [liveGroup, reapedGroup, failedSignal],
+    warnings: ['held output'],
+  });
 });

@@ -33,11 +33,11 @@ export async function writeOwnerPreparation(
 }
 
 export const processGroupStopSchema = z.discriminatedUnion('leaderReaped', [
-  z.object({
+  z.strictObject({
     pgid: z.number().int().positive(),
     leaderReaped: z.literal(true),
   }),
-  z.object({
+  z.strictObject({
     pgid: z.number().int().positive(),
     leaderReaped: z.literal(false),
     signalError: z.string().optional(),
