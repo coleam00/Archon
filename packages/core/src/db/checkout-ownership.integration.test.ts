@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { checkoutEnvironmentReferences } from '@archon/workflows/schemas/checkout-ownership';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readdir, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -960,7 +961,7 @@ test('SQL conditional checkout clear refuses a missing conversation', async () =
 });
 
 test.each(
-  (['pending', 'running', 'paused', 'failed', 'cancelled', 'completed'] as const).flatMap(status =>
+  workflowRunStatusSchema.options.flatMap(status =>
     (['clear', 'rebind', 'attach'] as const).map(change => ({ status, change }))
   )
 )(
