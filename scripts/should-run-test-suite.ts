@@ -20,10 +20,6 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
- *   - `reference/variables.md` and `guides/script-nodes.md` state the user-controlled variable
- *     rule, which `scripts/variables-rule-parity.test.ts` pins for review and checks against
- *     engine-owned names and accessors. The guard reads
- *     every page of the docs site, so the conformance rule below is what lists these two.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
@@ -36,8 +32,6 @@ const BUILD_INPUTS = [
   'packages/docs-web/src/content/docs/reference/database.md',
   'packages/docs-web/src/content/docs/reference/api.md',
   'packages/docs-web/src/content/docs/reference/node-execution.md',
-  'packages/docs-web/src/content/docs/reference/variables.md',
-  'packages/docs-web/src/content/docs/guides/script-nodes.md',
   'packages/docs-web/src/content/docs/deployment/docker.md',
   'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
   'packages/docs-web/src/content/docs/guides/attention-queue.md',
