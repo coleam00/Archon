@@ -3,7 +3,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runPluginProcess } from './plugin-process';
+import { pluginProcessEnv, runPluginProcess } from './plugin-process';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
 const candidate = (mode: string) => ({
@@ -101,4 +101,21 @@ test.each(['plugin.cmd', 'plugin.bat'])('refuses shell shim %s without execution
   });
   expect(result.spawnError).toContain('.cmd or .bat');
   expect(result.exitCode).toBeNull();
+});
+
+test('passes the configured GitHub origin without ambient credentials to forge plugins', () => {
+  expect(
+    pluginProcessEnv(
+      {
+        GITHUB_URL: 'http://ghes.example.test:8080',
+        GH_TOKEN: 'ambient-token',
+        GITHUB_TOKEN: 'other-token',
+        UNRELATED_SECRET: 'private',
+      },
+      'selected-token'
+    )
+  ).toEqual({
+    GITHUB_URL: 'http://ghes.example.test:8080',
+    ARCHON_FORGE_TOKEN: 'selected-token',
+  });
 });

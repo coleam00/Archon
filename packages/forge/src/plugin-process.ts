@@ -37,6 +37,7 @@ const SAFE_ENV = new Set([
   'LC_ALL',
   'LC_CTYPE',
   'TZ',
+  'GITHUB_URL',
 ]);
 
 export function pluginProcessEnv(env: NodeJS.ProcessEnv, token?: string): NodeJS.ProcessEnv {
