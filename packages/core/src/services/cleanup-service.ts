@@ -409,6 +409,12 @@ export interface RemoveEnvironmentResult {
   warnings: string[];
 }
 
+function incompleteRemovalReason(removal: RemoveEnvironmentResult): string | undefined {
+  return removal.skippedReason === 'filesystem removal incomplete; environment remains active'
+    ? removal.skippedReason
+    : undefined;
+}
+
 /**
  * Remove a specific environment
  */
@@ -799,10 +805,24 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     sessionsDeleted: 0,
     releasedFailedRuns: [],
   };
-  const recordRelease = (envId: string, released: ReleasedFailedRun | null): void => {
-    if (!released) return;
-    report.releasedFailedRuns.push({ id: envId, ...released });
-    getLog().info({ envId, ...released }, 'failed_run_lock_released');
+  const recordRemoval = (
+    envId: string,
+    removal: RemoveEnvironmentResult,
+    reason: 'path missing' | 'merged' | 'stale',
+    released: ReleasedFailedRun | null = null
+  ): void => {
+    const error = incompleteRemovalReason(removal);
+    if (error) {
+      report.errors.push({ id: envId, error });
+    } else if (removal.skippedReason) {
+      report.skipped.push({ id: envId, reason: removal.skippedReason });
+    } else {
+      report.removed.push(`${envId} (${reason})`);
+      if (released) {
+        report.releasedFailedRuns.push({ id: envId, ...released });
+        getLog().info({ envId, ...released }, 'failed_run_lock_released');
+      }
+    }
   };
 
   try {
@@ -853,11 +873,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
               continue;
             }
             const removeResult = await removeEnvironment(env, { force: false });
-            if (removeResult.skippedReason) {
-              report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
-            } else {
-              report.removed.push(`${env.id} (path missing)`);
-            }
+            recordRemoval(env.id, removeResult, 'path missing');
             continue;
           }
         }
@@ -903,12 +919,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
             force: false,
             deleteRemoteBranch: true,
           });
-          if (mergedResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: mergedResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (merged)`);
-            recordRelease(env.id, check.released);
-          }
+          recordRemoval(env.id, mergedResult, 'merged', check.released);
           continue;
         }
 
@@ -961,12 +972,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           const staleResult = await removeEnvironment(env, {
             force: false,
           });
-          if (staleResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (stale)`);
-            recordRelease(env.id, check.released);
-          }
+          recordRemoval(env.id, staleResult, 'stale', check.released);
         }
       } catch (error) {
         const err = error as Error;
@@ -1135,8 +1141,9 @@ function recordCleanupRemoval(
   released: ReleasedFailedRun | null
 ): void {
   result.warnings.push(...removal.warnings.map(message => ({ branchName, message })));
-  if (removal.skippedReason === 'filesystem removal incomplete; environment remains active') {
-    result.errors.push({ branchName, error: removal.skippedReason });
+  const error = incompleteRemovalReason(removal);
+  if (error) {
+    result.errors.push({ branchName, error });
   } else if (removal.skippedReason) {
     result.skipped.push({ branchName, reason: removal.skippedReason });
   } else {

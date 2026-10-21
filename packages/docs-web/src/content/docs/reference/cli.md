@@ -1461,6 +1461,9 @@ Project deletion (`DELETE /api/codebases/{id}`) returns `409` while active conta
 environments remain. The error lists their environment IDs and the cleanup command.
 Clean them up explicitly, then retry deletion.
 
+Cleanup continues after individual errors and exits with status `1` if any removal fails;
+protected skips exit with status `0`.
+
 Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
 the plugins. A receipt supersedes a bundled chat policy with the same platform id.

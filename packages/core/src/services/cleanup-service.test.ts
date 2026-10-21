@@ -681,6 +681,42 @@ describe('runScheduledCleanup', () => {
     }
   );
 
+  test.each(
+    (['path missing', 'merged', 'stale'] as const).flatMap(sweep =>
+      (['worktreeRemoved', 'directoryClean'] as const).map(failure => ({ sweep, failure }))
+    )
+  )(
+    'scheduled $sweep cleanup reports incomplete $failure and continues',
+    async ({ sweep, failure }) => {
+      scheduledSweepFinds(
+        ...['broken', 'later'].map(branch => sweptWorktreeEnv(branch, { created_at: daysAgo(30) }))
+      );
+      mockWorktreeExists.mockResolvedValue(sweep !== 'path missing');
+      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        directoryClean: true,
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+        [failure]: false,
+      });
+
+      const report = await runScheduledCleanup();
+
+      expect(report.errors).toEqual([
+        { id: 'env-broken', error: 'filesystem removal incomplete; environment remains active' },
+      ]);
+      expect(report.skipped).toEqual([]);
+      expect(report.removed).toEqual([`env-later (${sweep})`]);
+      expect(report.releasedFailedRuns).toEqual([]);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledTimes(1);
+      expect(mockMarkWorktreeDestroyed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'env-later' })
+      );
+    }
+  );
+
   test('skips merged branches with uncommitted changes', async () => {
     scheduledSweepFinds(sweptWorktreeEnv('issue-10'));
     mockWorktreeExists.mockResolvedValue(true);
