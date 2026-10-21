@@ -74,9 +74,16 @@ In a terminal, an answer continues the run in place. With `--json`, the answer i
 ```bash
 archon workflow resume <run-id>       # rerun a failed or paused run, skipping completed nodes
 archon workflow resume <run-id> --detach
+archon workflow end-turn <run-id>     # end a running run's stalled turn
 archon workflow cancel <run-id>       # stop a running run
 archon workflow abandon <run-id>      # give up on a run for good
 ```
+
+Pick the command by what is wrong:
+
+- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
+- **The run should stop.** Use `cancel`.
+- **The run failed or paused.** Use `resume` to continue it.
 
 `cancel` works only on a `running` run. It stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
 
