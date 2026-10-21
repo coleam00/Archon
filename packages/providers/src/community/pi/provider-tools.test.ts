@@ -1,6 +1,7 @@
 import {
   mockCreateAgentSession,
   mockCreateBashTool,
+  mockCreatePowerShellTool,
   mockSettingsManagerInMemory,
   consume,
   resetScript,
@@ -219,7 +220,7 @@ describe('PiProvider tools', () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
     mockSettingsManagerInMemory.mockImplementationOnce(() => ({
-      getDefaultTools: () => ['read', 'grep', 'ls'],
+      getDefaultTools: () => ['read', 'grep', 'ls', 'powershell'],
     }));
 
     await consume(
@@ -235,6 +236,7 @@ describe('PiProvider tools', () => {
       'read',
       'grep',
       'ls',
+      'powershell',
       'structured_output',
     ]);
   });
@@ -243,7 +245,7 @@ describe('PiProvider tools', () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
     mockSettingsManagerInMemory.mockImplementationOnce(() => ({
-      getDefaultTools: () => ['read', 'bash'],
+      getDefaultTools: () => ['read', 'bash', 'powershell'],
     }));
 
     await consume(
@@ -255,6 +257,10 @@ describe('PiProvider tools', () => {
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     const tools = callArgs.customTools as { __piTool: string }[];
-    expect(tools.map(t => t.__piTool)).toEqual(['read', 'bash']);
+    expect(tools.map(t => t.__piTool)).toEqual(['read', 'bash', 'powershell']);
+    const powershellOptions = mockCreatePowerShellTool.mock.calls.at(-1)?.[1] as
+      | { spawnHook?: unknown }
+      | undefined;
+    expect(typeof powershellOptions?.spawnHook).toBe('function');
   });
 });

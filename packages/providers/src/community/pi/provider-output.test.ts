@@ -2,6 +2,9 @@ import {
   type FakeEvent,
   mockPrompt,
   mockCreateAgentSession,
+  capturedListener,
+  createMockSessionResult,
+  scriptedEvents,
   consume,
   resetScript,
   scriptedAgentEnd,
@@ -269,6 +272,40 @@ describe('PiProvider output', () => {
       'write',
       'structured_output',
     ]);
+  });
+
+  test('outputFormat: the tool call answers the turn and its failed calls are capped', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const sessionResult = createMockSessionResult();
+    const session = { ...sessionResult.session, agent: {} } as typeof sessionResult.session;
+    mockCreateAgentSession.mockImplementationOnce(async options => {
+      const tool = options?.customTools?.find(t => t.name === 'structured_output');
+      mockPrompt.mockImplementationOnce(async () => {
+        await tool?.execute('call-1', { area: 'web' }, undefined, undefined, {} as never);
+        for (const ev of scriptedEvents) capturedListener?.(ev);
+      });
+      return { ...sessionResult, session };
+    });
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('classify', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })
+    );
+
+    const result = chunks.find(
+      (c): c is { type: 'result'; structuredOutput?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(result?.structuredOutput).toEqual({ area: 'web' });
+
+    const failedCall = { toolName: 'structured_output', isError: true };
+    const turn = { toolResults: [failedCall, failedCall, failedCall] } as unknown as Parameters<
+      NonNullable<typeof session.agent.finishTurn>
+    >[0];
+    expect(await session.agent.finishTurn?.(turn)).toEqual({ action: 'end' });
   });
 
   test('outputFormat: a schema without an object root fails before the session opens', async () => {
