@@ -4,8 +4,9 @@ import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
 
+const log = createMockLogger();
 mock.module('@archon/paths', () => ({
-  createLogger: mock(() => createMockLogger()),
+  createLogger: mock(() => log),
 }));
 
 import {
@@ -320,13 +321,40 @@ describe('AppServerConnection', () => {
   });
 
   test('shutdown has no deadline after SIGTERM: a Codex still exiting is awaited until it exits', async () => {
-    // A Codex on a loaded machine keeps exiting long after SIGTERM, then exits 0. Waiting
-    // through several warning intervals must still return that clean exit.
+    // A Codex on a loaded machine keeps exiting long after SIGTERM, then exits 0. It closes
+    // only once the second still-exiting warning is logged, so the wait must outlast
+    // several warning intervals and report each one, however slow the event loop is.
+    log.warn.mockClear();
+    const waits = (): number[] =>
+      log.warn.mock.calls
+        .filter(([, event]) => event === 'codex.app_server_still_exiting')
+        .map(([fields]) => (fields as { waitedMs: number }).waitedMs);
     const slow = rawChild(child => {
-      setTimeout(() => child.emit('close', 0, null), 120);
+      const poll = setInterval(() => {
+        if (waits().length < 2) return;
+        clearInterval(poll);
+        child.emit('close', 0, null);
+      }, 5);
     });
     const end = await AppServerConnection.start(BINARY, [], {}, slow.spawner).shutdown(5, 20);
     expect(end).toEqual({ kind: 'exited', code: 0, signal: null });
+    expect(waits().slice(0, 2)).toEqual([20, 40]);
+  }, 5_000);
+
+  test('an unparseable app-server line is logged by length only, never its text', async () => {
+    log.warn.mockClear();
+    const fake = rawChild();
+    AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const sentinel = 'user-text-sentinel-7f3a';
+    fake.stdout.write(`not json ${sentinel}\n`);
+    await tick();
+    const calls = log.warn.mock.calls.filter(
+      ([, event]) => event === 'codex.app_server_unparseable_line'
+    );
+    expect(calls).toEqual([
+      [{ bytes: Buffer.byteLength(`not json ${sentinel}`) }, 'codex.app_server_unparseable_line'],
+    ]);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sentinel);
   });
 });
 
