@@ -2,11 +2,13 @@ import { describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
+import { getRunScratchDir } from '../packages/paths/src/run-paths';
+import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
 import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';
 
 /**
@@ -212,6 +214,24 @@ function result(bindings: { run?: unknown; classification?: unknown }): {
   const stdout = out.stdout.toString().trim();
   return { exitCode: out.exitCode, output: stdout === '' ? null : JSON.parse(stdout) };
 }
+
+describe("the pack's scratch directory", () => {
+  it('is the run scratch directory the engine removes when the run ends', () => {
+    expect(scratchDir('/artifacts', '')).toBe(getRunScratchDir('/artifacts'));
+  });
+
+  it('is the only scratch directory the pack commands name', async () => {
+    const engineScratch = `$ARTIFACTS_DIR/${relative('/artifacts', getRunScratchDir('/artifacts')).split(sep).join('/')}/`;
+    const sdlc = join(import.meta.dir, '..', '.archon', 'workflows', 'sdlc');
+    const named: string[] = [];
+    for await (const file of new Bun.Glob('*/commands/*.md').scan(sdlc)) {
+      const text = readFileSync(join(sdlc, file), 'utf8');
+      for (const [path] of text.matchAll(/\$\{?ARTIFACTS_DIR\}?\/\S*scratch\S*/g)) named.push(path);
+    }
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter(path => !path.startsWith(engineScratch))).toEqual([]);
+  });
+});
 
 describe("the gate's environment", () => {
   it("names exactly the engine's exec-node contract", () => {

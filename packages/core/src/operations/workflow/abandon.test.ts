@@ -2,7 +2,12 @@
 import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import type { IIsolationStore } from '@archon/isolation';
@@ -17,12 +22,14 @@ import {
   mockCancelWorkflowRun,
   mockCancelResumableRunsForConversation,
   mockFindChildRuns,
+  mockGetRunAncestry,
   mockReclaimContainerEnv,
   noOwnerAnswers,
   mockRequestDetachedRunStop,
   isolationStore,
   store,
   makePausedRun,
+  makeRunWithScratch,
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   isRunOwnedByThisProcess,
@@ -30,6 +37,10 @@ import {
   abandonWorkflow,
   abandonResumableRunsForConversation,
 } from './test-harness';
+
+const trackTempRoot = trackTempRoots();
+const scratchRoot = () =>
+  trackTempRoot(join(getArchonWorkspacesPath(), '_cwd', `abandon-${randomUUID()}`));
 
 describe('abandonWorkflow', () => {
   beforeEach(() => {
@@ -559,6 +570,54 @@ describe('abandonWorkflow', () => {
     });
   });
 
+  // Only an owner process on this host that is gone, or this process once it no longer
+  // executes the run, proves nothing of the run can still write its scratch.
+  test.each([
+    ['this process, not executing it', hostname(), process.pid, false],
+    ['a live process', hostname(), process.ppid, true],
+    ['a process on another host', 'other-host', process.pid, true],
+  ] as const)('a silent owner that is %s keeps its scratch: %p', async (_case, host, pid, kept) => {
+    const { run, checkout } = makeRunWithScratch(scratchRoot(), {
+      status: 'running',
+      metadata: { execution_owner: { host, pid, uid: process.getuid?.() } },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    await abandonWorkflow(run.id, operator);
+
+    expect(existsSync(checkout)).toBe(kept);
+  });
+
+  // A cascaded descendant executes in the stopped root's process, unless an output
+  // holder the stop left running can still write.
+  test.each([
+    [[], false],
+    [['An output holder is still running.'], true],
+  ] as const)(
+    'a stop with warnings %p keeps a cancelled child’s scratch: %p',
+    async (warnings, kept) => {
+      const root = makePausedRun({ status: 'running' });
+      const { run: child, checkout } = makeRunWithScratch(scratchRoot(), {
+        id: `child-${randomUUID()}`,
+        parent_run_id: root.id,
+      });
+      mockGetWorkflowRun.mockResolvedValueOnce(root);
+      mockFindChildRuns.mockImplementation(async parentId => (parentId === root.id ? [child] : []));
+      mockGetRunAncestry.mockResolvedValueOnce([root]);
+      mockRequestDetachedRunStop.mockImplementationOnce(() =>
+        Promise.resolve({
+          pid: 42,
+          stop: async () => ({ warnings: [...warnings] }),
+          release: () => undefined,
+        })
+      );
+
+      await abandonWorkflow(root.id, operator);
+
+      expect(existsSync(checkout)).toBe(kept);
+    }
+  );
+
   for (const reason of ['not_detached', 'unproven', undefined] as const) {
     test(`an owner endpoint that answered (${String(reason)}) leaves the run unchanged`, async () => {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
@@ -668,6 +727,23 @@ describe('abandonResumableRunsForConversation', () => {
       blockedParentRunId: null,
     });
     expect(mockFindChildRuns).not.toHaveBeenCalled();
+  });
+
+  // A paused run may still be executing a gate's sibling nodes; its executor removes its
+  // scratch when it exits.
+  test.each([
+    ['this process, not executing it', process.pid, false],
+    ['a live process', process.ppid, true],
+  ] as const)('a reset run whose owner is %s keeps its scratch: %p', async (_case, pid, kept) => {
+    const { run, checkout } = makeRunWithScratch(scratchRoot(), {
+      id: `reset-${randomUUID()}`,
+      metadata: { execution_owner: { host: hostname(), pid, uid: process.getuid?.() } },
+    });
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([run]);
+
+    await abandonResumableRunsForConversation('conv-1', operator);
+
+    expect(existsSync(checkout)).toBe(kept);
   });
 
   test('reclaims every cancelled container run', async () => {

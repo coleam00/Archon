@@ -70,7 +70,10 @@ export async function loadBundledScope(
     }
     if (appResult.errors.length > 0) {
       getLog().warn(
-        { errorCount: appResult.errors.length, errors: appResult.errors },
+        {
+          errorCount: appResult.errors.length,
+          errors: appResult.errors.map(({ filename, errorType }) => ({ filename, errorType })),
+        },
         'app_default_workflow_errors'
       );
       context.allErrors.push(...appResult.errors);
@@ -104,10 +107,7 @@ function loadEmbeddedWorkflows(context: WorkflowParseContext): DirLoadResult {
     const result = parseWorkflow(content, filename, context.providers, context.configuredEnvNames);
     if (!result.workflow) {
       // Bundled workflows should ALWAYS be valid - this indicates a build-time error
-      getLog().error(
-        { filename, contentPreview: content.slice(0, 200) + '...' },
-        'bundled_workflow_parse_failed'
-      );
+      getLog().error({ filename }, 'bundled_workflow_parse_failed');
       errors.push(result.error);
       continue;
     }

@@ -711,6 +711,15 @@ describe('CodexProvider', () => {
       expect(server.processes[0].stdinEnded).toBe(true);
     });
 
+    test('a Codex still exiting after SIGTERM settles once it exits cleanly', async () => {
+      // Codex shutting down on a loaded machine outlasts the stdin-close grace; SIGTERM
+      // does not hurry it, and it exits 0 on its own schedule.
+      const server = createFakeAppServer(() => ({ exitsAfterStdinCloseMs: 100 }));
+      const chunks = await run(new CodexProvider(server, 20));
+      expect(server.processes[0].signals).toEqual(['SIGTERM']);
+      expect(chunks.map(c => c.type)).toEqual(['result', 'settled']);
+    });
+
     test('an abnormal process exit after the final notification is not a settle', async () => {
       const { provider, server } = providerWith({
         notifications: [turnCompleted('completed')],
