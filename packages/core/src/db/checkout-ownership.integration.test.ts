@@ -771,8 +771,8 @@ test.each([false, true])(
     const retired = await createEnv();
     const conversationId = randomUUID();
     await db.query(
-      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $1, $2)`,
-      [conversationId, retired.id]
+      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id) VALUES ($1, 'cli', $2, $3)`,
+      [conversationId, conversationId, retired.id]
     );
     await sql.withWorktreeRegistration(retired, async mark => mark());
     const current = replacement ? await createEnv() : null;
