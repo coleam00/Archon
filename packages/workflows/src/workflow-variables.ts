@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createLogger } from '@archon/paths';
 import {
+  USER_CONTROLLED_VARIABLES,
+  type UserControlledVariableContext,
+} from './user-controlled-variables';
+import {
   inputRefToken,
   substituteTemplate,
   templateToken,
@@ -36,9 +40,12 @@ export function currentAdoptedRunDir(): string | undefined {
   return adoptedRunDirContext.getStore();
 }
 
+const contextVariables = USER_CONTROLLED_VARIABLES.filter(group => group.kind === 'context').map(
+  group => ({ ...group, pattern: `\\$(?:${group.names.join('|')})(?![A-Za-z0-9_])` })
+);
+
 /** Pattern string for context variables - used to create fresh regex instances */
-export const CONTEXT_VAR_PATTERN_STR =
-  '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
+export const CONTEXT_VAR_PATTERN_STR = contextVariables.map(group => group.pattern).join('|');
 
 /**
  * Reference grammars resolved in the same pass as the workflow variables, so nothing a
@@ -181,20 +188,29 @@ export function substituteWorkflowVariables(
   // When shellSafe is true, user-controlled variables stay literal — they are passed via
   // subprocess environment variables instead to prevent shell injection (#2115).
   if (!options?.shellSafe) {
+    const values: UserControlledVariableContext = {
+      userMessage,
+      loopUserInput,
+      rejectionReason,
+      loopPrevOutput,
+      issueContext,
+    };
     tokens.push(
-      variable('USER_MESSAGE', () => userMessage),
-      variable('ARGUMENTS', () => userMessage),
-      variable('LOOP_USER_INPUT', () => loopUserInput ?? ''),
-      variable('REJECTION_REASON', () => rejectionReason ?? ''),
-      variable('LOOP_PREV_OUTPUT', () => loopPrevOutput ?? ''),
+      ...USER_CONTROLLED_VARIABLES.filter(group => group.kind === 'text').flatMap(group =>
+        group.names.map(name => variable(name, () => values[group.source] ?? ''))
+      )
+    );
+    tokens.push(
       // $INPUTS.<name> — named sub-run inputs (#2470). Non-shell branch ONLY: a sub-run's
       // input value can derive from AI output (e.g. `with: {plan: $plan.output}`), the
       // exact user-controlled class shellSafe keeps out of shell source (#2115). An
       // unknown name THROWS (mirrors $node.output.field strictness) rather than
       // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
-      inputRefToken(options?.inputs),
-      templateToken(CONTEXT_VAR_PATTERN_STR, () => issueContext ?? '')
+      inputRefToken(options?.inputs)
     );
+    for (const group of contextVariables) {
+      tokens.push(templateToken(group.pattern, () => values[group.source] ?? ''));
+    }
   }
 
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(prompt);
@@ -202,7 +218,7 @@ export function substituteWorkflowVariables(
     getLog().debug(
       {
         action: 'clearing variables',
-        variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
+        variables: contextVariables.flatMap(group => group.names.map(name => `$${name}`)),
       },
       'context_variables_cleared'
     );
