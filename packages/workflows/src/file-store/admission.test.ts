@@ -1203,9 +1203,16 @@ test.each(['paused', 'failed'] as const)(
   }
 );
 
-test.each(['admission', 'drain', 'paused resume', 'failed resume'] as const)(
-  'a refused historical continuation keeps priority over %s',
-  async operation => {
+test.each(
+  (['first', 'repeated'] as const).flatMap(refusal =>
+    (['admission', 'drain', 'paused resume', 'failed resume'] as const).map(operation => ({
+      refusal,
+      operation,
+    }))
+  )
+)(
+  'a $refusal refused historical continuation keeps priority over $operation',
+  async ({ refusal, operation }) => {
     const { root, store, holder, queued, resuming } = await releasedHolderFixture(
       'released-before-upgrade',
       'intact'
@@ -1214,10 +1221,20 @@ test.each(['admission', 'drain', 'paused resume', 'failed resume'] as const)(
     const occupant = intent();
     occupant.launch.execution.cwd = '/occupant';
     expect(await store.admitResourceStart(occupant)).toMatchObject({ status: 'admitted' });
+    const existingWait = { since: '2026-01-02T00:00:00.000Z' };
+    if (refusal === 'repeated') {
+      await store.updateWorkflowRun(holder.launch.run.id, {
+        metadata: { capacity_wait: existingWait },
+      });
+    }
     await expect(store.resumeWorkflowRun(holder.launch.run.id)).rejects.toMatchObject({
       blocker: { kind: 'run', id: occupant.launch.run.id },
       refusal: 'waiting',
     });
+    if (refusal === 'repeated')
+      expect((await store.getWorkflowRun(holder.launch.run.id))?.metadata.capacity_wait).toEqual(
+        existingWait
+      );
     const incoming = intent();
     incoming.launch.execution.cwd = '/incoming';
     if (operation === 'drain')
