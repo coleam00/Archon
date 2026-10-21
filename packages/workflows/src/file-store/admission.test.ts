@@ -564,7 +564,15 @@ test.each(['launch', 'json', 'null', 'queued', 'skipped', 'withdrawn'] as const)
   }
 );
 
-test.each(['id', 'resource', 'overlap', 'blocker', 'launch', 'position'] as const)(
+test.each([
+  'id',
+  'resource',
+  'resource-mismatch',
+  'overlap',
+  'blocker',
+  'launch',
+  'position',
+] as const)(
   'host listing isolates a selected request with corrupt %s and drains an independent resource',
   async field => {
     const { root, store } = await fixture();
@@ -586,7 +594,8 @@ test.each(['id', 'resource', 'overlap', 'blocker', 'launch', 'position'] as cons
     );
     const target = join(root, path);
     const row = JSON.parse(await readFile(target, 'utf8'));
-    row[field] = field === 'blocker' ? {} : null;
+    if (field === 'resource-mismatch') row.resource = 'wrong-resource';
+    else row[field] = field === 'blocker' ? {} : null;
     const damaged = JSON.stringify(row);
     await writeFile(target, damaged);
     const logs: string[] = [];
@@ -617,10 +626,116 @@ test.each(['id', 'resource', 'overlap', 'blocker', 'launch', 'position'] as cons
     expect(await store.getWorkflowRun(otherHolder.launch.run.id)).toMatchObject({
       status: 'pending',
     });
-    await expect(store.getResourceStartRequest(corrupt.launch.run.id)).rejects.toThrow();
+    if (field !== 'resource-mismatch')
+      await expect(store.getResourceStartRequest(corrupt.launch.run.id)).rejects.toThrow();
     await expect(
       store.drainResourceStarts({ resource: 'other', hostId: 'host' })
     ).rejects.toThrow();
+    if (field === 'resource-mismatch') {
+      await expect(store.admitResourceStart({ ...intent(), resource: 'other' })).rejects.toThrow(
+        'does not belong to resource'
+      );
+      await store.claimPendingWorkflowRun(otherHolder.launch.run.id, '/other');
+      await store.pauseWorkflowRunForWait(
+        otherHolder.launch.run.id,
+        {
+          owner: 'node',
+          nodeId: 'wait',
+          kind: 'time',
+          waitingSince: '2026-01-01T00:00:00.000Z',
+          resumeAt: '2026-01-02T00:00:00.000Z',
+        },
+        { kind: 'started', stepName: 'wait' }
+      );
+      await expect(store.resumeWorkflowRun(otherHolder.launch.run.id)).rejects.toThrow(
+        'does not belong to resource'
+      );
+      await writeFile(target, JSON.stringify({ ...row, resource: 'other' }));
+      await finishRun(root, otherHolder.launch.run.id);
+      expect(await store.drainResourceStarts({ resource: 'other', hostId: 'host' })).toMatchObject([
+        { status: 'admitted', runId: corrupt.launch.run.id },
+      ]);
+    }
+  }
+);
+
+test.each([
+  'json',
+  'null',
+  'missing-resource',
+  'invalid-resource',
+  'missing-status',
+  'invalid-status',
+] as const)(
+  'a released paused holder with %s corruption cannot become foreign',
+  async corruption => {
+    const { root, store } = await fixture();
+    const holder = intent();
+    const queued = intent();
+    queued.launch.run.metadata.admission_checkout_guard = false;
+    const resuming = intent();
+    resuming.launch.execution.cwd = '/resuming';
+    resuming.launch.run.metadata.admission_checkout_guard = false;
+    await store.admitResourceStart(holder);
+    await store.admitResourceStart(queued);
+    await store.claimPendingWorkflowRun(holder.launch.run.id, '/test');
+    const wait = {
+      owner: 'node' as const,
+      nodeId: 'wait',
+      kind: 'time' as const,
+      waitingSince: '2026-01-01T00:00:00.000Z',
+      resumeAt: '2026-01-02T00:00:00.000Z',
+    };
+    await store.pauseWorkflowRunForWait(holder.launch.run.id, wait, {
+      kind: 'started',
+      stepName: 'wait',
+    });
+    const cursor = { kind: 'wait' as const, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
+    expect(await store.releasePausedRunSlot(holder.launch.run.id, cursor)).toEqual({
+      released: true,
+    });
+    await store.admitResourceStart(resuming);
+    await store.claimPendingWorkflowRun(resuming.launch.run.id, '/resuming');
+    await store.pauseWorkflowRunForWait(resuming.launch.run.id, wait, {
+      kind: 'started',
+      stepName: 'wait',
+    });
+    await store.releasePausedRunSlot(resuming.launch.run.id, cursor);
+    const path = join(
+      root,
+      'resource/requests',
+      `${createHash('sha256').update(holder.launch.run.id).digest('hex')}.json`
+    );
+    const row = JSON.parse(await readFile(path, 'utf8'));
+    if (corruption === 'missing-resource') delete row.resource;
+    if (corruption === 'invalid-resource') row.resource = 42;
+    if (corruption === 'missing-status') delete row.status;
+    if (corruption === 'invalid-status') row.status = 'unsupported';
+    const damaged =
+      corruption === 'json' ? '{' : JSON.stringify(corruption === 'null' ? null : row);
+    await writeFile(path, damaged);
+    const head = await readFile(join(root, 'head.json'), 'utf8');
+    for (const overlap of ['queue', 'skip'] as const) {
+      const next = { ...intent(), overlap };
+      next.launch.run.metadata.admission_checkout_guard = false;
+      await expect(store.admitResourceStart(next)).rejects.toThrow();
+      expect(await store.getWorkflowRun(next.launch.run.id)).toBeNull();
+    }
+    await expect(
+      store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+    ).rejects.toThrow();
+    await expect(store.resumeWorkflowRun(resuming.launch.run.id)).rejects.toThrow();
+    expect(await store.getWorkflowRun(queued.launch.run.id)).toBeNull();
+    expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('paused');
+    expect((await store.getWorkflowRun(resuming.launch.run.id))?.status).toBe('paused');
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+    await writeFile(path, JSON.stringify({ ...row, resource: 'resource', status: 'admitted' }));
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+    await finishRun(root, holder.launch.run.id);
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject(
+      [{ runId: queued.launch.run.id }]
+    );
   }
 );
 
