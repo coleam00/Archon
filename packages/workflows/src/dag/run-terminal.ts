@@ -2,7 +2,7 @@
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
  * usage-limit dispositions, the evidence and write-back gates, and the completion write.
  */
-import { executionClaim } from '../store';
+import { executionClaim, WorkflowRunPauseConflictError } from '../store';
 import { existsSync } from 'fs';
 import { join as joinPath } from 'path';
 import type { WorkflowDeps } from '../deps';
@@ -509,6 +509,7 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
       stepName: wait.nodeId,
     });
   } catch (pauseError) {
+    if (!(pauseError instanceof WorkflowRunPauseConflictError)) throw pauseError;
     // A run cancelled or paused meanwhile keeps that status, exactly as the failure
     // branches below leave it.
     const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);

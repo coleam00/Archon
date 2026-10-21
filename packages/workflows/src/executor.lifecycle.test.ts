@@ -443,6 +443,26 @@ describe('finally backstop', () => {
 // Terminal telemetry is reported by the run store when a terminal write commits; the
 // executor records the exit reason on that write and reports only a run that never got a row.
 describe('terminal failure writes', () => {
+  it('returns the execution error without terminalizing an independently paused run', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag storage failed'));
+    const getWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(
+      async () => 'running'
+    );
+    getWorkflowRunStatus.mockResolvedValueOnce('paused');
+    const store = makeStore({ getWorkflowRunStatus });
+
+    expect(await startWorkflow({ store })).toMatchObject({
+      success: false,
+      error: 'dag storage failed',
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(mockEmitter.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'workflow_failed' })
+    );
+    expect(mockEmitter.unregisterRun).not.toHaveBeenCalled();
+    expect(getWorkflowRunStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('records unhandled_error on the terminal write when executeDagWorkflow throws', async () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
     const store = makeStore();

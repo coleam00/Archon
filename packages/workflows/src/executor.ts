@@ -64,6 +64,7 @@ import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-recor
 import {
   executionClaim,
   deadlineWaitCursor,
+  type IWorkflowStore,
   type PersistedNodeOutput,
   type PriorFailedNode,
 } from './store';
@@ -619,6 +620,18 @@ export async function executeWorkflow(
       'workflow_execution_unhandled_error'
     );
 
+    const failureStatus = await deps.store.getWorkflowRunStatus(workflowRun.id).catch(readError => {
+      getLog().warn(
+        { err: readError, workflowRunId: workflowRun.id },
+        'executor.failure_status_read_failed'
+      );
+      return null;
+    });
+    if (failureStatus === 'paused') {
+      executionSegmentStopped = true;
+      return { success: false, workflowRunId: workflowRun.id, error: err.message };
+    }
+
     // The log file and the user's notification are independent of the terminal write and
     // precede it, so a rejection cannot silence them. The live event follows the write:
     // it announces only a failure this call committed. Terminal telemetry is reported by
@@ -651,32 +664,11 @@ export async function executeWorkflow(
     // reporting a completed process for a row that still says running. Record that it
     // failed so the finally-block backstop below does not fire a second write over a
     // write channel that just proved unreliable — that write would mask this error.
-    const emitter = getWorkflowEventEmitter();
     try {
-      const { failed } = await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(workflowRun.id, err.message, { exitReason: 'unhandled_error' }),
-        {
-          workflowRunId: workflowRun.id,
-          site: 'db_record_failure_failed',
-        }
-      );
-      // A run another writer already finished keeps that writer's outcome and announcement.
-      if (failed) {
-        emitter.emit({
-          type: 'workflow_failed',
-          runId: workflowRun.id,
-          workflowName: workflow.name,
-          error: err.message,
-        });
-      }
+      await recordExecutionFailure(deps.store, workflowRun.id, workflow.name, err);
     } catch (writeError) {
       terminalStatusWriteFailed = true;
-      if (writeError instanceof TerminalStatusWriteError) {
-        writeError.message += ` (while recording workflow failure: ${err.message})`;
-      }
       throw writeError;
-    } finally {
-      emitter.unregisterRun(workflowRun.id);
     }
 
     // Return failure result instead of re-throwing
@@ -721,5 +713,35 @@ export async function executeWorkflow(
         );
       }
     }
+  }
+}
+
+async function recordExecutionFailure(
+  store: IWorkflowStore,
+  workflowRunId: string,
+  workflowName: string,
+  error: Error
+): Promise<void> {
+  const emitter = getWorkflowEventEmitter();
+  try {
+    const { failed } = await requireTerminalStatusWrite(
+      store.failWorkflowRun(workflowRunId, error.message, { exitReason: 'unhandled_error' }),
+      { workflowRunId, site: 'db_record_failure_failed' }
+    );
+    if (failed) {
+      emitter.emit({
+        type: 'workflow_failed',
+        runId: workflowRunId,
+        workflowName,
+        error: error.message,
+      });
+    }
+  } catch (writeError) {
+    if (writeError instanceof TerminalStatusWriteError) {
+      writeError.message += ` (while recording workflow failure: ${error.message})`;
+    }
+    throw writeError;
+  } finally {
+    emitter.unregisterRun(workflowRunId);
   }
 }
