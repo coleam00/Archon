@@ -135,20 +135,6 @@ function publish(): PrRecord {
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
   const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
   const artifacts = artifactsDir();
-  const section = preparedSection(artifacts);
-  const pr = openOrContinue(source, repo, headRepo, existing, artifacts);
-  // The edit does not move the head, so the head-verified record stays the output.
-  if (section !== undefined) applyDescription(pr, section, source);
-  return pr;
-}
-
-function openOrContinue(
-  source: ForgeSource,
-  repo: Repo,
-  headRepo: Repo,
-  existing: number | null,
-  artifacts: string
-): PrRecord {
 
   const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;
   if (named !== null && existing !== named) {
@@ -239,8 +225,17 @@ function openOrContinue(
   }
 }
 
+// The section is read and checked before publish() pushes, so a refused one pushes nothing.
+function publishWithDescription(): PrRecord {
+  const section = preparedSection(artifactsDir());
+  const pr = publish();
+  // The edit does not move the head, so the head-verified record stays the output.
+  if (section !== undefined) applyDescription(pr, section, forgeSource());
+  return pr;
+}
+
 try {
-  emit(publish());
+  emit(publishWithDescription());
 } catch (error) {
   refuse(`publish-pr: ${error instanceof Error ? error.message : String(error)}`);
 }
