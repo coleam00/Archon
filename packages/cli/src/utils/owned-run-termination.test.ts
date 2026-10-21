@@ -281,53 +281,56 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  test(`${signal} cannot adopt a successor claim before predecessor retirement`, async () => {
-    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-signal-successor-')));
-    const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
-    const store = await createFileWorkflowStore({ root, getCodebase: async () => null });
-    const run = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
-    await store.claimPendingWorkflowRun(run.id);
-    let teardowns = 0;
-    let exited!: () => void;
-    const exitCalled = new Promise<void>(resolve => {
-      exited = resolve;
-    });
-    const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
-    const before = process.listeners(signal);
-    const deregister = registerOwnedRunTermination({
-      store,
-      runId: run.id,
-      getExecutionClaim: () => null,
-      logModule: 'owned-run-termination.test',
-      liveOwner: {
-        close: async () => undefined,
-        isStopRequested: () => false,
-        registerTerminationPreparation: () => () => undefined,
-      },
-      detachedProcessOwner: false,
-      teardown: async () => {
-        teardowns++;
-      },
-    });
-    try {
-      await store.pauseWorkflowRun(run.id, {
-        nodeId: 'review',
-        message: 'Review',
-        type: 'approval',
+  test.each(['paused', 'successor'] as const)(
+    `${signal} preserves %s before predecessor retirement`,
+    async state => {
+      const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-signal-successor-')));
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const store = await createFileWorkflowStore({ root, getCodebase: async () => null });
+      const run = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
+      await store.claimPendingWorkflowRun(run.id);
+      let teardowns = 0;
+      let exited!: () => void;
+      const exitCalled = new Promise<void>(resolve => {
+        exited = resolve;
       });
-      await store.resumeWorkflowRun(run.id);
-      const successor = await store.getWorkflowRun(run.id);
-      const events = await store.listWorkflowEvents(run.id);
-      const handler = process.listeners(signal).find(listener => !before.includes(listener));
-      expect(handler).toBeDefined();
-      handler?.(signal);
-      await exitCalled;
-      expect(await store.getWorkflowRun(run.id)).toEqual(successor);
-      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
-      expect(teardowns).toBe(0);
-    } finally {
-      deregister();
-      exitSpy.mockRestore();
+      const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
+      const before = process.listeners(signal);
+      const deregister = registerOwnedRunTermination({
+        store,
+        runId: run.id,
+        getExecutionClaim: () => null,
+        logModule: 'owned-run-termination.test',
+        liveOwner: {
+          close: async () => undefined,
+          isStopRequested: () => false,
+          registerTerminationPreparation: () => () => undefined,
+        },
+        detachedProcessOwner: false,
+        teardown: async () => {
+          teardowns++;
+        },
+      });
+      try {
+        await store.pauseWorkflowRun(run.id, {
+          nodeId: 'review',
+          message: 'Review',
+          type: 'approval',
+        });
+        if (state === 'successor') await store.resumeWorkflowRun(run.id);
+        const successor = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        const handler = process.listeners(signal).find(listener => !before.includes(listener));
+        expect(handler).toBeDefined();
+        handler?.(signal);
+        await exitCalled;
+        expect(await store.getWorkflowRun(run.id)).toEqual(successor);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+        expect(teardowns).toBe(0);
+      } finally {
+        deregister();
+        exitSpy.mockRestore();
+      }
     }
-  });
+  );
 }

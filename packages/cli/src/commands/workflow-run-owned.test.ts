@@ -1583,28 +1583,33 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     );
   });
 
-  it('does not fail the run when it is paused at a new gate at signal time', async () => {
+  it('passes its claim to the failure writer when a gate wins before the signal', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      // The signal lands while the handler is still registered.
-      const [handler] = addedSigtermListeners(sigtermBefore);
-      expect(handler).toBeDefined();
-      (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        status: 'paused',
-        metadata: {},
-      });
-      handler();
-      await settleCleanup();
-      return { success: true, workflowRunId: 'run-1', paused: true };
-    });
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        // The signal lands while the handler is still registered.
+        const [handler] = addedSigtermListeners(sigtermBefore);
+        expect(handler).toBeDefined();
+        (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+          failed: false,
+        });
+        handler();
+        await settleCleanup();
+        return { success: true, workflowRunId: 'run-1', paused: true };
+      }
+    );
 
     setupWorkflowMocks();
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
 
-    // Paused-at-gate is an external transition the signal handler must respect.
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      'Process terminated (SIGTERM)',
+      { exitReason: 'process_terminated', signal: 'SIGTERM', expectedExecutionClaim: null }
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -1620,17 +1625,16 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      const [handler] = addedSigtermListeners(sigtermBefore);
-      expect(handler).toBeDefined();
-      (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        status: 'running',
-        metadata: {},
-      });
-      handler();
-      await settleCleanup();
-      return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
-    });
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        const [handler] = addedSigtermListeners(sigtermBefore);
+        expect(handler).toBeDefined();
+        handler();
+        await settleCleanup();
+        return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
+      }
+    );
 
     setupWorkflowMocks();
     await expect(
@@ -1667,19 +1671,23 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       failed: false,
     });
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      setMockDetachedStopRequested(true);
-      const readsBefore = (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls.length;
-      const [handler] = addedSigtermListeners(sigtermBefore);
-      expect(handler).toBeDefined();
-      handler();
-      await settleCleanup();
-      runReadsAtSignalTime =
-        (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls.length - readsBefore;
-      failureWritesAtSignalTime = (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mock
-        .calls.length;
-      return { success: false, workflowRunId: 'test-run-id', error: 'interrupted' };
-    });
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        setMockDetachedStopRequested(true);
+        const readsBefore = (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls
+          .length;
+        const [handler] = addedSigtermListeners(sigtermBefore);
+        expect(handler).toBeDefined();
+        handler();
+        await settleCleanup();
+        runReadsAtSignalTime =
+          (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls.length - readsBefore;
+        failureWritesAtSignalTime = (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mock
+          .calls.length;
+        return { success: false, workflowRunId: 'test-run-id', error: 'interrupted' };
+      }
+    );
 
     setupWorkflowMocks();
     await expect(
@@ -1734,19 +1742,18 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      // No workflow_started event is needed: source capture reserved the exact id
-      // before execution or its live-owner endpoint became visible.
-      const [handler] = addedSigtermListeners(sigtermBefore);
-      expect(handler).toBeDefined();
-      (workflowsDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        status: 'running',
-        metadata: {},
-      });
-      handler();
-      await settleCleanup();
-      return { success: true, workflowRunId: 'run-1' };
-    });
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        // No workflow_started event is needed: source capture reserved the exact id
+        // before execution or its live-owner endpoint became visible.
+        const [handler] = addedSigtermListeners(sigtermBefore);
+        expect(handler).toBeDefined();
+        handler();
+        await settleCleanup();
+        return { success: true, workflowRunId: 'run-1' };
+      }
+    );
 
     setupWorkflowMocks();
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});

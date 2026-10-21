@@ -187,30 +187,7 @@ export async function continueBlockedRun(
 
   let parentWorkflow: ResolvedWorkflow | undefined;
   try {
-    // Reload the parent's graph from the source IT started with. Rediscovering from
-    // `parentCwd` is how a mid-run authoring edit used to change an already-running
-    // parent's DAG, so stored node output could be reinterpreted by a different node.
-    //
-    // Through the shared entry point like every other continuation surface. This spot
-    // hand-rolled the same sequence and read the capture twice for it, which is how the
-    // fifth surface quietly ends up behaving differently from the other four. Throws when
-    // the recorded capture no longer verifies; the catch below leaves the parent resumable
-    // rather than silently running other source.
-    const continuation = await resolveContinuationWorkflow(deps, parent, parentCwd);
-    if (continuation) {
-      parentWorkflow = continuation.workflow;
-    } else {
-      // No recorded source: a parent predating capture, which resumes live as it always did.
-      const { workflows } = await discoverWorkflowsWithConfig(
-        parentCwd,
-        deps.loadConfig,
-        deps.providers
-      );
-      parentWorkflow = resolveWorkflowName(
-        parent.workflow_name,
-        workflows.map(w => w.workflow)
-      );
-    }
+    parentWorkflow = await resolveParentResumeWorkflow(deps, parent, parentCwd);
   } catch (err) {
     getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_discovery_failed');
     await notifyStuck('workflow discovery failed');
@@ -294,6 +271,21 @@ export async function continueBlockedRun(
     });
     return { success: false, workflowRunId: parentRunId, error };
   }
+}
+
+async function resolveParentResumeWorkflow(
+  deps: WorkflowDeps,
+  parent: WorkflowRun,
+  cwd: string
+): Promise<ResolvedWorkflow | undefined> {
+  const continuation = await resolveContinuationWorkflow(deps, parent, cwd);
+  if (continuation) return continuation.workflow;
+  // Only runs predating source capture may resolve from the live checkout.
+  const { workflows } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig, deps.providers);
+  return resolveWorkflowName(
+    parent.workflow_name,
+    workflows.map(entry => entry.workflow)
+  );
 }
 
 /**
