@@ -133,10 +133,15 @@ describe('the build record', () => {
     const generated = [
       buildBranch(7, 'Fix: the Build queue -- reuses its own PR!', 'abcdef123456'),
       buildBranch(7, '!!!', 'abcdef12'),
-      buildBranch(7, 'x', 'run-1'),
+      buildBranch(7, '', '12345678-0000-4000-8000-000000000000'),
+      buildBranch(7, 'a'.repeat(60), 'abcdef12'),
     ];
     for (const branch of generated) expect(isBuildBranch(branch)).toBe(true);
-    for (const branch of ['build/docs', 'build/9-', 'build/50-fix/docs-abcdef12', 'build/50-fix.docs-abcdef12', 'build/50-Fix-abcdef12']) {
+    const handMade = [
+      'build/docs', 'build/7', 'build/9-', 'build/07-abcdef12', 'build/50-fix/docs-abcdef12', 'build/50-fix.docs-abcdef12',
+      'build/50-Fix-abcdef12', 'build/50-fix-docs/api', `build/50-${'a'.repeat(60)}`, `build/50-${'a'.repeat(41)}-abcdef12`,
+    ];
+    for (const branch of handMade) {
       expect(isBuildBranch(branch)).toBe(false);
     }
   });
