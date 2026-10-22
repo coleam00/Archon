@@ -22,7 +22,7 @@ import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import type { IncludeCommandContent } from '../../../compiled-command';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { logWorkflowEvent } from '../../../logger';
-import { aggregateProviderFailure } from '../../../executor-shared';
+import { aggregateProviderFailure, rootFailures } from '../../../executor-shared';
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
@@ -327,7 +327,9 @@ async function settleInstance(
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
   if (failed.length > 0) {
     const providerFailure = aggregateProviderFailure(
-      failed.map(o => o.providerFailure),
+      rootFailures(instanceCtx.layers.flat(), instanceCtx.nodeOutputs).map(
+        ({ output }) => output.providerFailure
+      ),
       Date.now()
     );
     const outcome: ComposeInstanceOutcome = {

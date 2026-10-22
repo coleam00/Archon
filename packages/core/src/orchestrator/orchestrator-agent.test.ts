@@ -1039,6 +1039,7 @@ describe('paused approval gate routing', () => {
 
     await handleMessage(makePlatform(), 'conv-1', 'what would that change?', { actor: operator });
 
+    expect(mockGetPausedWorkflowRun).toHaveBeenCalledWith('conv-1-db', 'codebase-1');
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('run-1');
@@ -1332,6 +1333,7 @@ describe('paused approval gate routing', () => {
 
     await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
+    expect(mockGetPausedWorkflowRun).toHaveBeenCalledWith('conv-1-db', undefined);
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('no project is attached');

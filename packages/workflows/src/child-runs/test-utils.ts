@@ -569,11 +569,14 @@ export class InMemoryStore implements IWorkflowStore {
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
   releaseWritebackClaim = (): Promise<void> => Promise.resolve();
 
-  cancelWorkflowRun = (id: string): Promise<{ cancelled: boolean }> => {
+  // Both cancels write their terminal event in the same step, as the SQL transitions do.
+  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event) => {
     const r = this.runs.get(id);
     if (r && r.status !== 'completed' && r.status !== 'cancelled') {
       r.status = 'cancelled';
       r.completed_at = new Date();
+      const { step_name, ...data } = event ?? {};
+      this.events.push({ workflow_run_id: id, event_type: 'workflow_cancelled', step_name, data });
       return Promise.resolve({ cancelled: true });
     }
     return Promise.resolve({ cancelled: false });
@@ -585,6 +588,11 @@ export class InMemoryStore implements IWorkflowStore {
       r.status = 'cancelled';
       r.completed_at = new Date();
       r.metadata = { ...r.metadata, cancelled_reason: reason };
+      this.events.push({
+        workflow_run_id: id,
+        event_type: 'workflow_cancelled',
+        data: { reason, cancel_reason: 'fan_out' },
+      });
       return Promise.resolve({ cancelled: true });
     }
     return Promise.resolve({ cancelled: false });

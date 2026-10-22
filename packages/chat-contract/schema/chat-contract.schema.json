@@ -1294,6 +1294,12 @@
             },
             "cancelled": {
               "type": "boolean"
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [

@@ -15,7 +15,7 @@ import type {
 } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
-import type { AttentionOption } from './schemas/dag-node';
+import type { AttentionOption } from './schemas/wait-node';
 import { legacyOccurrenceStep, type RunAttention, type WorkflowRun } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
 import type {

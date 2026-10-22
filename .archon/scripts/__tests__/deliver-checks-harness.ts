@@ -152,7 +152,7 @@ export interface ScriptRun {
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
   /** Every issue state change the fake gh received. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
-  /** Every issue body the fake gh was asked to write, in order. */
+  /** Every issue or pull request body the fake gh was asked to write, in order. */
   readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
@@ -263,7 +263,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr edit')) {
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    const body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(body) + '\\n');
+    if (!fake.writeLost) pr.body = body;
     return result(0, '');
   }
   if (text.startsWith('pr list')) {

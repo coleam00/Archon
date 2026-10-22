@@ -1,11 +1,7 @@
 import type { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
-import {
-  effortLevelSchema,
-  betasSchema,
-  INPUT_NAME_PATTERN,
-  inputEnvKey,
-} from '../schemas/dag-node';
+import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
+import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
 import type { EffortLevel } from '../schemas/effort';
 import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
 import {

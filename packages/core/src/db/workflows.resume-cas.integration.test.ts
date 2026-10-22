@@ -97,6 +97,7 @@ const operationDeps = {
   store: {
     ...workflowDb,
     persistWorkflowEvent: createWorkflowStore().persistWorkflowEvent,
+    listWorkflowEvents: createWorkflowStore().listWorkflowEvents,
     listWorkflowRuns: workflowDb.listDashboardRuns,
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     deleteWorkflowNodeSessions: async () => {

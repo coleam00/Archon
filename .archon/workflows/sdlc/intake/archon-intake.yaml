@@ -57,6 +57,11 @@ inputs:
 
 returns: outcome
 
+# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
 nodes:
   # Trust is decided here, by a script, from the maintainer list at the default
   # branch's head. Writes only the request and the claim.

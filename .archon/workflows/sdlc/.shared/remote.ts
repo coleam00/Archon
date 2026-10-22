@@ -10,6 +10,7 @@
  * `url.<base>.insteadOf` rewrite: that is the repository the operator named.
  */
 
+import { randomUUID } from 'node:crypto';
 import { sameRepo, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 
@@ -92,16 +93,23 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
 }
 
 /**
- * Fetch the head of the repository's default branch, as its remote reports it, into
- * the remote-tracking ref, whatever branch the checkout sits on.
+ * Fetch into a unique ref: tracking refs are shared by worktrees, and FETCH_HEAD
+ * can be overwritten by another fetch in this checkout.
  */
-export function fetchDefaultBranch(repo: Repo): { readonly branch: string; readonly ref: string } {
+export function fetchDefaultBranch(repo: Repo): { readonly branch: string; readonly sha: string } {
   const remote = remoteFor(repo);
-  const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
-  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
-  if (branch === undefined) throw new Error(`${remote} reports no default branch`);
-  const ref = `refs/remotes/${remote}/${branch}`;
-  gitOrThrow('fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${ref}`);
-  return { branch, ref };
+  const ref = `refs/archon/fetch/${randomUUID()}`;
+  try {
+    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `HEAD:${ref}`);
+    const sha = gitOrThrow('rev-parse', '--verify', ref);
+    const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
+    const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
+    if (branch === undefined) throw new Error(`${remote} reports no default branch`);
+    if (!head.split('\n').includes(`${sha}\tHEAD`)) {
+      throw new Error(`${remote} default branch changed during fetch; cannot verify the fetched snapshot`);
+    }
+    return { branch, sha };
+  } finally {
+    gitOrThrow('update-ref', '-d', ref);
+  }
 }
-

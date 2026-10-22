@@ -165,7 +165,17 @@ test('starter cancel succeeds; another member is forbidden; admins can act', asy
     expect((await getWorkflowRun(started.id))?.status).toBe('running');
     expect(
       await action({ runId: started.id, action: 'cancel', sender: { platformUserId: 'starter' } })
-    ).toEqual({ status: 'done', result: { kind: 'cooperative', cancelled: true } });
+    ).toEqual({
+      status: 'done',
+      result: {
+        kind: 'cooperative',
+        cancelled: true,
+        // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+        ...(process.platform === 'win32'
+          ? {}
+          : { cleanupWarnings: [expect.stringContaining('untracked background work')] }),
+      },
+    });
   } finally {
     await owner.close();
   }

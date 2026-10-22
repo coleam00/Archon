@@ -22,7 +22,14 @@ if (command === 'metadata') {
         version: '1.0.0',
         forge: mode === 'github-origin' ? 'github' : 'test',
         hosts: ['forge.example'],
-        capabilities: mode === 'unsupported' ? [] : ['resolve', 'checks.state'],
+        capabilities:
+          mode === 'unsupported'
+            ? []
+            : [
+                'resolve',
+                'checks.state',
+                ...(mode === 'normalized-resolve' ? ['repo.labels.list'] : []),
+              ],
         token_env: mode === 'token' ? ['TEST_FORGE_TOKEN'] : [],
       })
     );
@@ -51,7 +58,34 @@ if (mode === 'environment') {
 } else if (mode === 'large') {
   process.stdout.write('x'.repeat(4096));
 } else {
-  const input = (await Bun.stdin.json()) as { operationId: string; op: string; remote?: string };
+  const input = (await Bun.stdin.json()) as {
+    operationId: string;
+    op: string;
+    remote?: string;
+    repo?: { host: string; path: string };
+  };
+  if (mode === 'normalized-resolve') {
+    // Released GitHub resolvers use URL.host, which removes HTTPS's default port.
+    const url = input.remote ? new URL(input.remote) : undefined;
+    process.stdout.write(
+      JSON.stringify({
+        operationId: input.operationId,
+        ok: true,
+        result: url
+          ? {
+              op: 'resolve',
+              value: {
+                kind: 'resolved',
+                forge: 'test',
+                repo: { host: url.host, path: 'team/repo' },
+                plugin: { name, version: '1.0.0' },
+              },
+            }
+          : { op: input.op, value: { repo: input.repo, labels: [] } },
+      })
+    );
+    process.exit(0);
+  }
   if (mode === 'github-origin' || mode === 'other-origin') {
     process.stdout.write(
       JSON.stringify({

@@ -683,19 +683,21 @@ Archon sends a few anonymous events — `archon_started` (once per CLI invocatio
 
 ### `.env` File Locations
 
-Archon keys env loading on **directory ownership, not filename**. `.archon/` (at `~/` or `<cwd>/`) is archon-owned. Anything else is yours.
+Archon loads its own environment files, separate from the target repository's app configuration. The CLI and compiled server load `.archon/.env` files at user and repo scope. A server running from source also loads the Archon checkout's root `.env`.
 
 | Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
 | --- | --- | --- | --- |
-| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| Target repo `<cwd>/.env` | **yes** (safety guard) | no | never |
+| `<archon-checkout>/.env` | yes if the checkout is CWD | source server only, after stripping, without override | never |
 | `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope with CLI exceptions below) | yes iff `--scope project` |
 | `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
 **Load order at boot** (every entry point — CLI and server):
 
-1. Strip keys Bun auto-loaded from `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production` (prevents target-repo env from leaking into Archon).
-2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
-3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
+1. Strip every key named in `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production`, including shell or direnv values with those names (prevents target-repo env from leaking into Archon).
+2. **Source-checkout server only:** load `<archon-checkout>/.env` without `override`, so values still in the process environment win. This path is resolved from the server source location, independently of CWD. When CWD is the Archon checkout, this deliberately reloads its root `.env` after stripping. The CLI and compiled server skip this step.
+3. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars and source-checkout values).
+4. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
 The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
@@ -718,7 +720,8 @@ The `[archon] loaded N keys from …` lines are suppressed by default (they woul
 
 - **`~/.archon/.env`** — user-wide defaults (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, etc.). Applies to every project.
 - **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc. It cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`.
-- **`<cwd>/.env`** — **your app's** env file. Archon does not read this file; it strips the keys at boot so they do not leak into Archon's process.
+- **Target repo `<cwd>/.env`** — **your app's** env file. Archon strips its keys at boot and does not load its values.
+- **`<archon-checkout>/.env`** — configuration for a server running from Archon source, as described in the [developer guide](https://github.com/coleam00/Archon/blob/dev/CONTRIBUTING.md#getting-started). This is Archon's own checkout, not a separate target repository. Its root `.env` loads even when the server starts with another CWD; when the checkout itself is CWD, its root `.env` is the exception to the target-repo rule above.
 
 ```bash
 # User-wide
@@ -874,7 +877,7 @@ Attention stores only ids, timestamps, and bounded display fields. It never copi
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-The run waits only when every node that failed in that pass hit a usage limit with a reported reset, or a rate limit (below), and the latest of those deadlines is still ahead. This also applies to failed descendants inside loop groups and fan-outs. A usage limit whose reset has already passed does not prevent waiting for another node's later deadline: when the run continues, both failed nodes retry. Any other failure, a usage limit without a reset time, or no deadline still ahead fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset, or a rate limit (below), and the latest of those deadlines is still ahead. This also applies to failed descendants inside loop groups and fan-outs. A node that failed downstream of another failed node, such as an `all_done` node reading a limited node's output, does not prevent the wait, whatever its own error was; it runs again when the run continues, and if it then fails after its upstream succeeded, that failure fails the run. A usage limit whose reset has already passed does not prevent waiting for another node's later deadline: when the run continues, both failed nodes retry. Any other failure, a usage limit without a reset time, or no deadline still ahead fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
 
 A rate limit (`rate_limited`, such as HTTP 429) that still refuses a node after its retries takes the same wait. Its deadline is the provider's reset when the failure reports one that is still ahead; otherwise Archon waits a computed backoff of 5 to 15 minutes, jittered so runs limited together do not retry together. Resume the run to try sooner.
 

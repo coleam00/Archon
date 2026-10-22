@@ -20,6 +20,7 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import { readNodeRecordEvent } from './node-record-reader';
+import type { FanOutOutcome } from './schemas/fan-out-outcome';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -29,6 +30,13 @@ export interface TerminalRecordEvent {
 const eventDataSchema = z.record(z.string(), z.unknown());
 function eventData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
+}
+
+function withFanOutOutcome(
+  state: RunNodeState,
+  fanOutOutcome: FanOutOutcome | undefined
+): RunNodeState {
+  return fanOutOutcome === undefined ? state : { ...state, fan_out_outcome: fanOutOutcome };
 }
 
 function foldNodeEvents(
@@ -73,18 +81,38 @@ function foldNodeEvents(
         failureOrder.delete(nodeId);
         break;
       case 'node_completed':
+        nodes.set(
+          nodeId,
+          withFanOutOutcome({ node_id: nodeId, state: 'completed' }, record.data.fan_out_outcome)
+        );
+        outputs.set(nodeId, record.data);
+        failureOrder.delete(nodeId);
+        break;
       case 'node_skipped_prior_success':
-        nodes.set(nodeId, { node_id: nodeId, state: 'completed' });
+        // A replayed node keeps the slot record its earlier completion wrote.
+        nodes.set(
+          nodeId,
+          withFanOutOutcome(
+            { node_id: nodeId, state: 'completed' },
+            nodes.get(nodeId)?.fan_out_outcome
+          )
+        );
         outputs.set(nodeId, record.data);
         failureOrder.delete(nodeId);
         break;
       case 'node_failed': {
         const data = record.data;
-        nodes.set(nodeId, {
-          node_id: nodeId,
-          state: 'failed',
-          ...(typeof data.error === 'string' ? { error: data.error } : {}),
-        });
+        nodes.set(
+          nodeId,
+          withFanOutOutcome(
+            {
+              node_id: nodeId,
+              state: 'failed',
+              ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            },
+            data.fan_out_outcome
+          )
+        );
         outputs.delete(nodeId);
         failureOrder.set(nodeId, index);
         break;

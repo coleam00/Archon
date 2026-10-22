@@ -7,24 +7,24 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { setLogLevel } from '@archon/paths';
-import { setPlatformPolicies } from '../platforms/registry';
+import { setPlatformPolicies } from '../../platforms/registry';
 import { toBranchName } from '@archon/git';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
 import type { IsolationEnvironmentRow, IIsolationStore } from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 setLogLevel('silent');
-const { SqliteAdapter, sqliteDialect } = await import('../db/adapters/sqlite');
+const { SqliteAdapter, sqliteDialect } = await import('../../db/adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
-mock.module('../db/connection', () => ({
+mock.module('../../db/connection', () => ({
   pool: db,
   getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const isolationDb = await import('../db/isolation-environments');
-const { claimPendingWorkflowRun } = await import('../db/workflows');
-const { reclaimRunWorktree } = await import('./cleanup-service');
+const isolationDb = await import('../../db/isolation-environments');
+const { claimPendingWorkflowRun } = await import('../../db/workflows');
+const { reclaimRunWorktree } = await import('./run-worktree');
 let root: string;
 let repo: string;
 let codebaseId: string;

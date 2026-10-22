@@ -24,6 +24,7 @@ import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../lo
 import {
   providerLimitResumeAt,
   isProviderLimit,
+  rootFailures,
   type ProviderLimitFailure,
 } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
@@ -419,7 +420,9 @@ async function completeRun(
   );
 
   // The terminal record already carries the decision. Removing the checkout is cleanup
-  // of terminal data, so a refusal or failure leaves it in place and the run completed.
+  // of terminal data, so a refusal or failure leaves it in place, the run completed, and
+  // the run's output says what was kept.
+  const keptPath = completedRun.working_path ?? '(unknown path)';
   if (worktreeDisposition?.disposition === 'release') {
     try {
       await deps.completedRunWorktree?.release(completedRun);
@@ -429,16 +432,54 @@ async function completeRun(
         { err, workflowRunId: workflowRun.id },
         'workflow.completed_worktree_release_failed'
       );
+      await sendRetentionWarning(ctx, keptPath, `removing it failed (${(err as Error).message})`);
     }
+  } else if (worktreeDisposition?.disposition === 'retained') {
+    const lost = wouldBeLost(worktreeDisposition);
+    if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
 }
 
+/** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */
+function wouldBeLost(
+  disposition: Extract<WorktreeDisposition, { disposition: 'retained' }>
+): string | undefined {
+  switch (disposition.reason) {
+    case 'uncommitted_changes':
+      return 'it has uncommitted changes';
+    case 'unpushed_commits':
+      return `it has ${disposition.detail ?? 'commits on no remote'}`;
+    case 'in_use':
+      return `${disposition.detail ?? 'another run'} still uses it`;
+    case 'check_failed':
+      return `the removal check failed (${disposition.detail ?? 'no detail'})`;
+    case 'workspace_retained':
+    case 'resumable':
+    case 'cancelled':
+    case 'published_branch':
+      return undefined;
+  }
+}
+
+async function sendRetentionWarning(
+  ctx: RunTerminalContext,
+  path: string,
+  why: string
+): Promise<void> {
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `⚠️ Kept worktree ${path}: ${why}. It stays listed by \`archon isolation list\`.`,
+    { workflowId: ctx.workflowRun.id }
+  );
+}
+
 /**
- * The wait a failed pass takes instead of failing, when every failed node either hit a
- * provider usage limit whose reset the provider reported, or hit a
- * rate limit that outlasted its retries (deadline: its reported reset when still ahead,
- * else a jittered backoff). The run cannot progress before the last of those deadlines, so
- * it waits for it if it is still ahead. An expired usage reset does not prevent waiting
+ * The wait a failed pass takes instead of failing, when every failed node with no failure
+ * upstream of it ({@link rootFailures}) either hit a provider usage limit whose reset the provider
+ * reported, or hit a rate limit that outlasted its retries (deadline: its reported reset
+ * when still ahead, else a jittered backoff). The run cannot progress before the last of
+ * those deadlines, so it waits for it if it is still ahead. An expired usage reset does not prevent waiting
  * for another node's later deadline: continuation retries both failed nodes. Any other
  * failure, a usage limit without a reported reset, no deadline still ahead,
  * `autoResumeOnQuotaReset: false`, or a container run (the continuation host does not
@@ -467,8 +508,7 @@ async function usageLimitWait(
   let latest:
     | { nodeId: string; resumeAt: number; cause: ProviderLimitFailure['class'] }
     | undefined;
-  for (const [nodeId, output] of ctx.nodeOutputs) {
-    if (output.state !== 'failed') continue;
+  for (const { nodeId, output } of rootFailures(ctx.workflow.nodes, ctx.nodeOutputs)) {
     const failure = output.providerFailure;
     if (!isProviderLimit(failure)) return undefined;
     const resumeAt = providerLimitResumeAt(failure, now);

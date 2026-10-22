@@ -13,6 +13,7 @@ import {
 } from '@archon/provider-contract';
 import * as sessionDb from '../db/sessions';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
+import { withStaleResumeRetry } from '@archon/workflows/stale-resume';
 import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import type { getAgentProvider } from '../services/provider-admission';
@@ -58,6 +59,7 @@ async function tryPersistSessionId(
 export interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
+  result?: TurnResult;
   /** A failed turn drops any launch queued during it. */
   failed: boolean;
 }
@@ -74,10 +76,18 @@ function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface)
   return classifyAndFormatError(new Error(errorDetail || 'AI result error'), surface);
 }
 
-export function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
+export function reportChatTurn(
+  turn: ChatTurn,
+  props: Omit<Parameters<typeof captureChatTurn>[0], 'costUsd' | 'tokensIn' | 'tokensOut'>
+): void {
   turn.reported = true;
   turn.failed = props.outcome === 'failed';
-  captureChatTurn(props);
+  captureChatTurn({
+    ...props,
+    costUsd: turn.result?.cost,
+    tokensIn: turn.result?.tokens?.input,
+    tokensOut: turn.result?.tokens?.output,
+  });
 }
 
 /** Everything one chat turn's mode handler reads, built once by `handleMessage`. */
@@ -97,8 +107,36 @@ export interface ChatTurnInput {
 type TurnResult = ResultUsageTotal & { stopReason?: string };
 
 /**
- * The provider session id to persist after a `result` chunk. An `error_during_execution`
- * result clears the stored id, which the provider can no longer resume.
+ * The turn's provider stream. A resume the provider reports as stale is retried once on a
+ * fresh session, with the stored id cleared first and the user told the context is gone.
+ */
+function turnChunks(input: ChatTurnInput): ReturnType<typeof withStaleResumeRetry> {
+  const { aiClient, fullPrompt, cwd, session, requestOptions, platform, conversationId } = input;
+  return withStaleResumeRetry(
+    resumeSessionId => aiClient.sendQuery(fullPrompt, cwd, resumeSessionId, requestOptions),
+    session.assistant_session_id ?? undefined,
+    {
+      logContext: { conversationId },
+      onRetry: async () => {
+        await tryPersistSessionId(session.id, null);
+        await platform
+          .sendMessage(
+            conversationId,
+            '⚠️ The previous conversation session could not be resumed, so this reply starts a new session without the earlier context.'
+          )
+          .catch((e: unknown) => {
+            getLog().error({ err: toError(e), conversationId }, 'stale_resume_notice_send_failed');
+          });
+      },
+    }
+  );
+}
+
+/**
+ * The provider session id to persist after a `result` chunk. Any `error_during_execution`
+ * result clears the stored id, so the next message starts fresh rather than resuming a
+ * session that may be broken. A stale resume the provider confirmed never reaches here:
+ * `turnChunks` already retried it.
  */
 async function sessionIdAfterResult(
   input: ChatTurnInput,
@@ -168,11 +206,7 @@ async function reportFailedResult(
 }
 
 /** Persist the reply, send the result footer and report the completed turn. */
-async function completeChatTurn(
-  input: ChatTurnInput,
-  text: string,
-  turnResult: TurnResult | undefined
-): Promise<void> {
+async function completeChatTurn(input: ChatTurnInput, text: string): Promise<void> {
   const { turn, platform, conversationId, conversation, aiClient, requestOptions } = input;
   // Adapter-owned storage must not get a second copy of the assistant reply (#1182).
   if (platform.capabilities.messagePersistence === 'core' && text) {
@@ -184,7 +218,7 @@ async function completeChatTurn(
       );
     });
   }
-  await maybeSendResultFooter(platform, conversationId, turnResult);
+  await maybeSendResultFooter(platform, conversationId, turn.result);
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
@@ -192,31 +226,22 @@ async function completeChatTurn(
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turn.startedAt,
-    costUsd: turnResult?.cost,
-    tokensIn: turnResult?.tokens?.input,
-    tokensOut: turnResult?.tokens?.output,
     outcome: 'completed',
   });
 }
 
-async function reportUnansweredToolFailure(
-  input: ChatTurnInput,
-  turnResult: TurnResult | undefined
-): Promise<void> {
+async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> {
   const { platform, conversationId, aiClient, requestOptions, turn } = input;
   await platform.sendMessage(
     conversationId,
     'A tool failed or was cancelled, and the assistant returned no follow-up reply. The requested action may not have completed. Check the run status before retrying.'
   );
-  await maybeSendResultFooter(platform, conversationId, turnResult);
+  await maybeSendResultFooter(platform, conversationId, turn.result);
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions.model,
     durationMs: Date.now() - turn.startedAt,
-    costUsd: turnResult?.cost,
-    tokensIn: turnResult?.tokens?.input,
-    tokensOut: turnResult?.tokens?.output,
     outcome: 'failed',
   });
 }
@@ -227,18 +252,12 @@ async function reportUnansweredToolFailure(
  * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
  */
 export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
-  const { platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+  const { turn, platform, conversationId, session } = input;
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
-  let turnResult: TurnResult | undefined;
   let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
+  for await (const msg of turnChunks(input)) {
     if (msg.type === 'agent_message_chunk') {
       if (msg.text.trim()) toolFailed = false;
       allMessages.push(msg.text);
@@ -259,15 +278,15 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
     } else if (msg.type === 'warning') {
       await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
+      turn.result = {
+        ...addResultUsage(turn.result ?? {}, msg),
+        stopReason: msg.stopReason ?? turn.result?.stopReason,
+      };
       newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
       if (await reportFailedResult(input, msg, newSessionId)) return;
       if (platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
-      turnResult = {
-        ...addResultUsage(turnResult ?? {}, msg),
-        stopReason: msg.stopReason ?? turnResult?.stopReason,
-      };
     }
   }
 
@@ -275,7 +294,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
     await tryPersistSessionId(session.id, newSessionId);
   }
 
-  if (toolFailed) return reportUnansweredToolFailure(input, turnResult);
+  if (toolFailed) return reportUnansweredToolFailure(input);
 
   if (allMessages.length === 0) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
@@ -286,7 +305,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
 
   const fullResponse = allMessages.join('');
   // Text was already streamed — nothing more to send.
-  await completeChatTurn(input, fullResponse, turnResult);
+  await completeChatTurn(input, fullResponse);
 }
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
@@ -296,21 +315,15 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
  * Used by Slack, GitHub, Discord (batch), and CLI.
  */
 export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
-  const { platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+  const { turn, platform, conversationId, session } = input;
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: ReplyChunk[] = [];
   let assistantChunksTruncated = false;
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
-  let turnResult: TurnResult | undefined;
   let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
+  for await (const msg of turnChunks(input)) {
     if (msg.type === 'agent_message_chunk') {
       if (msg.text.trim()) toolFailed = false;
       allChunks.push({ type: 'assistant', content: msg.text });
@@ -329,12 +342,12 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
       // A warning surfaces as it arrives, not batched into the reply.
       await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
+      turn.result = {
+        ...addResultUsage(turn.result ?? {}, msg),
+        stopReason: msg.stopReason ?? turn.result?.stopReason,
+      };
       newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
       if (await reportFailedResult(input, msg, newSessionId)) return;
-      turnResult = {
-        ...addResultUsage(turnResult ?? {}, msg),
-        stopReason: msg.stopReason ?? turnResult?.stopReason,
-      };
     }
 
     if (allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
@@ -367,7 +380,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
 
-  if (toolFailed) return reportUnansweredToolFailure(input, turnResult);
+  if (toolFailed) return reportUnansweredToolFailure(input);
 
   if (!finalMessage) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
@@ -378,7 +391,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
 
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
-  await completeChatTurn(input, finalMessage, turnResult);
+  await completeChatTurn(input, finalMessage);
 }
 
 /**

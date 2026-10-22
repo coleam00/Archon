@@ -34,6 +34,11 @@ inputs:
 
 returns: outcome
 
+# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
 nodes:
   # Builds the queue and claims the queued runs.
   - id: facts

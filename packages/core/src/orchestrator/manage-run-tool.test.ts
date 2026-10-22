@@ -97,7 +97,7 @@ import {
   CancelRefusedError,
   ChildRunRedirectError,
 } from '../operations/workflow-operations';
-const mockCancel = mock((_id: string) =>
+const mockCancel = mock<WorkflowOperations['cancelWorkflow']>((_id: string) =>
   Promise.resolve({
     kind: 'stopped' as const,
     pid: 4242,
@@ -1359,4 +1359,17 @@ describe('manage_run authorization refusal', () => {
       expect(out).toContain('Only the user who started this run or an admin');
     });
   }
+});
+
+test('cooperative cancel exposes cleanup warnings from the supplied operation', async () => {
+  mockFindByPrefix.mockResolvedValue([makeRun({ status: 'running' })]);
+  mockCancel.mockResolvedValueOnce({
+    kind: 'cooperative',
+    run: makeRun(),
+    cancelled: true,
+    cleanupWarnings: ['Exited host commands may have left untracked background work.'],
+  });
+  const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+  const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
+  expect(out).toContain('Warning: Exited host commands');
 });

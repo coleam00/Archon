@@ -412,12 +412,8 @@ export class SlackWorkflowBridge {
         if (result.blockedParentRunId)
           note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         await this.postActionNote(body, runId, note);
-      } else if (result.kind === 'cooperative' && !result.cancelled) {
-        await this.postActionNote(
-          body,
-          runId,
-          `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
-        );
+      } else if (result.kind === 'cooperative') {
+        await this.postCooperativeCancelNote(body, runId, result);
       }
     } catch (err) {
       logFailure('action.cancel', err);
@@ -427,6 +423,17 @@ export class SlackWorkflowBridge {
         `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
       );
     }
+  }
+
+  private async postCooperativeCancelNote(
+    body: BlockButtonAction,
+    runId: string,
+    result: Extract<RunActionResult, { kind: 'cooperative' }>
+  ): Promise<void> {
+    const note = result.cancelled
+      ? (result.cleanupWarnings ?? []).map(warning => `:warning: ${warning}`).join('\n')
+      : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`;
+    if (note) await this.postActionNote(body, runId, note);
   }
 
   private async postActionNote(

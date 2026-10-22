@@ -4,7 +4,7 @@ import {
   type WorkflowAttentionWaitContext,
 } from '../../../schemas/workflow-run';
 import { nodeTemplateReferences, resolveRunInputs, substituteWaitMessage } from '../../references';
-import { waitCondition, type WaitNode } from '../../../schemas/dag-node';
+import { waitCondition, type WaitNode } from '../../../schemas/wait-node';
 import type { WaitLoopOwner } from './wait';
 import type { RunLayersContext } from '../../run-context';
 import { loopScopeTokens } from '../../loop-scope';

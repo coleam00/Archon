@@ -370,6 +370,7 @@ export function RunStream({
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
+              fanOutOutcome={entry.node.fanOutOutcome}
               showDetail={entry.showDetail}
             />
           );

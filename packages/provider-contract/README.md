@@ -17,6 +17,8 @@ Every normally completed turn, successful or failed, ends with one `{ type: 'set
 
 A provider that declares `sessionResume` names the session each turn ran in with the result's `sessionId`; a provider that cannot resume leaves it out rather than inventing one. A persistent session id can resume the conversation, so the engine stores the full id only on the node record, which is where a user finds it to continue a node outside Archon. Streams and logs carry `sessionPreview(id)`, its first `SESSION_PREVIEW_LENGTH` characters; a provider logs that preview, never the full id.
 
+When a turn that asked to resume fails because the session no longer exists, a provider that can confirm it through a structured check, never the vendor's error text, sets `sessionNotFound: true` on that failed result. It sets it only for a rejection that did no model work. The engine owns the one retry on a fresh session; a provider that cannot tell leaves the field out and the turn fails.
+
 Pi honors `SendQueryOptions.purpose: 'title-generation'` by using an in-memory session when no resume id is supplied. Ordinary turns and workflow nodes, including `context: fresh`, remain persistent. Resume, fork, and missing-resume fallbacks retain persistent state. An in-memory title session's result id cannot be resumed from disk.
 
 `schema/provider-contract.schema.json` is generated from `src/` by `src/scripts/generate-schema.ts`. Run `bun run generate:provider-contract-schema` from the repository root after changing a schema; `bun run validate` fails while the file is stale.

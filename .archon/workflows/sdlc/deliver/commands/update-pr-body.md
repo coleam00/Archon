@@ -27,7 +27,10 @@ through the source this run selected, `$INPUTS.source`:
    functions and guards, described mechanics, file lists, "unchanged" claims.
    Change only what the diff falsifies. Keep the structure, the tone and every
    claim that is still true. Do not rewrite from scratch, add sections other than
-   step 4's, or narrate the correction history.
+   step 4's, or narrate the correction history. Text between
+   `<!-- archon-delivery-description -->` and `<!-- /archon-delivery-description -->`
+   is content the rounds published: keep both markers, and correct claims inside
+   them like any other.
 3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is

@@ -101,7 +101,7 @@ const codexSessionId = {
 
 /**
  * How long the app-server gets to answer a cancel's interrupt, then to exit after stdin
- * closes before it is sent SIGTERM.
+ * closes before it is sent SIGTERM. Only a cancel and the credential check send one.
  */
 const SHUTDOWN_GRACE_MS = 3000;
 
@@ -243,7 +243,8 @@ export class CodexProvider implements IAgentProvider {
 
   /**
    * @param spawner starts the app-server process; tests pass a fake.
-   * @param shutdownGraceMs the interrupt wait and the wait before SIGTERM; tests shorten it.
+   * @param shutdownGraceMs a cancel's interrupt wait and its wait before SIGTERM, and the
+   *   credential check's wait before SIGTERM; tests shorten it.
    */
   constructor(
     private readonly spawner?: Spawner,
@@ -511,10 +512,14 @@ export class CodexProvider implements IAgentProvider {
     });
   }
 
-  /** Finish tool calls and stop the process; false when it did not exit cleanly. */
+  /**
+   * Finish tool calls and stop the process after its turn; false when it did not exit
+   * cleanly. It waits for the exit after stdin closes without a SIGTERM, which would turn
+   * a slow clean exit into exit code 1.
+   */
   private async shutDown(connection: AppServerConnection): Promise<boolean> {
     await connection.finishToolCalls();
-    const end = await connection.shutdown(this.shutdownGraceMs);
+    const end = await connection.shutdown();
     if (end?.kind === 'exited' && end.code === 0 && end.signal === null) return true;
     if (end) {
       getLog().error(

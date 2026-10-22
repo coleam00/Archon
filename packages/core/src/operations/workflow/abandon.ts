@@ -2,7 +2,7 @@ import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { readExecutionOwner, readOwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup-service';
+import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
 import type { RunActor } from '../run-authorization';
 import { getLog, type OperationContext } from './context';
 import {

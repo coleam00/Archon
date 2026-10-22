@@ -27,6 +27,8 @@ export interface LoopResume {
   iterationLimit: number;
   /** Usage consumed through the gate, which the resumed loop's totals start from. */
   costUsd: number | undefined;
+  /** The gate recorded `costUsd` as complete; otherwise it is only a floor. A fresh start carries nothing in. */
+  priorCostKnown: boolean;
   tokens: TokenUsage | undefined;
 }
 
@@ -64,6 +66,8 @@ export interface LoopState {
    */
   resolvedModel: ResolvedModel | undefined;
   costUsd: number | undefined;
+  /** The gate recorded the cost it carried in as complete; otherwise `costUsd` is only a floor. */
+  priorCostKnown: boolean;
   tokens: TokenUsage | undefined;
   tokensUnknown: boolean;
   /**
@@ -128,6 +132,7 @@ export async function failLoopNode(
             execution.spend.tokens.reason === 'incomplete') ||
           extras.tokensUnknown,
         costUsd: extras.costUsd,
+        costPartial: !state.priorCostKnown,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,

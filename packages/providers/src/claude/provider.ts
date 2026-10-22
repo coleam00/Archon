@@ -53,6 +53,7 @@ import { resolveClaudeBinaryPath, resolveClaudeBinaryWithSource } from './binary
 import { ClassifiedProviderError } from '../shared/failure';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
 import { readSessionSpendBaseline } from './session-spend-reader';
+import { markStaleResume } from './stale-resume';
 import { createLogger } from '@archon/paths';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
@@ -742,7 +743,7 @@ export class ClaudeProvider implements IAgentProvider {
       // Claude resumes-or-errors: an invalid resume id fails the turn, so reaching
       // the result stream means the prior session was restored. Hence `true`
       // whenever a resume was requested.
-      for await (const chunk of withResumedOutcome(
+      for await (const streamed of withResumedOutcome(
         closeOpenToolCalls(
           streamClaudeMessages(events, toolResultQueue, spendBaseline, closeInput),
           // A result can arrive while background agents still run their tools.
@@ -750,6 +751,12 @@ export class ClaudeProvider implements IAgentProvider {
         ),
         resumedOutcome(resumeSessionId, true)
       )) {
+        const chunk = await markStaleResume(streamed, resumeSessionId, {
+          cwd,
+          env,
+          signal: controller.signal,
+          isContainerRun,
+        });
         if (chunk.type === 'result') resultReported = true;
         else if (chunk.type === 'subtask') trackSubtask(openSubtaskIds, chunk);
         yield chunk;

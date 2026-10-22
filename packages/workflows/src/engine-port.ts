@@ -3,7 +3,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
-import type { AttentionLabels } from './schemas/dag-node';
+import type { AttentionLabels } from './schemas/wait-node';
 import type { AttentionQueueScope } from './attention-queue';
 import type { AttentionStreamLine } from './attention-watch';
 

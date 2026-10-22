@@ -17,7 +17,8 @@ import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import { workflowGetCommand, workflowStatusCommand } from './workflow-query';
-import { buildNodeSummaries } from './workflow-node-summaries';
+import { buildNodeSummaries, formatFanOutOutcome } from './workflow-node-summaries';
+import { fanOutOutcome, type FanOutSlot } from '@archon/workflows/schemas/fan-out-outcome';
 
 const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
   {
@@ -2166,5 +2167,52 @@ describe('workflowGetCommand', () => {
       runId: 'run-v',
       error: 'workflow_events_unavailable',
     });
+  });
+});
+
+describe('fan-out outcome lines', () => {
+  it('lists unfinished slots up to the display limit and counts the rest from the tally', () => {
+    const slots: FanOutSlot[] = Array.from({ length: 40 }, (_, index): FanOutSlot => {
+      if (index % 3 === 0) return { index, outcome: 'completed', child_run_id: `c${index}` };
+      if (index % 3 === 1)
+        return { index, outcome: 'failed', child_run_id: `c${index}`, error: 'exit 1' };
+      return { index, outcome: 'not_started', error: 'refused' };
+    });
+    slots[2] = {
+      index: 2,
+      outcome: 'cancelled_out_of_band',
+      child_run_id: 'c2',
+      cancel_reason: 'operator',
+    };
+    const lines = formatFanOutOutcome(fanOutOutcome(slots));
+    expect(lines[0]).toBe(
+      'Fan-out work: 26 of 40 children did not complete ' +
+        '(13 failed, 12 not started, 1 cancelled out of band)'
+    );
+    expect(lines.slice(1, 3)).toEqual([
+      '  item 1: failed — run c1 — exit 1',
+      '  item 2: cancelled out of band (operator) — run c2',
+    ]);
+    expect(lines).toHaveLength(1 + 10 + 1);
+    expect(lines.at(-1)).toBe('  … and 16 more (see --json)');
+    expect(
+      formatFanOutOutcome(fanOutOutcome([{ index: 0, outcome: 'completed', child_run_id: 'c' }]))
+    ).toEqual([]);
+  });
+
+  it('carries the slot record from a fan-out node event into its summary', () => {
+    const outcome = fanOutOutcome([{ index: 0, outcome: 'not_started', error: 'refused' }]);
+    const [summary] = buildNodeSummaries([
+      {
+        id: 'work-failed',
+        workflow_run_id: 'run-fan',
+        event_type: 'node_failed',
+        step_name: 'work',
+        step_index: null,
+        data: { error: 'refused all', fan_out: true, fan_out_outcome: outcome },
+        created_at: '2026-10-22T10:00:00.000Z',
+      },
+    ]);
+    expect(summary?.fanOutOutcome).toEqual(outcome);
   });
 });

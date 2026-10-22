@@ -17,7 +17,7 @@ export const CANCEL_CHECK_INTERVAL_MS = 10_000;
  *   transitioned the run to paused. The streaming node should finish its own
  *   output; workflow progression is gated by the approval node, not by tearing
  *   down unrelated in-flight streams. See the doc comment on
- *   `workflowRunStatusSchema` (schemas/workflow-run.ts), where this contract is
+ *   `workflowRunStatusSchema` (schemas/run-status.ts), where this contract is
  *   also stated on the status type itself.
  * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
  *   state → abort the stream.
