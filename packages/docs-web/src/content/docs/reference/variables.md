@@ -169,7 +169,7 @@ Resolved `bash:` bodies and plain-loop and loop-group `until_bash:` completion c
 
 User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. A `loop_group` body's `bash:` node is the exception: the loop scope splices the reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives already quoted. Read the spliced reply as an already-quoted value — assign it and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather than as `"$LOOP_USER_INPUT"`. In `bash:` read an environment-delivered value with `"$ARGUMENTS"`. In `script:` read it via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body is not substituted: the text stays in the source.
 
-At load time, Archon scans inline and named exec sources for static environment reads. The supported forms are `os.environ["NAME"]` and `os.environ.get("NAME", ...)` in Python, `process.env.NAME` and `process.env["NAME"]` in JavaScript/TypeScript, and `$INPUTS_NAME` or `${INPUTS_NAME}` in bash; single quotes work in bracket and call forms too. Within a declared `inputs:` contract, an `INPUTS_*` read with no matching script `with:` binding or declared workflow input is a load error. A workflow with no `inputs:` block keeps the open caller-input contract, so caller-provided names cannot be rejected while loading that workflow in isolation. Other static Python/JavaScript env reads that Archon does not provide produce a parse warning, since project and credential variables may still come from the execution environment. Diagnostics identify the inline `bash`/`script` line or the named script path and line, plus the available binding and input names.
+At load time, Archon scans inline and named exec sources for static environment reads. The supported forms are `os.environ["NAME"]` and `os.environ.get("NAME", ...)` in Python, `process.env.NAME` and `process.env["NAME"]` in JavaScript/TypeScript, and `$INPUTS_NAME` or `${INPUTS_NAME}` in bash; single quotes work in bracket and call forms too. Within a declared `inputs:` contract, an `INPUTS_*` read is a load error unless it matches a script `with:` binding, a declared workflow input, or an environment name configured in Archon or the project's `.archon/.env`. A workflow with no `inputs:` block keeps the open caller-input contract, so caller-provided names cannot be rejected while loading that workflow in isolation. Other static Python/JavaScript env reads that Archon does not provide produce a parse warning, since project and credential variables may still come from the execution environment. Diagnostics identify the inline `bash`/`script` line or the named script path and line, plus the available binding and input names.
 
 This is a deliberately lexical check, not a language parser. Computed keys, aliases, destructuring, `os.getenv`, and ordinary non-`INPUTS_*` bash variables are outside the supported detection boundary. An exact supported accessor spelling inside a comment or string literal can still be reported.
 
@@ -264,9 +264,11 @@ the workflow otherwise, so a binding can never race its producer. Node-local bin
 the **nearest** input layer: they win over a composed block's inputs, which win over the
 run's own `$INPUTS`.
 
-The load-time environment-read check uses these same binding names and the workflow's declared
-input names. For example, `process.env.INPUTS_GREEN` requires `with: { green: ... }` on that
-script node or a declared `green` workflow input. Engine-owned names such as `ARTIFACTS_DIR`,
+The load-time environment-read check accepts these binding names, declared workflow inputs,
+and environment names configured in Archon or the project's `.archon/.env`. Within a declared
+`inputs:` contract, an unconfigured `process.env.INPUTS_GREEN` read requires
+`with: { green: ... }` on that script node or a declared `green` workflow input.
+Engine-owned names such as `ARTIFACTS_DIR`,
 `BASE_BRANCH`, `ARGUMENTS`, and `WORKFLOW_ID` are always accepted.
 
 `with:` on other node types: `include:` and `workflow:` nodes keep their existing caller-input

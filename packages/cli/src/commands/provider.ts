@@ -2,7 +2,8 @@ import { maintainedProviderPluginId } from '@archon/plugin-manifest';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { isMaintainedProvider, MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
 import { attachmentUsage, isAttachmentVerb } from '../attachment-commands';
-import { replacePlugin, type PluginEnvironment } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
+import { replacePlugin } from './plugin-install';
 
 export async function providerCommand(
   subcommand: string | undefined,

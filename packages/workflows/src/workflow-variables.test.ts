@@ -52,6 +52,7 @@ describe('user-controlled runtime variable delivery', () => {
         loopPrevOutput: values.loopPrevOutput ?? '',
         typedArtifactsFile: '/listing.json',
         nodeExecution: null,
+        inputEnvKeys: [],
       });
       const names = USER_CONTROLLED_VARIABLES.flatMap(group => group.names);
       const template = names.map(name => `$${name}`).join(' | ');
@@ -98,6 +99,7 @@ describe('user-controlled runtime variable delivery', () => {
         ISSUE_CONTEXT: value('issue'),
         TYPED_ARTIFACTS_FILE: '/listing.json',
         ARCHON_NODE_EXECUTION: '',
+        ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
       });
     });
   }
