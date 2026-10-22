@@ -30,7 +30,7 @@ import { sumReportedCost, sumFanOutTokens, type RunUsageFigures } from '../../us
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
 
-/** One settled composed fan-out instance, reduced into the aggregate (#2512). */
+/** One composed fan-out instance's execution outcome, reduced into the aggregate (#2512). */
 export interface ComposeInstanceOutcome {
   status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
   output: string;
@@ -437,7 +437,7 @@ export async function runComposeInstance(
     priorUsage = await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix });
   } catch (error) {
     return {
-      status: 'failed',
+      status: 'ambiguous',
       output: '',
       error: `instance ${snapshot.identity} could not read its prior usage: ${error instanceof Error ? error.message : String(error)}`,
     };
