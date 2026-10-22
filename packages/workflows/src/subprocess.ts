@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, type ExecFileException, spawn } from 'node:child_process';
 import { confirmProcessGroupsGone, terminateTree } from '@archon/paths/plugin-process';
 import { DetachedNodeProcesses, type PreparedNodeTermination } from './detached-node-processes';
 import { retainStreamTail } from './executor-shared';
@@ -51,18 +51,8 @@ export function buildSubprocessDockerArgs(
 }
 
 /** Subprocess failure evidence, including execFile timeout and exit fields. */
-export type RawSubprocessRejection = Error & {
-  stdout?: string;
-  stderr?: string;
-  cmd?: string;
+export type RawSubprocessRejection = Omit<ExecFileException, 'signal'> & {
   spawnargs?: string[];
-  /**
-   * Numeric exit code, or a symbol (`'ENOENT'`, `'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'`).
-   * `null` on a timeout kill — Node reports that one through `signal` instead.
-   */
-  code?: number | string | null;
-  /** True when Node killed the child after the configured `execFile` timeout elapsed. */
-  killed?: boolean;
   /** The owned group deadline expired, independent of the eventual exit code. */
   timedOut?: boolean;
   /**
@@ -72,7 +62,7 @@ export type RawSubprocessRejection = Error & {
   treeSurvived?: true;
   /** The node's run stopped and its tree was ended for it; never a timeout. */
   cancelled?: true;
-  /** Terminal signal, also present when a command terminates itself. */
+  /** Spawn's close event includes null when the command exited without a signal. */
   signal?: string | null;
 };
 

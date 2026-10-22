@@ -7,6 +7,7 @@ import type { DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
+import type { RawSubprocessRejection } from './subprocess';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -242,23 +243,6 @@ export function retainStreamTail(text: string | undefined): string | undefined {
 }
 
 /**
- * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
- * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
- * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
- * which is why `formatSubprocessFailure` strips the prefix and exposes a
- * controlled `logFields` subset rather than the raw error.
- */
-interface RawSubprocessError {
-  message?: string;
-  stderr?: string;
-  stdout?: string;
-  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
-  code?: number | string | null;
-  killed?: boolean;
-  cmd?: string;
-}
-
-/**
  * Produce a concise, diagnostic-first summary of a failed subprocess.
  *
  * User-visible output strips Node's `"Command failed: <cmd>"` prefix (which for
@@ -270,7 +254,7 @@ interface RawSubprocessError {
  * of the script body (`err.message`, `err.stack`, `err.cmd`).
  */
 export function formatSubprocessFailure(
-  err: RawSubprocessError,
+  err: Partial<Pick<RawSubprocessRejection, 'message' | 'stderr' | 'stdout' | 'code' | 'killed'>>,
   label: string
 ): { userMessage: string; logFields: Record<string, unknown> } {
   const stderr = (err.stderr ?? '').trim();

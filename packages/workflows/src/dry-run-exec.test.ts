@@ -32,7 +32,88 @@ describe('dry-run code execution', () => {
       execCode: true,
     });
     expect(failureResult.outcome).toBe('failed');
-    expect(failureResult.trace[0]).toMatchObject({ state: 'failed', reason: 'nope' });
+    expect(failureResult.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: "Bash node 'code' failed [exit 7]: nope",
+    });
+  });
+
+  test.each([
+    ['stdout only', 'printf stdout-tail', 'stdout-tail'],
+    ['both streams', 'printf stdout-tail; printf stderr-tail >&2', 'stderr-tail'],
+  ])('reports sanitized bash failures with %s', async (_name, output, diagnostic) => {
+    const code = `# inline-body-marker\n${output}; exit 7`;
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({ name: 'bash-diagnostic', nodes: [{ id: 'code', bash: code }] }),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.state).toBe('failed');
+    const reason = result.trace[0]?.reason;
+    expect(reason).toContain('stdout-tail');
+    expect(reason).toContain(diagnostic);
+    expect(reason).toContain('[exit 7]');
+    expect(reason).not.toContain('inline-body-marker');
+    expect(reason).not.toContain('Command failed:');
+  });
+
+  test('reports sanitized inline script failures with capped stream tails', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'script-diagnostic',
+        nodes: [
+          {
+            id: 'code',
+            runtime: 'bun',
+            script: `// inline-body-marker
+console.log('x'.repeat(5000) + 'stdout-tail');
+console.error('y'.repeat(5000) + 'stderr-tail');
+process.exit(9);`,
+          },
+        ],
+      }),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.state).toBe('failed');
+    const reason = result.trace[0]?.reason;
+    expect(reason).toContain("Script node 'code' failed [exit 9]");
+    expect(reason).toContain('[stdout]');
+    expect(reason).toContain('stdout-tail');
+    expect(reason).toContain('[stderr]');
+    expect(reason).toContain('stderr-tail');
+    expect(reason).not.toContain('inline-body-marker');
+    expect(reason).not.toContain('Command failed:');
+    expect(reason?.length).toBeLessThan(2100);
+  });
+
+  test('reports a timeout even when the subprocess wrote diagnostics', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'timeout-diagnostic',
+        nodes: [{ id: 'code', bash: 'printf waiting; while :; do :; done', timeout: 100 }],
+      }),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: "Bash node 'code' timed out after 100ms",
+    });
+  });
+
+  test('reports a subprocess termination signal', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'signal-diagnostic',
+        nodes: [{ id: 'code', runtime: 'bun', script: 'process.kill(process.pid, "SIGTERM");' }],
+      }),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.state).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('SIGTERM');
+    expect(result.trace[0]?.reason).not.toContain('process.kill');
   });
 
   test('executable bash dry runs reject NUL without executing a prefix', async () => {
