@@ -252,6 +252,9 @@ describe('executeDagWorkflow -- workflow: node', () => {
         'child-workflow'
       );
       const store = createMockStore();
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        store.pauseWorkflowRun.mock.calls.length > 0 ? 'paused' : 'running'
+      );
       store.findChildRuns.mockResolvedValue([
         makeWorkflowRun('live-child', { status, metadata: { parent_node_id: 'sub' } }),
       ]);
