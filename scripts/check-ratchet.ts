@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
+import { BASELINE_PATH, baselineEntries, parseBaseline } from './check-mock-modules';
 
 /**
  * Code may grow freely up to a ceiling; above it, a change may not make it worse. A touched
@@ -37,6 +38,11 @@ import ts from 'typescript';
  * `Ratchet-Allow: <path>` for a file's line count, `Ratchet-Allow: <path>:<identity>` for a
  * function. A trailer lives only in the commits after the merge base, so it waives this change
  * and nothing after it.
+ *
+ * The `mock.module()` baseline (`scripts/mock-module-baseline.json`, owned by
+ * `check-mock-modules.ts`) is committed, so its own check cannot tell a grandfathered site from
+ * one a change just added with `--write`. Here every entry it gains against the merge base is
+ * refused, waived for the whole file by `Ratchet-Allow: scripts/mock-module-baseline.json`.
  */
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -342,8 +348,9 @@ export function checkRatchet(
   }
   const inScope = biomeScope(git(['show', `${mergeBase}:biome.jsonc`], repo));
 
+  const touched = touchedPaths(mergeBase, repo);
   const files: ScoredFile[] = [];
-  for (const [headPath, basePath] of touchedPaths(mergeBase, repo)) {
+  for (const [headPath, basePath] of touched) {
     const base =
       basePath !== null && inScope(basePath)
         ? scored(basePath, git(['show', `${mergeBase}:${basePath}`], repo))
@@ -401,7 +408,27 @@ export function checkRatchet(
     const grown = lineGrowth(path, base, head, ceilings.lines);
     if (grown !== null) report(grown, path);
   }
+  for (const entry of mockBaselineGrowth(mergeBase, touched, repo)) {
+    report(`${BASELINE_PATH}: gains ${entry}`, BASELINE_PATH);
+  }
   return result;
+}
+
+/** Entries the mock.module() baseline has at HEAD and not at the merge base. */
+function mockBaselineGrowth(
+  mergeBase: string,
+  touched: ReadonlyMap<string, string | null>,
+  repo: string
+): string[] {
+  const basePath = touched.get(BASELINE_PATH);
+  if (basePath === undefined) return [];
+  const headText = headContent(BASELINE_PATH, repo);
+  const before =
+    basePath === null
+      ? new Set<string>()
+      : baselineEntries(parseBaseline(git(['show', `${mergeBase}:${basePath}`], repo)));
+  const after = headText === null ? new Set<string>() : baselineEntries(parseBaseline(headText));
+  return [...after].filter(entry => !before.has(entry));
 }
 
 if (import.meta.main) {

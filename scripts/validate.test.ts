@@ -20,6 +20,7 @@ describe('validate check selection', () => {
       'generated-files',
       'type-check',
       'lint',
+      'mock-modules',
       'ratchet',
       'format',
       'installer',

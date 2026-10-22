@@ -318,7 +318,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate
-        run: bun run validate --only cli-import-boundary,package-edges,generated-files,type-check,lint,format
+        run: bun run validate --only cli-import-boundary,package-edges,generated-files,type-check,lint,mock-modules,format
 
       # The ratchet compares against the merge base with origin/$GITHUB_BASE_REF, which the
       # full fetch above provides. A push skips it: the change is already merged, and a squash
