@@ -17,12 +17,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   parseRunDocument,
+  type Queue,
   type QueuedRun,
   type RunDocument,
   RUNS_PREFIX,
   runName,
 } from '../../.shared/discoveries.ts';
-import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { fetchDefaultBranch } from '../../.shared/remote.ts';
@@ -124,7 +124,6 @@ function main(): void {
   if (self === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const base = fetchDefaultBranch(repo);
-  const sha = gitOrThrow('rev-parse', base.ref);
   const documents = readRunDocuments();
   const at = new Date().toISOString();
 
@@ -177,13 +176,11 @@ function main(): void {
 
   const drain = join(artifactsDir(), 'drain');
   mkdirSync(drain, { recursive: true });
-  writeFileSync(
-    join(drain, 'queue.json'),
-    `${JSON.stringify({ base: { branch: base.branch, sha }, runs: queue }, null, 2)}\n`
-  );
+  const document: Queue = { base, runs: queue };
+  writeFileSync(join(drain, 'queue.json'), `${JSON.stringify(document, null, 2)}\n`);
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
-    base: { branch: base.branch, sha },
+    base,
     policy_defaults: POLICY_DEFAULTS,
   });
 }
