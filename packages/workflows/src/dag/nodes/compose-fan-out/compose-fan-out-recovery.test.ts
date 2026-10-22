@@ -17,6 +17,13 @@ import {
   persistedEvents,
   runUsageWrites,
 } from '../../test-utils';
+import {
+  startNodeExecution,
+  finishNodeExecution,
+  newNodeInvocation,
+} from '../../../node-execution';
+import { serializeNodeStateRecord } from '../../../node-record-serialization';
+import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
@@ -57,17 +64,76 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     await removeTempTree(testDir);
   });
 
+  async function assertRecoveredInstanceUsage(
+    store: ReturnType<typeof createMockStore>,
+    instance: FanOutInstanceSnapshot,
+    priorScope: string,
+    path: string
+  ): Promise<void> {
+    const paidSibling = priorScope === 'paid sibling' || priorScope === 'unknown sibling';
+    const unknownTokens = priorScope === 'unknown sibling';
+    const totalCost = paidSibling ? 0.07 : 0.03;
+    const totalTokens = paidSibling ? { input: 49, output: 21 } : { input: 21, output: 9 };
+    const completed = eventsOf(store).find(
+      event => event.step_name === path && event.event_type === 'node_completed'
+    );
+    expect(completed?.data.cost_usd).toBeCloseTo(0.02);
+    expect(completed?.data.tokens).toMatchObject({ input: 14, output: 6 });
+    const terminal = eventsOf(store).find(
+      event =>
+        event.step_name === `${composeScope()}__${instance.identity}` &&
+        event.event_type === 'node_completed'
+    );
+    const segmentCost = priorScope === 'closed segment' ? 0.02 : totalCost;
+    const segmentTokens = priorScope === 'closed segment' ? { input: 14, output: 6 } : totalTokens;
+    expect(terminal?.data.cost_usd).toBeCloseTo(segmentCost);
+    if (unknownTokens) {
+      expect(
+        terminal &&
+          readNodeRecordEvent({ ...terminal, workflow_run_id: 'parent' })?.metadata?.spend.tokens
+      ).toEqual({
+        source: 'unavailable',
+        reason: 'incomplete',
+      });
+      expect(terminal?.data.tokens).toBeUndefined();
+    } else {
+      expect(terminal?.data.tokens).toMatchObject(segmentTokens);
+    }
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: expect.closeTo(totalCost, 8),
+      ...(unknownTokens
+        ? { total_tokens_unknown: true, total_tokens_in: null, total_tokens_out: null }
+        : {
+            total_tokens_in: totalTokens.input,
+            total_tokens_out: totalTokens.output,
+          }),
+    });
+    const folded = await store.getDagResumeSnapshot('parent');
+    expect(folded.costUsd).toBeCloseTo(totalCost);
+    if (unknownTokens) {
+      expect(folded.tokensUnknown).toBe(true);
+      expect(folded.tokens).toBeUndefined();
+    } else {
+      expect(folded.tokens).toMatchObject(totalTokens);
+    }
+  }
+
   it.each(
     [false, true].flatMap(fanOut =>
-      ['open child', 'paid sibling', 'closed segment'].map(priorScope => ({ fanOut, priorScope }))
+      ['open child', 'paid sibling', 'unknown sibling', 'closed segment'].map(priorScope => ({
+        fanOut,
+        priorScope,
+      }))
     )
   )('preserves prior spend inside a composed instance (%j)', async ({ fanOut, priorScope }) => {
+    const paidSibling = priorScope === 'paid sibling' || priorScope === 'unknown sibling';
+    const unknownTokens = priorScope === 'unknown sibling';
     await writeBlock(
       `name: compose-blk
 description: child block
 mutates_checkout: false
 nodes:
-${priorScope === 'paid sibling' ? '  - id: paid\n    prompt: Already paid.\n' : ''}  - id: child
+${paidSibling ? '  - id: paid\n    prompt: Already paid.\n' : ''}  - id: child
     workflow: child-workflow
 ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_success\n" : ''}`
     );
@@ -89,18 +155,29 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
         tokens: { input: 7, output: 3 },
       },
     });
-    if (priorScope === 'paid sibling') {
-      await store.persistWorkflowEvent({
-        workflow_run_id: 'parent',
-        step_name: composeInnerStep(instance.identity, 'paid'),
-        event_type: 'node_completed',
-        data: {
-          type: 'agent',
-          node_output: 'paid',
-          cost_usd: 0.04,
-          tokens: { input: 28, output: 12 },
-        },
-      });
+    if (paidSibling) {
+      await store.persistWorkflowEvent(
+        serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              invocation: newNodeInvocation(),
+              runId: 'parent',
+              path: composeInnerStep(instance.identity, 'paid'),
+              node: {
+                kind: 'agent',
+                id: 'paid',
+                source: { kind: 'inline', prompt: 'Already paid.' },
+              },
+            }),
+            { status: 'completed' },
+            {
+              output: { text: 'paid' },
+              costUsd: 0.04,
+              ...(unknownTokens ? { tokensUnknown: true } : { tokens: { input: 28, output: 12 } }),
+            }
+          )
+        )
+      );
     }
     if (priorScope === 'closed segment') {
       await store.persistWorkflowEvent({
@@ -146,36 +223,7 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
         },
       })
     );
-    const completed = eventsOf(store).find(
-      event => event.step_name === path && event.event_type === 'node_completed'
-    );
-    expect(completed?.data.cost_usd).toBeCloseTo(0.02);
-    expect(completed?.data.tokens).toMatchObject({ input: 14, output: 6 });
-    const terminal = eventsOf(store).find(
-      event =>
-        event.step_name === `${composeScope()}__${instance.identity}` &&
-        event.event_type === 'node_completed'
-    );
-    const segmentCost =
-      priorScope === 'closed segment' ? 0.02 : priorScope === 'paid sibling' ? 0.07 : 0.03;
-    const segmentTokens =
-      priorScope === 'closed segment'
-        ? { input: 14, output: 6 }
-        : priorScope === 'paid sibling'
-          ? { input: 49, output: 21 }
-          : { input: 21, output: 9 };
-    expect(terminal?.data.cost_usd).toBeCloseTo(segmentCost);
-    expect(terminal?.data.tokens).toMatchObject(segmentTokens);
-    expect(runUsageWrites(store).at(-1)).toMatchObject({
-      total_cost_usd: expect.closeTo(priorScope === 'paid sibling' ? 0.07 : 0.03, 8),
-      total_tokens_in: priorScope === 'paid sibling' ? 49 : 21,
-      total_tokens_out: priorScope === 'paid sibling' ? 21 : 9,
-    });
-    const folded = await store.getDagResumeSnapshot('parent');
-    expect(folded.costUsd).toBeCloseTo(priorScope === 'paid sibling' ? 0.07 : 0.03);
-    expect(folded.tokens).toMatchObject(
-      priorScope === 'paid sibling' ? { input: 49, output: 21 } : { input: 21, output: 9 }
-    );
+    await assertRecoveredInstanceUsage(store, instance, priorScope, path);
   });
 
   it('persists the instance snapshot before scheduling any body work', async () => {

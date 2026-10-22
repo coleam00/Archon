@@ -432,13 +432,23 @@ export async function runComposeInstance(
 
   const stepNamePrefix = `${scopeName}__`;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
+  let priorUsage: RunUsageFigures;
+  try {
+    priorUsage = await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix });
+  } catch (error) {
+    return {
+      status: 'failed',
+      output: '',
+      error: `instance ${snapshot.identity} could not read its prior usage: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   const instance: InstanceRun = {
     scope,
     snapshot,
     scopeName,
     stepNamePrefix,
     execution: startInstanceExecution(scope, scopeName, snapshot),
-    priorUsage: await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix }),
+    priorUsage,
   };
   const notStarted = await claimInstanceStart(instance);
   if (notStarted !== undefined) return notStarted;
