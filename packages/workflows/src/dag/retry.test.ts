@@ -21,6 +21,7 @@ import {
   dagOptions,
   runUsageWrites,
   createMockStore,
+  persistedEvents,
 } from './test-utils';
 
 describe('executeDagWorkflow -- node-level retry for transient errors', () => {
@@ -98,6 +99,97 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       total_cost_incomplete: true,
     });
   });
+
+  for (const rejection of ['status', 'executor', 'notification-event'] as const) {
+    it.each([
+      { label: 'unpriced', costs: [undefined], floor: undefined },
+      { label: 'zero', costs: [0], floor: 0 },
+      { label: 'priced', costs: [0.1], floor: 0.1 },
+      { label: 'mixed', costs: [0.1, undefined], floor: 0.1 },
+    ])(
+      `retains retry usage after ${rejection} rejection ($label attempts)`,
+      async ({ costs, floor }) => {
+        let calls = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield {
+            type: 'result',
+            sessionId: 'first',
+            cost: costs[calls++],
+            tokens: { input: 10, output: 2 },
+            isError: true,
+            failure: { class: 'transient', evidence: 'interrupted' },
+          };
+        });
+        const store = createMockStore();
+        const platform = createMockPlatform();
+        const error = new Error(`${rejection} unavailable`);
+        let rejected = false;
+        if (rejection === 'status') {
+          store.getWorkflowRunStatus.mockImplementation(async () => {
+            if (
+              !rejected &&
+              store.createWorkflowEvent.mock.calls.some(
+                ([e]) =>
+                  e.event_type === 'node_retry_scheduled' && e.data?.retry_attempt === costs.length
+              )
+            ) {
+              rejected = true;
+              throw error;
+            }
+            return 'running';
+          });
+        } else if (rejection === 'executor') {
+          platform.getStreamingMode.mockImplementation(() => {
+            if (calls === costs.length) {
+              rejected = true;
+              throw error;
+            }
+            return 'batch';
+          });
+        } else {
+          store.createWorkflowEvent.mockImplementation(async event => {
+            if (
+              event.event_type === 'node_retry_scheduled' &&
+              event.data?.retry_attempt === costs.length
+            ) {
+              rejected = true;
+              throw error;
+            }
+          });
+        }
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('retry-rejected'),
+            workflow: {
+              name: 'retry-rejected',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Work.' },
+                  retry: { max_attempts: 2, delay_ms: 0 },
+                },
+              ],
+            },
+          })
+        );
+        expect(rejected).toBe(true);
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(costs.length);
+        expect(store.failWorkflowRun).toHaveBeenCalled();
+        expect(persistedEvents(store).some(event => event.data?.error === error.message)).toBe(
+          true
+        );
+        const usage = runUsageWrites(store).at(-1);
+        expect(usage?.total_cost_usd).toBe(floor);
+        if (costs.some(cost => cost === undefined)) expect(usage?.total_cost_incomplete).toBe(true);
+        expect(usage?.total_tokens_in).toBe(10 * costs.length);
+        expect(usage?.total_tokens_out).toBe(2 * costs.length);
+      }
+    );
+  }
 
   it('node succeeds on retry after a transient error', async () => {
     let callCount = 0;

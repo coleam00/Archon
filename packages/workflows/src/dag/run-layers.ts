@@ -19,6 +19,7 @@ import {
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import { RunBudgetRefusedError } from '../run-budget';
+import { NodeRetryError } from './retry';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
 import { writeNodeArtifact } from '../artifacts-index';
@@ -495,6 +496,8 @@ async function recordPreExecutionFailure(
   node: DagNode,
   error: unknown
 ): Promise<LayerNodeResult> {
+  const retryUsage = error instanceof NodeRetryError ? error.usage : undefined;
+  if (error instanceof NodeRetryError) error = error.cause;
   // This dispatch boundary also owns provider/binding preparation failures.
   // Durable-write rejection and a budget refusal must reach run recovery
   // without becoming a node outcome: a refused node never started.
@@ -535,7 +538,11 @@ async function recordPreExecutionFailure(
   );
   return {
     nodeId: node.id,
-    output: failed,
+    output: {
+      ...failed,
+      ...retryUsage,
+      costIncomplete: failed.costIncomplete || retryUsage?.costIncomplete,
+    },
   };
 }
 

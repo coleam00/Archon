@@ -1,4 +1,3 @@
-import type { TokenUsage } from '@archon/provider-contract';
 import type { DagNode, NodeOutput, AgentNode, ExecNode, WorkflowRun } from '../schemas';
 import {
   type RetryClass,
@@ -7,7 +6,7 @@ import {
   getRetryDelayMs,
 } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
-import type { NodeExecutionResult } from '../node-record-serialization';
+import type { NodeExecutionResult, NodeUsage } from '../node-record-serialization';
 import {
   admitRunBudgetAttempt,
   RunBudgetRefusedError,
@@ -20,6 +19,17 @@ import type { RunLayersContext } from './run-context';
 import { shouldContinueStreamingForStatus, waitForNodeRetry } from './run-control';
 import { sumTokenUsage } from './usage';
 import { getLog } from './log';
+
+/** Carries completed retry-attempt usage to the dispatch failure boundary. */
+export class NodeRetryError extends Error {
+  constructor(
+    cause: unknown,
+    readonly usage: NodeUsage
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'NodeRetryError';
+  }
+}
 
 /** Default DAG node retry for TRANSIENT errors */
 export const DEFAULT_NODE_MAX_RETRIES = 2;
@@ -154,100 +164,106 @@ export async function runNodeRetryLoop(
   iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
-  let accumulatedCostUsd: number | undefined;
-  let accumulatedCostIncomplete = false;
-  let accumulatedTokens: TokenUsage | undefined;
-  let accumulatedTokensUnknown = false;
+  const usage: NodeUsage = {
+    costUsd: undefined,
+    costIncomplete: false,
+    tokens: undefined,
+    tokensUnknown: false,
+  };
   // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
   // for the rest of the loop (#2706): load-shedding windows are minutes-scale, so the
   // node's own short maxRetries would exhaust before the provider recovers.
   let sawRateLimit = false;
   let attempt = 0;
-  while (true) {
-    if (attempt > 0) {
-      const status = await store.getWorkflowRunStatus(workflowRun.id);
-      if (!shouldContinueStreamingForStatus(status)) {
-        output = {
-          state: 'failed',
-          output: '',
-          error: `Workflow ${status ?? 'deleted'}`,
-          failureKind: 'cancelled',
-        };
-        break;
+  try {
+    while (true) {
+      if (attempt > 0) {
+        const status = await store.getWorkflowRunStatus(workflowRun.id);
+        if (!shouldContinueStreamingForStatus(status)) {
+          output = {
+            state: 'failed',
+            output: '',
+            error: `Workflow ${status ?? 'deleted'}`,
+            failureKind: 'cancelled',
+          };
+          break;
+        }
       }
-    }
-    output = await run();
-    if (output.costUsd !== undefined) {
-      accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
-    }
-    accumulatedCostIncomplete ||= output.costIncomplete === true;
-    accumulatedTokensUnknown ||= output.tokensUnknown === true;
-    if (accumulatedTokensUnknown) {
-      accumulatedTokens = undefined;
-    } else if (output.tokens !== undefined) {
-      accumulatedTokens = sumTokenUsage(
-        [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), output.tokens],
-        { nodeId: node.id }
-      );
-    }
-    if (output.state !== 'failed') break;
+      output = await run();
+      accumulateRetryUsage(usage, output, node.id);
+      if (output.state !== 'failed') break;
 
-    const retryClass = retryableFailureClass(output, retryConfig.onError);
-    if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = effectiveRetryMaxRetries(
-      retryConfig.maxRetries,
-      retryClass,
-      sawRateLimit
-    );
-    if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
-
-    const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
-    getLog().warn(
-      {
-        nodeId: node.id,
-        attempt: attempt + 1,
-        maxRetries: effectiveMaxRetries,
+      const retryClass = retryableFailureClass(output, retryConfig.onError);
+      if (retryClass === 'rate_limited') sawRateLimit = true;
+      const effectiveMaxRetries = effectiveRetryMaxRetries(
+        retryConfig.maxRetries,
         retryClass,
-        delayMs,
-        error: output.error,
-      },
-      'dag_node_transient_retry'
-    );
+        sawRateLimit
+      );
+      if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
-    const errorKind =
-      retryClass === 'overloaded'
-        ? 'provider capacity error'
-        : retryClass === 'unknown'
-          ? 'error'
-          : 'transient error';
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `⚠️ Node \`${node.id}\` failed with ${errorKind} (attempt ${String(attempt + 1)}/${String(effectiveMaxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
-      { workflowId: workflowRun.id, nodeName: node.id }
-    );
+      const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
+      getLog().warn(
+        {
+          nodeId: node.id,
+          attempt: attempt + 1,
+          maxRetries: effectiveMaxRetries,
+          retryClass,
+          delayMs,
+          error: output.error,
+        },
+        'dag_node_transient_retry'
+      );
 
-    await store.createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_retry_scheduled',
-      step_name: stepName,
-      data: {
-        nodeId: node.id,
-        retry_class: retryClass,
-        retry_attempt: attempt + 1,
-        max_retries: effectiveMaxRetries,
-        delay_ms: delayMs,
-        ...(iteration !== undefined ? { iteration } : {}),
-      },
-    });
-    await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
-    attempt++;
+      const errorKind =
+        retryClass === 'overloaded'
+          ? 'provider capacity error'
+          : retryClass === 'unknown'
+            ? 'error'
+            : 'transient error';
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `⚠️ Node \`${node.id}\` failed with ${errorKind} (attempt ${String(attempt + 1)}/${String(effectiveMaxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+        { workflowId: workflowRun.id, nodeName: node.id }
+      );
+
+      await store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_retry_scheduled',
+        step_name: stepName,
+        data: {
+          nodeId: node.id,
+          retry_class: retryClass,
+          retry_attempt: attempt + 1,
+          max_retries: effectiveMaxRetries,
+          delay_ms: delayMs,
+          ...(iteration !== undefined ? { iteration } : {}),
+        },
+      });
+      await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
+      attempt++;
+    }
+  } catch (error) {
+    throw new NodeRetryError(error, usage);
   }
-  output.costUsd = accumulatedCostUsd;
-  output.costIncomplete = accumulatedCostIncomplete;
-  output.tokens = accumulatedTokens;
-  output.tokensUnknown = accumulatedTokensUnknown;
-  return output;
+  return { ...output, ...usage };
+}
+
+function accumulateRetryUsage(usage: NodeUsage, output: NodeUsage, nodeId: string): void {
+  if (output.costUsd !== undefined) {
+    usage.costUsd = (usage.costUsd ?? 0) + output.costUsd;
+  }
+  usage.costIncomplete ||= output.costIncomplete === true;
+  usage.tokensUnknown ||= output.tokensUnknown === true;
+  if (usage.tokensUnknown) {
+    usage.tokens = undefined;
+  } else if (output.tokens !== undefined) {
+    usage.tokens = sumTokenUsage(
+      [...(usage.tokens !== undefined ? [usage.tokens] : []), output.tokens],
+      { nodeId }
+    );
+  }
 }
 
 /**
