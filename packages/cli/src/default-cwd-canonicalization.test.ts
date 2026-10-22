@@ -37,7 +37,7 @@ const CANONICALIZING_SITES = [
   // may run at all in a non-git directory.
   'packages/cli/src/cli.ts',
   // `archon doctor`'s folder-project check.
-  'packages/cli/src/commands/doctor.ts',
+  'packages/cli/src/commands/doctor-folder-project.ts',
 ] as const;
 
 /**

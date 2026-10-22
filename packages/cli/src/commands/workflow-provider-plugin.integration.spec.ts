@@ -18,7 +18,7 @@ import { loadProviderPlugins } from '@archon/core/providers/load-provider-plugin
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { codexDescriptor } from '@archon/providers';
 import { parseProviderRunModel } from '@archon/provider-contract';
-import { checkAssistantLogin } from './doctor';
+import { checkAssistantLogin } from './doctor-assistant-login';
 import { pluginCommand, replacePlugin, type PluginEnvironment } from './plugin';
 
 const tempRoot = trackTempRoots();
