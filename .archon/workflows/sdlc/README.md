@@ -152,15 +152,35 @@ result without starting delivery.
 
 ## Public writes belong to a script
 
-An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request; on a pull request the run continues it only pushes, and `prepare` writes no
-body for it when the caller named the PR or selected no branch. If the caller
+An agent judges and authors; one node owns the public writes and
+proves they landed. `publish-pr` pushes the branch and opens or reuses the pull
+request; on a pull request the run continues it pushes and opens nothing, and
+`prepare` writes no body for it when the caller named the PR or selected no branch. If the caller
 selected a branch without naming a PR, prepare writes a body even if it found an
 existing PR: publish may need to open one from the selected branch. That body is
-used only when opening a PR. The description of a continued pull request belongs to `update-pr-body`
-in delivery, which brings it up to date once the rounds end; a standalone `archon-pr`
-leaves it as its author left it. `publish-review` upserts the one marked review
+used only when opening a PR. In delivery, content the work requires in the
+description is written during the round that prepared it, before that round's
+review reads the pull request: `prepare` copies it to `pr-description.md`, and
+`publish-pr` writes it between `archon-delivery-description` markers, keeps the
+rest of the description as it is, and reads it back. Markers in Markdown code
+examples and raw HTML containers are literal text; top-level markers are reserved
+for the managed section and are refused in prepared content before pushing. The
+composed body must expose exactly the intended pair before any description edit;
+unclosed fences or HTML containers that hide either delimiter refuse publication.
+A blank line separates the closing delimiter from prepared content, including terminal tables;
+legacy sections whose closing delimiter follows a table row remain replaceable.
+If publication verifies a created or reused PR but a later description edit fails,
+the failure report still names that PR from its verified publication record. If writing that record
+fails, publication fails and the node error names the verified PR URL and recording
+error for explicit continuation. The failure report selects the latest verified publication
+by artifact write time across the typed output and creation record, and reports an
+unreadable creation record. An unresolved
+creation claim reports `pr_create_unresolved`; the build queue refuses to select
+another PR or branch until a newer triage settles it: it names the reconciled PR, or
+names none and the next round opens one. `update-pr-body` corrects the
+description's stale claims and links the issue once the rounds end. A standalone
+`archon-pr` leaves a continued pull request's description as its author left it:
+its `publish_description` input defaults off. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
@@ -179,8 +199,9 @@ head that was left behind before it judges anything, ending `other` if it cannot
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
 draft around its CI wait. The last two act through the source the `forge` node
-certified, bound to them as a typed input. No script reads an
-agent-written file to find out what to write.
+certified, bound to them as a typed input. PR publication reads the agent-authored
+`pr-body.md` and `pr-description.md` content through certified artifact pointers;
+the publisher owns the writes and verifies the description edit.
 
 Which remote holds a repository is decided by its configured URL, never by the
 remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork
@@ -492,10 +513,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
   When `retriage_as` names a maintainer login, a run that names no item also revisits
-  the blocked items, beside the item it builds. `facts` lists the unclaimed blocked
-  items not revisited in the last six hours, so a scheduled queue does not judge the
-  same items every run. One `revisit` agent reads each issue, what it waits on and the
-  default branch, and names the items that no longer look blocked. `retriage` adds
+  the blocked items, beside the item it builds. `blocked` lists the unclaimed blocked
+  items not revisited in the last six hours, independently of item pickup and PR
+  resolution. An unresolved PR create refuses the item's continuation without
+  suppressing these revisits. A scheduled queue does not judge the same items every
+  run. One `revisit` agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. `retriage` adds
   `archon-triage` to each and starts `archon-intake` detached with that label event,
   recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
   that login is on the maintainer list, and its verdict decides whether the item now
