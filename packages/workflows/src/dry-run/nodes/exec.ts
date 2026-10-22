@@ -5,6 +5,7 @@ import { certifyExecOutput } from '../../dag/nodes/exec/exec-output';
 import { discoverScriptsForCwd } from '../../script-discovery';
 import { formatSubprocessFailure, isInlineScript } from '../../executor-shared';
 import {
+  hostSpawnFailure,
   isSubprocessTimeout,
   redactSubprocessError,
   type RawSubprocessRejection,
@@ -69,18 +70,33 @@ export async function executeCodeNode(
       });
     } catch (error) {
       const err = redactSubprocessError(error as RawSubprocessRejection, credentialValues);
-      const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
-      if (isSubprocessTimeout(err)) {
-        return { error: `${label} timed out after ${String(node.timeout ?? 300_000)}ms` };
-      }
-      const { userMessage } = formatSubprocessFailure(err, label);
-      return { error: err.signal ? `${userMessage} [signal ${err.signal}]` : userMessage };
+      return { error: codeNodeFailure(node, command, err) };
     }
     // The real run's gate, so a fixture cannot pass a node whose stdout the engine would reject.
     return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), credentialValues);
   } catch (error) {
     return { error: (error as Error).message };
   }
+}
+
+function codeNodeFailure(node: ExecNode, command: string, err: RawSubprocessRejection): string {
+  const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
+  if (isSubprocessTimeout(err))
+    return `${label} timed out after ${String(node.timeout ?? 300_000)}ms`;
+  const spawnFailure = hostSpawnFailure({ kind: 'host' }, err);
+  if (node.runtime === 'sh' && (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR')) {
+    return (
+      `${label} failed: bash executable not found at '${command}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  }
+  if (spawnFailure === 'ENOENT')
+    return `${label} failed: '${command}' executable not found in PATH`;
+  if (spawnFailure === 'EACCES')
+    return `${label} failed: permission denied (check cwd permissions)`;
+  const { userMessage } = formatSubprocessFailure(err, label);
+  return err.signal ? `${userMessage} [signal ${err.signal}]` : userMessage;
 }
 
 async function resolveCodeInvocation(

@@ -40,7 +40,11 @@ import type {
   RunModelBindingsMetadata,
 } from './model-validation';
 import { applyWorkflowRunConfigLayer, readWorkflowRunConfigMetadata } from './run-config';
-import type { WorkflowRunConfigInput, WorkflowRunConfigMetadata } from './schemas/run-config';
+import type {
+  WorkflowRunConfigInput,
+  WorkflowRunConfigLayer,
+  WorkflowRunConfigMetadata,
+} from './schemas/run-config';
 import { createLogger } from '@archon/paths';
 
 const log = createLogger('workflow.run-preflight');
@@ -72,6 +76,24 @@ export function effectiveDbCredentialValues(
   return Object.entries(dbEnvVars).flatMap(([key, value]) =>
     envVars?.[key] === value ? [value] : []
   );
+}
+
+export function applyRunEnvironment(
+  fileConfig: WorkflowConfig,
+  dbEnvVars: Record<string, string>,
+  layer?: WorkflowRunConfigLayer
+): WorkflowConfig {
+  const config = applyWorkflowRunConfigLayer(
+    { ...fileConfig, envVars: { ...fileConfig.envVars, ...dbEnvVars } },
+    layer
+  );
+  config.protectedCredentialValues = [
+    ...new Set([
+      ...(config.protectedCredentialValues ?? []),
+      ...effectiveDbCredentialValues(dbEnvVars, config.envVars),
+    ]),
+  ];
+  return config;
 }
 
 export async function prepareRunAiConfiguration(
@@ -128,16 +150,7 @@ async function prepareAiConfiguration(
   }
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
-  const config = applyWorkflowRunConfigLayer(
-    { ...fileConfig, envVars: { ...fileConfig.envVars, ...dbEnvVars } },
-    effectiveRunConfig?.layer
-  );
-  config.protectedCredentialValues = [
-    ...new Set([
-      ...(config.protectedCredentialValues ?? []),
-      ...effectiveDbCredentialValues(dbEnvVars, config.envVars),
-    ]),
-  ];
+  const config = applyRunEnvironment(fileConfig, dbEnvVars, effectiveRunConfig?.layer);
   const snapshot =
     readRunAiConfigurationSnapshot(deps.providers, options.continuationRun?.metadata) ??
     readRunAiConfigurationSnapshot(deps.providers, options.aiConfigurationRun?.metadata);

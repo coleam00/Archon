@@ -2,6 +2,7 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect } from 'bun:test';
 
+import { redactSubprocessError } from './subprocess';
 import type { NodeOutput } from './schemas';
 import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
@@ -187,6 +188,30 @@ describe('formatSubprocessFailure', () => {
       "Script node 'n1'"
     );
     expect(userMessage).toBe("Script node 'n1' failed [exit 7]: no diagnostic output");
+  });
+
+  it.each(['', ' \n '])('keeps command provenance through credential redaction (%j)', stream => {
+    const err = redactSubprocessError(
+      Object.assign(new Error('Command failed: bun -e // private-body\nprocess.exit(7);'), {
+        stdout: stream,
+        stderr: stream,
+        code: 7,
+      }),
+      ['failed']
+    );
+    expect(formatSubprocessFailure(err, 'Script').userMessage).toBe(
+      'Script failed [exit 7]: no diagnostic output'
+    );
+  });
+
+  it('retains useful spawn diagnostics without presenting errno as an exit', () => {
+    const err = redactSubprocessError(
+      Object.assign(new Error('spawn bun ENOENT'), { code: 'ENOENT' }),
+      ['failed']
+    );
+    const formatted = formatSubprocessFailure(err, 'Script');
+    expect(formatted.userMessage).toBe('Script failed: spawn bun ENOENT');
+    expect(formatted.logFields.exitCode).toBeUndefined();
   });
 
   it('prefers stderr over message body when both are present', () => {

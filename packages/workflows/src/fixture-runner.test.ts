@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { applyRunEnvironment } from './run-preflight';
 /** Tests for the declared-data dry-run fixture runner (#2772). */
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';
@@ -1292,6 +1293,31 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     }
   );
 
+  it('keeps silent inline source out of fixture reports after redaction', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: silent failure\nnodes:\n  - id: code\n    runtime: bun\n    script: |\n      // private-inline-body-marker\n      process.exit(7);',
+      body: 'fixture:\n  expect: failed\n  fail-node: code\nexec-code: true',
+    });
+    callerFrom(trackedOnlyRepo, cwd);
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+      config: {
+        assistant: undefined,
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        protectedCredentialValues: ['failed'],
+      },
+    });
+    expect(report.results[0].pass).toBe(true);
+    for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+      expect(output).toContain("Script node 'code' failed [exit 7]: no diagnostic output");
+      expect(output).not.toContain('private-inline-body-marker');
+      expect(output).not.toContain('Command [REDACTED]');
+    }
+  });
+
   it.each(['bash', 'script'] as const)(
     'reports host-absent configured env in executable %s fixture diagnostics',
     async kind => {
@@ -1424,14 +1450,15 @@ describe('runFixtures exec-code isolation (#2851)', () => {
         const report = await runFixtures({
           workflows: workflowsOnDisk(cwd, ['test-wf']),
           cwd,
-          config: {
-            assistant: undefined,
-            assistants: { claude: {}, codex: {} },
-            commands: {},
-            envVars: { ARCHON_FIXTURE_ACCOUNT: secret },
-            protectedEnvKeys: ['ARCHON_FIXTURE_ACCOUNT'],
-            protectedCredentialValues: [explicitValue],
-          },
+          config: applyRunEnvironment(
+            {
+              assistant: undefined,
+              assistants: { claude: {}, codex: {} },
+              commands: {},
+              protectedCredentialValues: [explicitValue],
+            },
+            { ARCHON_FIXTURE_ACCOUNT: secret }
+          ),
         });
         expect(report.results[0].pass).toBe(true);
         expect(report.results[0].nodeFailures?.[0].reason).toContain('[exit 7]');

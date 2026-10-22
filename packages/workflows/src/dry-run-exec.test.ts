@@ -1,6 +1,8 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { describe, expect, test, spyOn } from 'bun:test';
+import * as git from '@archon/git';
+import { applyRunEnvironment } from './run-preflight';
+import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
@@ -88,6 +90,8 @@ process.exit(9);`,
   });
 
   test.each([
+    ['silent Bash', 'sh', '# inline-body-marker\nexit 7'],
+    ['whitespace Bash', 'sh', '# inline-body-marker\nprintf " "; exit 7'],
     ['silent Bun', 'bun', '// inline-body-marker\nprocess.exit(7);'],
     ['whitespace Bun', 'bun', '// inline-body-marker\nconsole.log(" "); process.exit(7);'],
     ['silent Python', 'uv', '# inline-body-marker\nimport sys\nsys.exit(7)'],
@@ -96,15 +100,107 @@ process.exit(9);`,
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
         name: 'silent-script',
-        nodes: [{ id: 'code', runtime, script }],
+        nodes: [{ id: 'code', ...(runtime === 'sh' ? { bash: script } : { runtime, script }) }],
       }),
+      config: {
+        assistant: undefined,
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        protectedCredentialValues: ['failed'],
+      },
       execCode: true,
     });
     expect(result.outcome).toBe('failed');
     expect(result.trace[0]).toMatchObject({
       state: 'failed',
-      reason: "Script node 'code' failed [exit 7]: no diagnostic output",
+      reason: `${runtime === 'sh' ? 'Bash' : 'Script'} node 'code' failed [exit 7]: no diagnostic output`,
     });
+  });
+
+  test.each(['bun', 'uv'] as const)(
+    'suppresses the named %s invocation after redaction',
+    async runtime => {
+      const cwd = temporaryDirectory();
+      const dir = join(cwd, '.archon', 'scripts');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, runtime === 'bun' ? 'silent.ts' : 'silent.py'),
+        runtime === 'bun'
+          ? '// private-body\nprocess.exit(7);'
+          : '# private-body\nimport sys\nsys.exit(7)'
+      );
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'silent-named',
+          nodes: [{ id: 'code', runtime, script: 'silent' }],
+        }),
+        cwd,
+        config: {
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          protectedCredentialValues: ['failed'],
+        },
+        execCode: true,
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toBe(
+        "Script node 'code' failed [exit 7]: no diagnostic output"
+      );
+    }
+  );
+
+  test.each([
+    ['sh', 'ENOENT', 'bash executable not found'],
+    ['sh', 'ENOTDIR', 'bash executable not found'],
+    ['sh', 'EACCES', 'permission denied'],
+    ['bun', 'ENOENT', "'bun' executable not found in PATH"],
+    ['bun', 'EACCES', 'permission denied'],
+    ['uv', 'ENOENT', "'uv' executable not found in PATH"],
+    ['uv', 'EACCES', 'permission denied'],
+  ] as const)('classifies %s spawn %s', async (runtime, code, diagnostic) => {
+    const spawn = spyOn(git, 'execFileAsync').mockRejectedValueOnce(
+      Object.assign(new Error('spawn failure'), { code })
+    );
+    try {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'spawn-error',
+          nodes: [
+            {
+              id: 'code',
+              ...(runtime === 'sh' ? { bash: 'exit 7' } : { runtime, script: 'exit(7);' }),
+            },
+          ],
+        }),
+        execCode: true,
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toContain(diagnostic);
+      expect(result.trace[0]?.reason).not.toContain('[exit');
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+
+  test('reports a missing script runtime as a spawn failure', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'missing-runtime',
+        nodes: [{ id: 'code', runtime: 'bun', script: 'process.exit(7);' }],
+      }),
+      config: {
+        assistant: undefined,
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        envVars: { PATH: '' },
+      },
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toBe(
+      "Script node 'code' failed: 'bun' executable not found in PATH"
+    );
   });
 
   test('reports a timeout even when the subprocess wrote diagnostics', async () => {
@@ -272,14 +368,15 @@ process.exit(9);`,
             ],
           }),
           inputs: { value: explicitValue },
-          config: {
-            assistant: undefined,
-            assistants: { claude: {}, codex: {} },
-            commands: {},
-            envVars: { ARCHON_DIAGNOSTIC_ACCOUNT: protectedValue },
-            protectedEnvKeys: ['ARCHON_DIAGNOSTIC_ACCOUNT'],
-            protectedCredentialValues: [explicitValue],
-          },
+          config: applyRunEnvironment(
+            {
+              assistant: undefined,
+              assistants: { claude: {}, codex: {} },
+              commands: {},
+              protectedCredentialValues: [explicitValue],
+            },
+            { ARCHON_DIAGNOSTIC_ACCOUNT: protectedValue }
+          ),
           execCode: true,
         });
         expect(result.outcome).toBe('failed');

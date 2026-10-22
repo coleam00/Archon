@@ -53,6 +53,8 @@ export function buildSubprocessDockerArgs(
 /** Subprocess failure evidence, including execFile timeout and exit fields. */
 export type RawSubprocessRejection = Omit<ExecFileException, 'signal'> & {
   spawnargs?: string[];
+  /** Original message contained argv; redaction may change its identifying prefix. */
+  commandFailed?: true;
   /** The owned group deadline expired, independent of the eventual exit code. */
   timedOut?: boolean;
   /**
@@ -106,6 +108,7 @@ export function redactSubprocessError(
   e: RawSubprocessRejection,
   credentialValues: readonly string[]
 ): RawSubprocessRejection {
+  if (e.message.trim().startsWith('Command failed:')) e.commandFailed = true;
   e.message = redactCredentialValues(e.message, credentialValues);
   if (e.stack) e.stack = redactCredentialValues(e.stack, credentialValues);
   if (typeof e.stdout === 'string') {

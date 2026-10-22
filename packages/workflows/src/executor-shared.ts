@@ -254,7 +254,12 @@ export function retainStreamTail(text: string | undefined): string | undefined {
  * of the script body (`err.message`, `err.stack`, `err.cmd`).
  */
 export function formatSubprocessFailure(
-  err: Partial<Pick<RawSubprocessRejection, 'message' | 'stderr' | 'stdout' | 'code' | 'killed'>>,
+  err: Partial<
+    Pick<
+      RawSubprocessRejection,
+      'message' | 'stderr' | 'stdout' | 'code' | 'killed' | 'commandFailed'
+    >
+  >,
   label: string
 ): { userMessage: string; logFields: Record<string, unknown> } {
   const stderr = (err.stderr ?? '').trim();
@@ -263,7 +268,7 @@ export function formatSubprocessFailure(
 
   // Node embeds multiline argv in this message, so none of it is safe as a
   // fallback diagnostic. Actual process output belongs to stdout and stderr.
-  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
+  const hasCommandFailedPrefix = err.commandFailed || rawMessage.startsWith('Command failed:');
 
   // Well-behaved scripts print failure context to stdout, so both streams share
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
@@ -296,12 +301,12 @@ export function formatSubprocessFailure(
       ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
       : diagnostic;
 
-  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
+  const exitSuffix = typeof err.code === 'number' ? ` [exit ${String(err.code)}]` : '';
 
   return {
     userMessage: `${label} failed${exitSuffix}: ${truncated}`,
     logFields: {
-      exitCode: err.code ?? undefined,
+      exitCode: typeof err.code === 'number' ? err.code : undefined,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,
