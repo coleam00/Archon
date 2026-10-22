@@ -496,20 +496,9 @@ export function createFileAdmissionStore(
     }
   }
   async function receiptIdForRequest(id: string): Promise<string | undefined> {
-    const schema = receiptSchema
-      .pick({ id: true })
-      .strip()
-      .extend({
-        bindings: z.array(bindingSchema.pick({ requestIds: true })),
-      });
     for (const path of await documentPaths(root, 'receipts')) {
-      const receipt = await queueCandidate(path, schema);
-      if ('error' in receipt) {
-        log.error({ document: path }, 'queued_start_receipt_invalid_attribution_unknown');
-        continue;
-      }
-      if (receipt.data.bindings.some(binding => binding.requestIds.includes(id)))
-        return receipt.data.id;
+      const receipt = await readReceiptDocument(root, path);
+      if (receipt?.bindings.some(binding => binding.requestIds.includes(id))) return receipt.id;
     }
     return undefined;
   }
