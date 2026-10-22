@@ -5,7 +5,7 @@ export class ParentStatusReadError extends Error {
     readonly nodeId: string,
     cause: unknown
   ) {
-    super(`Could not verify parent status after composed fan-out '${nodeId}'`, { cause });
+    super(`Could not verify parent status after '${nodeId}'`, { cause });
     this.name = 'ParentStatusReadError';
   }
 }

@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { readInterruptedRunUsage } from './dag/interrupted-usage';
 import { ParentStatusReadError } from './parent-status-read';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
@@ -473,9 +474,9 @@ export async function executeDagWorkflow(
       error instanceof ParentStatusReadError
     ) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
+      // the in-memory totals miss it. Rebuild from node events and child run telemetry.
       try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+        const durable = await readInterruptedRunUsage(deps.store, workflowRun.id, error);
         runCtx.totalCostUsd = durable.costUsd;
         runCtx.totalTokens = durable.tokens;
         runCtx.totalTokensUnknown = durable.tokensUnknown;

@@ -1,4 +1,4 @@
-import { ParentStatusReadError } from '../../../parent-status-read';
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { safeSendMessage } from '../../../platform-messages';
 import { describeUnmetCompletion } from '../../../executor-shared';
 import { finishNodeExecution } from '../../../node-execution';
@@ -7,7 +7,6 @@ import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
 import type { LoopGroupNode } from '../../../schemas';
 import { resolvedBodyNodes } from '../../../graph-plan';
-import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { RunSourceUnreadableError } from '../../node-source';
@@ -80,10 +79,9 @@ export async function executeLoopGroupNode(
   } catch (error) {
     // These interruptions leave lifecycle ownership to run recovery.
     if (
-      error instanceof TerminalStatusWriteError ||
+      isWorkflowExecutionInterruption(error) ||
       error instanceof NodeEventWriteError ||
-      error instanceof RunSourceUnreadableError ||
-      error instanceof ParentStatusReadError
+      error instanceof RunSourceUnreadableError
     )
       throw error;
     const err = error instanceof Error ? error : new Error(String(error));

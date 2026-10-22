@@ -105,24 +105,6 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
-  const cacheRead =
-    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
-  const cacheWrite =
-    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens =
-    input !== undefined || output !== undefined
-      ? {
-          input: input ?? 0,
-          output: output ?? 0,
-          ...(cacheRead !== undefined ? { cacheRead } : {}),
-          ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-          // Persisted by persistRunUsage; without it a child's floor would contribute to
-          // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-        }
-      : undefined;
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
@@ -138,8 +120,40 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
+    ...childRunUsage(run),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
+}
+
+/** Usage is available while a child is unresolved as well as after it settles. */
+export function childRunUsage(
+  run: WorkflowRun
+): Pick<ChildWorkflowOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> {
+  const md: Record<string, unknown> = run.metadata ?? {};
+  return {
+    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    ...(md.total_tokens_unknown === true
+      ? { tokensUnknown: true }
+      : { tokens: childRunTokens(md) }),
+  };
+}
+
+function childRunTokens(md: Record<string, unknown>): TokenUsage | undefined {
+  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
+  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
+  const cacheRead =
+    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
+  const cacheWrite =
+    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
+  return input !== undefined || output !== undefined
+    ? {
+        input: input ?? 0,
+        output: output ?? 0,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+        // Persisted by persistRunUsage; without it a child's floor would contribute to
+        // the parent as though it were an exact total.
+        ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
+      }
+    : undefined;
 }
