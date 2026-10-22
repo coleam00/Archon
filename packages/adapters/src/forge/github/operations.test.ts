@@ -754,6 +754,72 @@ test('invalid configured GitHub origins fail before sending a credential', async
   }
 });
 
+test('dispatch resolves HTTPS default ports through exact or bare host claims', async () => {
+  const host = 'ghes.example.test';
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [
+        {
+          plugin: 'github',
+          command: process.execPath,
+          args: [resolve(import.meta.dir, 'plugin.ts')],
+        },
+      ],
+      hosts: { [host]: 'github', [`${host}:443`]: 'github' },
+      scanPath: false,
+    },
+    env: {},
+  });
+  const plugin = discovery.plugins[0];
+  for (const byHost of [
+    new Map([[host, plugin]]),
+    new Map([[`${host}:443`, plugin]]),
+    new Map([
+      [`${host}:443`, plugin],
+      [host, { ...plugin, metadata: { ...plugin.metadata, name: 'bare', capabilities: [] } }],
+    ]),
+  ]) {
+    const result = await dispatchForge(
+      { operationId: 'default-port', op: 'resolve', remote: `https://${host}:443/team/repo.git` },
+      { discovery: { ...discovery, byHost }, env: {} }
+    );
+    expect(result.plugin).toEqual({ name: 'github', version: '1' });
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'resolve',
+        value: { kind: 'resolved', repo: { host: `${host}:443`, path: 'team/repo' } },
+      },
+    });
+  }
+  for (const remote of [
+    `http://${host}:80/team/repo.git`,
+    `http://${host}:443/team/repo.git`,
+    `https://${host}:8443/team/repo.git`,
+    `ssh://git@${host}:443/team/repo.git`,
+  ]) {
+    const result = await dispatchForge(
+      { operationId: 'unclaimed-port', op: 'resolve', remote },
+      { discovery: { ...discovery, byHost: new Map([[host, plugin]]) }, env: {} }
+    );
+    expect(result.plugin).toBeNull();
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+    });
+  }
+  const qualified = await dispatchForge(
+    {
+      operationId: 'qualified-port',
+      op: 'repo.labels.list',
+      repo: { host: `${host}:443`, path: 'team/repo' },
+    },
+    { discovery: { ...discovery, byHost: new Map([[host, plugin]]) }, env: {} }
+  );
+  expect(qualified.plugin).toBeNull();
+  expect(qualified.response).toMatchObject({ ok: false, error: { kind: 'no_plugin_for_host' } });
+});
+
 test('dispatch resolves only claimed GitHub remotes and preserves parser validation', async () => {
   const host = 'ghes.example.test:8080';
   const discovery = await discoverPlugins({

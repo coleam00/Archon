@@ -146,6 +146,21 @@ function remoteHost(remote: string | null): string | undefined {
   }
 }
 
+function selectPlugin(discovery: PluginDiscovery, request: ForgeRequest, host: string) {
+  const exact = discovery.byHost.get(host);
+  if (exact || request.op !== 'resolve' || !request.remote) return exact;
+  try {
+    const { url, host: remoteHost } = parseRemoteUrl(request.remote.trim());
+    // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
+    if (url.protocol === 'https:' && remoteHost === `${url.hostname}:443`) {
+      return discovery.byHost.get(normalizeHost(url.hostname));
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 /**
  * Whether a plugin's response answers the request that was sent.
  *
@@ -469,7 +484,7 @@ export async function dispatchForge(
       return finish(request, pluginIdentity, response, started);
     }
     const selectedHost = host ?? '';
-    const plugin = discovery.byHost.get(selectedHost);
+    const plugin = selectPlugin(discovery, request, selectedHost);
     if (!plugin) {
       response =
         discovery.unavailable.length > 0
