@@ -890,7 +890,7 @@ See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/pac
 
 ### One retry layer
 
-The node retry is the only retry Archon adds. Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
+The node retry is the only retry Archon adds, with one exception: when the provider reports that the session a node resumed no longer exists, the engine makes a single fresh-session attempt (see [When a resume can't be restored](#when-a-resume-cant-be-restored)). Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
 
 ## Run budgets
 
@@ -1097,7 +1097,9 @@ If the stored session is gone (for example, a Pi JSONL file was moved), the prov
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
-The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
+The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only when a resumed session became unavailable; warm resumes and first-time runs are unaffected.
+
+Claude does not fall back on its own: it rejects a resume whose session transcript no longer exists. When Archon confirms on the host that the transcript is gone and the rejection arrived before any output or tool call, it runs the node once more on a fresh session and shows the same warning. This covers `persist_session` nodes, sessions threaded from an earlier node in the run, and plain `loop:` iterations with `fresh_context: false`, which get a loop-specific notice instead. A second rejection, a rejection after output, or a run inside a container fails the node as before. A named resume (`context: { resume }`) never falls back and fails.
 
 Codex does not fall back: a thread it cannot resume or fork fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. A `persist_session` node on Codex forks the thread an earlier run saved, so once that thread is gone (its rollout under the Codex home was deleted, or the run uses another `CODEX_HOME`) the node fails on every run in that scope. Clear the saved session with [`archon workflow reset-sessions`](/reference/cli/#workflow-reset-sessions) to start the node fresh.
 

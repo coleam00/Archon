@@ -10,6 +10,7 @@
     "./run-paths": "./src/run-paths.ts",
     "./run-source": "./src/run-source.ts",
     "./run-resume": "./src/run-resume.ts",
+    "./stale-resume": "./src/stale-resume.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
