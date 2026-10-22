@@ -167,10 +167,29 @@ else {
       },
     });
 
+  /** A merge-queue read's answer; `mismatch` answers another pull request or commit. */
+  const mergeQueueRead = (mismatch: boolean): unknown => {
+    if (input.op === 'pr.merge-state') return mergeState(ref.number + (mismatch ? 1 : 0));
+    if (input.op === 'checks.commit') {
+      const asked = input.at?.kind === 'revision' ? input.at.revision : 'devsha';
+      return commitChecks(mismatch ? 'another-revision' : asked);
+    }
+    if (input.op !== 'workitem.comments') return undefined;
+    return read({
+      workitem: subject,
+      comments: [
+        {
+          id: '7',
+          author: { host: 'forge.example', id: '1', login: 'maintainer' },
+          url: `${subject.url}#issuecomment-7`,
+          body: 'private conversation comment',
+        },
+      ],
+    });
+  };
+
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
-    if (input.op === 'pr.merge-state') return mergeState(ref.number + 1);
-    if (input.op === 'checks.commit') return commitChecks('another-revision');
     if (input.op === 'workitem.label.add') return answer(ref, { workitem: subject, labels: [] });
     if (input.op === 'workitem.label.remove')
       return answer(ref, { workitem: subject, labels: [input.name] });
@@ -300,21 +319,6 @@ else {
     if (input.op === 'workitem.comment.upsert') return answer(ref, { workitem: subject, comment });
     if (input.op === 'workitem.close')
       return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason });
-    if (input.op === 'pr.merge-state') return mergeState(ref.number);
-    if (input.op === 'checks.commit')
-      return commitChecks(input.at?.kind === 'revision' ? input.at.revision : 'devsha');
-    if (input.op === 'workitem.comments')
-      return read({
-        workitem: subject,
-        comments: [
-          {
-            id: '7',
-            author: { host: 'forge.example', id: '1', login: 'maintainer' },
-            url: `${subject.url}#issuecomment-7`,
-            body: 'private conversation comment',
-          },
-        ],
-      });
     if (input.op === 'pr.threads')
       return {
         operationId: input.operationId,
@@ -380,7 +384,7 @@ else {
       )
     );
   } else if (mode === 'mismatch') {
-    process.stdout.write(JSON.stringify(mismatched()));
+    process.stdout.write(JSON.stringify(mergeQueueRead(true) ?? mismatched()));
   } else if (mode === 'registered-case') {
     // The forge answers in the case it has registered, whatever case was asked with.
     const registered = { host: repo.host.toUpperCase(), path: repo.path.toUpperCase() };
@@ -407,6 +411,6 @@ else {
     );
     process.exit(1);
   } else {
-    process.stdout.write(JSON.stringify(applied()));
+    process.stdout.write(JSON.stringify(mergeQueueRead(false) ?? applied()));
   }
 }

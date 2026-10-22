@@ -1,5 +1,6 @@
 import {
   type ForgeError,
+  type ForgeMutationRequest,
   type ForgeRequest,
   type ForgeResponse,
   type PluginMetadata,
@@ -69,6 +70,26 @@ function failure(operationId: string, error: ForgeError): ForgeResponse {
   return { operationId, ok: false, error };
 }
 
+type ReadOp = Exclude<ForgeRequest['op'], 'resolve' | ForgeMutationRequest['op']>;
+type ReadHandler<Op extends ReadOp> = (
+  request: Extract<ForgeRequest, { op: Op }>,
+  fetchImpl: Fetch,
+  token: string
+) => Promise<ForgeResponse>;
+
+const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
+  'workitem.view': handleGithubWorkItemView,
+  'workitem.list': handleGithubWorkItemList,
+  'workitem.comments': handleGithubWorkItemComments,
+  'repo.labels.list': handleGithubRepoLabelsList,
+  'pr.view': handleGithubPrView,
+  'pr.reviews': handleGithubPrReviews,
+  'pr.threads': handleGithubPrThreads,
+  'pr.merge-state': handleGithubPrMergeState,
+  'checks.state': handleGithubChecksState,
+  'checks.commit': handleGithubChecksCommit,
+};
+
 export async function handleGithubOperation(
   request: ForgeRequest,
   options: GitHubOperationOptions
@@ -111,23 +132,10 @@ export async function handleGithubOperation(
     const fetchImpl = options.fetch ?? globalThis.fetch;
     const token = options.token;
     if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
-    if (request.op === 'workitem.view')
-      return await handleGithubWorkItemView(request, fetchImpl, token);
-    if (request.op === 'workitem.list')
-      return await handleGithubWorkItemList(request, fetchImpl, token);
-    if (request.op === 'repo.labels.list')
-      return await handleGithubRepoLabelsList(request, fetchImpl, token);
-    if (request.op === 'pr.reviews') return await handleGithubPrReviews(request, fetchImpl, token);
-    if (request.op === 'pr.threads') return await handleGithubPrThreads(request, fetchImpl, token);
-    if (request.op === 'pr.view') return await handleGithubPrView(request, fetchImpl, token);
-
-    if (request.op === 'workitem.comments')
-      return await handleGithubWorkItemComments(request, fetchImpl, token);
-    if (request.op === 'pr.merge-state')
-      return await handleGithubPrMergeState(request, fetchImpl, token);
-    if (request.op === 'checks.commit')
-      return await handleGithubChecksCommit(request, fetchImpl, token);
-    return await handleGithubChecksState(request, fetchImpl, token);
+    // Keyed by the request's own op, the handler takes that request; TypeScript cannot
+    // correlate the table's members with the request union on its own.
+    const read = readHandlers[request.op] as ReadHandler<ReadOp>;
+    return await read(request, fetchImpl, token);
   } catch (cause) {
     return failure(request.operationId, githubErrorDetail(cause));
   }
