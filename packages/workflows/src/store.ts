@@ -11,7 +11,6 @@
 import type { IResourceStartStore } from './resource-start-store';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
-import type { RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -38,6 +37,7 @@ import type {
   WorkflowEventType,
 } from './store/event-types';
 import type { DagResumeSnapshot } from './store/resume-snapshot';
+import type { WorkflowRunFailureOptions } from './workflow-run-failure';
 import type {
   FanOutCancelReason,
   SourceReleaseWrite,
@@ -54,6 +54,7 @@ export * from './store/event-feed';
 export * from './store/event-types';
 export * from './store/resume-snapshot';
 export * from './store/run-writes';
+export type { WorkflowRunFailureOptions } from './workflow-run-failure';
 
 /** Composite primary key identifying a single persisted node session row. */
 export interface WorkflowNodeSessionKey {
@@ -324,8 +325,6 @@ export interface IWorkflowStore
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
    * outcome in place, so the caller must not announce its own failure. Missing runs and
    * other start states reject.
-   * `pendingLaunchToken` restricts the write to the matching detached launch while
-   * still pending; any ownership or status mismatch returns false without writing.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces
@@ -334,7 +333,7 @@ export interface IWorkflowStore
   failWorkflowRun(
     id: string,
     error: string,
-    options?: { exitReason?: RunExitReason; signal?: RunStopSignal; pendingLaunchToken?: string }
+    options?: WorkflowRunFailureOptions
   ): Promise<{ failed: boolean }>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

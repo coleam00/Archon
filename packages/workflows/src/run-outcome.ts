@@ -1,5 +1,7 @@
 import { createLogger } from '@archon/paths';
 import type { ChildIsolationResolver } from './child-isolation';
+import type { executeDagWorkflow } from './dag-executor';
+import { containerPauseHandoff, readPublishedContainerPause } from './dag/pause';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
@@ -11,6 +13,7 @@ import {
   releaseContinuablePauseSlot,
 } from './parent-resume';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
+import type { ExecuteWorkflowOptions } from './executor';
 import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
 import { isApprovalContext, pendingWorkflowWaitDeadline } from './schemas';
 import { deadlineWaitCursor } from './store';
@@ -24,32 +27,39 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * How an execution left its run, read by `executeWorkflow`'s finally-block backstop.
- * `sourceExecutionStopped`: another owner may hold the row (a source release or a DAG
- * release), so the backstop has no authority over it. `terminalStatusWriteFailed`: a
- * terminal status write was rejected, and a second write over that channel would either
- * fail again or mask the real error.
+ * `executionStopped`: ownership passed to a successor (a source release, a published
+ * container pause, a continued fan-out parent or a handoff error), so the backstop has
+ * no authority over the row even when it is running again. `terminalStatusWriteFailed`:
+ * a terminal status write was rejected, and a second write over that channel would
+ * either fail again or mask the real error.
  */
 export interface RunExitState {
-  sourceExecutionStopped: boolean;
+  executionStopped: boolean;
   terminalStatusWriteFailed: boolean;
 }
 
+type DagResult = Awaited<ReturnType<typeof executeDagWorkflow>>;
+
 /**
  * Read the run's status after the DAG returned and turn it into the execution result:
- * re-enter a paused parent when this child ended, continue a fan-out parent its children
- * released, then report completed, paused or failed.
+ * hand off a run another owner took over, re-enter a paused parent when this child
+ * ended, continue a fan-out parent its children released, then report completed, paused
+ * or failed.
  */
 export async function settleRunOutcome(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  dagSummary: string | undefined,
-  resolveChildIsolation: ChildIsolationResolver | undefined
+  dagResult: DagResult,
+  opts: Pick<ExecuteWorkflowOptions, 'resolveChildIsolation' | 'onExecutionClaimed'>,
+  exit: RunExitState
 ): Promise<WorkflowExecutionResult> {
-  // executeDagWorkflow throws on fatal errors; check DB status for result
-  const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
+  const settled = await readSettledRun(deps, workflowRun, dagResult, exit);
+  if (settled.handedOff) return settled.result;
+  const finalStatus = settled.run;
   if (!finalStatus) return didNotComplete(workflowRun.id);
+  const { resolveChildIsolation } = opts;
   await resumeParentOfEndedChild(
     deps,
     platform,
@@ -63,15 +73,53 @@ export async function settleRunOutcome(
       platform,
       conversationId,
       finalStatus,
-      resolveChildIsolation
+      resolveChildIsolation,
+      opts.onExecutionClaimed
     );
-    if (continued !== undefined) return continued;
+    if (continued !== undefined) {
+      exit.executionStopped = true;
+      return continued;
+    }
   }
   if (finalStatus.status === 'completed') {
-    return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
+    const summary = typeof dagResult === 'string' ? dagResult : undefined;
+    return { success: true, workflowRunId: workflowRun.id, summary };
   }
   if (finalStatus.status === 'paused') return pausedResult(deps, finalStatus);
   return didNotComplete(workflowRun.id);
+}
+
+/**
+ * Read the run the DAG left. A DAG that released its source or published a container
+ * pause handed ownership to a successor. A released source, or a published pause another
+ * owner already moved past, ends this execution with a handoff result.
+ */
+async function readSettledRun(
+  deps: WorkflowDeps,
+  workflowRun: WorkflowRun,
+  dagResult: DagResult,
+  exit: RunExitState
+): Promise<
+  | { handedOff: true; result: WorkflowExecutionResult }
+  | { handedOff: false; run: WorkflowRun | null }
+> {
+  if (typeof dagResult !== 'object') {
+    // executeDagWorkflow throws on fatal errors; check DB status for result
+    return { handedOff: false, run: await deps.store.getWorkflowRun(workflowRun.id) };
+  }
+  exit.executionStopped = true;
+  if (dagResult.kind === 'source_release') {
+    if (dagResult.released) {
+      return {
+        handedOff: true,
+        result: { success: true, paused: true, workflowRunId: workflowRun.id },
+      };
+    }
+    return { handedOff: false, run: await deps.store.getWorkflowRun(workflowRun.id) };
+  }
+  const run = await readPublishedContainerPause(deps.store, workflowRun.id);
+  const handoff = containerPauseHandoff(run, workflowRun, dagResult);
+  return handoff ? { handedOff: true, result: handoff } : { handedOff: false, run };
 }
 
 /**
@@ -115,7 +163,8 @@ async function continueReleasedFanOutParent(
   platform: IWorkflowPlatform,
   conversationId: string,
   paused: WorkflowRun,
-  resolveChildIsolation: ChildIsolationResolver | undefined
+  resolveChildIsolation: ChildIsolationResolver | undefined,
+  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
 ): Promise<WorkflowExecutionResult | undefined> {
   const notifyStuck = async (reason: string): Promise<void> => {
     await safeSendMessage(
@@ -147,7 +196,8 @@ async function continueReleasedFanOutParent(
     paused,
     notifyStuck,
     {},
-    resolveChildIsolation
+    resolveChildIsolation,
+    onExecutionClaimed
   );
 }
 

@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { WORKFLOW_SOURCES } from '@archon/paths/workflow-source';
 import type { deadlineWaitCursor } from '../store';
+import type { WorkflowRunStatus } from './workflow-run';
 import {
   dagNodeSchema,
   effortLevelSchema,
@@ -399,7 +400,8 @@ export type LoadCommandResult =
 // ---------------------------------------------------------------------------
 
 /**
- * Result of workflow execution - allows callers to detect success/failure
+ * A handoff reports the observed run state without granting this caller authority to
+ * finalize it or clean up its container. A successful handoff is not workflow completion.
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
@@ -409,6 +411,19 @@ export type WorkflowExecutionResult =
       paused: true;
       workflowRunId: string;
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+    }
+  | {
+      success: true;
+      handedOff: true;
+      workflowRunId: string;
+      observedStatus: Exclude<WorkflowRunStatus, 'failed' | 'cancelled'> | null;
+    }
+  | {
+      success: false;
+      handedOff: true;
+      workflowRunId: string;
+      observedStatus: Extract<WorkflowRunStatus, 'failed' | 'cancelled'>;
+      error: string;
     };
 
 // ---------------------------------------------------------------------------

@@ -37,9 +37,15 @@ import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
+import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
-import { announceContainerRun, suspendContainerForPause } from './dag/container-gate';
+import {
+  announceContainerRun,
+  suspendContainerForPause,
+  reportContainerSuspension,
+  recordContainerSuspendWarning,
+} from './dag/container-gate';
 
 /**
  * Usage a resumed run already consumed in earlier passes, rebuilt from its persisted
@@ -92,7 +98,9 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
  */
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
-): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
+): Promise<
+  string | undefined | ContainerPauseReceipt | { kind: 'source_release'; released: boolean }
+> {
   const {
     deps,
     platform,
@@ -220,6 +228,7 @@ export async function executeDagWorkflow(
       ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
       : undefined;
   const runCtx: RunLayersContext = {
+    containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
     runBudget,
@@ -514,27 +523,22 @@ export async function executeDagWorkflow(
       released: await releaseRunForUnreadableSource(sourceUnreadable),
     };
   }
-
-  // Container pause economics (Phase C): if a node paused the run (approval /
-  // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
-  // The pause happens BETWEEN layers, after node completion — the #2134 background-
-  // task wait gate has already drained and no `docker exec` is in flight (docker
-  // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
-  // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
-  // suspended. Only 'paused' triggers this.
-  if (execContext.kind === 'container' && containerCtx) {
-    const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (pausedStatus === 'paused') {
-      await suspendContainerForPause(
+  const boundary = runCtx.containerPause;
+  if (boundary?.publish !== undefined && execContext.kind === 'container' && containerCtx) {
+    // Active Docker execs and required pass writes have settled; publication hands off ownership.
+    const outcome = await suspendContainerForPause(containerCtx);
+    return publishContainerPause(workflowRun.id, boundary, boundary.publish, async () => {
+      await recordContainerSuspendWarning(deps, workflowRun.id, outcome);
+      await reportContainerSuspension(
         deps,
         platform,
         conversationId,
         containerCtx,
         execContext,
-        workflowRun.id
+        workflowRun.id,
+        outcome
       );
-      return;
-    }
+    });
   }
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });

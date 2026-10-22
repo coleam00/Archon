@@ -35,6 +35,7 @@ import type { RunPhase } from './executor-shared';
 import { runWithAdoptedRunDir } from './workflow-variables';
 import { withContainerArtifactsRoot } from './artifact-writes';
 import { announceRunStart } from './run-start';
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { recordUnhandledRunFailure, settleRunOutcome, type RunExitState } from './run-outcome';
 import type {
   ResolvedWorkflow,
@@ -51,7 +52,7 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import type { PersistedNodeOutput, PriorFailedNode } from './store';
+import { executionClaim, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
@@ -100,6 +101,8 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Binds host termination handling to the admitted execution, before any node can publish a pause. */
+  onExecutionClaimed?: (claim: string | null) => void;
   /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
   deferScratchCleanup?: (cleanup: () => Promise<void>) => void;
   ownedWorktree?: OwnedWorktree;
@@ -260,6 +263,9 @@ export async function executeWorkflow(
   origin?: WorkflowRunOrigin,
   opts: ExecuteWorkflowOptions = {}
 ): Promise<WorkflowExecutionResult> {
+  if (opts.preCreatedRun?.status === 'running')
+    opts.onExecutionClaimed?.(executionClaim(opts.preCreatedRun.metadata));
+
   const started = await startRun(
     deps,
     platform,
@@ -281,7 +287,7 @@ export async function executeWorkflow(
   // its stopped results also release through this try's finally.
   keepAwake.acquire();
   const leaveRunExecution = enterRunExecution(workflowRun.id);
-  const exit: RunExitState = { sourceExecutionStopped: false, terminalStatusWriteFailed: false };
+  const exit: RunExitState = { executionStopped: false, terminalStatusWriteFailed: false };
   try {
     const sourced = await establishAdoptedRunSource(
       deps,
@@ -294,7 +300,7 @@ export async function executeWorkflow(
       dispatch.execution
     );
     if (sourced.stopped) {
-      exit.sourceExecutionStopped = true;
+      exit.executionStopped = true;
       return sourced.result;
     }
     const { workflowSourceRoots } = sourced.value;
@@ -334,21 +340,18 @@ export async function executeWorkflow(
         )
       )
     );
-    if (typeof dagResult === 'object') {
-      // After release another executor may own even a running row; the backstop has no authority.
-      exit.sourceExecutionStopped = true;
-      if (dagResult.released) return { success: true, paused: true, workflowRunId: workflowRun.id };
-    }
     return await settleRunOutcome(
       deps,
       platform,
       conversationId,
       workflowRun,
-      typeof dagResult === 'string' ? dagResult : undefined,
-      opts.resolveChildIsolation
+      dagResult,
+      opts,
+      exit
     );
   } catch (error) {
-    if (exit.sourceExecutionStopped) throw error;
+    exit.executionStopped ||= error instanceof WorkflowExecutionHandoffError;
+    if (exit.executionStopped) throw error;
     return await recordUnhandledRunFailure(
       deps,
       platform,
@@ -366,8 +369,7 @@ export async function executeWorkflow(
     keepAwake.release();
     leaveRunExecution();
     if (!exit.terminalStatusWriteFailed) {
-      // A source release that lost to a cancel skips the backstop but still frees scratch.
-      if (!exit.sourceExecutionStopped) await failRunLeftRunning(deps, workflowRun.id);
+      if (!exit.executionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
   }
@@ -576,14 +578,7 @@ function dagArgs(
   };
 }
 
-/**
- * Defensive backstop: if the workflow run is still 'running' after all normal and
- * exceptional code paths, flip it to 'failed' to prevent zombie accumulation. Guards
- * against any future code path that exits without calling failWorkflowRun (e.g. a
- * generator cleanup that exits without throwing). Only fires when the process stays
- * alive long enough to run the executor's finally — see #1561 for the originating
- * zombie-state incident.
- */
+// Only an execution that still owns running work may invoke this backstop.
 async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<void> {
   const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
     // A failed lookup leaves status unknown, not missing or finalized. Preserve the

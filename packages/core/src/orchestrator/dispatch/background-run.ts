@@ -123,10 +123,8 @@ function submitRun(run: BackgroundRun): Promise<SubmitResult> {
 /** Surface workflow output to parent conversation as a result card */
 async function surfaceResult(run: BackgroundRun, result: SubmitResult): Promise<void> {
   const { ctx, workflow } = run;
-  // Paused workflows (approval gates) — no result card yet
-  if ('paused' in result) return;
   let card: { message: string; runId: string };
-  if (result.success && result.summary) {
+  if ('summary' in result && result.summary) {
     card = { message: result.summary, runId: result.workflowRunId };
   } else if (!result.success && result.workflowRunId) {
     // Surface failure as a result card so the chat shows status + "View full logs"

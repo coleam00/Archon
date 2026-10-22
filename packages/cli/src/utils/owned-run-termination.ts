@@ -15,14 +15,14 @@ type TerminationSignal = RunStopSignal;
 export interface OwnedRunTerminationInput {
   store: Pick<
     IWorkflowStore,
-    | 'getWorkflowRunStatus'
-    | 'failWorkflowRun'
-    | 'getWorkflowRun'
-    | 'listWorkflowEvents'
-    | 'findChildRuns'
+    'failWorkflowRun' | 'getWorkflowRun' | 'listWorkflowEvents' | 'findChildRuns'
   >;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
+  /** The engine supplies this execution's claim; undefined until admission. */
+  getExecutionClaim: () => string | null | undefined;
+  /** A result settled by this process retains resource cleanup authority after the status write. */
+  isExecutionSettled?: () => boolean;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
   liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested' | 'registerTerminationPreparation'>;
@@ -81,10 +81,12 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     }
     return false;
   }
+  let registered = true;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
-    if (terminating) return;
+    if (!registered || terminating) return;
     terminating = true;
+    let cleanupAllowed = true;
     log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
       if (liveOwner.isStopRequested()) {
@@ -94,21 +96,20 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      const status = await input.store.getWorkflowRunStatus(runId);
-      if (status !== 'running') {
-        // Externally transitioned (paused at a new gate, completed, cancelled,
-        // failed) or never claimed (still pending) — not this handler's to mutate.
-        log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
-        return;
-      }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // status CAS closes the read-then-write window: if the executor commits a gate
-      // pause between the read above and this write, the CAS misses and the run
-      // stays paused.
-      await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
-        exitReason: 'process_terminated',
-        signal,
-      });
+      if (input.isExecutionSettled?.()) return;
+      const expectedExecutionClaim = input.getExecutionClaim();
+      if (expectedExecutionClaim === undefined) return;
+      cleanupAllowed = false;
+      const { failed } = await input.store.failWorkflowRun(
+        runId,
+        `Process terminated (${signal})`,
+        {
+          exitReason: 'process_terminated',
+          signal,
+          expectedExecutionClaim,
+        }
+      );
+      cleanupAllowed = failed;
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -119,13 +120,22 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       })
       // After the failed status write: ending a tree first lets the executor fail the
       // run through its own path and win the status write, losing stop_reason.
-      .then(() => nodeTrees?.end())
+      .then(() => {
+        if (!registered) return;
+        if (cleanupAllowed) return nodeTrees?.end();
+        return console.error(
+          `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}; ` +
+            'cleanup was skipped, so subprocesses and any isolation container may still be running. ' +
+            `Inspect ownership before stopping them: archon workflow get ${runId}. ` +
+            'Inspect containers with: docker ps -a --filter label=diy.archon.managed=true'
+        );
+      })
       .catch((error: unknown) => {
         console.error(
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
-      .then(() => input.teardown?.(signal))
+      .then(() => (registered && cleanupAllowed ? input.teardown?.(signal) : undefined))
       .catch(() => undefined)
       .then(async () => {
         // A detached cancel already rang the handoff frame and must keep its lease
@@ -150,6 +160,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   process.once('SIGTERM', sigtermHandler);
   process.once('SIGINT', sigintHandler);
   return () => {
+    registered = false;
     process.off('SIGTERM', sigtermHandler);
     process.off('SIGINT', sigintHandler);
     unregisterPreparation?.();

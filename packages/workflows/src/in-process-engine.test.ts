@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { WorkflowExecutionHandoffError } from './engine-port';
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
@@ -11,7 +12,7 @@
  * `./executor` or `@archon/workflows/executor` itself.
  */
 import { providerRegistry } from '@archon/providers';
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -120,7 +121,7 @@ import { createFileWorkflowStore } from './file-store';
 import { resolveWorkflow } from './graph-plan';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import type { WorkflowRunDelivery } from './engine-port';
-import type { IWorkflowStore } from './store';
+import { executionClaim, type IWorkflowStore } from './store';
 
 runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
@@ -186,6 +187,70 @@ describe('InProcessWorkflowEngine', () => {
     deliveries
       .filter(({ event }) => event.event_type.startsWith('workflow_') || event.step_name)
       .map(({ event }) => `${event.workflow_run_id}:${event.event_type}:${event.step_name ?? ''}`);
+
+  it.each(['read', 'post-publication', 'pre-publication'] as const)(
+    'preserves ownership across a %s rejection on resume',
+    async kind => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (failed?.status !== 'failed') throw new Error('expected failed run');
+      const cause = new Error('required operation failed');
+      let read: ReturnType<typeof spyOn> | undefined;
+      dagBody = async ({ workflowRun }) => {
+        if (kind === 'pre-publication') throw cause;
+        const context = {
+          type: 'approval' as const,
+          nodeId: 'review',
+          message: '',
+          pauseId: 'published',
+        };
+        await store.pauseWorkflowRun(workflowRun.id, context);
+        await store.resumeWorkflowRun(workflowRun.id);
+        if (kind === 'read') {
+          const get = store.getWorkflowRun.bind(store);
+          read = spyOn(store, 'getWorkflowRun')
+            .mockImplementation(get)
+            .mockImplementationOnce(async () => {
+              throw cause;
+            });
+        }
+        if (kind === 'post-publication')
+          throw new WorkflowExecutionHandoffError(workflowRun.id, cause);
+        return {
+          kind: 'container_pause',
+          pause: { kind: 'gate', context },
+        };
+      };
+      try {
+        const admission = await engine.resume({
+          platform,
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          userMessage: '',
+          run: failed,
+          legacyWorkflow: parent,
+        });
+        if (!admission.accepted) throw new Error('expected resume');
+        if (kind === 'pre-publication') {
+          expect(await admission.settled).toMatchObject({ success: false, error: cause.message });
+        } else {
+          await expect(admission.settled).rejects.toMatchObject({
+            name: 'WorkflowExecutionHandoffError',
+            workflowRunId: run.id,
+            cause,
+          });
+        }
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(
+          kind === 'pre-publication' ? 'failed' : 'running'
+        );
+      } finally {
+        read?.mockRestore();
+      }
+    }
+  );
 
   it('resume settles before the host drains scratch cleanup', async () => {
     const { engine, store } = await makeEngine();
@@ -291,7 +356,13 @@ describe('InProcessWorkflowEngine', () => {
 
   it('a subscription opened before resume sees only the new segment', async () => {
     const { engine, store } = await makeEngine();
+    const claims: (string | null)[] = [];
+    const onExecutionClaimed = (claim: string | null): void => {
+      claims.push(claim);
+    };
     dagBody = async ({ deps, workflowRun, priorCompletedNodes }) => {
+      expect(claims).toHaveLength(priorCompletedNodes?.has('first') ? 2 : 1);
+      expect(claims.at(-1)).toBe(executionClaim(workflowRun.metadata));
       if (priorCompletedNodes?.has('first')) {
         await completeNode(deps.store, workflowRun.id, 'child');
         await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
@@ -307,6 +378,7 @@ describe('InProcessWorkflowEngine', () => {
       cwd: '/tmp/ops',
       workflow: parent,
       userMessage: '',
+      options: { onExecutionClaimed },
     });
     const failed = await store.getWorkflowRun(first.workflowRunId ?? '');
     if (failed?.status !== 'failed') throw new Error('expected a failed first segment');
@@ -320,9 +392,12 @@ describe('InProcessWorkflowEngine', () => {
       userMessage: '',
       run: failed,
       legacyWorkflow: parent,
+      options: { onExecutionClaimed },
     });
     if (!admission.accepted) throw new Error('expected resume');
     await admission.settled;
+    expect(claims[0]).toBeNull();
+    expect(typeof claims[1]).toBe('string');
     await subscription.close();
 
     expect(lifecycle(deliveries)).toEqual([
