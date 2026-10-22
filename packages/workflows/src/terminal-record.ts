@@ -73,17 +73,28 @@ function foldNodeEvents(
         failureOrder.delete(nodeId);
         break;
       case 'node_completed':
-      case 'node_skipped_prior_success':
-        nodes.set(nodeId, { node_id: nodeId, state: 'completed' });
+      case 'node_skipped_prior_success': {
+        // A replayed node keeps the slot record its earlier completion wrote.
+        const fanOutOutcome =
+          record.eventType === 'node_completed'
+            ? record.data.fan_out_outcome
+            : nodes.get(nodeId)?.fan_out_outcome;
+        nodes.set(nodeId, {
+          node_id: nodeId,
+          state: 'completed',
+          ...(fanOutOutcome !== undefined ? { fan_out_outcome: fanOutOutcome } : {}),
+        });
         outputs.set(nodeId, record.data);
         failureOrder.delete(nodeId);
         break;
+      }
       case 'node_failed': {
         const data = record.data;
         nodes.set(nodeId, {
           node_id: nodeId,
           state: 'failed',
           ...(typeof data.error === 'string' ? { error: data.error } : {}),
+          ...(data.fan_out_outcome !== undefined ? { fan_out_outcome: data.fan_out_outcome } : {}),
         });
         outputs.delete(nodeId);
         failureOrder.set(nodeId, index);
