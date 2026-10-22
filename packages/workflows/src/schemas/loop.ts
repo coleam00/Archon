@@ -148,6 +148,13 @@ export const BASE_COMPLETION_CHANNELS = [
   { field: 'until_bash', describe: 'deterministic check, exit 0 = complete' },
 ] as const;
 
+export const LOOP_COMPLETION_CHANNELS = [
+  ...BASE_COMPLETION_CHANNELS,
+  { field: 'until_field', describe: 'a declared boolean in output_format' },
+] as const;
+
+export type LoopCompletionChannel = (typeof LOOP_COMPLETION_CHANNELS)[number]['field'];
+
 /**
  * `loop:` node config — iteration control plus exactly one iteration-prompt source:
  * an inline `prompt` or a named command file (`command`). `loop_group:` shares only
@@ -196,11 +203,8 @@ export const loopNodeConfigSchema = loopControlSchema
     // The across-channels rule for `loop:` — three channels, unlike loop_group's two.
     addMissingChannelIssue(
       ctx,
-      [data.until, data.until_bash, data.until_field].filter(v => v !== undefined),
-      [
-        ...BASE_COMPLETION_CHANNELS,
-        { field: 'until_field', describe: 'a declared boolean in output_format' },
-      ]
+      LOOP_COMPLETION_CHANNELS.filter(({ field }) => data[field] !== undefined).map(c => c.field),
+      LOOP_COMPLETION_CHANNELS
     );
 
     const hasPrompt = typeof data.prompt === 'string' && data.prompt.length > 0;

@@ -111,7 +111,7 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
   .superRefine((data, ctx) => {
     addMissingChannelIssue(
       ctx,
-      [data.until, data.until_bash].filter(v => v !== undefined),
+      BASE_COMPLETION_CHANNELS.filter(({ field }) => data[field] !== undefined).map(c => c.field),
       BASE_COMPLETION_CHANNELS
     );
   });
