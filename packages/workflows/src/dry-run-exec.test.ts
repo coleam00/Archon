@@ -218,7 +218,7 @@ process.exit(9);`,
     });
   });
 
-  test('reports a subprocess termination signal', async () => {
+  test('reports subprocess self-termination with the platform exit semantics', async () => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
         name: 'signal-diagnostic',
@@ -228,8 +228,39 @@ process.exit(9);`,
     });
     expect(result.outcome).toBe('failed');
     expect(result.trace[0]?.state).toBe('failed');
-    expect(result.trace[0]?.reason).toContain('SIGTERM');
-    expect(result.trace[0]?.reason).not.toContain('process.kill');
+    expect(result.trace[0]?.reason).toBe(
+      process.platform === 'win32'
+        ? "Script node 'code' failed [exit 1]: no diagnostic output"
+        : "Script node 'code' failed: no diagnostic output [signal SIGTERM]"
+    );
+  });
+
+  test.each([
+    [null, 'SIGTERM', "Script node 'code' failed: no diagnostic output [signal SIGTERM]"],
+    [1, null, "Script node 'code' failed [exit 1]: no diagnostic output"],
+  ] as const)('reports termination code %s and signal %s', async (code, signal, reason) => {
+    const script = 'process.kill(process.pid, "SIGTERM");';
+    const spawn = spyOn(git, 'execFileAsync').mockRejectedValueOnce(
+      Object.assign(new Error(`Command failed: bun -e ${script}`), {
+        code,
+        signal,
+        stdout: '',
+        stderr: '',
+      })
+    );
+    try {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'termination-diagnostic',
+          nodes: [{ id: 'code', runtime: 'bun', script }],
+        }),
+        execCode: true,
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]).toMatchObject({ state: 'failed', reason });
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   test('executable bash dry runs reject NUL without executing a prefix', async () => {
