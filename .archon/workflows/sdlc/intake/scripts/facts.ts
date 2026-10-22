@@ -16,7 +16,6 @@ import {
   decideIntake,
   enqueue,
   type IntakeRequest,
-  parseOrder,
   REQUEST_ACTIONS,
   type RequestAction,
 } from '../../.shared/workitem.ts';
@@ -38,7 +37,6 @@ function main(): void {
   if (!REQUEST_ACTIONS.includes(action)) {
     throw new Error(`action must be one of ${REQUEST_ACTIONS.join(', ')}, not "${action}"`);
   }
-  const order = parseOrder(text(process.env.INPUTS_ORDER));
   // Read before any write, so a broken list refuses the run with nothing recorded.
   const maintainers = readMaintainers(repo);
   const at = new Date().toISOString();
@@ -60,7 +58,7 @@ function main(): void {
     enqueue(subject, request);
   }
 
-  const doc = claimNext(order, at, runId);
+  const doc = claimNext(at, runId);
   if (doc === null) {
     emit({ path: 'idle', item: null, target: '', decision: null });
     return;

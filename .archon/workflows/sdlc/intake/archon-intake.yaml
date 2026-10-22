@@ -40,12 +40,6 @@ inputs:
       Who added the label, as the forge reported it (binding field
       label.actor.login). A label promotes only when this login is on the
       maintainer list.
-  order:
-    default: '["urgency desc","importance desc","size asc","created asc"]'
-    description: >-
-      Pickup order, a JSON array of "<key> <asc|desc>" with keys urgency,
-      importance, size, complexity and created. An item with no value for a
-      key sorts after every item that has one.
 
 returns: outcome
 

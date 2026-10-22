@@ -408,9 +408,9 @@ request, never the state.
   and is ignored. The outcome also refuses to add a request label to an outside item
   no maintainer promoted, so the install's own identity cannot promote anything.
 - **Pickup.** Every run records its event as a request on its issue, then claims the
-  waiting item that sorts first by the `order` input (default
-  `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
-  sorts after triaged ones, oldest first) with a conditional write. A request that
+  waiting item that sorts first (most urgent, then most important, then smallest,
+  then oldest; an untriaged item sorts after triaged ones, oldest first) with a
+  conditional write. Every queue claims in this order. A request that
   arrives while its item is claimed waits for the next intake run. A request label
   whose request no run has claimed may have a request on its way, so a run leaves
   it for the run that claims that request. It waits one pickup; the next pickup
@@ -493,8 +493,7 @@ person. It acts on its own when a case is clear and asks when it is not; the def
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
 which a project extends with its own `.archon/sdlc/policy/build.md`.
 
-- **Pickup.** A run claims one item with intake's claim and order (the `order`
-  input). An item waits for the build queue when its work item's stage is a READY
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
   recorded it, or recorded it as waiting for its next round. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
@@ -531,7 +530,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once, a detached `archon-build-queue
-  --input number=<n>` on the run config and the `order`, `retriage_as` and
+  --input number=<n>` on the run config and the `retriage_as` and
   `round_limit` this run started with; if that launch fails, the item waits for the
   next queue run.
   Facts reports the open pull request in the item's repository as the candidate, and
@@ -575,7 +574,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   choice's ruling and the person's words into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice starts
   the item's next round at once, a detached `archon-build-queue --input number=<n>`
-  run on the run config (`--config-from-run`) and the `order`, `retriage_as` and
+  run on the run config (`--config-from-run`) and the `retriage_as` and
   `round_limit` the answered run started with, and a
   `park` choice stops working the item until a re-triage. If that launch fails, the
   item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
@@ -745,7 +744,7 @@ then the project's file, whose lines win where the two conflict.
   the ruling. Without a brief, `other` records the text and parks until the build
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
-  a sweep the answer starts at once (on the answered run's config and its `order`,
+  a sweep the answer starts at once (on the answered run's config and its
   `limit`, `merge_method` and `retriage_as`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item

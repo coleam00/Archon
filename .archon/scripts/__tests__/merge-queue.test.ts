@@ -366,7 +366,6 @@ function run(
       WORKFLOW_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
-      INPUTS_ORDER: '',
       INPUTS_LIMIT: '10',
       INPUTS_MERGE_METHOD: 'squash',
       ...inputs,
@@ -614,10 +613,11 @@ describe('the merge queue scripts', () => {
     }, 60_000);
   }
 
-  test('recovery preserves pinned approval and limits claims in configured order', () => {
+  test('recovery preserves pinned approval and limits claims in pickup order', () => {
     const at = install();
     seed(at, parkedOwn());
-    seed(at, { ...item(), subject: OTHER, created_at: LATER });
+    // Untriaged like an own PR, so the pickup order falls through to the oldest first.
+    seed(at, { ...item(), subject: OTHER, created_at: LATER, facts: { build: BUILT } });
     const sameHead = parkedOwn();
     seed(at, {
       ...sameHead,
@@ -628,7 +628,7 @@ describe('the merge queue scripts', () => {
         merge: { ...sameHead.facts.merge, decisions: [{ ...sameHead.facts.merge.decisions[0], head: OLD }] },
       },
     });
-    const picked = run(at, 'facts', { INPUTS_LIMIT: '1', INPUTS_ORDER: '["created asc"]' }, { pr: { headRefOid: OLD } });
+    const picked = run(at, 'facts', { INPUTS_LIMIT: '1' }, { pr: { headRefOid: OLD } });
     expect(ok(picked)).toMatchObject({ items: [{ item: PR, record: { approval: { head: HEAD, at: AT } }, facts: { head_revision: OLD } }] });
     expect(stored(at, OTHER.number).value?.claim).toBeNull();
     expect(stored(at, 1).value?.claim).toBeNull();
@@ -1345,7 +1345,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
+  const SELECTED = { INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
   const launchOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
 
@@ -1359,7 +1359,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(mergeWaits(doc)).toBe(true);
     // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
     expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
+      expect.arrayContaining(['archon-merge-queue', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
     );
   }, 60_000);
 
@@ -1373,7 +1373,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
     const launch = launchOf(calls);
     expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
-    expect(launch?.filter(arg => /^(order|limit|merge_method)=/.test(arg))).toEqual([]);
+    expect(launch?.filter(arg => /^(limit|merge_method)=/.test(arg))).toEqual([]);
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });

@@ -301,7 +301,6 @@ function run(
       WORKFLOW_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
-      INPUTS_ORDER: '',
       INPUTS_ROUND_LIMIT: '3',
       ...inputs,
     },
@@ -317,14 +316,14 @@ const ENDING = { delivered: false, reason: 'review_open', pr_url: 'https://ghe.e
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 
 /** Non-default selections on a run that named no item, so its own `number` is empty. */
-const SELECTED = { INPUTS_ORDER: '["size asc"]', INPUTS_RETRIAGE_AS: 'maintainer', INPUTS_ROUND_LIMIT: '5', INPUTS_NUMBER: '' };
+const SELECTED = { INPUTS_RETRIAGE_AS: 'maintainer', INPUTS_ROUND_LIMIT: '5', INPUTS_NUMBER: '' };
 
 /** The next round keeps the run's config and selections, and targets the item it continues. */
 function expectNextRound(calls: string): void {
   const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
   expect(launch).toEqual(
     expect.arrayContaining([
-      'archon-build-queue', 'order=["size asc"]', 'retriage_as=maintainer', 'round_limit=5', 'number=7',
+      'archon-build-queue', 'retriage_as=maintainer', 'round_limit=5', 'number=7',
       '--config-from-run', 'run-1', '--detach',
     ])
   );
