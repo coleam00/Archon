@@ -119,10 +119,14 @@ function turnChunks(input: ChatTurnInput): ReturnType<typeof withStaleResumeRetr
       logContext: { conversationId },
       onRetry: async () => {
         await tryPersistSessionId(session.id, null);
-        await platform.sendMessage(
-          conversationId,
-          '⚠️ The previous conversation session could not be resumed, so this reply starts a new session without the earlier context.'
-        );
+        await platform
+          .sendMessage(
+            conversationId,
+            '⚠️ The previous conversation session could not be resumed, so this reply starts a new session without the earlier context.'
+          )
+          .catch((e: unknown) => {
+            getLog().error({ err: toError(e), conversationId }, 'stale_resume_notice_send_failed');
+          });
       },
     }
   );

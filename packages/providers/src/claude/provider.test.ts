@@ -1904,6 +1904,17 @@ describe('cost of a resumed or forked session is the query’s own spend', () =>
       expect(result).not.toHaveProperty('sessionNotFound');
     });
 
+    test('is not marked in a container run, whose transcripts the host cannot see', async () => {
+      sdkYields(rejection);
+      const chunks = await chunksOf('test', '/workspace', staleId, {
+        env: { CLAUDE_CONFIG_DIR: configRoot },
+        execContext: { kind: 'container', containerId: 'c-1' },
+      });
+      const result = chunks.find(chunk => chunk.type === 'result');
+      expect(result?.isError).toBe(true);
+      expect(result).not.toHaveProperty('sessionNotFound');
+    });
+
     test.each([
       [
         'a spend-limit result',

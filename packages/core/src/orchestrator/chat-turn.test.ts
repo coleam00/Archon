@@ -187,13 +187,17 @@ describe('stale session ID clearing on error_during_execution', () => {
     sessionId: 'stale-session-id',
     sessionNotFound: true,
   } as const;
-  async function staleTurn(mode: 'stream' | 'batch'): Promise<IPlatformAdapter> {
+  async function staleTurn(
+    mode: 'stream' | 'batch',
+    setup?: (platform: IPlatformAdapter) => void
+  ): Promise<IPlatformAdapter> {
     mockCaptureChatTurn.mockClear();
     mockTransitionSession.mockResolvedValueOnce(
       makeSession({ id: 'session-1', assistant_session_id: 'stale-session-id' })
     );
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    setup?.(platform);
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     return platform;
   }
@@ -229,6 +233,26 @@ describe('stale session ID clearing on error_during_execution', () => {
       expect(errorReported()).toBe(false);
     }
   );
+
+  test('a failed fresh-session notice does not stop the retry', async () => {
+    mockSendQuery
+      .mockImplementationOnce(async function* () {
+        yield staleRejection;
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+        yield { type: 'result', sessionId: 'fresh-id' };
+      });
+    const platform = await staleTurn('stream', p => {
+      (p.sendMessage as ReturnType<typeof mock>).mockRejectedValueOnce(new Error('transport down'));
+    });
+
+    expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Fresh reply.');
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'completed' })
+    );
+  });
 
   test.each(['stream', 'batch'] as const)(
     '%s mode: a stale rejection after output fails without a retry',
