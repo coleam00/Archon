@@ -120,18 +120,22 @@ export async function getActiveWorkflowRun(
 }
 
 /**
- * Find a paused workflow run for a conversation (or its parent).
+ * Find the newest paused run associated with a conversation, optionally within a project.
  * Used by the message handler to give the chat agent the open approval gate as
  * context for the turn (#2565).
  * Non-throwing: returns null on DB error so the caller can fall through to normal routing.
  */
-export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
+export async function getPausedWorkflowRun(
+  conversationId: string,
+  codebaseId?: string
+): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'
+       ${codebaseId ? 'AND codebase_id = $3' : ''}
        ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
+      codebaseId ? [conversationId, conversationId, codebaseId] : [conversationId, conversationId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
