@@ -563,7 +563,7 @@ describe('the build queue scripts', () => {
     const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
     seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
     const result = run(at, 'facts', {}, { source: 'gh' });
-    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
     expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
   });
 
