@@ -375,3 +375,16 @@ describe('reaction name constants', () => {
     expect(REACTION_FAILURE).toBe('x');
   });
 });
+
+test('terminal status shows incomplete cost without a reported amount', () => {
+  const { blocks } = buildStatusBlocks({
+    runId: 'run-1',
+    workflowName: 'deploy',
+    startedAt: Date.now(),
+    nodes: [],
+    status: 'completed',
+    totalCostIncomplete: true,
+  });
+  expect(JSON.stringify(blocks)).toContain('reported cost: unavailable (incomplete)');
+  expect(JSON.stringify(blocks)).not.toContain('$');
+});

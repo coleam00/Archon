@@ -24,15 +24,13 @@ export interface NodeSnapshot {
   error?: string;
 }
 
-export interface RunSnapshot {
+export interface RunSnapshot extends Pick<TerminalEvent, 'totalCostUsd' | 'totalCostIncomplete'> {
   runId: string;
   workflowName: string;
   startedAt: number;
   nodes: NodeSnapshot[];
   status: 'running' | 'paused' | RunTerminalStatus;
   authoredOutcome?: TerminalEvent['authoredOutcome'];
-  totalCostUsd?: number;
-  totalCostIncomplete?: TerminalEvent['totalCostIncomplete'];
   failureReason?: string;
   approvalDeliveryFailed?: boolean;
 }
@@ -296,9 +294,8 @@ export function buildStatusBlocks(
   }
 
   const footerParts: string[] = [];
-  if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
-    footerParts.push(formatRunCost(snapshot.totalCostUsd, snapshot.totalCostIncomplete));
-  }
+  const cost = formatRunCost(snapshot);
+  if (terminalStatus && cost !== null) footerParts.push(cost);
   if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
     footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
   }
@@ -534,8 +531,8 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
     facts.push(
       `authored outcome: ${notice.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : notice.authoredOutcome}`
     );
-  if (notice.totalCostUsd !== undefined)
-    facts.push(formatRunCost(notice.totalCostUsd, notice.totalCostIncomplete));
+  const cost = formatRunCost(notice);
+  if (cost !== null) facts.push(cost);
   const blocks: KnownBlock[] = [
     {
       type: 'section',
@@ -582,7 +579,11 @@ export const REACTION_RUNNING = 'arrows_counterclockwise';
 export const REACTION_SUCCESS = 'white_check_mark';
 export const REACTION_FAILURE = 'x';
 
-function formatRunCost(cost: number, incomplete?: true): string {
+function formatRunCost({
+  totalCostUsd: cost,
+  totalCostIncomplete: incomplete,
+}: Pick<TerminalEvent, 'totalCostUsd' | 'totalCostIncomplete'>): string | null {
+  if (cost === undefined) return incomplete ? 'reported cost: unavailable (incomplete)' : null;
   return incomplete
     ? `reported cost: ≥$${cost.toFixed(4)} (incomplete)`
     : `reported cost: $${cost.toFixed(4)} (completeness unknown)`;

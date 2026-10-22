@@ -121,7 +121,7 @@ export function RunDetailHeader({
 
       {/* Cost + elapsed + IDE — right-aligned */}
       <div className="ml-auto flex items-center gap-3">
-        {typeof run.costUsd === 'number' ? (
+        {formatRunCost(run) !== null ? (
           <span
             className="font-mono text-[12px] tabular-nums text-text-secondary"
             title="Reported agent cost"

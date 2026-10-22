@@ -112,3 +112,17 @@ test.each([undefined, true] as const)(
     expect(html).not.toContain('Total agent cost');
   }
 );
+
+test('shows incomplete cost without a reported amount', () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunDetailHeader
+        run={toRun({ ...detailFixture.run, metadata: { total_cost_incomplete: true } })}
+        projectName="Archon"
+        projectId={undefined}
+      />
+    </MemoryRouter>
+  );
+  expect(html).toContain('Cost unavailable (incomplete)');
+  expect(html).not.toContain('$');
+});

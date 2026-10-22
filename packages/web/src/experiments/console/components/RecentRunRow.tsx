@@ -146,9 +146,9 @@ export function RecentRunRow({
       </span>
       <span
         className="text-right font-mono text-[12px] tabular-nums text-text-primary"
-        title={typeof run.costUsd === 'number' ? 'Reported agent cost' : undefined}
+        title={formatRunCost(run) !== null ? 'Reported agent cost' : undefined}
       >
-        {typeof run.costUsd === 'number' ? formatRunCost(run) : ''}
+        {formatRunCost(run)}
       </span>
 
       {/* trailing: origin + hover actions + CLI */}

@@ -84,6 +84,8 @@ test.each([undefined, true] as const)(
     expect(formatRunCost({ costUsd: 0, costIncomplete: marker })).toBe(
       marker ? '≥$0.0000 (incomplete)' : '$0.0000 (completeness unknown)'
     );
-    expect(formatRunCost({ costUsd: null, costIncomplete: marker })).toBeNull();
+    expect(formatRunCost({ costUsd: null, costIncomplete: marker })).toBe(
+      marker ? 'Cost unavailable (incomplete)' : null
+    );
   }
 );

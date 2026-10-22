@@ -111,7 +111,7 @@ export function formatProjectLocator(project: {
 }
 
 export function formatRunCost(run: Pick<Run, 'costUsd' | 'costIncomplete'>): string | null {
-  if (run.costUsd === null) return null;
+  if (run.costUsd === null) return run.costIncomplete ? 'Cost unavailable (incomplete)' : null;
   return run.costIncomplete
     ? `≥${formatCost(run.costUsd)} (incomplete)`
     : `${formatCost(run.costUsd)} (completeness unknown)`;

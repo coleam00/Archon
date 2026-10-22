@@ -143,3 +143,13 @@ test.each([undefined, true] as const)('active cards qualify cost completeness %s
   );
   expect(html).toContain(marker ? '≥$0.200 (incomplete)' : '$0.200 (completeness unknown)');
 });
+
+test('shows incomplete cost without a reported amount', () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={{ ...parallelRun, costUsd: null, costIncomplete: true }} />
+    </MemoryRouter>
+  );
+  expect(html).toContain('Cost unavailable (incomplete)');
+  expect(html).not.toContain('$');
+});

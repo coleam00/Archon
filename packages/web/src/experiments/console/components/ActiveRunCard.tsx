@@ -160,7 +160,7 @@ export function ActiveRunCard({
           ) : null}
           <div className="ml-auto flex items-center gap-2">
             <OriginBadge origin={run.origin} />
-            {typeof run.costUsd === 'number' ? (
+            {formatRunCost(run) !== null ? (
               <span
                 className="font-mono text-[11px] tabular-nums text-text-secondary"
                 title="Reported agent cost"

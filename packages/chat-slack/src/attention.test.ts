@@ -333,3 +333,18 @@ test('terminal attention notice labels an incomplete cost floor', async () => {
   });
   expect(JSON.stringify(blocksOf(0))).toContain('reported cost: ≥$0.0000 (incomplete)');
 });
+
+test('terminal attention shows incomplete cost without a reported amount', async () => {
+  await plugin.attentionNotice({
+    destination: 'C9',
+    notice: {
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'deploy',
+      status: 'completed',
+      totalCostIncomplete: true,
+    },
+  });
+  expect(JSON.stringify(blocksOf(0))).toContain('reported cost: unavailable (incomplete)');
+  expect(JSON.stringify(blocksOf(0))).not.toContain('$');
+});

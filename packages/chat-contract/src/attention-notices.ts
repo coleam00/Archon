@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { chatApprovalDecisionSchema, chatAuthoredOutcomeSchema } from './run-events';
+import {
+  chatApprovalDecisionSchema,
+  chatAuthoredOutcomeSchema,
+  chatTerminalCostShape,
+} from './run-events';
 
 const id = z.string().min(1);
 const pausedRun = { runId: id, workflowName: id, nodeId: id, pauseId: id.optional() };
@@ -30,8 +34,7 @@ export const chatAttentionNoticeSchema = z.discriminatedUnion('type', [
     workflowName: id,
     status: z.enum(['completed', 'failed', 'cancelled']),
     authoredOutcome: chatAuthoredOutcomeSchema.optional(),
-    totalCostUsd: z.number().nonnegative().optional(),
-    totalCostIncomplete: z.literal(true).optional(),
+    ...chatTerminalCostShape,
   }),
 ]);
 export type ChatAttentionNotice = z.infer<typeof chatAttentionNoticeSchema>;

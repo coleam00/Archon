@@ -19,3 +19,10 @@ test.each([undefined, true] as const)('finished lines qualify cost completeness 
   const html = renderToStaticMarkup(<RunFinishedLine run={run} />);
   expect(html).toContain(marker ? '≥$0.200 (incomplete)' : '$0.200 (completeness unknown)');
 });
+
+test('finished line shows incomplete cost without a reported amount', () => {
+  const run = toRun({ ...detailFixture.run, metadata: { total_cost_incomplete: true } });
+  const html = renderToStaticMarkup(<RunFinishedLine run={run} />);
+  expect(html).toContain('Cost unavailable (incomplete)');
+  expect(html).not.toContain('$');
+});

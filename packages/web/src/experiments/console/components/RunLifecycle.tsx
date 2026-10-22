@@ -40,7 +40,8 @@ const LABEL: Record<string, string> = {
 export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
   if (!TERMINAL.has(run.status)) return null;
   const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
-  const cost = run.costUsd !== null ? ` · ${formatRunCost(run)}` : '';
+  const runCost = formatRunCost(run);
+  const cost = runCost !== null ? ` · ${runCost}` : '';
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-[11px]">
