@@ -179,6 +179,31 @@ it.each(
   }
 );
 
+it('folds a completed legacy two-child event with no reported usage', async () => {
+  const snapshot = await foldDagResumeSnapshot(
+    [
+      {
+        step_name: 'sub',
+        event_type: 'node_completed',
+        data: {
+          type: 'workflow',
+          node_output: 'legacy children completed',
+          fan_out_outcome: fanOutOutcome([
+            { index: 0, outcome: 'completed', child_run_id: 'a' },
+            { index: 1, outcome: 'completed', child_run_id: 'b' },
+          ]),
+        },
+      },
+    ],
+    'parent'
+  );
+  expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe('legacy children completed');
+  expect(snapshot.costUsd).toBeUndefined();
+  expect(snapshot.tokens).toBeUndefined();
+  expect(snapshot.tokensUnknown).toBe(false);
+  expect(snapshot.reportedChildUsage?.size).toBe(0);
+});
+
 it.each(
   [legacyIdentities[0], legacyIdentities[2]].flatMap(attribution =>
     ['node_completed', 'node_failed'].flatMap(eventType =>
