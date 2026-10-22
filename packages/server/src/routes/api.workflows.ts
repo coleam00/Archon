@@ -190,7 +190,7 @@ type WorkingDir = { valid: false } | { valid: true; path: string | undefined };
 async function resolveWorkingDir(cwd: string | undefined): Promise<WorkingDir> {
   if (cwd) return (await validateCwd(cwd)) ? { valid: true, path: cwd } : { valid: false };
   const codebases = await codebaseDb.listCodebases();
-  return { valid: true, path: codebases.length > 0 ? codebases[0].default_cwd : cwd };
+  return { valid: true, path: codebases[0]?.default_cwd };
 }
 
 /** The workflows folder PUT and DELETE write to. */
