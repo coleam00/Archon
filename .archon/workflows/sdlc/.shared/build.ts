@@ -229,9 +229,12 @@ export function buildBranch(number: number, title: string, runId: string): strin
 
 const BUILD_BRANCH_PREFIX = 'build/';
 
-/** Whether a branch is one `buildBranch` names: the build queue owns pushes to it. */
+/**
+ * Whether a branch is one `buildBranch` names: the build queue owns pushes to it.
+ * `buildBranch` joins only nonempty parts, so a hyphen is always followed by one.
+ */
 export function isBuildBranch(branch: string): boolean {
-  return new RegExp(`^${BUILD_BRANCH_PREFIX}\\d+(-|$)`).test(branch);
+  return new RegExp(`^${BUILD_BRANCH_PREFIX}\\d+(-.|$)`).test(branch);
 }
 
 export interface BuildChange {
