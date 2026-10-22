@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { foldDagResumeSnapshot, type DagResumeEvent } from './dag-resume-snapshot';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
 
 const valid: DagResumeEvent = {
   step_name: 'valid',
@@ -117,5 +119,80 @@ describe('historical token accounting', () => {
       cacheWrite: 0,
       cachePartial: true,
     });
+  });
+});
+
+describe('historical cost completeness', () => {
+  const agentStart = (path: string) =>
+    startNodeExecution({
+      runId: 'run',
+      path,
+      node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+  const attempt = (path: string, costUsd?: number): DagResumeEvent[] => {
+    const start = agentStart(path);
+    return [
+      serializeNodeStateRecord(start),
+      serializeNodeStateRecord(
+        finishNodeExecution(start, { status: 'completed' }, { output: { text: path }, costUsd })
+      ),
+    ];
+  };
+
+  it.each([
+    ['absent', { tokens: { input: 1, output: 1 } }],
+    ['a string', { cost_usd: 'NaN' }],
+    ['non-finite', { cost_usd: Infinity }],
+  ])(
+    'a metadata-free contribution with %s cost leaves a priced floor unproven',
+    async (_, data) => {
+      const snapshot = await foldDagResumeSnapshot(
+        [
+          { step_name: 'old', event_type: 'node_completed', data: { node_output: 'o', ...data } },
+          ...attempt('later', 0.2),
+        ],
+        'run'
+      );
+      expect(snapshot.costUsd).toBeCloseTo(0.2);
+      expect(snapshot.costComplete).toBeUndefined();
+    }
+  );
+
+  it('proves a fully priced history, keeping reported zero distinct from absence', async () => {
+    const priced = await foldDagResumeSnapshot([...attempt('a', 0.2), ...attempt('b', 0)], 'run');
+    expect(priced.costUsd).toBeCloseTo(0.2);
+    expect(priced.costComplete).toBe(true);
+
+    const zero = await foldDagResumeSnapshot(attempt('a', 0), 'run');
+    expect(zero.costUsd).toBe(0);
+    expect(zero.costComplete).toBe(true);
+
+    const unreported = await foldDagResumeSnapshot(attempt('a'), 'run');
+    expect(unreported.costUsd).toBeUndefined();
+    expect(unreported.costComplete).toBeUndefined();
+  });
+
+  it('reads nothing as completeness unknown', async () => {
+    expect((await foldDagResumeSnapshot([], 'run')).costComplete).toBeUndefined();
+  });
+
+  const loopStart = { ...agentStart('loop'), node: { id: 'loop', kind: 'loop' as const } };
+  it.each<[string, DagResumeEvent[]]>([
+    ['an unparseable row', [{ step_name: 'bad', event_type: 'node_completed', data: '{not json' }]],
+    ['a started attempt with no terminal row', [serializeNodeStateRecord(agentStart('open'))]],
+    [
+      'a loop row',
+      [
+        serializeNodeStateRecord(
+          finishNodeExecution(loopStart, { status: 'completed' }, { costUsd: 0.1 })
+        ),
+      ],
+    ],
+  ])('%s leaves an otherwise priced history unproven', async (_, rows) => {
+    const snapshot = await foldDagResumeSnapshot([...attempt('a', 0.2), ...rows], 'run');
+    expect(snapshot.costUsd).toBeGreaterThanOrEqual(0.2);
+    expect(snapshot.costComplete).toBeUndefined();
   });
 });

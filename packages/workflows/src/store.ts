@@ -112,6 +112,9 @@ export interface DagResumeSnapshot {
   tokensUnknown?: boolean;
   /** Cumulative reported USD cost from completed/failed attempts and abandoned deferred segments. */
   costUsd?: number;
+  /** Set only when the fold proved every node row's cost known and priced, so `costUsd` is
+   * the whole cost. Absent means completeness unknown; live run totals never carry it. */
+  costComplete?: true;
   /**
    * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
    * from `costUsd`, which is telemetry and cannot tell unknown spend from none.

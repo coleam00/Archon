@@ -17,6 +17,7 @@ import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/nod
 import {
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
   addAttemptSpend,
+  attemptSpend,
   emptyRunBudgetUsage,
   type RunBudgetUsage,
 } from './run-budget';
@@ -141,10 +142,55 @@ interface ResumeFold {
   /** An attempt can carry a second terminal row (the dispatch catch re-finishes its start
    * record after an engine-side throw); the live ledger charged only the first. */
   readonly settledAgentAttempts: Set<string>;
+  /** Node rows that must prove their cost, counted before parsing so a row that fails to
+   * read stays unproven without any failure path having to say so. */
+  costRows: number;
+  /** Rows whose recorded cost proved known and priced. */
+  provenCostRows: number;
 }
 
 type FoldedRow = DagResumeEvent & { step_name: string };
 type NodeRecord = NonNullable<ReturnType<typeof readNodeRecordEvent>>;
+
+/** Whether a row's own kind can prove its cost; exhaustive so a new kind must be classified. */
+const KIND_PROVES_COST: Record<
+  NodeExecutionMetadata['node']['kind'],
+  (record: NodeRecord) => boolean
+> = {
+  // A terminal attempt row proves its cost through the run budget's single spend rule. A
+  // started attempt is settled by its terminal row; `openAgentAttempts` catches one that never got it.
+  agent: record =>
+    (record.eventType !== 'node_completed' && record.eventType !== 'node_failed') ||
+    attemptSpend(record.metadata).kind === 'known',
+  // These kinds make no provider call; a gate's `on_reject` rework runs as its own agent row.
+  exec: () => true,
+  gate: () => true,
+  halt: () => true,
+  wait: () => true,
+  // Live loop iterations drop an unreported cost, so a loop's recorded total proves nothing.
+  loop: () => false,
+  // A roll-up of body rows whose own record carries no proof of the whole.
+  loop_group: () => false,
+  // Binds no provider, so an unpriced child still reads as a `not_applicable` known zero.
+  workflow: () => false,
+  // Sums of live accumulators that do not record unpriced work.
+  compose_fan_out: () => false,
+  compose_fan_out_instance: () => false,
+};
+
+/** Rows written before execution metadata can never prove their cost. */
+function provesOwnCost(record: NodeRecord): boolean {
+  return record.metadata !== undefined && KIND_PROVES_COST[record.metadata.node.kind](record);
+}
+
+/** Replay and marker rows carry no work of their own, so they have no cost to prove. */
+function carriesNoOwnWork(eventType: string): boolean {
+  return (
+    eventType === 'node_skipped_prior_success' ||
+    eventType === 'node_always_run_reset' ||
+    eventType === 'node_prior_cache_invalidated'
+  );
+}
 
 function isFoldedRow(row: DagResumeEvent): row is FoldedRow {
   return (
@@ -227,6 +273,8 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
 }
 
 function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
+  // Deferred segments carry no node kind and come only from loops, so they never prove cost.
+  fold.costRows++;
   let usage: ReturnType<typeof readDeferredNodeUsageEvent>;
   try {
     usage = readDeferredNodeUsageEvent({ workflow_run_id: fold.runId, ...row, data: row.data });
@@ -319,12 +367,7 @@ function foldExecutedInvocation(
 }
 
 function forgetReplayedInvocations(fold: ResumeFold, record: NodeRecord): void {
-  if (
-    record.eventType !== 'node_skipped_prior_success' &&
-    record.eventType !== 'node_always_run_reset' &&
-    record.eventType !== 'node_prior_cache_invalidated'
-  )
-    return;
+  if (!carriesNoOwnWork(record.eventType)) return;
   for (const [key, unfinished] of fold.unfinishedInvocations)
     if (unfinished.path === record.path) fold.unfinishedInvocations.delete(key);
 }
@@ -438,6 +481,8 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   const nodeStateType = NODE_STATE_EVENT_TYPES.find(type => type === row.event_type);
   if (nodeStateType) foldActiveNodeIds(fold.unresolvedNodeStarts, row.step_name, nodeStateType);
+  const mustProveCost = nodeStateType !== undefined && !carriesNoOwnWork(nodeStateType);
+  if (mustProveCost) fold.costRows++;
   // Every later node state supersedes reusable success, even when that row
   // carries no output (or its data cannot be recovered). Only success restores it.
   fold.completedNodeOutputs.delete(row.step_name);
@@ -446,6 +491,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   if (rawData === undefined) return;
   const record = readRecord(fold, row, rawData);
   if (!record) return;
+  if (mustProveCost && provesOwnCost(record)) fold.provenCostRows++;
   foldAgentAttempt(fold, record);
   foldInvocation(fold, record);
   const data = record.data;
@@ -483,7 +529,7 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
 
 function countedUsage(
   fold: ResumeFold
-): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'> {
+): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costComplete'> {
   const authoritativeInstancePrefixes = [...fold.authoritativeInstanceScopes].map(
     scope => `${scope}__`
   );
@@ -492,7 +538,10 @@ function countedUsage(
       !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
   );
   const tokensUnknown = counted.some(contribution => contribution.tokensUnknown);
+  const costComplete =
+    fold.costRows > 0 && fold.provenCostRows === fold.costRows && fold.openAgentAttempts.size === 0;
   return {
+    ...(costComplete ? { costComplete: true } : {}),
     tokensUnknown,
     tokens: tokensUnknown
       ? undefined
@@ -552,6 +601,13 @@ function countedUsage(
  * through `addAttemptSpend`, so an attempt whose cost is unreported, partial or
  * invalid, or one that started and never reached a terminal row, marks spend
  * unavailable instead of adding nothing as the telemetry total does.
+ *
+ * `costComplete` is a proof, not a marker: the fold counts every node row with work of its
+ * own before reading it, and counts it again only when its execution metadata proves the
+ * row's cost known and priced. It is set only when every counted row proved its cost and no
+ * started `agent` attempt is missing its terminal row. A row written before execution
+ * metadata, an unreadable row, an aggregating kind, or a fold that read nothing leaves it
+ * absent, which reads as "completeness unknown" like every unmarked amount.
  */
 export async function foldDagResumeSnapshot(
   rows: readonly DagResumeEvent[],
@@ -570,6 +626,8 @@ export async function foldDagResumeSnapshot(
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
     settledAgentAttempts: new Set(),
+    costRows: 0,
+    provenCostRows: 0,
   };
   for (const row of rows) {
     if (isFoldedRow(row)) await foldRow(fold, row);
