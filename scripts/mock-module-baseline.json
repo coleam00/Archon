@@ -138,7 +138,7 @@
       "@archon/workflows/run-source",
       "@archon/workflows/workflow-discovery"
     ],
-    "packages/core/src/config/config-loader.test.ts": ["@archon/paths", "fs/promises"],
+    "packages/core/src/config/test-harness.ts": ["@archon/paths", "fs/promises"],
     "packages/core/src/credentials/connect-service.test.ts": ["../db/connection"],
     "packages/core/src/credentials/github-copilot-oauth.test.ts": ["node:timers/promises"],
     "packages/core/src/credentials/oauth-bridge.integration.test.ts": ["./connect-service"],
@@ -2231,7 +2231,6 @@
     ],
     "packages/cli/src/utils/stdout.ts": ["writeJsonLine", "writeStderr"],
     "packages/core/src/config/config-loader.ts": [
-      "InvalidConfigError",
       "clearConfigCache",
       "loadConfig",
       "loadGlobalConfig",

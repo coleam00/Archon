@@ -45,8 +45,6 @@ import {
   mergeRepoConfig,
 } from './config-merge';
 
-export { InvalidConfigError } from './config-validation';
-
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
   return fsReadFile(path, 'utf-8');
