@@ -589,6 +589,13 @@ async function runOneFixture(
   return out;
 }
 
+async function resolveFixtureConfig(
+  options: RunFixturesOptions,
+  execCode: boolean
+): Promise<WorkflowConfig | undefined> {
+  return execCode && options.resolveExecConfig ? options.resolveExecConfig() : options.config;
+}
+
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -605,8 +612,7 @@ async function checkFixture(
   try {
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
-    const config =
-      execCode && options.resolveExecConfig ? await options.resolveExecConfig() : options.config;
+    const config = await resolveFixtureConfig(options, execCode);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,

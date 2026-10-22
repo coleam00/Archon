@@ -771,6 +771,7 @@ describe('workflowTestCommand', () => {
     const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockRejectedValue(
       new Error('store unavailable')
     );
+    lookup.mockClear();
     try {
       const fixtureRunner = await import('@archon/workflows/fixture-runner');
       (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValueOnce({
