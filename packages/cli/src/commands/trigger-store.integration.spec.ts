@@ -903,6 +903,50 @@ test.each([true, false])(
   }
 );
 
+test('a damaged receipt does not stop preparing a healthy binding on the same host', async () => {
+  const { host, project, userId, stateRoot, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const binding = (bindingId: string): ResourceStartBindingIntent => ({
+    bindingId,
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: userId,
+    resource: bindingId,
+    capacity: 1,
+    overlap: 'queue',
+    launch: { cwd: project, workflowName: 'portable', inputs: {}, isolation: { kind: 'in-place' } },
+  });
+  const damaged = acceptance(binding('damaged'), 'damaged');
+  const healthy = acceptance(binding('healthy'), 'healthy');
+  try {
+    await store.acceptStartReceipt(damaged);
+    await store.acceptStartReceipt(healthy);
+    const document = `resource/receipts/${createHash('sha256').update(damaged.receipt.id).digest('hex')}.json`;
+    await writeFile(join(stateRoot, document), '{');
+
+    const started: string[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const failure = await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async requestId => {
+          started.push(requestId);
+        },
+      }).catch((error: unknown) => error);
+      if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
+      expect(failure.failures).toHaveLength(1);
+      expect(failure.failures[0]?.receiptId).toBeUndefined();
+      expect(String(failure.failures[0]?.error)).toContain(document);
+      expect(started).toHaveLength(1);
+    }
+    expect((await store.getResourceStartRequest(started[0]!))?.launch.run.metadata).toMatchObject({
+      resource_start: { receiptId: healthy.receipt.id, bindingId: 'healthy' },
+    });
+  } finally {
+    restore();
+  }
+});
+
 test('keyed replays fail for every receipt queued on a resource whose drain fails', async () => {
   const { host, project, configPath, stateRoot, restore } = await fireFixture(true);
   const store = host.deps.store;
