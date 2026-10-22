@@ -26,6 +26,10 @@ const normalizedRemotePaths = [
 const invalidHttpRemotePaths = [
   'team\\extra/repo.git',
   'team/repo\\extra.git',
+  ...['%5C', '%5c'].flatMap(backslash => [
+    `team${backslash}extra/repo.git`,
+    `team/repo${backslash}extra.git`,
+  ]),
   ...['', '/', '//'].flatMap(slashes =>
     ['\\', '\\\\'].flatMap(backslashes =>
       ['team/repo.git', 'team/extra/repo.git'].map(path => `${slashes}${backslashes}${path}`)
@@ -767,6 +771,13 @@ describe('GitHub forge origins', () => {
             ] satisfies ForgeRequest[]
         ),
       ] satisfies ForgeRequest[];
+      expect(new Set(requests.map(request => request.op))).toEqual(
+        new Set(
+          forgeRequestSchema.options
+            .map(schema => schema.shape.op.value)
+            .filter(op => op !== 'resolve')
+        )
+      );
       for (const request of requests) {
         const response = await handleGithubOperation(forgeRequestSchema.parse(request), {
           token: 'selected-token',

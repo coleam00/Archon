@@ -173,9 +173,10 @@ function parseUrlRemote(value: string): RepoRef | null {
       true
     );
   }
+  const decodedPath = decodeURIComponent(pathname);
   const repository =
-    (url.protocol === 'ssh:' || !pathname.includes('\\')) &&
-    repositoryPath(decodeURIComponent(pathname)) &&
+    (url.protocol === 'ssh:' || !decodedPath.includes('\\')) &&
+    repositoryPath(decodedPath) &&
     repositoryPath(decodeURIComponent(url.pathname));
   if (!repository) return null;
   return { host, path: `${repository.owner}/${repository.repo}` };
