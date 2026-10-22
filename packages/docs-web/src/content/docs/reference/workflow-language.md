@@ -2033,11 +2033,14 @@ when its `command:` bodies need named values:
   under [Bash and script node timeouts](#bash-and-script-node-timeouts), and cancelling a
   detached run stops its live node groups and owner group (macOS and Linux) or Job Object
   (Windows), with the output-holder warnings described above.
-- **Cost roll-up.** The child's total cost rolls up into the `workflow:` node's cost and
+- **Cost roll-up.** The child's available reported cost rolls up into the `workflow:` node's cost and
   the parent's aggregate, and `parent_run_id` on the child row makes the run tree visible
   in `archon workflow runs` and the console. A run records what it spent whatever its
-  outcome, so a partly-failed fan-out reports the spend of every child, not just the ones
-  that finished. How to read token and cost fields without double counting is described in
+  outcome, so a partly-failed fan-out includes available spend from unfinished and failed
+  children too. If a supplemental child-history read fails, the retained child amount is
+  a floor whose full total could not be confirmed, and the parent records incomplete cost.
+  A failed read for a held child also makes parent token totals unknown. How to read token
+  and cost fields without double counting is described in
   [Reading tokens and cost](/reference/node-execution/#reading-tokens-and-cost).
 
 ### Choosing the child's checkout with `isolation:`

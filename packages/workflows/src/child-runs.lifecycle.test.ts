@@ -492,6 +492,9 @@ nodes:
     expect(parent?.status).toBe('paused');
     expect(parent?.metadata.total_cost_usd).toBe(0.01);
     expect(parent?.metadata.total_cost_incomplete).toBe(true);
+    expect(parent?.metadata.total_tokens_unknown).toBe(true);
+    expect(parent?.metadata.total_tokens_in).toBeNull();
+    expect(parent?.metadata.total_tokens_out).toBeNull();
     expect(cancel).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
       { err: readError, childRunId: child?.id },

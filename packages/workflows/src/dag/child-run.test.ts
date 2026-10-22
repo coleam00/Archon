@@ -176,8 +176,10 @@ it.each(['completed', 'failed', 'cancelled', 'paused', 'running', 'pending'] as 
       status: status === 'running' || status === 'pending' ? 'paused' : status,
       costUsd: 0.2,
       costIncomplete: true,
-      tokens: { input: 10, output: 2 },
     });
+    const held = status === 'paused' || status === 'running' || status === 'pending';
+    expect(outcome.tokensUnknown).toBe(held ? true : undefined);
+    expect(outcome.tokens).toEqual(held ? undefined : { input: 10, output: 2 });
   }
 );
 

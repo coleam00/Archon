@@ -182,6 +182,10 @@ export async function readChildOutcome(
     } catch (err) {
       // Enrichment cannot undo accepted usage or send a settled child through setup cleanup.
       outcome.costIncomplete = true;
+      if (held) {
+        outcome.tokensUnknown = true;
+        outcome.tokens = undefined;
+      }
       getLog().warn({ err, childRunId: run.id }, 'workflow.child_usage_read_failed');
     }
   }

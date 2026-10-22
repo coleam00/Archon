@@ -525,6 +525,7 @@ for (const fanOut of [false, true]) {
     `retains child spend after a supplemental read failure (${fanOut ? 'fan-out' : 'single'}, %s)`,
     async status => {
       const store = createMockStore();
+      const run = makeWorkflowRun();
       store.findChildRuns.mockResolvedValue([
         makeWorkflowRun('existing', {
           status,
@@ -555,7 +556,7 @@ for (const fanOut of [false, true]) {
         dagOptions({
           cwd,
           deps: createMockDeps(store),
-          workflowRun: makeWorkflowRun(),
+          workflowRun: run,
           runChildWorkflow,
           workflow: {
             name: 'parent',
@@ -581,6 +582,23 @@ for (const fanOut of [false, true]) {
       );
       expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeCloseTo(fanOut ? 0.3 : 0.2);
       expect(runUsageWrites(store).at(-1)?.total_cost_incomplete).toBe(true);
+      if (status === 'paused') {
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_tokens_unknown: true,
+          total_tokens_in: null,
+          total_tokens_out: null,
+          total_cache_read_tokens: null,
+          total_cache_write_tokens: null,
+          total_cache_partial: null,
+        });
+        const recovered = await store.getDagResumeSnapshot(run.id);
+        expect(recovered.tokensUnknown).toBe(true);
+        expect(recovered.tokens).toBeUndefined();
+      } else {
+        expect(runUsageWrites(store).at(-1)?.total_tokens_unknown).toBeUndefined();
+        expect(runUsageWrites(store).at(-1)?.total_tokens_in).toBe(10);
+        expect(runUsageWrites(store).at(-1)?.total_tokens_out).toBe(2);
+      }
       expect(runChildWorkflow).toHaveBeenCalledTimes(fanOut ? 1 : 0);
       expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
       if (status === 'paused') expect(store.pauseWorkflowRun).toHaveBeenCalled();
