@@ -5,6 +5,8 @@ import { isInlineScript } from './executor-shared';
 import type { TemplateSlot } from './template-walker';
 import { visitNodeTemplateSlots } from './template-walker';
 
+const INPUT_ENV_PREFIX = inputEnvKey('');
+
 export interface ExecInputValidationTarget {
   readonly node: ExecNode;
   readonly slot: TemplateSlot;
@@ -93,9 +95,9 @@ export function validateExecInputTargets(
 
     for (const read of scanEnvironmentReads(source.text, source.runtime)) {
       if (availableEnv.has(read.name)) continue;
-      const isInputsRead = read.name.startsWith('INPUTS_');
+      const isInputsRead = read.name.startsWith(INPUT_ENV_PREFIX);
       if (isInputsRead && workflow.inputs === undefined) continue;
-      if (!isInputsRead && configuredEnvNames.has(read.name)) continue;
+      if (configuredEnvNames.has(read.name)) continue;
       const location = `${source.label} line ${String(read.line)}`;
       const available =
         availableNames.length === 0 ? 'none' : availableNames.map(name => `'${name}'`).join(', ');
@@ -156,8 +158,8 @@ function scanEnvironmentReads(
     collect(/\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g, 1);
     collect(/\bprocess\.env\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g, 2);
   } else {
-    collect(/\$\{(INPUTS_[A-Z0-9_]+)\}/g, 1);
-    collect(/\$(INPUTS_[A-Z0-9_]+)\b/g, 1);
+    collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\}`, 'g'), 1);
+    collect(new RegExp(`\\$(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\b`, 'g'), 1);
   }
 
   matches.sort((left, right) => left.offset - right.offset || left.name.localeCompare(right.name));
