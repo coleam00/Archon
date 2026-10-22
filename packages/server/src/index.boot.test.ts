@@ -12,12 +12,8 @@ import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
-import {
-  clearConfigCache,
-  InvalidConfigError,
-  loadConfig,
-  toSafeConfig,
-} from '@archon/core/config/config-loader';
+import { clearConfigCache, loadConfig, toSafeConfig } from '@archon/core/config/config-loader';
+import { InvalidConfigError } from '@archon/core/config';
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;

@@ -16,7 +16,7 @@ import { createMockLogger } from '../../test/mocks/logger';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../../schemas/workflow-run';
-import type { CleanupOperationResult } from '../../services/cleanup-service';
+import type { CleanupOperationResult } from '../../services/cleanup/merged-sweep';
 import {
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
@@ -34,7 +34,7 @@ import type * as CodebaseDb from '../../db/codebases';
 import type * as ConversationDb from '../../db/conversations';
 import type * as IsolationEnvironmentDb from '../../db/isolation-environments';
 import type * as SessionDb from '../../db/sessions';
-import type * as CleanupService from '../../services/cleanup-service';
+import type * as CleanupRunLock from '../../services/cleanup/run-lock';
 import type * as WorkflowDb from '../../db/workflows';
 import type * as WorkflowEventDb from '../../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../../db/workflow-node-sessions';
@@ -457,18 +457,37 @@ mock.module('../../services/run-owner-stop', () => ({
 }));
 
 export const mockReclaimContainerEnv = mock(async () => undefined);
-export const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
   Promise.resolve(null)
 );
 mock.module('../../services/cleanup-service', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
-  reclaimRunWorktree: async () => ({ warnings: [] }),
-  reclaimContainerEnv: mockReclaimContainerEnv,
-  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
   getWorktreeStatusBreakdown: mock(() =>
     Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0, activeEnvs: [] })
   ),
+}));
+mock.module('../../services/cleanup/run-lock', () => ({
+  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getCleanupRunLock: mock(),
+  toUnpushedLock: mock(),
+  countUnpushedCommits: mock(),
+  readLiveRemoteTips: mock(),
+  checkRemoval: mock(),
+}));
+mock.module('../../services/cleanup/run-worktree', () => ({
+  reclaimRunWorktree: async () => ({ warnings: [] }),
+  assessCompletedRunWorktree: mock(),
+  releaseCompletedRunWorktree: mock(),
+}));
+mock.module('../../services/cleanup/containers', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
+  listContainerEnvironments: mock(),
+  reapContainerEnvironments: mock(),
+}));
+mock.module('../../services/cleanup/merged-sweep', () => ({
+  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
+  cleanupToMakeRoom: mock(),
+  recordCleanupRemoval: mock(),
 }));
 
 // Note: We removed mock.module('child_process') because:

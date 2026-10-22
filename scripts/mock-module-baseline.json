@@ -124,7 +124,6 @@
       "@archon/core/db/workflows",
       "@archon/core/handlers/clone",
       "@archon/core/operations/workflow-adoption",
-      "@archon/core/services/cleanup-service",
       "@archon/core/services/provider-admission",
       "@archon/core/services/run-live-owner",
       "@archon/core/workflows/sql-host",
@@ -139,7 +138,7 @@
       "@archon/workflows/run-source",
       "@archon/workflows/workflow-discovery"
     ],
-    "packages/core/src/config/config-loader.test.ts": ["@archon/paths", "fs/promises"],
+    "packages/core/src/config/test-harness.ts": ["@archon/paths", "fs/promises"],
     "packages/core/src/credentials/connect-service.test.ts": ["../db/connection"],
     "packages/core/src/credentials/github-copilot-oauth.test.ts": ["node:timers/promises"],
     "packages/core/src/credentials/oauth-bridge.integration.test.ts": ["./connect-service"],
@@ -281,25 +280,23 @@
     ],
     "packages/core/src/operations/isolation-operations.test.ts": [
       "../db/isolation-environments",
-      "../services/cleanup-service",
       "@archon/paths",
       "node:fs/promises"
     ],
     "packages/core/src/operations/workflow/test-harness.ts": ["@archon/paths"],
     "packages/core/src/orchestrator/chat-context-paused.integration.test.ts": ["../db/connection"],
-    "packages/core/src/orchestrator/manage-run-tool.test.ts": ["@archon/paths"],
-    "packages/core/src/orchestrator/orchestrator-isolation.test.ts": [
-      "../config/config-loader",
-      "../db/codebases",
-      "../db/conversations",
-      "../db/isolation-environments",
-      "../db/sessions",
-      "../handlers/command-handler",
-      "../services/cleanup-service",
-      "../services/run-live-owner",
-      "../utils/error-formatter",
-      "../workflows/store-adapter",
-      "./prompt-builder",
+    "packages/core/src/orchestrator/dispatch/background.test.ts": [
+      "../../config/config-loader",
+      "../../db/codebases",
+      "../../db/conversations",
+      "../../db/isolation-environments",
+      "../../db/sessions",
+      "../../handlers/command-handler",
+      "../../services/cleanup-service",
+      "../../services/run-live-owner",
+      "../../utils/error-formatter",
+      "../../workflows/store-adapter",
+      "../prompt-builder",
       "@archon/git",
       "@archon/isolation",
       "@archon/paths",
@@ -310,6 +307,7 @@
       "@archon/workflows/workflow-discovery",
       "fs"
     ],
+    "packages/core/src/orchestrator/manage-run-tool.test.ts": ["@archon/paths"],
     "packages/core/src/orchestrator/orchestrator.test.ts": [
       "../config/config-loader",
       "../db/codebases",
@@ -321,7 +319,6 @@
       "../handlers/sql-registration",
       "../utils/error-formatter",
       "../workflows/store-adapter",
-      "./orchestrator",
       "./prompt-builder",
       "@archon/paths",
       "@archon/providers",
@@ -335,19 +332,21 @@
       "@archon/git",
       "@archon/paths"
     ],
-    "packages/core/src/services/cleanup-service.test.ts": [
-      "../config/config-loader",
-      "../db/codebases",
-      "../db/conversations",
-      "../db/isolation-environments",
-      "../db/sessions",
-      "../db/workflows",
+    "packages/core/src/services/cleanup/run-worktree-policy.integration.test.ts": [
+      "../../db/connection"
+    ],
+    "packages/core/src/services/cleanup/test-harness.ts": [
+      "../../config/config-loader",
+      "../../db/codebases",
+      "../../db/conversations",
+      "../../db/isolation-environments",
+      "../../db/sessions",
+      "../../db/workflows",
       "@archon/git",
       "@archon/isolation",
       "@archon/paths"
     ],
-    "packages/core/src/services/cleanup-worktree-policy.integration.test.ts": ["../db/connection"],
-    "packages/core/src/services/cleanup-worktree.integration.test.ts": ["../db/connection"],
+    "packages/core/src/services/cleanup/worktree.integration.test.ts": ["../../db/connection"],
     "packages/core/src/services/run-attention-watch.test.ts": ["./run-live-owner", "@archon/paths"],
     "packages/core/src/services/title-generator.test.ts": [
       "../db/conversations",
@@ -372,7 +371,6 @@
       "../db/workflows",
       "../handlers/sql-registration",
       "../operations/workflow-adoption",
-      "../orchestrator/orchestrator",
       "../orchestrator/prompt-builder",
       "../services/run-live-owner",
       "../utils/error-formatter",
@@ -672,7 +670,6 @@
       "@archon/core/db/users",
       "@archon/core/db/workflow-events",
       "@archon/core/db/workflows",
-      "@archon/core/services/cleanup-service",
       "@archon/git",
       "@archon/paths",
       "@archon/workflows/run-resume"
@@ -2234,7 +2231,6 @@
     ],
     "packages/cli/src/utils/stdout.ts": ["writeJsonLine", "writeStderr"],
     "packages/core/src/config/config-loader.ts": [
-      "InvalidConfigError",
       "clearConfigCache",
       "loadConfig",
       "loadGlobalConfig",
@@ -2628,7 +2624,6 @@
       "adoptRegisteredWorktree",
       "resolveRegisteredWorktree"
     ],
-    "packages/core/src/orchestrator/orchestrator.ts": ["ensureIsolationConfigured"],
     "packages/core/src/orchestrator/prompt-builder.ts": [
       "buildOrchestratorSystemAppend",
       "buildRoutingRulesWithProject",
@@ -2641,20 +2636,10 @@
     "packages/core/src/services/cleanup-service.ts": [
       "SESSION_RETENTION_DAYS",
       "STALE_THRESHOLD_DAYS",
-      "assessCompletedRunWorktree",
       "cleanupContainerEnvironments",
-      "cleanupMergedWorktrees",
       "cleanupStaleWorktrees",
-      "cleanupToMakeRoom",
-      "getCleanupRunLock",
-      "getLiveRunBlocker",
       "getWorktreeStatusBreakdown",
-      "listContainerEnvironments",
       "onConversationClosed",
-      "reclaimContainerEnv",
-      "reclaimRunWorktree",
-      "releaseCompletedRunWorktree",
-      "removeEnvironment",
       "runScheduledCleanup",
       "startCleanupScheduler",
       "stopCleanupScheduler"

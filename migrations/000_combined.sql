@@ -415,7 +415,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
 -- consumes the vendor. Idempotent data fix: where both a legacy and a vendor
 -- row exist for the same user, the vendor row wins (rare — requires having
 -- connected both ids pre-rename); then legacy rows are renamed in place.
--- Tested on SQLite (adapters/sqlite.test.ts covers rename, conflict, and
+-- Tested on SQLite (adapters/sqlite-migrations.test.ts covers rename, conflict, and
 -- idempotency); the Postgres DML below is the same statements but is NOT
 -- covered by an automated test — verified manually on the multi-user smoke.
 -- Survivable either way: reads normalize legacy ids (normalizeCredentialVendor).

@@ -22,14 +22,13 @@ import {
   readWorktreeBranchCreated,
   readWorktreeCreationId,
 } from '@archon/isolation';
+import { cleanupContainerEnvironments } from '@archon/core/services/cleanup-service';
+import { listContainerEnvironments } from '@archon/core/services/cleanup/containers';
 import {
-  getLiveRunBlocker,
   removeEnvironment,
-  getCleanupRunLock,
-  listContainerEnvironments,
-  cleanupContainerEnvironments,
   type RemoveEnvironmentResult,
-} from '@archon/core/services/cleanup-service';
+} from '@archon/core/services/cleanup/remove-environment';
+import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/cleanup/run-lock';
 import {
   listEnvironments,
   cleanupMergedEnvironments,
