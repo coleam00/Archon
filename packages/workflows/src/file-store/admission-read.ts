@@ -22,11 +22,14 @@ export async function readReceiptDocument(root: string, path: string): Promise<R
       .refine(
         row =>
           pathFor('receipts', row.id) === path &&
+          new Set(row.bindings.map(binding => binding.bindingId)).size === row.bindings.length &&
           row.bindings.every(
             binding =>
               binding.receiptId === row.id &&
               (binding.intent
-                ? binding.hostId === binding.intent.hostId
+                ? binding.hostId === binding.intent.hostId &&
+                  binding.bindingId === binding.intent.bindingId &&
+                  binding.bindingRevision === binding.intent.bindingRevision
                 : binding.status !== 'pending' &&
                   binding.status !== 'failed' &&
                   binding.status !== 'preparing')

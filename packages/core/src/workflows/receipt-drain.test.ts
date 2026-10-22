@@ -125,6 +125,28 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
     case 'binding-id':
       row.bindings[0].receiptId = 'wrong';
       break;
+    case 'duplicate-binding':
+      row.bindings.push({ ...row.bindings[0] });
+      break;
+    case 'evaluated-collision':
+    case 'duplicate-evaluated': {
+      const evaluated = {
+        ...row.bindings[0],
+        bindingId: damage === 'duplicate-evaluated' ? 'evaluated' : row.bindings[0].bindingId,
+        hostId: null,
+        status: 'unmatched',
+        intent: null,
+      };
+      row.bindings.push(evaluated);
+      if (damage === 'duplicate-evaluated') row.bindings.push({ ...evaluated });
+      break;
+    }
+    case 'intent-binding-id':
+      row.bindings[0].intent.bindingId = 'wrong';
+      break;
+    case 'intent-revision':
+      row.bindings[0].intent.bindingRevision = 'wrong';
+      break;
     case 'host':
       row.bindings[0].hostId = row.bindings[0].hostId === 'host' ? 'other' : 'host';
       break;
@@ -144,6 +166,11 @@ for (const receiptHost of ['host', 'other']) {
     'unreadable',
     'outer-id',
     'binding-id',
+    'duplicate-binding',
+    'evaluated-collision',
+    'duplicate-evaluated',
+    'intent-binding-id',
+    'intent-revision',
     'host',
     'null-intent',
   ] as const)(
