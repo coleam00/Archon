@@ -30,6 +30,7 @@ import {
   parseWholeOutputRef,
 } from '../output-ref';
 import { readComposedBindings } from '../compiled-command';
+import { transitiveDepsLookup } from '../depends-on';
 import { checkNodeReferences, type DagScope } from './dag-references';
 
 type NodeCheck = (node: DagNode | IncludeDirective, scope: DagScope) => string | null;
@@ -212,23 +213,6 @@ function checkSharedContextLayers(
     return `Node '${sharedNode.id}' uses scalar context: 'shared' in a structurally parallel layer. Scalar 'shared' only inherits the ambient session in sequential layers. Use 'context: { resume: <upstream-node-id> }' to fork an exact upstream session, or serialize the nodes with 'depends_on'`;
   }
   return null;
-}
-
-function transitiveDepsLookup(
-  nodes: readonly (DagNode | IncludeDirective)[]
-): (nodeId: string) => Set<string> {
-  const directDeps = new Map<string, string[]>(nodes.map(n => [n.id, n.depends_on ?? []]));
-  return (nodeId: string): Set<string> => {
-    const seen = new Set<string>();
-    const stack = [...(directDeps.get(nodeId) ?? [])];
-    while (stack.length > 0) {
-      const dep = stack.pop();
-      if (dep === undefined || seen.has(dep)) continue;
-      seen.add(dep);
-      stack.push(...(directDeps.get(dep) ?? []));
-    }
-    return seen;
-  };
 }
 
 function hasDurableWait(node: DagNode | IncludeDirective): boolean {
