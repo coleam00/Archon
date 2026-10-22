@@ -272,6 +272,9 @@
       "src/test-support/workflow-store.conformance.test.ts"
     ],
     [
+      "src/test-support/detached-owner.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-launch-config.integration.spec.ts"
     ],
     [
