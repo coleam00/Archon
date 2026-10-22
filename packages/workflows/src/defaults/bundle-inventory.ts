@@ -133,116 +133,160 @@ export async function collectBundleSources(
   packs: readonly string[]
 ): Promise<BundleSourceFile[]> {
   const files: BundleSourceFile[] = [];
-  const workflowNames = new Set<string>();
-  const commandNames = new Set<string>();
-  const add = (file: BundleSourceFile): void => {
+  const add = uniqueNameAdder(files);
+  for (const pack of [...packs].sort()) await collectPack(workflowsRoot, pack, add);
+  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+type AddSource = (file: BundleSourceFile) => void;
+
+interface PackScope {
+  readonly workflowsRoot: string;
+  readonly pack: string;
+  readonly packRoot: string;
+  readonly add: AddSource;
+}
+
+/** Workflow and command names share one namespace each across every pack. */
+function uniqueNameAdder(files: BundleSourceFile[]): AddSource {
+  const names = { workflow: new Set<string>(), command: new Set<string>() };
+  return file => {
     if (file.kind !== 'pack-file') {
-      const names = file.kind === 'workflow' ? workflowNames : commandNames;
-      if (names.has(file.name))
+      const seen = names[file.kind];
+      if (seen.has(file.name))
         throw new Error(`Bundled ${file.kind} filename collision: "${file.name}".`);
-      names.add(file.name);
+      seen.add(file.name);
     }
     files.push(file);
   };
-  const workflowFile = (path: string, owner: BundledWorkflowOwner): void => {
-    const name = basename(path, extname(path));
-    validateName(name, path);
+}
+
+async function collectPack(workflowsRoot: string, pack: string, add: AddSource): Promise<void> {
+  validateName(pack, pack);
+  const packRoot = join(workflowsRoot, pack);
+  if (!(await isDirectory(packRoot)))
+    throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
+  const scope: PackScope = { workflowsRoot, pack, packRoot, add };
+  await collectSharedFiles(scope);
+  for (const entry of await readdir(packRoot, { withFileTypes: true })) {
+    if (await isWorkflowDirectory(packRoot, entry)) await collectWorkflow(scope, entry.name);
+  }
+}
+
+async function collectSharedFiles({ pack, packRoot, add }: PackScope): Promise<void> {
+  const shared = join(packRoot, PACK_SHARED_DIRECTORY);
+  if (!(await isDirectory(shared))) return;
+  for (const path of await sharedFiles(shared)) {
+    const packPath = relative(packRoot, path).replaceAll('\\', '/');
     add({
-      kind: 'workflow',
-      name,
-      owner,
+      kind: 'pack-file',
+      pack,
+      packPath,
       sourcePath: path,
-      relativePath: `workflows/${relative(workflowsRoot, path).replaceAll('\\', '/')}`,
+      relativePath: `workflows/${pack}/${packPath}`,
     });
-  };
-  for (const pack of [...packs].sort()) {
-    validateName(pack, pack);
-    const packRoot = join(workflowsRoot, pack);
-    if (!(await isDirectory(packRoot)))
-      throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
-    const shared = join(packRoot, PACK_SHARED_DIRECTORY);
-    if (await isDirectory(shared)) {
-      for (const path of await sharedFiles(shared)) {
-        const packPath = relative(packRoot, path).replaceAll('\\', '/');
-        add({
-          kind: 'pack-file',
-          pack,
-          packPath,
-          sourcePath: path,
-          relativePath: `workflows/${pack}/${packPath}`,
-        });
-      }
-    }
-    for (const entry of await readdir(packRoot, { withFileTypes: true })) {
-      if (
-        entry.name === PACK_SHARED_DIRECTORY ||
-        entry.name === FIXTURES_DIR ||
-        !(await entryType(packRoot, entry)).isDirectory()
-      )
-        continue;
-      const workflow = entry.name;
-      validateName(workflow, `${pack}/${workflow}`);
-      const directory = join(packRoot, workflow);
-      const yamlFiles = (await readdir(directory)).filter(name =>
-        ['.yaml', '.yml'].includes(extname(name))
-      );
-      if (yamlFiles.length !== 1)
-        throw new Error(
-          `Packaged workflow "${pack}/${workflow}" must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`
-        );
-      workflowFile(join(directory, yamlFiles[0]), { pack, workflow });
-      const owner = { source: 'bundled' as const, pack, workflow };
-      const commands = join(directory, 'commands');
-      if (await isDirectory(commands)) {
-        for (const entry of await readdir(commands, { withFileTypes: true })) {
-          if (!(await entryType(commands, entry)).isFile() || !entry.name.endsWith('.md')) continue;
-          const name = basename(entry.name, '.md');
-          validateName(name, entry.name);
-          add({
-            kind: 'command',
-            name: formatPackagedResourceReference(owner, name),
-            sourcePath: join(commands, entry.name),
-            relativePath: `workflows/${pack}/${workflow}/commands/${entry.name}`,
-          });
-        }
-      }
-      const scripts = join(directory, 'scripts');
-      if (await isDirectory(scripts)) {
-        const seen = new Set<string>();
-        for (const entry of await readdir(scripts, { withFileTypes: true })) {
-          const kind = await entryType(scripts, entry);
-          const candidates: string[] = [];
-          if (kind.isDirectory()) {
-            const directory = join(scripts, entry.name);
-            for (const child of await readdir(directory, { withFileTypes: true })) {
-              if ((await entryType(directory, child)).isFile())
-                candidates.push(`${entry.name}/${child.name}`);
-            }
-          } else if (kind.isFile()) candidates.push(entry.name);
-          for (const candidate of candidates) {
-            const extension = extname(candidate);
-            const scriptRuntime = runtime(extension);
-            if (scriptRuntime === undefined) continue;
-            const name = basename(candidate, extension);
-            validateName(name, candidate);
-            if (seen.has(name))
-              throw new Error(`Duplicate packaged script "${name}" in ${pack}/${workflow}.`);
-            seen.add(name);
-            const packPath = `${workflow}/scripts/${candidate}`;
-            add({
-              kind: 'pack-file',
-              pack,
-              packPath,
-              sourcePath: join(packRoot, packPath),
-              relativePath: `workflows/${pack}/${packPath}`,
-              entry: { name: formatPackagedResourceReference(owner, name), runtime: scriptRuntime },
-            });
-          }
-        }
-      }
+  }
+}
+
+async function isWorkflowDirectory(packRoot: string, entry: Dirent): Promise<boolean> {
+  if (entry.name === PACK_SHARED_DIRECTORY || entry.name === FIXTURES_DIR) return false;
+  return (await entryType(packRoot, entry)).isDirectory();
+}
+
+async function collectWorkflow(scope: PackScope, workflow: string): Promise<void> {
+  const { workflowsRoot, pack, packRoot, add } = scope;
+  validateName(workflow, `${pack}/${workflow}`);
+  const directory = join(packRoot, workflow);
+  const path = join(directory, await workflowYamlFile(directory, `${pack}/${workflow}`));
+  const name = basename(path, extname(path));
+  validateName(name, path);
+  add({
+    kind: 'workflow',
+    name,
+    owner: { pack, workflow },
+    sourcePath: path,
+    relativePath: `workflows/${relative(workflowsRoot, path).replaceAll('\\', '/')}`,
+  });
+  await collectCommands(scope, workflow);
+  await collectScripts(scope, workflow);
+}
+
+async function workflowYamlFile(directory: string, reference: string): Promise<string> {
+  const yamlFiles = (await readdir(directory)).filter(name =>
+    ['.yaml', '.yml'].includes(extname(name))
+  );
+  if (yamlFiles.length !== 1)
+    throw new Error(
+      `Packaged workflow "${reference}" must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`
+    );
+  return yamlFiles[0];
+}
+
+function bundledOwner(pack: string, workflow: string): WorkflowResourceOwner {
+  return { source: 'bundled', pack, workflow };
+}
+
+async function collectCommands(
+  { pack, packRoot, add }: PackScope,
+  workflow: string
+): Promise<void> {
+  const commands = join(packRoot, workflow, 'commands');
+  if (!(await isDirectory(commands))) return;
+  for (const entry of await readdir(commands, { withFileTypes: true })) {
+    if (!(await entryType(commands, entry)).isFile() || !entry.name.endsWith('.md')) continue;
+    const name = basename(entry.name, '.md');
+    validateName(name, entry.name);
+    add({
+      kind: 'command',
+      name: formatPackagedResourceReference(bundledOwner(pack, workflow), name),
+      sourcePath: join(commands, entry.name),
+      relativePath: `workflows/${pack}/${workflow}/commands/${entry.name}`,
+    });
+  }
+}
+
+/** Script entries are the runtime files directly in `scripts/` or one directory below it. */
+async function collectScripts({ pack, packRoot, add }: PackScope, workflow: string): Promise<void> {
+  const scripts = join(packRoot, workflow, 'scripts');
+  if (!(await isDirectory(scripts))) return;
+  const seen = new Set<string>();
+  for (const entry of await readdir(scripts, { withFileTypes: true })) {
+    for (const candidate of await scriptCandidates(scripts, entry)) {
+      const extension = extname(candidate);
+      const scriptRuntime = runtime(extension);
+      if (scriptRuntime === undefined) continue;
+      const name = basename(candidate, extension);
+      validateName(name, candidate);
+      if (seen.has(name))
+        throw new Error(`Duplicate packaged script "${name}" in ${pack}/${workflow}.`);
+      seen.add(name);
+      const packPath = `${workflow}/scripts/${candidate}`;
+      add({
+        kind: 'pack-file',
+        pack,
+        packPath,
+        sourcePath: join(packRoot, packPath),
+        relativePath: `workflows/${pack}/${packPath}`,
+        entry: {
+          name: formatPackagedResourceReference(bundledOwner(pack, workflow), name),
+          runtime: scriptRuntime,
+        },
+      });
     }
   }
-  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+async function scriptCandidates(scripts: string, entry: Dirent): Promise<string[]> {
+  const kind = await entryType(scripts, entry);
+  if (kind.isFile()) return [entry.name];
+  if (!kind.isDirectory()) return [];
+  const directory = join(scripts, entry.name);
+  const candidates: string[] = [];
+  for (const child of await readdir(directory, { withFileTypes: true })) {
+    if ((await entryType(directory, child)).isFile())
+      candidates.push(`${entry.name}/${child.name}`);
+  }
+  return candidates;
 }
 
 export async function readBundleContent(file: BundleSourceFile): Promise<string> {
