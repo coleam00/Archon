@@ -52,7 +52,8 @@ import { checkClaudeNativeAuth } from './native-auth';
 import { resolveClaudeBinaryPath, resolveClaudeBinaryWithSource } from './binary-resolver';
 import { ClassifiedProviderError } from '../shared/failure';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
-import { claudeSessionTranscriptMissing, readSessionSpendBaseline } from './session-spend-reader';
+import { readSessionSpendBaseline } from './session-spend-reader';
+import { markStaleResume } from './stale-resume';
 import { createLogger } from '@archon/paths';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
@@ -568,33 +569,6 @@ function trackSubtask(
 ): void {
   if (chunk.status === 'started' || chunk.status === 'running') openSubtaskIds.add(chunk.taskId);
   else openSubtaskIds.delete(chunk.taskId);
-}
-
-/**
- * Claude rejects a resume of a missing session with an untyped `error_during_execution`,
- * the same subtype as a mid-turn crash. Only a host lookup that finds no transcript tells
- * them apart without reading the vendor's error text; a container run is never marked.
- */
-async function markStaleResume(
-  chunk: MessageChunk,
-  resumeSessionId: string | undefined,
-  lookup: { cwd: string; env: NodeJS.ProcessEnv; signal: AbortSignal; isContainerRun: boolean }
-): Promise<MessageChunk> {
-  if (
-    chunk.type !== 'result' ||
-    resumeSessionId === undefined ||
-    lookup.isContainerRun ||
-    chunk.failure?.class !== 'unknown' ||
-    chunk.errorSubtype !== 'error_during_execution' ||
-    (await claudeSessionTranscriptMissing(resumeSessionId, lookup)) !== true
-  ) {
-    return chunk;
-  }
-  getLog().warn(
-    { sessionIdPreview: sessionPreview(resumeSessionId) },
-    'claude.resume_session_not_found'
-  );
-  return { ...chunk, sessionNotFound: true };
 }
 
 function createQueryInput(
