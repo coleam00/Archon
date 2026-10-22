@@ -355,7 +355,7 @@ Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and
 
 ## Authentication Environment Variables
 
-These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables — they must be set in your shell environment or `.env` file before Archon starts.
+These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables. Set them before Archon starts in your shell environment, `~/.archon/.env` for user-wide credentials, or `<cwd>/.archon/.env` for project overrides. The CLI strips keys named in a target repository's `<cwd>/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence and entry-point differences.
 
 | Variable | Description |
 |----------|-------------|

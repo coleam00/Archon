@@ -10,6 +10,8 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
+In the checks below, `.env` means the file for your installation: `~/.archon/.env` or `<cwd>/.archon/.env` for the CLI, Archon's checkout-root `.env` for a source server, or the Compose `.env` for Docker. Substitute that path in the commands. The CLI strips keys named in a target repository's `<cwd>/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence.
+
 ## Project uses an unexpected provider
 
 New projects follow the configured provider when a conversation is created: repository
