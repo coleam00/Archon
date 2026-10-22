@@ -170,7 +170,7 @@ Everything below is written as the `gh` account, to the repository the queues na
 | Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met. Before merging, the merge queue changes `Refs #N` to `Closes #N` when the Ready review left nothing open, and changes it back if the merge doesn't land | Build queue rounds; merge queue |
 | CI | Reruns the failed jobs of a run once, when red is outside the change or on the default branch | Build queue rounds, merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
-| Worktrees and branches | If you schedule it, removes each worktree whose pull request merged, with the branch Archon created, remote included | `archon-worktree-cleanup` |
+| Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon-worktree-cleanup` |
 
 On your machine it keeps state documents (`archon state list --prefix work/`), worktrees and run artifacts under `~/.archon/`.
 
