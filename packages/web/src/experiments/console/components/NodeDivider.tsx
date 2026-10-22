@@ -46,7 +46,8 @@ const FAN_OUT_SLOT_LABEL: Record<FanOutSlotOutcome, string> = {
 const FAN_OUT_SLOT_DISPLAY_LIMIT = 10;
 
 /** Unfinished child work under a fan-out node; the "more" count comes from the stored tally. */
-function FanOutQualifier({ outcome }: { outcome: FanOutOutcome }): ReactElement | null {
+function FanOutQualifier({ outcome }: { outcome: NodeRun['fanOutOutcome'] }): ReactElement | null {
+  if (outcome === undefined) return null;
   const { tally } = outcome;
   const unfinished = tally.total - tally.completed;
   if (unfinished === 0) return null;
@@ -215,7 +216,7 @@ export function NodeDivider({
           ) : null}
         </div>
       ) : null}
-      {fanOutOutcome ? <FanOutQualifier outcome={fanOutOutcome} /> : null}
+      <FanOutQualifier outcome={fanOutOutcome} />
     </div>
   );
 }

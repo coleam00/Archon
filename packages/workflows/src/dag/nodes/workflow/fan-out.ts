@@ -513,49 +513,72 @@ export async function executeFanOutWorkflowNode(
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
-  // 7. Classify every slot from its durable child row. Every child is terminal here, so a
-  //    read failure fails the node without leaving a live child owned.
-  const built = await buildFanOutOutcome(deps.store, parentRun.id, stepName, outcomes);
+  return joinSettledChildren(node, ctx, fanOut.join, stepName, outcomes, {
+    notify,
+    fail: (error, failureKind, diagnostics) =>
+      failResult(error, failureKind, totalCostUsd, totalTokens, diagnostics),
+    complete: (elements, fanOutOutcome) =>
+      writeCompleted(JSON.stringify(elements), totalCostUsd, totalTokens, elements, fanOutOutcome),
+  });
+}
+
+/** How a settled fan-out reports: the node's own writers, bound to its spend. */
+interface SettledFanOutWriters {
+  notify: (text: string) => Promise<void>;
+  fail: (
+    error: string,
+    failureKind: NodeFailureKind,
+    diagnostics?: { fanOutOutcome: FanOutOutcome }
+  ) => Promise<NodeExecutionResult>;
+  complete: (elements: JsonValue[], fanOutOutcome: FanOutOutcome) => Promise<NodeExecutionResult>;
+}
+
+/**
+ * Every child is terminal: classify each slot from its durable child row, reduce through
+ * the join, and write the node's outcome with its slot record. A read failure fails the
+ * node without leaving a live child owned, because no child is live any more.
+ */
+async function joinSettledChildren(
+  node: WorkflowNode,
+  ctx: RunLayersContext,
+  join: FanOutConfig['join'],
+  stepName: string,
+  outcomes: readonly ChildWorkflowOutcome[],
+  writers: SettledFanOutWriters
+): Promise<NodeExecutionResult> {
+  const parentRunId = ctx.workflowRun.id;
+  const built = await buildFanOutOutcome(ctx.deps.store, parentRunId, stepName, outcomes);
   if ('lookupError' in built) {
     const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(built.lookupError as Error).message}`;
-    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown', totalCostUsd, totalTokens);
+    await writers.notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return writers.fail(msg, 'unknown');
   }
   const { outcome: fanOutOutcome } = built;
   const { tally } = fanOutOutcome;
 
-  // 8. Join.
-  const joined = joinFanOutOutcomes(parentRun.id, node, fanOut.join, outcomes, fanOutOutcome.slots);
+  const joined = joinFanOutOutcomes(parentRunId, node, join, outcomes, fanOutOutcome.slots);
   if (joined.status === 'failed') {
     if (tally.not_started > 0) {
       getLog().warn(
-        { parentRunId: parentRun.id, nodeId: node.id, ...tally },
+        { parentRunId, nodeId: node.id, ...tally },
         'workflow.fan_out_slots_not_started'
       );
     }
-    await notify(joined.notice);
-    return failResult(joined.error, joined.failureKind, totalCostUsd, totalTokens, {
-      fanOutOutcome,
-    });
+    await writers.notify(joined.notice);
+    return writers.fail(joined.error, joined.failureKind, { fanOutOutcome });
   }
-  const completed = await writeCompleted(
-    JSON.stringify(joined.elements),
-    totalCostUsd,
-    totalTokens,
-    joined.elements,
-    fanOutOutcome
-  );
+  const completed = await writers.complete(joined.elements, fanOutOutcome);
   // The node completed by its join; the qualification goes out only after that durable
   // write, through a notifier that never throws, so delivery cannot fail completed work.
   if (tally.completed < tally.total) {
     getLog().warn(
-      { parentRunId: parentRun.id, nodeId: node.id, ...tally },
+      { parentRunId, nodeId: node.id, ...tally },
       'workflow.fan_out_completed_with_unfinished_children'
     );
-    await notify(
+    await writers.notify(
       `⚠️ **Fan-out completed with unfinished children** (node \`${node.id}\`): ` +
         `${describeUnfinishedFanOut(tally)}. ` +
-        `See \`${spellWorkflowCommand(platform, 'status')}\`.`
+        `See \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
     );
   }
   return completed;

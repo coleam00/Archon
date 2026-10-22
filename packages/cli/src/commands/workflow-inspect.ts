@@ -482,18 +482,23 @@ function printAttentionWaitLines(
       console.log(`    ${line}`);
 }
 
+/** Unfinished fan-out child work under each node of a finished run. */
+function terminalFanOutLines(nodes: NonNullable<TerminalRecord>['nodes']): string[] {
+  return nodes.flatMap(node => {
+    const lines = formatFanOutOutcome(node.fan_out_outcome);
+    return lines.length === 0
+      ? []
+      : [`    Node ${node.node_id}:`, ...lines.map(line => `      ${line}`)];
+  });
+}
+
 function printTerminalRecord(terminalRecord: TerminalRecord): void {
   if (terminalRecord) {
     console.log('  Terminal record:');
     if (terminalRecord.first_failed_node) {
       console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
     }
-    for (const node of terminalRecord.nodes) {
-      if (node.fan_out_outcome === undefined) continue;
-      const lines = formatFanOutOutcome(node.fan_out_outcome);
-      if (lines.length > 0) console.log(`    Node ${node.node_id}:`);
-      for (const line of lines) console.log(`      ${line}`);
-    }
+    terminalFanOutLines(terminalRecord.nodes).forEach(line => console.log(line));
     console.log(`    Selected return: ${terminalRecord.returns.availability}`);
     console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
     for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
