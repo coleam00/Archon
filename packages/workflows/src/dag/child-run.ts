@@ -175,17 +175,10 @@ export async function readChildOutcome(
   if (held || !outcome.costIncomplete || outcome.costUsd === undefined) {
     try {
       const usage = await store.getDagResumeSnapshot(run.id);
-      if (usage.costIncomplete) outcome.costIncomplete = true;
-      // Signed contributions can reduce cumulative totals; never take the maximum.
-      outcome.costUsd = held
-        ? (usage.costUsd ?? outcome.costUsd)
-        : (outcome.costUsd ?? usage.costUsd);
-      if (usage.tokensUnknown) outcome.tokensUnknown = true;
-      outcome.tokens = outcome.tokensUnknown
-        ? undefined
-        : held
-          ? (usage.tokens ?? outcome.tokens)
-          : (outcome.tokens ?? usage.tokens);
+      return {
+        ...outcome,
+        ...childUsageFromSnapshots(held ? usage : outcome, held ? outcome : usage),
+      };
     } catch (err) {
       // Enrichment cannot undo accepted usage or send a settled child through setup cleanup.
       outcome.costIncomplete = true;
@@ -193,4 +186,15 @@ export async function readChildOutcome(
     }
   }
   return outcome;
+}
+
+function childUsageFromSnapshots(preferred: NodeUsage, fallback: NodeUsage): NodeUsage {
+  const tokensUnknown = preferred.tokensUnknown || fallback.tokensUnknown || undefined;
+  return {
+    // Signed contributions can reduce cumulative totals; never take the maximum.
+    costUsd: preferred.costUsd ?? fallback.costUsd,
+    costIncomplete: preferred.costIncomplete || fallback.costIncomplete || undefined,
+    tokensUnknown,
+    tokens: tokensUnknown ? undefined : (preferred.tokens ?? fallback.tokens),
+  };
 }
