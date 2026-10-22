@@ -49,6 +49,7 @@ import {
   type StartBindingInspection,
   type ResourceStartRequestInspection,
   type QueuedResourceStartInspection,
+  type DamagedStartReceipt,
 } from '../resource-start-store';
 import { WorkflowNotResumableError } from '../store';
 import {
@@ -690,10 +691,25 @@ export function createFileAdmissionStore(
       ),
     listPendingStartBindings: options =>
       query(async tx => {
-        const rows = (await list('receipts', receiptSchema)).flatMap(receipt =>
-          receipt.bindings.map(binding => ({ binding, createdAt: receipt.createdAt }))
-        );
-        return Promise.all(
+        // Each receipt is read on its own: one damaged document must not hide every host's
+        // pending bindings.
+        const damaged: DamagedStartReceipt[] = [];
+        const rows: { binding: Binding; createdAt: string }[] = [];
+        for (const path of await documentPaths(root, 'receipts')) {
+          let receipt: z.output<typeof receiptSchema>;
+          try {
+            receipt = receiptSchema.parse(await readJson(join(root, path)));
+          } catch (error) {
+            damaged.push({
+              document: path,
+              error: new Error(`Invalid start receipt document '${path}'`, { cause: error }),
+            });
+            continue;
+          }
+          for (const binding of receipt.bindings)
+            rows.push({ binding, createdAt: receipt.createdAt });
+        }
+        const bindings = await Promise.all(
           rows
             .filter(
               ({ binding }) =>
@@ -708,6 +724,7 @@ export function createFileAdmissionStore(
             .slice(0, options.limit ?? 100)
             .map(({ binding }) => inspectBinding(tx, binding))
         );
+        return [...damaged, ...bindings];
       }),
     getResourceStartRequest: id =>
       query(async tx => {
