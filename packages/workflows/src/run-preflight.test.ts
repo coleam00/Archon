@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
-import { beforeAll, describe, expect, mock, test } from 'bun:test';
+import { beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import type { CredentialStatus, ProviderDefaultsMap } from '@archon/provider-contract';
 import type {
@@ -221,6 +221,33 @@ describe('run credential preflight', () => {
       "Credential preflight failed for provider 'claude' (vendor 'anthropic'): could not verify native authentication"
     );
     expect(checkCredential).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['throws on abort', (signal: AbortSignal) => Promise.reject(signal.reason)],
+    [
+      'reports its abort as a failed check',
+      (): Promise<CredentialStatus> =>
+        Promise.resolve({ state: 'check_failed', source: 'native', evidence: 'aborted' }),
+    ],
+  ] as const)('a timed-out native probe that %s refuses with a timeout', async (_, probe) => {
+    const timeout = spyOn(AbortSignal, 'timeout').mockImplementation(() =>
+      AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError'))
+    );
+    try {
+      const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+      const { deps, checkCredential } = fixture();
+      checkCredential.mockImplementation(({ signal }) => probe(signal));
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/p');
+      const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
+      await expect(check).rejects.toBeInstanceOf(WorkflowCredentialPreflightError);
+      await expect(check).rejects.toThrow(
+        "Credential preflight failed for provider 'claude' (vendor 'anthropic'): native authentication check timed out after 60s"
+      );
+      expect(timeout).toHaveBeenCalledWith(60_000);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   test('a stored connection removed after launch cannot switch to native authentication', async () => {
