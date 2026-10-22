@@ -18,7 +18,7 @@
  * next queue run picks the item up as before.
  *
  * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
- * attention answer; INPUTS_ORDER, INPUTS_LIMIT and INPUTS_MERGE_METHOD, the workflow's inputs.
+ * attention answer; INPUTS_LIMIT, INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_AS, the workflow's inputs.
  */
 
 import { withBuild } from '../../.shared/build.ts';
@@ -43,8 +43,8 @@ function continueNow(effect: string, item: QualifiedPr, runId: string, selection
     const next =
       effect === 'merge'
         ? launchDetached('archon-merge-queue', { ...selections, ...repo }, { configFromRun: runId })
-        : // The build queue declares none of the merge queue's selections, and a numbered
-          // round reads no `order`, so a returned round runs on the build queue's defaults.
+        : // The build queue declares none of the merge queue's selections, so a returned
+          // round runs on the build queue's defaults.
           launchDetached('archon-build-queue', { ...repo, number: String(item.number) }, { configFromRun: runId });
     return `; run ${next} acts on it now`;
   } catch (error) {
@@ -87,7 +87,6 @@ function main(): void {
   const choice = chosen(asked.attention, id);
   const at = new Date().toISOString();
   const selections: MergeQueueSelections = {
-    order: text(process.env.INPUTS_ORDER),
     limit: text(process.env.INPUTS_LIMIT),
     merge_method: text(process.env.INPUTS_MERGE_METHOD),
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),

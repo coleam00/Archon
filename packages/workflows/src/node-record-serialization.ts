@@ -10,6 +10,7 @@ import type { NodeOutput } from './schemas/workflow-run';
 import { fanOutOutcomeSchema } from './schemas/fan-out-outcome';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
+  childUsageSchema,
   executionBindingSchema,
   executionSpendSchema,
   nodeExecutionMetadataSchema,
@@ -75,6 +76,7 @@ export const serializedNodeDataSchema = z.object({
   session_forked: z.boolean().optional(),
   background_tasks_incomplete: z.array(z.string()).optional(),
   child_run_id: z.string().optional(),
+  child_usage: z.array(childUsageSchema).optional(),
   blocked_on_child_run_id: z.string().optional(),
   fan_out: z.boolean().optional(),
   fan_out_outcome: fanOutOutcomeSchema.optional(),
@@ -381,6 +383,7 @@ function sessionDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
 
 function childRunDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
   return {
+    ...(d.childUsage !== undefined ? { child_usage: d.childUsage } : {}),
     ...(d.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
     ...(d.blockedOnChildRunId !== undefined
       ? { blocked_on_child_run_id: d.blockedOnChildRunId }

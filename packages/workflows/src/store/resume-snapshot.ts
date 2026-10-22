@@ -1,4 +1,4 @@
-import type { TokenUsage } from '@archon/provider-contract';
+import type { RunUsageFigures } from '../dag/usage';
 import type { FanOutInstanceSnapshot } from '../fan-out-identity';
 import type { DeclaredOutputPaths } from '../output-ref';
 import type { RunBudgetUsage } from '../run-budget';
@@ -35,7 +35,11 @@ export interface PriorFailedNode {
   failureKind?: NodeFailureKind;
 }
 
-export interface DagResumeSnapshot {
+export interface DagResumeSnapshot extends RunUsageFigures {
+  /** Cumulative usage already reported for each child run, keyed by child run id. */
+  reportedChildUsage?: Map<string, RunUsageFigures>;
+  /** Historical workflow spend with no unambiguous child attribution, keyed by path. */
+  unattributedChildUsagePaths?: Set<string>;
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
@@ -45,10 +49,6 @@ export interface DagResumeSnapshot {
   fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
   /** Node/instance starts with no later terminal event, in lifecycle order. */
   unresolvedNodeStarts: Set<string>;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  /** Cumulative reported USD cost from completed/failed attempts and abandoned deferred segments. */
-  costUsd?: number;
   /**
    * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
    * from `costUsd`, which is telemetry and cannot tell unknown spend from none.

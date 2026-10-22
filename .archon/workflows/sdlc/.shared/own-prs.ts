@@ -10,7 +10,7 @@
  * and enrollment after the round finds the pull request recorded.
  */
 
-import { record, samePr, type QualifiedPr } from './forge.ts';
+import { forgeSource, record, samePr, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
 import { prFromUrl } from './merge.ts';
 import { stateDocuments, stateGet, statePut } from './state.ts';
@@ -70,6 +70,11 @@ export function isOwnPr(doc: WorkItem): boolean {
 /** Create a work item for each own pull request no work item names; returns their numbers. */
 export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<string>, at: string): number[] {
   if (authors.size === 0) return [];
+  if (forgeSource() === 'forge') {
+    throw new Error(
+      "own-PR enrollment lists a maintainer's open pull requests, which the forge contract cannot read; on ARCHON_SDLC_FORGE=forge no own pull request is enrolled"
+    );
+  }
   const named = namedPrs();
   const enrolled: number[] = [];
   for (const author of authors) {

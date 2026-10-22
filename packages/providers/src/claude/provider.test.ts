@@ -1,4 +1,5 @@
 import * as containerSpawnModule from './container-spawn';
+import * as sessionSpendReader from './session-spend-reader';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
@@ -1905,14 +1906,28 @@ describe('cost of a resumed or forked session is the query’s own spend', () =>
     });
 
     test('is not marked in a container run, whose transcripts the host cannot see', async () => {
-      sdkYields(rejection);
-      const chunks = await chunksOf('test', '/workspace', staleId, {
-        env: { CLAUDE_CONFIG_DIR: configRoot },
-        execContext: { kind: 'container', containerId: 'c-1' },
+      const baseline = spyOn(sessionSpendReader, 'readSessionSpendBaseline').mockResolvedValue({
+        kind: 'unknown',
       });
-      const result = chunks.find(chunk => chunk.type === 'result');
-      expect(result?.isError).toBe(true);
-      expect(result).not.toHaveProperty('sessionNotFound');
+      const hostLookup = spyOn(sessionSpendReader, 'claudeSessionTranscriptMissing');
+      try {
+        sdkYields(rejection);
+        const chunks = await chunksOf('test', '/workspace', staleId, {
+          env: { CLAUDE_CONFIG_DIR: configRoot },
+          execContext: { kind: 'container', containerId: 'c-1' },
+        });
+        const result = chunks.find(chunk => chunk.type === 'result');
+        expect(result?.isError).toBe(true);
+        expect(result).not.toHaveProperty('sessionNotFound');
+        expect(baseline).toHaveBeenCalledWith(
+          staleId,
+          expect.objectContaining({ execContext: { kind: 'container', containerId: 'c-1' } })
+        );
+        expect(hostLookup).not.toHaveBeenCalled();
+      } finally {
+        baseline.mockRestore();
+        hostLookup.mockRestore();
+      }
     });
 
     test.each([

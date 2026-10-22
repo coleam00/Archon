@@ -24,11 +24,6 @@ inputs:
     description: The forge host of the repository whose work items the queue builds.
   repo_path:
     description: The owner/name path of that repository.
-  order:
-    default: '["urgency desc","importance desc","size asc","created asc"]'
-    description: >-
-      Pickup order, intake's format: a JSON array of "<key> <asc|desc>" with keys
-      urgency, importance, size, complexity and created.
   number:
     default: ""
     description: >-

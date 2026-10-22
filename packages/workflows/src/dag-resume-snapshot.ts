@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
-import { sumReportedCost } from './dag/usage';
+import { sumFanOutTokens, sumReportedCost } from './dag/usage';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 import {
   nodeInvocationKey,
@@ -133,8 +133,9 @@ interface ResumeFold {
   readonly completedExecutions: Map<string, NodeExecutionMetadata>;
   /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
-  readonly usageContributions: UsageContribution[];
-  readonly authoritativeInstanceScopes: Set<string>;
+  usageContributions: UsageContribution[];
+  readonly reportedChildUsage: NonNullable<DagResumeSnapshot['reportedChildUsage']>;
+  readonly unattributedChildUsagePaths: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
   readonly openAgentAttempts: Map<string, string>;
@@ -203,7 +204,11 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   return undefined;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+function readUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage']
+): UsageContribution {
   const contribution: UsageContribution = {
     stepName,
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
@@ -217,6 +222,11 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
     if (costUsd !== undefined) contribution.costUsd = costUsd;
   }
+  return contribution;
+}
+
+function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+  const contribution = readUsage(fold, stepName, rawUsage);
   if (
     contribution.tokensUnknown ||
     contribution.tokens !== undefined ||
@@ -422,16 +432,77 @@ async function readCompletedOutput(
 }
 
 function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): void {
-  // Composed-instance terminals are the durable accounting source for their whole
-  // scope. Their inner rows are observability writes and may be missing after a crash.
+  // Each instance terminal owns only the preceding segment. Later inner rows
+  // remain counted until a subsequent terminal replaces that segment.
   const isAuthoritativeInstanceUsage =
     record.data.type === 'compose_fan_out_instance' &&
     (row.event_type === 'node_completed' || row.event_type === 'node_failed');
-  if (isAuthoritativeInstanceUsage) fold.authoritativeInstanceScopes.add(row.step_name);
+  if (isAuthoritativeInstanceUsage) {
+    const prefix = `${row.step_name}__`;
+    fold.usageContributions = fold.usageContributions.filter(
+      contribution => !contribution.stepName.startsWith(prefix)
+    );
+  }
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type !== 'node_skipped_prior_success') {
     addUsage(fold, row.step_name, record.rawUsage);
+  }
+}
+
+function foldReportedChildUsage(
+  fold: ResumeFold,
+  usages: NonNullable<NodeRecord['data']['child_usage']>
+): void {
+  for (const usage of usages) {
+    const prior = fold.reportedChildUsage.get(usage.childRunId);
+    const hasTokenMeasurement = usage.tokens !== undefined || usage.tokensUnknown === true;
+    fold.reportedChildUsage.set(usage.childRunId, {
+      ...usage,
+      costUsd: usage.costUsd ?? prior?.costUsd,
+      tokens:
+        usage.tokens !== undefined
+          ? { ...prior?.tokens, ...usage.tokens }
+          : hasTokenMeasurement
+            ? undefined
+            : prior?.tokens,
+      tokensUnknown: hasTokenMeasurement ? usage.tokensUnknown : prior?.tokensUnknown,
+    });
+  }
+}
+
+function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
+  const { data, path } = record;
+  if (data.child_usage !== undefined) {
+    foldReportedChildUsage(fold, data.child_usage);
+    return;
+  }
+  if (data.type !== 'workflow') return;
+  const usage = readUsage(fold, path, record.rawUsage);
+  if (
+    (usage.costUsd ?? 0) === 0 &&
+    !usage.tokensUnknown &&
+    Object.values(usage.tokens ?? {}).every(value => value === undefined || value === 0)
+  )
+    return;
+  const ids = new Set(
+    data.fan_out_outcome?.slots.flatMap(slot => ('child_run_id' in slot ? [slot.child_run_id] : []))
+  );
+  if (data.child_run_id !== undefined) ids.add(data.child_run_id);
+  // Historical fan-out increments cannot be allocated among children. Keep their
+  // node-level spend readable without inventing cumulative child baselines.
+  if (ids.size !== 1) {
+    fold.unattributedChildUsagePaths.add(path);
+    return;
+  }
+  // Legacy workflow rows report increments, unlike child_usage's cumulative baselines.
+  for (const id of ids) {
+    const contributions = [fold.reportedChildUsage.get(id) ?? {}, usage];
+    fold.reportedChildUsage.set(id, {
+      costUsd: sumReportedCost(contributions),
+      tokens: sumFanOutTokens(contributions),
+      tokensUnknown: contributions.some(value => value.tokensUnknown),
+    });
   }
 }
 
@@ -462,6 +533,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
       await readCompletedOutput(fold, row.step_name, data, data.node_output)
     );
   }
+  if (row.event_type !== 'node_skipped_prior_success') foldChildUsage(fold, record);
   foldNodeUsage(fold, row, record);
 }
 
@@ -484,13 +556,7 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
 function countedUsage(
   fold: ResumeFold
 ): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'> {
-  const authoritativeInstancePrefixes = [...fold.authoritativeInstanceScopes].map(
-    scope => `${scope}__`
-  );
-  const counted = fold.usageContributions.filter(
-    contribution =>
-      !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
-  );
+  const counted = fold.usageContributions;
   const tokensUnknown = counted.some(contribution => contribution.tokensUnknown);
   return {
     tokensUnknown,
@@ -566,7 +632,8 @@ export async function foldDagResumeSnapshot(
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
     usageContributions: [],
-    authoritativeInstanceScopes: new Set(),
+    reportedChildUsage: new Map(),
+    unattributedChildUsagePaths: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
     settledAgentAttempts: new Set(),
@@ -578,6 +645,8 @@ export async function foldDagResumeSnapshot(
     fold.budget.costUnavailable ??= { path, reason: 'interrupted' };
   }
   return {
+    reportedChildUsage: fold.reportedChildUsage,
+    unattributedChildUsagePaths: fold.unattributedChildUsagePaths,
     unfinishedInvocations: fold.unfinishedInvocations,
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,

@@ -1,3 +1,4 @@
+import { runUsageSchema } from './run-usage';
 import { declaredOutputPathsSchema } from '../output-ref';
 import { z } from 'zod';
 import { fanOutOutcomeSchema } from './fan-out-outcome';
@@ -184,6 +185,8 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
+export const childUsageSchema = runUsageSchema.extend({ childRunId: z.string() });
+
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),
   loopIterations: z.number().optional(),
@@ -197,6 +200,8 @@ export const executionDiagnosticsSchema = z.object({
   backgroundTasksIncomplete: z.array(z.string()).optional(),
   /** The child run this node ran, or is suspended on. */
   childRunId: z.string().optional(),
+  /** Cumulative child totals covered by this node's incremental spend. */
+  childUsage: z.array(childUsageSchema).optional(),
   /**
    * The node FAILED because this child run is still live and ownership is ambiguous;
    * abandoning that run is what unblocks the parent. Distinct from `childRunId` so a

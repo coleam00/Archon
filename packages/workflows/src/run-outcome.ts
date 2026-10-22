@@ -1,3 +1,5 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
+import { ParentStatusReadError } from './parent-status-read';
 import { createLogger } from '@archon/paths';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { executeDagWorkflow } from './dag-executor';
@@ -15,7 +17,7 @@ import {
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
-import { isApprovalContext, pendingWorkflowWaitDeadline } from './schemas';
+import { isApprovalContext, isTerminalRunStatus, pendingWorkflowWaitDeadline } from './schemas';
 import { deadlineWaitCursor } from './store';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 
@@ -28,10 +30,10 @@ function getLog(): ReturnType<typeof createLogger> {
 /**
  * How an execution left its run, read by `executeWorkflow`'s finally-block backstop.
  * `executionStopped`: ownership passed to a successor (a source release, a published
- * container pause, a continued fan-out parent or a handoff error), so the backstop has
- * no authority over the row even when it is running again. `terminalStatusWriteFailed`:
- * a terminal status write was rejected, and a second write over that channel would
- * either fail again or mask the real error.
+ * container pause, a continued fan-out parent or a handoff error), or lifecycle
+ * observation was interrupted. The backstop has no authority over that row.
+ * `terminalStatusWriteFailed`: a terminal status write was rejected, and a second
+ * write over that channel would either fail again or mask the real error.
  */
 export interface RunExitState {
   executionStopped: boolean;
@@ -134,11 +136,7 @@ async function resumeParentOfEndedChild(
   finalStatus: WorkflowRun,
   resolveChildIsolation: ChildIsolationResolver | undefined
 ): Promise<void> {
-  const ended =
-    finalStatus.status === 'completed' ||
-    finalStatus.status === 'failed' ||
-    finalStatus.status === 'cancelled';
-  if (!finalStatus.parent_run_id || !ended) return;
+  if (!finalStatus.parent_run_id || !isTerminalRunStatus(finalStatus.status)) return;
   await maybeResumeParentRun(
     deps,
     platform,
@@ -222,8 +220,8 @@ function didNotComplete(workflowRunId: string): WorkflowExecutionResult {
 
 /**
  * Top-level error handler: mark the run failed and return the failure as the result.
- * A rejected terminal status write — one arriving from the DAG or a sub-run, or this
- * handler's own — is recorded on `exit` and rethrown instead.
+ * Execution interruptions leave lifecycle ownership unresolved and are rethrown.
+ * Rejected terminal writes also prevent a second write through the backstop.
  */
 export async function recordUnhandledRunFailure(
   deps: WorkflowDeps,
@@ -235,8 +233,16 @@ export async function recordUnhandledRunFailure(
   error: unknown,
   exit: RunExitState
 ): Promise<WorkflowExecutionResult> {
-  if (error instanceof TerminalStatusWriteError) {
-    exit.terminalStatusWriteFailed = true;
+  if (isWorkflowExecutionInterruption(error)) {
+    exit.executionStopped = true;
+    if (error instanceof TerminalStatusWriteError) exit.terminalStatusWriteFailed = true;
+    if (error instanceof ParentStatusReadError) {
+      getLog().error(
+        { err: error.cause, workflowRunId: workflowRun.id, nodeId: error.nodeId },
+        'workflow.parent_status_read_failed'
+      );
+      getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+    }
     throw error;
   }
   const err = error as Error;

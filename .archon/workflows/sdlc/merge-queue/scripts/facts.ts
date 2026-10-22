@@ -29,14 +29,14 @@ import {
   type PrFacts,
   readBase,
   readPr,
-  requireGh,
+  requireMergeSource,
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
-import { claimNext, parseOrder, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   /** The issue whose work item the queue claimed. */
@@ -66,11 +66,11 @@ function quoted(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-function claimAll(limit: number, order: ReturnType<typeof parseOrder>, runId: string, pickup: Pickup): WorkItem[] {
+function claimAll(limit: number, runId: string, pickup: Pickup): WorkItem[] {
   const claimed: WorkItem[] = [];
   const at = new Date().toISOString();
   while (claimed.length < limit) {
-    const doc = claimNext(order, at, runId, pickup);
+    const doc = claimNext(at, runId, pickup);
     if (doc === null) break;
     claimed.push(doc);
   }
@@ -181,14 +181,13 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
 
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
-  const order = parseOrder(text(process.env.INPUTS_ORDER));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
   const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
   if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
-  requireGh();
+  requireMergeSource(repo);
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
   enrollOrNote(repo, list.ownPrs);
@@ -196,7 +195,7 @@ function main(): void {
   const pickup = recoveryPickup(snapshot);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
-  for (const doc of claimAll(limit, order, runId, pickup)) {
+  for (const doc of claimAll(limit, runId, pickup)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
     try {

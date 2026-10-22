@@ -8,6 +8,9 @@
  * (`dag/run-terminal`).
  */
 
+import { serializeRunUsage } from './schemas/run-usage';
+import { readInterruptedRunUsage } from './dag/interrupted-usage';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -230,34 +233,11 @@ export async function executeDagWorkflow(
   const persistRunUsage = async (): Promise<void> => {
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
-    const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
-      ...(runCtx.totalTokensUnknown
-        ? {
-            total_tokens_unknown: true,
-            total_tokens_in: null,
-            total_tokens_out: null,
-            total_cache_read_tokens: null,
-            total_cache_write_tokens: null,
-            total_cache_partial: null,
-          }
-        : {}),
-      ...(runCtx.totalTokens !== undefined
-        ? {
-            total_tokens_in: runCtx.totalTokens.input,
-            total_tokens_out: runCtx.totalTokens.output,
-            ...(runCtx.totalTokens.cacheRead !== undefined
-              ? { total_cache_read_tokens: runCtx.totalTokens.cacheRead }
-              : {}),
-            ...(runCtx.totalTokens.cacheWrite !== undefined
-              ? { total_cache_write_tokens: runCtx.totalTokens.cacheWrite }
-              : {}),
-            // Marks the two cache totals above as a floor rather than an exact figure.
-            ...(runCtx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
-          }
-        : {}),
-    };
+    const usage = serializeRunUsage({
+      costUsd: runCtx.totalCostUsd,
+      tokens: runCtx.totalTokens,
+      tokensUnknown: runCtx.totalTokensUnknown,
+    });
     if (Object.keys(usage).length === 0) return;
     await deps.store
       .updateWorkflowRun(workflowRun.id, { metadata: usage })
@@ -372,8 +352,12 @@ export async function executeDagWorkflow(
   const unwindRunLayers = async (
     error: unknown
   ): Promise<RunSourceUnreadableError | 'budget_failed'> => {
-    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
-      await refreshUsageFromDurableRows(deps.store, workflowRun.id, runCtx);
+    if (
+      error instanceof RunBudgetRefusedError ||
+      error instanceof RunSourceUnreadableError ||
+      isWorkflowExecutionInterruption(error)
+    ) {
+      await refreshUsageFromDurableRows(deps.store, workflowRun.id, runCtx, error);
     }
     if (error instanceof RunSourceUnreadableError) return error;
     await persistRunUsage();
@@ -523,6 +507,8 @@ async function createRunContext(
     containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    reportedChildUsage: resumeSnapshot?.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
     runBudget,
     deps,
     platform,
@@ -578,15 +564,16 @@ async function createRunContext(
 
 /**
  * The thunk that threw never reported its spend, nor did its settled siblings, so the
- * in-memory totals miss it. The durable rows hold all of it.
+ * in-memory totals miss it. Rebuild from node events and child run telemetry.
  */
 async function refreshUsageFromDurableRows(
   store: ExecuteDagWorkflowOptions['deps']['store'],
   workflowRunId: string,
-  runCtx: RunLayersContext
+  runCtx: RunLayersContext,
+  error: unknown
 ): Promise<void> {
   try {
-    const durable = await store.getDagResumeSnapshot(workflowRunId);
+    const durable = await readInterruptedRunUsage(store, workflowRunId, error);
     runCtx.totalCostUsd = durable.costUsd;
     runCtx.totalTokens = durable.tokens;
     runCtx.totalTokensUnknown = durable.tokensUnknown;

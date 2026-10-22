@@ -101,6 +101,7 @@
     ],
     [
       "src/forge/github/lifecycle.test.ts",
+      "src/forge/github/merge-facts.test.ts",
       "src/forge/github/workitems.test.ts",
       "src/forge/github/review-threads.test.ts"
     ],

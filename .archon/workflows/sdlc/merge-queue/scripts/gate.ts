@@ -26,7 +26,6 @@ import {
   prFromUrl,
   readBase,
   readPr,
-  requireGh,
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 
@@ -44,7 +43,6 @@ function main(): void {
   const url = flag(args, '--pr');
   const head = flag(args, '--head');
   const merge = args.includes('--merge');
-  requireGh();
   const pr = prFromUrl(url);
   const maintainers = readMaintainers(pr.repo);
   const refusals = gateRefusals(readPr(pr, maintainers), head, readBase(pr.repo));

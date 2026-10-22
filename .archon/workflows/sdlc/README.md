@@ -106,14 +106,19 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The preflight names every forge operation the pack uses, and a plugin missing any of
-them is refused before an agent spends. Keep `gh` as the default until a released
-plugin with all of them passes a real-PR check.
+The preflight names every forge operation the delivery workflows use, and a plugin
+missing any of them is refused before an agent spends. The merge queue checks its own
+operations when it starts (below). Keep `gh` as the default until a released plugin
+with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: it reads the trusted
-review comment, the default branch's head and CI, and how far a head is behind it,
-and the forge contract has no read for those yet. The gate itself doesn't refuse over
-threads; the sweep holds a merge only for a thread that raises a defect in code the
+The merge queue reads and merges through the run's source. On `forge` its facts,
+gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
+`checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
+`pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
+claims an item. Own-PR enrollment does not run on `forge`, because the contract has
+no read for a maintainer's open pull requests, and the sweep agent's failed-job
+reruns, log reads and closing-reference body edit still use `gh`. The gate itself
+doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
 `pr.thread.reply` and `pr.thread.resolve`.
@@ -392,7 +397,7 @@ request, never the state.
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
   open pull requests in the merge queue, except one a work item already names (see
-  Pickup there). No file means an empty list, so every author is outside. Any other
+  Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -408,9 +413,9 @@ request, never the state.
   and is ignored. The outcome also refuses to add a request label to an outside item
   no maintainer promoted, so the install's own identity cannot promote anything.
 - **Pickup.** Every run records its event as a request on its issue, then claims the
-  waiting item that sorts first by the `order` input (default
-  `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
-  sorts after triaged ones, oldest first) with a conditional write. A request that
+  waiting item that sorts first (most urgent, then most important, then smallest,
+  then oldest; an untriaged item sorts after triaged ones, oldest first) with a
+  conditional write. Every queue claims in this order. A request that
   arrives while its item is claimed waits for the next intake run. A request label
   whose request no run has claimed may have a request on its way, so a run leaves
   it for the run that claims that request. It waits one pickup; the next pickup
@@ -446,11 +451,6 @@ request, never the state.
   decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
   trust. Only the binding, or someone with access to the install, can supply it.
-  `trust: outside` sends the item down the outside path whatever the maintainer
-  list says. It only lowers trust a run decides: an item whose trust is already
-  recorded as a maintainer's refuses the run, since recorded trust never changes.
-  There is no `maintainer` value; `facts` refuses any value but `auto` and
-  `outside` before it reads or writes anything.
 
 The pack installs no binding. Two bindings in the GitHub source plugin's configuration start
 it; both share one resource so runs queue rather than overlap:
@@ -498,8 +498,7 @@ person. It acts on its own when a case is clear and asks when it is not; the def
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
 which a project extends with its own `.archon/sdlc/policy/build.md`.
 
-- **Pickup.** A run claims one item with intake's claim and order (the `order`
-  input). An item waits for the build queue when its work item's stage is a READY
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
   recorded it, or recorded it as waiting for its next round. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
@@ -536,7 +535,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once, a detached `archon-build-queue
-  --input number=<n>` on the run config and the `order`, `retriage_as` and
+  --input number=<n>` on the run config and the `retriage_as` and
   `round_limit` this run started with; if that launch fails, the item waits for the
   next queue run.
   Facts reports the open pull request in the item's repository as the candidate, and
@@ -580,7 +579,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   choice's ruling and the person's words into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice starts
   the item's next round at once, a detached `archon-build-queue --input number=<n>`
-  run on the run config (`--config-from-run`) and the `order`, `retriage_as` and
+  run on the run config (`--config-from-run`) and the `retriage_as` and
   `round_limit` the answered run started with, and a
   `park` choice stops working the item until a re-triage. If that launch fails, the
   item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
@@ -707,7 +706,8 @@ then the project's file, whose lines win where the two conflict.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question, and a red default branch the sweep neither re-ran nor raised: the pull
+  question, an `ask` that offers a `return` on an own pull request or with a blank
+  brief, and a red default branch the sweep neither re-ran nor raised: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -740,17 +740,13 @@ then the project's file, whose lines win where the two conflict.
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. A build-owned ask with a blank brief still raises its question, with all
-  return effects omitted and an explanation that no build brief was supplied. A
-  removed recommendation becomes `other` so the operator can record a ruling,
-  with evidence, confidence and a change condition describing that park choice.
-  The same rule applies when an own pull request's return choice is removed.
-  Every pull-request item also offers `other`; for a build item with a nonblank
+  links. A build-owned ask with a blank brief still raises its question when it
+  offers no `return`. Every pull-request item also offers `other`; for a build item with a nonblank
   brief, it returns the pull request to the build queue with the answer's text as
   the ruling. Without a brief, `other` records the text and parks until the build
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
-  a sweep the answer starts at once (on the answered run's config and its `order`,
+  a sweep the answer starts at once (on the answered run's config and its
   `limit`, `merge_method` and `retriage_as`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item

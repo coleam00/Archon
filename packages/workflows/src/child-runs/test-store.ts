@@ -1,4 +1,4 @@
-import type { InMemoryStoreEvent } from '../test-utils';
+import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
 import { readEventsForRuns } from './test-events';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import type { IWorkflowStore } from '../store';
@@ -141,9 +141,8 @@ export class InMemoryStore implements IWorkflowStore {
   deleteOldWorkflowRuns: IWorkflowStore['deleteOldWorkflowRuns'] = async () => {
     throw new Error('Not used by this test');
   };
-  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async () => {
-    throw new Error('Not used by this test');
-  };
+  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
+    inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
     readEventsForRuns(this.events, ids, types);
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];

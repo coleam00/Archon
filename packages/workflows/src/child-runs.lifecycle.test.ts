@@ -10,6 +10,8 @@ import {
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
+import { ParentStatusReadError } from './parent-status-read';
+import { continueBlockedRun } from './parent-resume';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile, rm, readFile, chmod } from 'fs/promises';
@@ -55,6 +57,734 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  it.each([false, true])(
+    'releases completed child scratch when its resumed parent status is unreadable (deferred=%p)',
+    async deferred => {
+      await writeWorkflow(
+        'gated-child',
+        `name: gated-child
+description: child awaiting approval
+nodes:
+  - id: gate
+    approval:
+      message: approve
+  - id: work
+    prompt: work
+    depends_on: [gate]
+`
+      );
+      await writeWorkflow(
+        'block',
+        `name: block
+description: composed work
+nodes:
+  - id: work
+    prompt: work
+`
+      );
+      await writeWorkflow(
+        'parent',
+        `name: parent
+description: parent continuing after its child
+nodes:
+  - id: sub
+    workflow: gated-child
+  - id: fan
+    include: block
+    depends_on: [sub]
+    fan_out:
+      items: '[1]'
+      as: item
+      join: all_success
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const first = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('parent'),
+        'goal'
+      );
+      expect(first).toMatchObject({ success: true, paused: true });
+      const parent = [...store.runs.values()].find(run => run.workflow_name === 'parent');
+      const child = [...store.runs.values()].find(run => run.workflow_name === 'gated-child');
+      if (!parent?.output_root || !child?.output_root) throw new Error('Missing run storage');
+      const scratchFor = (root: string, id: string): string =>
+        realArchonPaths.getRunScratchDir(realArchonPaths.getRunArtifactsDirForRoot(root, id));
+      const childScratch = scratchFor(child.output_root, child.id);
+      const parentScratch = scratchFor(parent.output_root, parent.id);
+      await mkdir(childScratch, { recursive: true });
+      await mkdir(parentScratch, { recursive: true });
+      const cause = new Error('Unsupported parent status');
+      const readStatus = store.getWorkflowRunStatus;
+      let rejected = false;
+      store.getWorkflowRunStatus = async id => {
+        if (
+          id === parent.id &&
+          store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.data?.type === 'compose_fan_out_instance'
+          )
+        ) {
+          rejected = true;
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      store.approveGate(child.id);
+      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+      if (!hydrated) throw new Error('Child was not resumable');
+      const cleanups: (() => Promise<void>)[] = [];
+      const error: unknown = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('gated-child'),
+        'goal',
+        undefined,
+        {
+          ...hydrated,
+          ...(deferred ? { deferScratchCleanup: cleanup => cleanups.push(cleanup) } : {}),
+        }
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(error.workflowRunId).toBe(parent.id);
+      expect(rejected).toBe(true);
+      expect((await store.getWorkflowRun(parent.id))?.status).toBe('running');
+      expect((await store.getWorkflowRun(child.id))?.status).toBe('completed');
+      expect(fail).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(cleanups).toHaveLength(deferred ? 1 : 0);
+      expect(existsSync(childScratch)).toBe(deferred);
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      expect(existsSync(childScratch)).toBe(false);
+      expect(existsSync(parentScratch)).toBe(true);
+    }
+  );
+
+  async function recoverInterruptedChildren(
+    store: InMemoryStore,
+    deps: ReturnType<typeof makeDeps>,
+    fanOut: boolean,
+    priorPaidAttempts = 0
+  ): Promise<void> {
+    for (const run of store.runs.values()) {
+      if (run.workflow_name !== 'target') continue;
+      // Explicit operator recovery, after the interrupted owner has returned.
+      await store.updateWorkflowRun(run.id, { status: 'paused' });
+      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(run.id))!);
+      if (!hydrated) throw new Error('Child not resumable');
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('target'),
+        'goal',
+        undefined,
+        hydrated
+      );
+    }
+    const outer = [...store.runs.values()].find(run => run.workflow_name === 'outer')!;
+    const snapshot = await store.getDagResumeSnapshot(outer.id);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('outer'),
+      'goal',
+      undefined,
+      {
+        preCreatedRun: outer,
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        priorUsage: snapshot,
+      }
+    );
+    expect((await store.getWorkflowRun(outer.id))?.status).toBe('completed');
+    expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
+      total_cost_usd: (fanOut ? 0.03 : 0.02) + priorPaidAttempts * 0.01,
+      total_tokens_in: (fanOut ? 21 : 14) + priorPaidAttempts * 7,
+      total_tokens_out: (fanOut ? 9 : 6) + priorPaidAttempts * 3,
+      total_cache_read_tokens: (fanOut ? 15 : 10) + priorPaidAttempts * 5,
+      total_cache_write_tokens: 0,
+    });
+    expect(
+      store.events.filter(
+        event => event.event_type === 'node_completed' && event.data?.type === 'agent'
+      )
+    ).toHaveLength((fanOut ? 3 : 2) + priorPaidAttempts);
+  }
+
+  it.each([false, true])(
+    'retains paid child baselines across credential refusal (fan-out=%p)',
+    async fanOut => {
+      await writeWorkflow(
+        'paid-retry',
+        `name: paid-retry
+description: paid attempts
+nodes:
+  - id: work
+    prompt: paid attempt
+    provider: codex
+    model: gpt-5.4
+    always_run: true
+  - id: fail
+    bash: exit 1
+    depends_on: [work]
+`
+      );
+      await writeWorkflow(
+        'retry-parent',
+        `name: retry-parent
+description: retry paid child
+nodes:
+  - id: seed
+    bash: echo seed
+  - id: sub
+    workflow: paid-retry
+    depends_on: [seed]
+${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_success\n" : ''}`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const workflow = await discover('retry-parent');
+      await executeWorkflow(deps, makePlatform(), 'test', cwd, workflow, 'goal', {
+        userId: 'operator',
+      });
+      const parent = [...store.runs.values()].find(run => run.workflow_name === 'retry-parent');
+      const child = [...store.runs.values()].find(run => run.workflow_name === 'paid-retry');
+      if (!parent || !child) throw new Error('Missing parent or child');
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(0.01);
+      expect(child.metadata.total_cost_usd).toBeCloseTo(0.01);
+      const retry = async () => {
+        const current = await store.getWorkflowRun(parent.id);
+        if (!current) throw new Error('Missing parent');
+        const hydrated = await hydrateResumableRun(deps, current);
+        if (!hydrated) throw new Error('Parent not resumable');
+        return executeWorkflow(
+          deps,
+          makePlatform(),
+          'test',
+          cwd,
+          workflow,
+          'goal',
+          { userId: 'operator' },
+          hydrated
+        );
+      };
+      deps.isPerUserProviderKeysEnabled = () => true;
+      deps.getUserProviderCredential = async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'credential unavailable',
+        }),
+      });
+      await retry();
+      expect(
+        store.events.some(
+          event =>
+            event.workflow_run_id === parent.id &&
+            event.event_type === 'node_failed' &&
+            String(event.data?.error).includes('Credential preflight failed')
+        )
+      ).toBe(true);
+      const refused = await store.getDagResumeSnapshot(parent.id);
+      expect(refused.reportedChildUsage?.get(child.id)?.costUsd).toBeCloseTo(0.01);
+      deps.isPerUserProviderKeysEnabled = () => false;
+      await retry();
+      expect((await store.getWorkflowRun(child.id))?.metadata.total_cost_usd).toBeCloseTo(0.02);
+      expect((await store.getWorkflowRun(parent.id))?.metadata).toMatchObject({
+        total_cost_usd: expect.closeTo(0.02),
+        total_tokens_in: 14,
+        total_tokens_out: 6,
+      });
+      expect(
+        [...store.runs.values()].filter(run => run.workflow_name === 'paid-retry')
+      ).toHaveLength(1);
+    }
+  );
+
+  type InterruptionCaller = 'child' | 'child fan-out' | 'engine resume' | 'automatic resume';
+
+  async function driveUnreadableParent(
+    caller: InterruptionCaller,
+    store: InMemoryStore,
+    deps: ReturnType<typeof makeDeps>
+  ): Promise<unknown> {
+    if (caller === 'child' || caller === 'child fan-out') {
+      return executeWorkflow(deps, makePlatform(), 'test', cwd, await discover('outer'), 'goal');
+    } else {
+      const run = await store.createWorkflowRun({
+        workflow_name: 'target',
+        user_message: '',
+        working_path: cwd,
+      });
+      await store.updateWorkflowRun(run.id, {
+        status: 'paused',
+        metadata: {
+          approval: {
+            type: 'child_workflow',
+            nodeId: 'fan',
+            childRunId: 'finished-child',
+            message: 'waiting',
+          },
+        },
+      });
+      const paused = await store.getWorkflowRun(run.id);
+      if (!paused) throw new Error('Missing paused run');
+      if (caller === 'engine resume') {
+        const admission = await new InProcessWorkflowEngine(deps).resume({
+          platform: makePlatform(),
+          conversationId: 'test',
+          cwd,
+          userMessage: '',
+          run: paused,
+          legacyWorkflow: await discover('target'),
+        });
+        if (!admission.accepted) throw new Error('Resume was not admitted');
+        return admission.settled;
+      } else {
+        return continueBlockedRun(deps, makePlatform(), 'test', paused, async () => {}, {});
+      }
+    }
+  }
+
+  for (const caller of ['child', 'child fan-out', 'engine resume', 'automatic resume'] as const) {
+    for (const persistent of [false, true]) {
+      it(`preserves unreadable composed parent through ${caller} (persistent=${persistent})`, async () => {
+        await writeWorkflow(
+          'block',
+          `name: block
+description: work
+nodes:
+  - id: work
+    prompt: work
+`
+        );
+        await writeWorkflow(
+          'target',
+          `name: target
+description: composed parent
+nodes:
+  - id: fan
+    include: block
+    fan_out:
+      items: '[1]'
+      as: item
+      join: all_success
+`
+        );
+        await writeWorkflow(
+          'outer',
+          `name: outer
+description: enclosing parent
+nodes:
+  - id: sibling
+    prompt: paid sibling
+  - id: sub
+    workflow: target
+${caller === 'child fan-out' ? "    fan_out:\n      items: '[1,2]'\n      as: item\n" : ''}`
+        );
+        const store = new InMemoryStore();
+        const deps = makeDeps(store);
+        const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+          name: 'WorkflowStatusReadError',
+          rawStatus: 'unsupported',
+        });
+        const readStatus = store.getWorkflowRunStatus;
+        let rejected = false;
+        let readsAfterRejection = 0;
+        const rejectedRuns = new Set<string>();
+        store.getWorkflowRunStatus = async id => {
+          const settled = store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.data?.type === 'compose_fan_out_instance'
+          );
+          if (rejectedRuns.has(id)) readsAfterRejection++;
+          if (settled && (!rejectedRuns.has(id) || persistent)) {
+            rejectedRuns.add(id);
+            rejected = true;
+            throw cause;
+          }
+          return readStatus(id);
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const cancel = spyOn(store, 'cancelWorkflowRun');
+        const complete = spyOn(store, 'completeWorkflowRun');
+        const pause = spyOn(store, 'pauseWorkflowRun');
+        const execution = driveUnreadableParent(caller, store, deps);
+        const error: unknown = await execution.catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(ParentStatusReadError);
+        if (!(error instanceof ParentStatusReadError))
+          throw new Error('Expected lifecycle interruption');
+        expect(error.cause).toBe(cause);
+        expect(rejected).toBe(true);
+        expect(readsAfterRejection).toBe(0);
+        expect([...store.runs.values()].every(run => run.status === 'running')).toBe(true);
+        expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+        expect(fail).not.toHaveBeenCalled();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(complete).not.toHaveBeenCalled();
+        expect(pause).not.toHaveBeenCalled();
+        for (const run of store.runs.values()) {
+          const units = run.workflow_name === 'outer' ? (caller === 'child fan-out' ? 3 : 2) : 1;
+          expect(run.metadata).toMatchObject({
+            total_cost_usd: 0.01 * units,
+            total_tokens_in: 7 * units,
+            total_tokens_out: 3 * units,
+            total_cache_read_tokens: 5 * units,
+            total_cache_write_tokens: 0,
+          });
+        }
+        if (caller === 'child' || caller === 'child fan-out') {
+          store.getWorkflowRunStatus = readStatus;
+          await recoverInterruptedChildren(store, deps, caller === 'child fan-out');
+        }
+      });
+    }
+  }
+
+  it.each([
+    { fanOut: false, replacement: false, interrupted: true },
+    { fanOut: true, replacement: false, interrupted: true },
+    { fanOut: false, replacement: true, interrupted: false },
+    { fanOut: true, replacement: true, interrupted: false },
+    { fanOut: false, replacement: true, interrupted: true },
+    { fanOut: true, replacement: true, interrupted: true },
+    { fanOut: true, replacement: 'mixed', interrupted: false },
+    { fanOut: true, replacement: 'mixed', interrupted: true },
+  ])('retains paid usage on recovery: %j', async ({ fanOut, replacement, interrupted }) => {
+    await writeWorkflow(
+      'block',
+      `name: block
+description: paid work
+nodes:
+  - id: work
+    prompt: work
+`
+    );
+    await writeWorkflow(
+      'target',
+      `name: target
+description: fails after paid work on its first pass
+nodes:
+  - id: paid
+    prompt: first attempt
+  - id: attempt
+    bash: test -f retry-marker
+    depends_on: [paid]
+  - id: fan
+    include: block
+    depends_on: [attempt]
+    fan_out:
+      items: '[1]'
+      as: item
+`
+    );
+    await writeWorkflow(
+      'outer',
+      `name: outer
+description: retrying parent
+nodes:
+  - id: sibling
+    prompt: paid sibling
+  - id: sub
+    workflow: target
+${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parallel: 1\n      join: all_success\n" : ''}`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    await executeWorkflow(deps, makePlatform(), 'test', cwd, await discover('outer'), 'goal');
+    const outer = [...store.runs.values()].find(run => run.workflow_name === 'outer')!;
+    expect(outer.status).toBe('failed');
+    const children = [...store.runs.values()].filter(run => run.workflow_name === 'target');
+    expect(children).toHaveLength(fanOut ? 2 : 1);
+    expect(children.every(run => run.status === 'failed')).toBe(true);
+    const replaced = replacement === 'mixed' ? children.slice(1) : replacement ? children : [];
+    replaced.forEach(child => store.runs.delete(child.id));
+    await writeFile(join(cwd, 'retry-marker'), 'retry');
+    const readStatus = store.getWorkflowRunStatus;
+    const cause = new Error('Unsupported workflow status');
+    if (interrupted)
+      store.getWorkflowRunStatus = async id => {
+        if (
+          store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.data?.type === 'compose_fan_out_instance'
+          )
+        )
+          throw cause;
+        return readStatus(id);
+      };
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(outer.id))!);
+    if (!hydrated) throw new Error('Parent not resumable');
+    const error: unknown = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('outer'),
+      'goal',
+      undefined,
+      hydrated
+    ).catch((error: unknown) => error);
+    if (interrupted) {
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+    }
+    const paidCalls = 1 + children.length * 2 + replaced.length;
+    expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
+      total_cost_usd: paidCalls * 0.01,
+      total_tokens_in: paidCalls * 7,
+      total_tokens_out: paidCalls * 3,
+      total_cache_read_tokens: paidCalls * 5,
+      total_cache_write_tokens: 0,
+    });
+    expect((await store.getWorkflowRun(outer.id))?.status).toBe(
+      interrupted ? 'running' : 'completed'
+    );
+    store.getWorkflowRunStatus = readStatus;
+    if (!replacement) await recoverInterruptedChildren(store, deps, fanOut, fanOut ? 2 : 1);
+  });
+
+  it.each(['dag', 'loop group', 'composed instance'] as const)(
+    'stops on a rejected between-layer status read in %s',
+    async scope => {
+      const body = `  - id: first
+    prompt: first
+  - id: second
+    prompt: second
+    depends_on: [first]`;
+      await writeWorkflow(
+        'block',
+        `name: block
+description: work
+nodes:
+${body}
+`
+      );
+      const nodes =
+        scope === 'dag'
+          ? body
+          : scope === 'loop group'
+            ? `  - id: group
+    loop_group:
+      max_iterations: 1
+      until: done
+      nodes:
+${body
+  .split('\n')
+  .map(line => '      ' + line)
+  .join('\n')}`
+            : `  - id: fan
+    include: block
+    fan_out:
+      items: '[1]'
+      as: item`;
+      await writeWorkflow(
+        'layers',
+        `name: layers
+description: work
+nodes:
+${nodes}
+`
+      );
+      const store = new InMemoryStore();
+      const readStatus = store.getWorkflowRunStatus;
+      const cause = new Error('Unsupported persisted status');
+      let rejected = false;
+      store.getWorkflowRunStatus = async id => {
+        if (
+          !rejected &&
+          store.events.some(
+            event =>
+              event.workflow_run_id === id &&
+              event.event_type === 'node_completed' &&
+              event.step_name?.endsWith('first')
+          )
+        ) {
+          rejected = true;
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const complete = spyOn(store, 'completeWorkflowRun');
+      const error: unknown = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('layers'),
+        'goal'
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(store.events.some(event => event.step_name?.endsWith('second'))).toBe(false);
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
+    }
+  );
+
+  it.each(['before iteration', 'after body'] as const)(
+    'propagates a rejected loop-group status read %s',
+    async phase => {
+      await writeWorkflow(
+        'group-status',
+        `name: group-status
+description: loop lifecycle
+nodes:
+  - id: group
+    loop_group:
+      until: DONE
+      max_iterations: 1
+      nodes:
+        - id: work
+          prompt: work
+`
+      );
+      const store = new InMemoryStore();
+      const readStatus = store.getWorkflowRunStatus;
+      const cause = Object.assign(new Error('Unsupported workflow status'), {
+        name: 'WorkflowStatusReadError',
+      });
+      let rejected = false;
+      let bodyStatusReads = 0;
+      store.getWorkflowRunStatus = async id => {
+        const atBoundary =
+          phase === 'before iteration'
+            ? store.events.some(
+                event => event.step_name === 'group' && event.event_type === 'node_started'
+              )
+            : store.events.some(
+                event => event.step_name === 'group.work' && event.event_type === 'node_completed'
+              );
+        if (phase === 'after body' && atBoundary) bodyStatusReads++;
+        if (!rejected && atBoundary && (phase === 'before iteration' || bodyStatusReads === 2)) {
+          rejected = true;
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const complete = spyOn(store, 'completeWorkflowRun');
+      const error: unknown = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('group-status'),
+        'goal'
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(rejected).toBe(true);
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      expect([...store.runs.values()][0]?.status).toBe('running');
+      if (phase === 'before iteration')
+        expect(store.events.some(event => event.step_name === 'group.work')).toBe(false);
+      else expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
+    }
+  );
+
+  it('automatically resumes a parent after its gated child fails', async () => {
+    await writeWorkflow(
+      'fails-after-gate',
+      `name: fails-after-gate
+description: failed gated child
+nodes:
+  - id: gate
+    approval:
+      message: approve
+  - id: fail
+    bash: exit 1
+    depends_on: [gate]
+`
+    );
+    await writeWorkflow(
+      'parent-failed-child',
+      `name: parent-failed-child
+description: parent
+nodes:
+  - id: sub
+    workflow: fails-after-gate
+  - id: after
+    prompt: must not run
+    depends_on: [sub]
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('parent-failed-child'),
+      'goal'
+    );
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'parent-failed-child'
+    )!;
+    const child = [...store.runs.values()].find(run => run.workflow_name === 'fails-after-gate')!;
+    expect(parent.status).toBe('paused');
+    expect(child.status).toBe('paused');
+    store.approveGate(child.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+    if (!hydrated) throw new Error('Child not resumable');
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('fails-after-gate'),
+      'goal',
+      undefined,
+      hydrated
+    );
+    expect((await store.getWorkflowRun(child.id))?.status).toBe('failed');
+    expect((await store.getWorkflowRun(parent.id))?.status).toBe('failed');
+    expect(
+      store.events.filter(
+        event =>
+          event.workflow_run_id === parent.id &&
+          event.step_name === 'sub' &&
+          event.event_type === 'node_failed'
+      )
+    ).toHaveLength(1);
+    expect(
+      store.events.some(event => event.step_name === 'after' && event.event_type === 'node_started')
+    ).toBe(false);
   });
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
@@ -748,59 +1478,96 @@ nodes:
     expect(child?.conversation_id).toBe('conv-db');
   });
 
-  it('propagates a child terminal write failure through a workflow node', async () => {
-    await writeWorkflow(
-      'child-terminal-write',
-      `
+  it.each([false, true])(
+    'retains paid child usage through terminal write failure (unknown tokens=%p)',
+    async unknownTokens => {
+      await writeWorkflow(
+        'child-terminal-write',
+        `
 name: child-terminal-write
 description: child whose completion write fails
 nodes:
   - id: work
     prompt: "work"
 `
-    );
-    await writeWorkflow(
-      'parent-terminal-write',
-      `
+      );
+      await writeWorkflow(
+        'parent-terminal-write',
+        `
 name: parent-terminal-write
 description: parent that invokes the child
 nodes:
   - id: sub
     workflow: child-terminal-write
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const completeWorkflowRun = store.completeWorkflowRun.bind(store);
-    const failWorkflowRun = store.failWorkflowRun.bind(store);
-    const parentFailureWrites: string[] = [];
-    store.completeWorkflowRun = (runId, completion, metadata) => {
-      if (store.runs.get(runId)?.workflow_name === 'child-terminal-write') {
-        return Promise.reject(new Error('child terminal write failed'));
-      }
-      return completeWorkflowRun(runId, completion, metadata);
-    };
-    store.failWorkflowRun = (runId, error) => {
-      if (store.runs.get(runId)?.workflow_name === 'parent-terminal-write') {
-        parentFailureWrites.push(error);
-      }
-      return failWorkflowRun(runId, error);
-    };
+      const store = new InMemoryStore();
+      const completeWorkflowRun = store.completeWorkflowRun.bind(store);
+      const failWorkflowRun = store.failWorkflowRun.bind(store);
+      const parentFailureWrites: string[] = [];
+      store.completeWorkflowRun = async (runId, completion, metadata) => {
+        if (store.runs.get(runId)?.workflow_name === 'child-terminal-write') {
+          if (unknownTokens) {
+            await store.updateWorkflowRun(runId, { metadata: { total_tokens_unknown: true } });
+            const parent = [...store.runs.values()].find(
+              run => run.workflow_name === 'parent-terminal-write'
+            )!;
+            await store.updateWorkflowRun(parent.id, {
+              metadata: {
+                total_tokens_in: 999,
+                total_tokens_out: 999,
+                total_cache_read_tokens: 999,
+                total_cache_write_tokens: 999,
+              },
+            });
+          }
+          throw new Error('child terminal write failed');
+        }
+        return completeWorkflowRun(runId, completion, metadata);
+      };
+      store.failWorkflowRun = (runId, error) => {
+        if (store.runs.get(runId)?.workflow_name === 'parent-terminal-write') {
+          parentFailureWrites.push(error);
+        }
+        return failWorkflowRun(runId, error);
+      };
 
-    await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        await discover('parent-terminal-write'),
-        'goal',
-        { conversationId: 'conv-db' }
-      )
-    ).rejects.toThrow('child terminal write failed');
+      await expect(
+        executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('parent-terminal-write'),
+          'goal',
+          { conversationId: 'conv-db' }
+        )
+      ).rejects.toThrow('child terminal write failed');
 
-    expect(parentFailureWrites).toEqual([]);
-  });
+      expect(parentFailureWrites).toEqual([]);
+      const parent = [...store.runs.values()].find(
+        run => run.workflow_name === 'parent-terminal-write'
+      )!;
+      expect(parent.metadata).toMatchObject({ total_cost_usd: 0.01 });
+      expect(parent.metadata).toMatchObject(
+        unknownTokens
+          ? {
+              total_tokens_unknown: true,
+              total_tokens_in: null,
+              total_tokens_out: null,
+              total_cache_read_tokens: null,
+              total_cache_write_tokens: null,
+            }
+          : {
+              total_tokens_in: 7,
+              total_tokens_out: 3,
+              total_cache_read_tokens: 5,
+              total_cache_write_tokens: 0,
+            }
+      );
+    }
+  );
 
   it('propagates a child terminal write failure through a fan-out node', async () => {
     await writeWorkflow(
@@ -848,6 +1615,16 @@ nodes:
         { conversationId: 'conv-db' }
       )
     ).rejects.toThrow('fan-out child terminal write failed');
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'fan-parent-terminal-write'
+    )!;
+    expect(parent.metadata).toMatchObject({
+      total_cost_usd: 0.01,
+      total_tokens_in: 7,
+      total_tokens_out: 3,
+      total_cache_read_tokens: 5,
+      total_cache_write_tokens: 0,
+    });
   });
 
   it('propagates sparse model bindings into a child run and its effective profile', async () => {

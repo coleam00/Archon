@@ -1,22 +1,28 @@
-/** The canonical marked comment on a GitHub issue or pull request, written in place. */
+/**
+ * Conversation comments on a GitHub issue or pull request: the canonical marked
+ * comment, written in place, and the read of every comment with its author.
+ */
 
 import { z } from 'zod';
 import {
   contentDigest,
   type ForgeCommentRecord,
   type ForgeMutationRequest,
+  type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
 import type { PrRef } from '@archon/forge';
 import { githubPages, githubRequest, location, type Fetch } from './api';
 import { applied, refused, unverified, type Submit } from './mutation-outcome';
 import { readIssue, subjectRecord } from './workitems';
+import { actor, userSchema } from './actor';
 
 const commentSchema = z.object({
   id: z.union([z.number().int(), z.string().min(1)]),
   html_url: z.url(),
   issue_url: z.url(),
   body: z.string().nullable(),
+  user: userSchema.optional(),
 });
 type Comment = z.infer<typeof commentSchema>;
 
@@ -120,4 +126,37 @@ export async function upsertComment(
     });
   }
   return applied(request, { changed: true, ...subject, comment });
+}
+
+export async function handleGithubWorkItemComments(
+  request: Extract<ForgeRequest, { op: 'workitem.comments' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { ref } = request.subject;
+  // One endpoint serves issue and pull-request comments, so the kind is proved first.
+  const workitem = subjectRecord(request.subject, await readIssue(fetchImpl, token, ref));
+  const { root, path } = location(ref.repo);
+  const comments = await githubPages(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(ref.number)}/comments`,
+    raw => z.array(commentSchema).parse(raw)
+  );
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: 'workitem.comments',
+      value: {
+        workitem,
+        comments: comments.map(comment => ({
+          id: String(comment.id),
+          author: actor(ref.repo.host, comment.user ?? null),
+          url: comment.html_url,
+          body: comment.body ?? '',
+        })),
+      },
+    },
+  };
 }

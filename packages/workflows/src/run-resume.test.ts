@@ -14,6 +14,8 @@ mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => m
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
 import type { DagResumeSnapshot } from './store';
+import { foldDagResumeSnapshot } from './dag-resume-snapshot';
+import { fanOutOutcome } from './schemas/fan-out-outcome';
 
 type ResumeStore = ResumeStoreDeps['store'];
 
@@ -61,6 +63,38 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 describe('hydrateResumableRun', () => {
+  it('inspects legacy zero-cost fan-out output without per-child attribution', async () => {
+    const candidate = makeRun({ status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async runId =>
+        foldDagResumeSnapshot(
+          [
+            {
+              step_name: 'work',
+              event_type: 'node_completed',
+              data: {
+                type: 'workflow',
+                node_output: '["a","b"]',
+                cost_usd: 0,
+                fan_out_outcome: fanOutOutcome([
+                  { index: 0, outcome: 'completed', child_run_id: 'a' },
+                  { index: 1, outcome: 'completed', child_run_id: 'b' },
+                ]),
+              },
+            },
+          ],
+          runId
+        )
+      ),
+    });
+    const inspection = await inspectResumableRun(makeDeps(store), candidate);
+    expect(inspection?.priorCompletedNodes.get('work')?.output).toBe('["a","b"]');
+    expect(inspection?.priorUsage.costUsd).toBe(0);
+    expect(inspection?.priorUsage.tokens).toBeUndefined();
+    expect(inspection?.priorUsage.tokensUnknown).toBe(false);
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);

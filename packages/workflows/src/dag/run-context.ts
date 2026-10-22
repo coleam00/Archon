@@ -179,6 +179,9 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  /** Each workflow path dispatches once per segment; prior events are the fixed accounting baseline. */
+  reportedChildUsage?: DagResumeSnapshot['reportedChildUsage'];
+  unattributedChildUsagePaths?: DagResumeSnapshot['unattributedChildUsagePaths'];
   /** The run budget's live ledger; set only when the workflow declares `budget:`. */
   runBudget?: RunBudgetLedger;
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---

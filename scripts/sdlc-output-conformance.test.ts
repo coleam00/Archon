@@ -46,7 +46,7 @@ import {
   spendOf,
   TIERS,
   type TierBinding,
-} from '../.archon/workflows/sdlc/.shared/bench';
+} from '../.archon/workflows/sdlc/review-eval/scripts/runs';
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
 import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.shared/discoveries';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
@@ -557,8 +557,6 @@ describe('the review bench', () => {
         completed_at: null,
         base_branch: 'dev',
         aliases: {},
-        transcript_path: null,
-        returns: null,
         nodes: [],
       })
     ).toBe(getRunArtifactsDirForRoot(detail.output_root, detail.id));

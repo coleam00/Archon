@@ -20,6 +20,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { ParentStatusReadError } from './parent-status-read';
 import { NodeEventWriteError } from './node-event-write';
 import * as resume from './run-resume';
 import * as source from './run-source';
@@ -29,7 +30,11 @@ import { noExecutorCanWrite } from './run-scratch';
 import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
-import { workflowRunStatusSchema, EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
+import {
+  workflowRunStatusSchema,
+  EXECUTION_OWNER_METADATA_KEY,
+  TERMINAL_WORKFLOW_STATUSES,
+} from './schemas/workflow-run';
 import { WorkflowExecutionHandoffError } from './engine-port';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
@@ -662,6 +667,35 @@ describe('scratch on exit', () => {
     }
   );
 
+  it('surfaces a status-read interruption without finalizing or deleting scratch', async () => {
+    const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
+    const run = makeRun({ output_root: root });
+    run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
+    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    const cause = new Error('Unsupported parent status');
+    const interruption = new ParentStatusReadError(run.id, 'fan', cause);
+    mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+    const store = makeStore({
+      getWorkflowRun: mock(async () => run),
+      getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
+    });
+
+    await expect(startWorkflow({ store })).rejects.toBe(interruption);
+    expect(interruption.cause).toBe(cause);
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    expect(existsSync(checkout)).toBe(true);
+    expect(noExecutorCanWrite(run)).toBe(true);
+    expect(keepAwake.activeCount()).toBe(0);
+    expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
+    expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
+      false
+    );
+  });
+
   it.each([false, true])(
     'host can report before draining scratch cleanup (failed=%p)',
     async failed => {
@@ -686,6 +720,29 @@ describe('scratch on exit', () => {
       expect(cleanups).toHaveLength(1);
       expect(existsSync(scratch)).toBe(true);
       await Promise.all(cleanups.map(cleanup => cleanup()));
+      expect(existsSync(scratch)).toBe(false);
+    }
+  );
+
+  it.each([...TERMINAL_WORKFLOW_STATUSES])(
+    "releases a %s run's scratch despite another run's lifecycle interruption",
+    async status => {
+      const root = trackTempRoot(join(WS, '_cwd', `terminal-child-${crypto.randomUUID()}`));
+      const run = makeRun({
+        status,
+        output_root: root,
+        metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
+      });
+      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      mkdirSync(scratch, { recursive: true });
+      const interruption = new ParentStatusReadError('another-run', 'fan', new Error('unreadable'));
+      mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+      const store = makeStore({ getWorkflowRun: mock(async () => run) });
+
+      await expect(startWorkflow({ store })).rejects.toBe(interruption);
+
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
       expect(existsSync(scratch)).toBe(false);
     }
   );

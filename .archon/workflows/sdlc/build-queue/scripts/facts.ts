@@ -26,7 +26,7 @@ import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, parseOrder, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNext, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -94,7 +94,6 @@ function emitItem(
 
 function main(): void {
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
-  const order = parseOrder(text(process.env.INPUTS_ORDER));
   const repo = {
     host: trimmed(process.env.INPUTS_REPO_HOST),
     path: trimmed(process.env.INPUTS_REPO_PATH),
@@ -106,7 +105,7 @@ function main(): void {
   const number = trimmed(process.env.INPUTS_NUMBER);
   const doc =
     number === ''
-      ? claimNext(order, new Date().toISOString(), runId, BUILD_PICKUP)
+      ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
       : claimNamed(positive('number', number), new Date().toISOString(), runId);
   if (doc === null) {
     emit({
