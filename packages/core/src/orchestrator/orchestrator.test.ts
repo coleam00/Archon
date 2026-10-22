@@ -36,6 +36,7 @@ import type * as WorkflowRouter from '@archon/workflows/router';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as IsolationResolver from './dispatch/isolation-resolver';
 import type * as BackgroundDispatch from './dispatch/background';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import type * as PromptBuilder from './prompt-builder';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as WorkflowDb from '../db/workflows';
@@ -409,6 +410,22 @@ mock.module('./dispatch/isolation-resolver', () => ({
 }));
 mock.module('./dispatch/background', () => ({
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
+}));
+
+// The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
+// here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
+const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+  close: () => Promise.resolve(),
+  isStopRequested: () => false,
+  registerTerminationPreparation: () => () => undefined,
+};
+const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
+mock.module('../services/run-live-owner', () => ({
+  ...realRunLiveOwner,
+  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
+    async (_runId, _options, body) => body(mockRunLiveOwner)
+  ),
 }));
 
 // Prompt builder mock
