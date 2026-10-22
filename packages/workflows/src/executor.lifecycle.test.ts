@@ -26,7 +26,7 @@ import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
-import { EXECUTION_OWNER_METADATA_KEY } from './schemas/workflow-run';
+import { EXECUTION_OWNER_METADATA_KEY, TERMINAL_WORKFLOW_STATUSES } from './schemas/workflow-run';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -541,7 +541,7 @@ describe('scratch on exit', () => {
     }
   );
 
-  it.each(['completed', 'failed', 'cancelled'] as const)(
+  it.each([...TERMINAL_WORKFLOW_STATUSES])(
     "releases a %s run's scratch despite another run's lifecycle interruption",
     async status => {
       const root = trackTempRoot(join(WS, '_cwd', `terminal-child-${crypto.randomUUID()}`));

@@ -547,12 +547,7 @@ export async function executeWorkflow(
     // Sub-run re-entry (#2121 Phase 2): if this run is a `workflow:` child that just
     // reached a terminal state, re-enter its paused parent in-process. Guarded to be
     // a no-op on the synchronous first-run path (parent still 'running').
-    if (
-      finalStatus?.parent_run_id &&
-      (finalStatus.status === 'completed' ||
-        finalStatus.status === 'failed' ||
-        finalStatus.status === 'cancelled')
-    ) {
+    if (finalStatus?.parent_run_id && isTerminalRunStatus(finalStatus.status)) {
       await maybeResumeParentRun(
         deps,
         platform,
