@@ -33,7 +33,7 @@ You need:
 archon workflow run archon-forge-check     # from the clone
 ```
 
-It proves that `gh` is signed in and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. The pack talks to GitHub through `gh` by default. Setting `ARCHON_SDLC_FORGE=forge` routes it through `archon forge` and an installed [forge plugin](/reference/forge/) instead, and `archon-forge-check` then also checks that the plugin offers every operation the pack uses. Stay on `gh` for the factory: the merge queue reads through `gh` only and refuses `forge`.
+It proves that `gh` is signed in and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. The pack talks to GitHub through `gh` by default. Setting `ARCHON_SDLC_FORGE=forge` routes it through `archon forge` and an installed [forge plugin](/reference/forge/) instead, and `archon-forge-check` then also checks that the plugin offers every operation the pack uses. Stay on `gh` for the factory until the installed plugin offers the merge queue's operations too; the merge queue refuses a plugin without them before it claims any work.
 
 ## 2. Name your maintainers
 

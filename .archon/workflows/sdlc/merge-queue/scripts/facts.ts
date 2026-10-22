@@ -29,7 +29,7 @@ import {
   type PrFacts,
   readBase,
   readPr,
-  requireGh,
+  requireMergeSource,
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
@@ -188,7 +188,7 @@ function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
-  requireGh();
+  requireMergeSource(repo);
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
   enrollOrNote(repo, list.ownPrs);
