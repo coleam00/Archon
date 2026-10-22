@@ -34,16 +34,21 @@ import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
+/** A fresh round stays on the base and tells ship `none` for any pull request the item has. */
+function fresh(known: PrRecord | null): void {
+  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
+  const base = fetchDefaultBranch(item.repo);
+  if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
+    throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
+  emit({ head: null, pull_request: known === null ? null : 'none' });
+}
+
 function main(): void {
   const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
   const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
   const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (continues === null) {
-    const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
-    const base = fetchDefaultBranch(item.repo);
-    if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
-      throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
-    emit({ head: null, pull_request: known === null ? null : 'none' });
+    fresh(known);
     return;
   }
   if (continues !== candidate)
