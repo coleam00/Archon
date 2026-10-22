@@ -931,6 +931,6 @@ describe('the build queue checkout', () => {
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
-    expect(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).status).not.toBe(0);
+    expect(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 });
