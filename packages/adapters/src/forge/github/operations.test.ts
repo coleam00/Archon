@@ -23,7 +23,15 @@ const invalidRemotePaths = [
 const normalizedRemotePaths = [
   ...['\t', '\n', '\r'].flatMap(control => [`te${control}am/repo.git`, `team/re${control}po.git`]),
 ];
-const invalidHttpRemotePaths = ['team\\extra/repo.git', 'team/repo\\extra.git'];
+const invalidHttpRemotePaths = [
+  'team\\extra/repo.git',
+  'team/repo\\extra.git',
+  ...['', '/', '//'].flatMap(slashes =>
+    ['\\', '\\\\'].flatMap(backslashes =>
+      ['team/repo.git', 'team/extra/repo.git'].map(path => `${slashes}${backslashes}${path}`)
+    )
+  ),
+];
 
 const checksRequest = {
   operationId: 'operation-1',

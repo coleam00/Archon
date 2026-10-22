@@ -145,45 +145,46 @@ export async function githubPages<T>(
   }
 }
 
+function parseUrlRemote(value: string): RepoRef | null {
+  let parsed: ReturnType<typeof parseRemoteUrl>;
+  try {
+    parsed = parseRemoteUrl(value);
+  } catch (cause) {
+    throw new GitHubError(
+      { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
+      true,
+      { cause }
+    );
+  }
+  const { url, host, pathname } = parsed;
+  if (!['http:', 'https:', 'ssh:'].includes(url.protocol)) return null;
+  if (url.password !== '' || (url.protocol !== 'ssh:' && url.username !== '')) {
+    throw new GitHubError(
+      { kind: 'invalid_request', message: 'GitHub remote must not contain credentials' },
+      true
+    );
+  }
+  if (value.includes('?') || value.includes('#')) {
+    throw new GitHubError(
+      {
+        kind: 'invalid_request',
+        message: 'GitHub remote must not contain a query or fragment',
+      },
+      true
+    );
+  }
+  const repository =
+    (url.protocol === 'ssh:' || !pathname.includes('\\')) &&
+    repositoryPath(decodeURIComponent(pathname)) &&
+    repositoryPath(decodeURIComponent(url.pathname));
+  if (!repository) return null;
+  return { host, path: `${repository.owner}/${repository.repo}` };
+}
+
 export function parseRemote(remote: string | null): RepoRef | null {
   if (!remote?.trim()) return null;
   const value = remote.trim();
-
-  if (value.includes('://')) {
-    let parsed: ReturnType<typeof parseRemoteUrl>;
-    try {
-      parsed = parseRemoteUrl(value);
-    } catch (cause) {
-      throw new GitHubError(
-        { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
-        true,
-        { cause }
-      );
-    }
-    const { url, host, pathname } = parsed;
-    if (!['http:', 'https:', 'ssh:'].includes(url.protocol)) return null;
-    if (url.password !== '' || (url.protocol !== 'ssh:' && url.username !== '')) {
-      throw new GitHubError(
-        { kind: 'invalid_request', message: 'GitHub remote must not contain credentials' },
-        true
-      );
-    }
-    if (value.includes('?') || value.includes('#')) {
-      throw new GitHubError(
-        {
-          kind: 'invalid_request',
-          message: 'GitHub remote must not contain a query or fragment',
-        },
-        true
-      );
-    }
-    const repository =
-      !pathname.startsWith('\\') &&
-      repositoryPath(decodeURIComponent(pathname)) &&
-      repositoryPath(decodeURIComponent(url.pathname));
-    if (!repository) return null;
-    return { host, path: `${repository.owner}/${repository.repo}` };
-  }
+  if (value.includes('://')) return parseUrlRemote(value);
 
   // Git's SCP-like SSH form has no URL scheme. Its optional user is transport identity,
   // not an HTTP credential, and is deliberately discarded at this normalization boundary.
