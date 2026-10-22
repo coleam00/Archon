@@ -106,9 +106,10 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The preflight names every forge operation the pack uses, and a plugin missing any of
-them is refused before an agent spends. Keep `gh` as the default until a released
-plugin with all of them passes a real-PR check.
+The preflight names every forge operation the delivery workflows use, and a plugin
+missing any of them is refused before an agent spends. The merge queue checks its own
+operations when it starts (below). Keep `gh` as the default until a released plugin
+with all of them passes a real-PR check.
 
 The merge queue reads and merges through the run's source. On `forge` its facts,
 gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
