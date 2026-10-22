@@ -1,3 +1,4 @@
+import { WorktreeInUseError } from './types';
 import { IsolationFailure } from './errors';
 import { GitFailure } from '@archon/git';
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
@@ -787,6 +788,39 @@ describe('IsolationResolver', () => {
       expect(result.method.type).toBe('created');
     }
   });
+
+  test.each(['existing', 'workflow', 'linked'] as const)(
+    '%s ghost cleanup stops when a run acquired the registration',
+    async route => {
+      const env = makeEnvRow({ workflow_type: 'issue', workflow_id: '42' });
+      worktreeExistsSpy.mockResolvedValue(false);
+      const refusal = new WorktreeInUseError(env.id, 'owner', 'pending');
+      const create = mock(async () => env);
+      const resolver = createResolver({
+        store: makeMockStore({
+          getById: async () => env,
+          findActiveByWorkflow: async (_cid, type, id) =>
+            type === 'issue' && id === '42' ? env : null,
+          markWorktreeDestroyed: async () => {
+            throw refusal;
+          },
+          create,
+        }),
+      });
+      await expect(
+        resolver.resolve({
+          existingEnvId: route === 'existing' ? env.id : null,
+          codebase: defaultCodebase,
+          hints:
+            route === 'linked'
+              ? { workflowType: 'pr', workflowId: '55', linkedIssues: [42] }
+              : { workflowType: 'issue', workflowId: '42' },
+          platformType: 'web',
+        })
+      ).rejects.toBe(refusal);
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
 
   test('stale cleanup error in findReusable does not crash resolution', async () => {
     const env = makeEnvRow({ workflow_type: 'issue', workflow_id: '42' });

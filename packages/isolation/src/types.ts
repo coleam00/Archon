@@ -683,3 +683,16 @@ export const CONTAINER_LABELS = {
   codebaseId: 'diy.archon.codebase-id',
   envId: 'diy.archon.env-id',
 } as const;
+
+export class WorktreeInUseError extends Error {
+  constructor(
+    readonly environmentId: string,
+    readonly runId: string,
+    readonly runStatus: string
+  ) {
+    super(
+      `Worktree ${environmentId}: claimable run ${runId} (${runStatus}) also uses this checkout`
+    );
+    this.name = 'WorktreeInUseError';
+  }
+}

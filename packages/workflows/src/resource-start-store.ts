@@ -1,3 +1,4 @@
+import { CheckoutReleasedError } from './schemas/checkout-ownership';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -306,6 +307,32 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
   return admitted;
 }
 
+/** Classify checkout refusals before admission so they cannot roll back independent starts. */
+export async function drainAvailableStarts(
+  slot: ResourceSlotOccupancy,
+  hostId: string,
+  check: (run: PreparedWorkflowLaunch['run']) => Promise<void>,
+  admit: (start: QueuedStart) => Promise<ResourceStartDisposition>
+): Promise<ResourceStartDrainResult[]> {
+  const decisions: ResourceStartDrainResult[] = [];
+  const available: QueuedStart[] = [];
+  for (const start of slot.queue) {
+    if (start.hostId === hostId) {
+      try {
+        await check(start.launch.run);
+      } catch (error) {
+        if (!(error instanceof CheckoutReleasedError)) throw error;
+        decisions.push({ status: 'failed', requestId: start.id, error });
+        continue;
+      }
+    }
+    available.push(start);
+  }
+  for (const start of drainableStarts({ ...slot, queue: available }, hostId))
+    decisions.push(await admit(start));
+  return decisions;
+}
+
 /**
  * What keeps an admitted failed or paused run from resuming now.
  *
@@ -365,12 +392,17 @@ export type QueuedResourceStartInspection =
   | ResourceStartRequestInspection
   | { id: string; resource?: string; receiptId?: string; error: unknown };
 
+/** Refused starts stay queued and inspectable; independent starts may still be admitted. */
+export type ResourceStartDrainResult =
+  | ResourceStartDisposition
+  | { status: 'failed'; requestId: string; error: Error };
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
     resource: string;
     hostId: string;
-  }): Promise<ResourceStartDisposition[]>;
+  }): Promise<ResourceStartDrainResult[]>;
   /**
    * Whether this source already holds a receipt for the delivery. Only a gate for checks that
    * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.

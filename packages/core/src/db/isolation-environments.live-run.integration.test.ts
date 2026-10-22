@@ -12,10 +12,12 @@
  * ./connection with a real adapter, conflicting with isolation-environments.test.ts's
  * fake.
  */
-import { describe, test, expect, mock } from 'bun:test';
+import { beforeEach, afterAll, describe, test, expect, mock } from 'bun:test';
 import { isolationStatusReadTests } from './isolation-status-read-harness';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -37,6 +39,12 @@ mock.module('./connection', () => ({
 }));
 
 const { create, getLiveRunOwningEnv } = await import('./isolation-environments');
+beforeEach(async () => {
+  await db.query('DELETE FROM remote_agent_workflow_runs');
+  await db.query('DELETE FROM remote_agent_conversations');
+  await db.query('DELETE FROM remote_agent_isolation_environments');
+});
+afterAll(() => db.close());
 
 // isolation_environments.codebase_id is NOT NULL with an enforced FK — seed a parent.
 await db.query(

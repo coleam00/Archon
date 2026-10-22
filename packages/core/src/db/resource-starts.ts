@@ -1,11 +1,13 @@
+import { lockCheckoutOwnership, assertNewRunCheckoutAvailable } from './checkout-ownership';
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
-  drainableStarts,
+  drainAvailableStarts,
   resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
+  ResourceStartDrainResult,
   StartBindingInspection,
   StartReceiptInspection,
   ResourceStartRequestInspection,
@@ -30,7 +32,7 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
@@ -50,12 +52,6 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
-}
-
-// Different resource rows can reserve the same checkout. Hold one transaction lock
-// across occupancy and publication; SQLite already serializes writers.
-async function lockCheckoutReservations(query: Query): Promise<void> {
-  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -98,7 +94,7 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
-  await lockCheckoutReservations(query);
+  await lockCheckoutOwnership(query);
   const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -152,15 +148,16 @@ export async function admitResourceStart(
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
-}): Promise<ResourceStartDisposition[]> {
+}): Promise<ResourceStartDrainResult[]> {
   return getDatabase().withTransaction(async query => {
-    await lockCheckoutReservations(query);
+    await lockCheckoutOwnership(query);
     const { capacity } = await lockResourceSlot(query, options.resource);
-    const slot = await resourceStartOccupancy(query, options.resource, capacity);
-    const admitted: ResourceStartDisposition[] = [];
-    for (const start of drainableStarts(slot, options.hostId))
-      admitted.push(await admitExisting(query, options.resource, start));
-    return admitted;
+    return drainAvailableStarts(
+      await resourceStartOccupancy(query, options.resource, capacity),
+      options.hostId,
+      run => assertNewRunCheckoutAvailable(query, run),
+      start => admitExisting(query, options.resource, start)
+    );
   });
 }
 
@@ -527,13 +524,7 @@ export async function completeStartBindingPreparation(input: {
   launch: PreparedWorkflowLaunch;
 }): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
-    // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
-    if (getDatabase().dialect === 'sqlite') {
-      await query(
-        'UPDATE remote_agent_start_receipt_bindings SET binding_id = binding_id WHERE receipt_id = $1 AND binding_id = $2',
-        [input.receiptId, input.bindingId]
-      );
-    }
+    await lockCheckoutOwnership(query);
     const binding = await query<{ intent: unknown }>(
       `SELECT intent FROM remote_agent_start_receipt_bindings
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${getDialect().rowLock()}`,

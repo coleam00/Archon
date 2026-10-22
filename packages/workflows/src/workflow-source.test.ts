@@ -129,6 +129,34 @@ const deps = {
 } satisfies Pick<WorkflowDeps, 'loadConfig'>;
 
 describe('captureWorkflowSource', () => {
+  test.each(['missing', 'file', 'removed-during-copy'] as const)(
+    'refuses a source root that is %s without publishing a capture',
+    async state => {
+      const root = await createTempRoot();
+      const source = join(root, 'source');
+      const captureRoot = join(root, 'capture');
+      if (state === 'file') await writeFile(source, 'not a directory');
+      if (state === 'removed-during-copy') {
+        await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
+        await writeFile(join(source, '.archon', 'workflows', 'test.yaml'), 'name: test');
+      }
+      const copyFile = fs.copyFile;
+      const copy = spyOn(fs, 'copyFile').mockImplementation(async (from, to, mode) => {
+        await copyFile(from, to, mode);
+        if (String(from).startsWith(source)) await rm(source, { recursive: true });
+      });
+      try {
+        await expect(captureWorkflowSource({ sourceRoot: source, captureRoot })).rejects.toThrow(
+          new WorkflowSourceUnavailableError(source, new Error('Source root is not a directory'))
+        );
+        await expect(stat(captureRoot)).rejects.toThrow();
+        await expect(stat(`${captureRoot}.partial`)).rejects.toThrow();
+      } finally {
+        copy.mockRestore();
+      }
+    }
+  );
+
   test('freezes commands and scripts so the target never needs them', async () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'review the diff');

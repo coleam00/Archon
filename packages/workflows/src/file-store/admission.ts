@@ -24,6 +24,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createLogger } from '@archon/paths/logger';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
+import type { RunCheckout } from '../schemas/checkout-ownership';
 import {
   preparedWorkflowLaunchSchema,
   sourceReceiptAcceptanceSchema,
@@ -34,7 +35,7 @@ import {
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   capacityWaiters,
-  drainableStarts,
+  drainAvailableStarts,
   heldCheckouts,
   type ReusableCheckout,
   resourceResumeBlocker,
@@ -102,9 +103,7 @@ interface AdmissionTransaction {
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
-  /** Remove the run holder of an admitted run; whether one was removed. */
   release(id: string): Promise<boolean>;
 }
 
@@ -474,15 +473,16 @@ export function createAdmissionTransaction(
 
 export function createFileAdmissionStore(
   root: string,
-  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts: (() => Promise<readonly ReusableCheckout[]>) | undefined,
+  assertCheckoutAvailable: (run: RunCheckout) => Promise<void>
 ): IResourceStartStore {
-  type Transaction = ReturnType<typeof createAdmissionTransaction>;
   const write = <T>(
-    call: (tx: Transaction, runs: Map<string, WorkflowRun>) => Promise<T>
+    call: (tx: AdmissionTransaction, runs: Map<string, WorkflowRun>) => Promise<T>
   ): Promise<T> =>
     commit(root, [], async runs => {
       const tx = createAdmissionTransaction(root, listReusableCheckouts);
       const result = await call(tx, runs);
+      for (const run of runs.values()) await assertCheckoutAvailable(run);
       return {
         result,
         changes: {
@@ -491,7 +491,7 @@ export function createFileAdmissionStore(
         },
       };
     });
-  async function query<T>(call: (tx: Transaction) => Promise<T>): Promise<T> {
+  async function query<T>(call: (tx: AdmissionTransaction) => Promise<T>): Promise<T> {
     await recoverBeforeRead(root);
     return call(createAdmissionTransaction(root, listReusableCheckouts));
   }
@@ -572,7 +572,7 @@ export function createFileAdmissionStore(
     };
   }
   async function inspectBinding(
-    tx: Transaction,
+    tx: AdmissionTransaction,
     item: z.infer<typeof bindingSchema>,
     requestId: string | null = null
   ): Promise<StartBindingInspection> {
@@ -587,15 +587,18 @@ export function createFileAdmissionStore(
   return {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
-      write(async (tx, runs) => {
-        const admitted: ResourceStartDisposition[] = [];
-        for (const start of drainableStarts(await tx.occupancy(options.resource), options.hostId)) {
-          const row = await tx.request(start.id);
-          if (!row) throw new Error('Queued resource request missing');
-          admitted.push(await tx.admitExisting(row, runs));
-        }
-        return admitted;
-      }),
+      write(async (tx, runs) =>
+        drainAvailableStarts(
+          await tx.occupancy(options.resource),
+          options.hostId,
+          assertCheckoutAvailable,
+          async start => {
+            const row = await tx.request(start.id);
+            if (!row) throw new Error('Queued resource request missing');
+            return tx.admitExisting(row, runs);
+          }
+        )
+      ),
     acceptStartReceipt: input =>
       write(async tx => {
         sourceReceiptAcceptanceSchema.parse(input);

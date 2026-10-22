@@ -619,6 +619,34 @@ nodes:
       expect(claims).toBe(1);
     });
 
+    it('refuses a released checkout before execution or failure writes', async () => {
+      const released = new Error("Checkout '/retired' was released; start a fresh run.");
+      let failures = 0;
+      let starts = 0;
+      const store = resumableStore({
+        resumeWorkflowRun: async () => {
+          throw released;
+        },
+        failWorkflowRun: async () => {
+          failures += 1;
+          return { failed: true };
+        },
+      });
+      const deps = makeDeps(providers, store);
+      const getProvider = deps.getAgentProvider;
+      deps.getAgentProvider = provider => {
+        starts += 1;
+        return getProvider(provider);
+      };
+      expect(
+        await captureRejection(
+          makeEngine(deps).resume({ ...resumeCallInput(), run: makeRun({ status: 'failed' }) })
+        )
+      ).toBe(released);
+      expect(starts).toBe(0);
+      expect(failures).toBe(0);
+    });
+
     it('preserves hydration and lost-claim errors before admission', async () => {
       const hydrationError = new Error('snapshot read failed');
       const caughtHydrationError = await captureRejection(

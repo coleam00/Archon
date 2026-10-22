@@ -3,6 +3,7 @@
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
+import { lockCheckoutOwnership, assertRunCheckoutAvailable } from './checkout-ownership';
 import type { ScheduledWorkflowResume, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CAPACITY_WAIT_METADATA_KEY,
@@ -199,12 +200,7 @@ export async function resumeWorkflowRun(
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      // Acquire the SQLite writer lock before taking a snapshot. Without this,
-      // another process can commit between the SELECT and our first UPDATE and
-      // make the deferred transaction fail its read-to-write upgrade.
-      if (getDatabaseType() === 'sqlite') {
-        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-      }
+      await lockCheckoutOwnership(query);
       const priorRows = await query<{
         status: string;
         metadata: unknown;
@@ -230,6 +226,7 @@ export async function resumeWorkflowRun(
           ))
       )
         return { rowCount: 0 };
+      await assertRunCheckoutAvailable(query, id);
       const resourceKey = prior?.resource_key ?? undefined;
       const status = prior?.status;
       if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
@@ -388,6 +385,8 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      await lockCheckoutOwnership(query);
+      await assertRunCheckoutAvailable(query, id);
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',

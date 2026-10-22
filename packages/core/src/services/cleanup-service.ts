@@ -2,6 +2,7 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
+import type { FailedRunRelease } from '@archon/isolation';
 import { lstat } from 'node:fs/promises';
 import {
   readOwnedWorktree,
@@ -329,7 +330,6 @@ export async function onConversationClosed(
     }
   }
 
-  // Get the environment
   const env = await isolationEnvDb.getById(envId);
   if (!env) {
     getLog().debug({ envId }, 'env_not_found_in_db');
@@ -342,11 +342,8 @@ export async function onConversationClosed(
     return;
   }
 
-  // Live work is the only lock — the same rule the merged cleanup sweep follows.
-  // Historical conversations referencing this env are data, not locks. This must
-  // read before the null-out below: a top-level run attaches to its env ONLY
-  // through this conversation's reference, so clearing first would erase the
-  // pin and let the env be removed under a running or paused run.
+  // Keep the conversation reference until removal commits: an origin-linked run
+  // may have no other checkout association. Historical conversations alone are not owners.
   const liveRun = await getLiveRunBlocker(envId);
   if (liveRun) {
     getLog().info(
@@ -364,12 +361,8 @@ export async function onConversationClosed(
     throw new Error(`Conversation cleanup retained environment ${envId}: ${result.skippedReason}`);
   }
 
-  // Clear this conversation's reference (best-effort - conversation may be deleted).
-  // `cwd` is cleared alongside it when it names the removed environment:
-  // a chat turn uses `cwd` verbatim and refuses a missing directory.
-  // Null means "no override": the conversation falls back to codebase.default_cwd,
-  // the same end state
-  // /setproject produces. A cwd pointing somewhere else is left untouched.
+  // A chat turn uses cwd verbatim and refuses a missing directory. Clearing this
+  // checkout's cwd restores codebase.default_cwd; an unrelated cwd stays untouched.
   const cwdBelongsToEnv = conversation.cwd === env.working_path;
   await conversationDb
     .updateConversation(conversation.id, {
@@ -383,6 +376,7 @@ export async function onConversationClosed(
 
 export interface RemoveEnvironmentOptions {
   force?: boolean;
+  runOwnership?: { releaseFailed?: FailedRunRelease } | false;
   /** Requests finished local-branch cleanup; remote refs are always retained. */
   deleteRemoteBranch?: boolean;
 }
@@ -391,21 +385,14 @@ const NON_WORKTREE_CLEANUP_REASON =
   'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
 
 export interface RemoveEnvironmentResult {
-  /** Whether the worktree was removed from disk */
   worktreeRemoved: boolean;
-  /** Whether the branch was deleted (null if branch cleanup was not attempted) */
   branchDeleted: boolean | null;
-  /**
-   * Why removal did not proceed. A closed set so callers that branch
-   * on a reason fail type-check when it changes, instead of silently diverging.
-   */
   skippedReason?:
     | 'already destroyed'
     | typeof NON_WORKTREE_CLEANUP_REASON
     | 'has uncommitted changes'
     | 'filesystem removal incomplete; environment remains active'
     | UnknownPlatformReason;
-  /** Warnings from partial cleanup (e.g., branch couldn't be deleted) */
   warnings: string[];
 }
 
@@ -415,9 +402,6 @@ function incompleteRemovalReason(removal: RemoveEnvironmentResult): string | und
     : undefined;
 }
 
-/**
- * Remove a specific environment
- */
 export async function removeEnvironment(
   env: IsolationEnvironmentRow,
   options?: RemoveEnvironmentOptions
@@ -444,18 +428,15 @@ export async function removeEnvironment(
   const reason = unknownPlatformReason(env.created_by_platform);
   if (reason) return { ...noopResult, skippedReason: reason };
 
-  // Get canonical repo path from codebase for branch cleanup
   let canonicalRepoPath: RepoPath | undefined;
   if (env.codebase_id) {
     const codebase = await codebaseDb.getCodebase(env.codebase_id);
     canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
   }
 
-  // Check if directory exists before attempting removal
   const pathExists = await worktreeExists(toWorktreePath(env.working_path));
 
   try {
-    // If path exists, check for uncommitted changes (unless force)
     if (pathExists && !options?.force) {
       const hasChanges = await hasUncommittedChangesStrict(toWorktreePath(env.working_path));
       if (hasChanges) {
@@ -482,7 +463,8 @@ export async function removeEnvironment(
 
         if (destroyResult.worktreeRemoved && destroyResult.directoryClean) await markDestroyed();
         return destroyResult;
-      }
+      },
+      options
     );
 
     const removed = destroyResult.worktreeRemoved && destroyResult.directoryClean;
@@ -916,6 +898,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           }
 
           const mergedResult = await removeEnvironment(env, {
+            runOwnership: { releaseFailed: { kind: 'settled' } },
             force: false,
             deleteRemoteBranch: true,
           });
@@ -970,6 +953,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           }
 
           const staleResult = await removeEnvironment(env, {
+            runOwnership: { releaseFailed: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS } },
             force: false,
           });
           recordRemoval(env.id, staleResult, 'stale', check.released);
@@ -1193,7 +1177,9 @@ export async function cleanupStaleWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env);
+      const removeResult = await removeEnvironment(env, {
+        runOwnership: { releaseFailed: { kind: 'stale', staleDays: STALE_THRESHOLD_DAYS } },
+      });
       recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
       const err = error as Error;
@@ -1204,10 +1190,6 @@ export async function cleanupStaleWorktrees(
   return result;
 }
 
-/**
- * Clean up merged worktrees for a codebase
- * Respects uncommitted changes and live workflow runs
- */
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
@@ -1272,6 +1254,7 @@ export async function cleanupMergedWorktrees(
         continue;
       }
       const removeResult = await removeEnvironment(env, {
+        runOwnership: { releaseFailed: { kind: 'settled' } },
         deleteRemoteBranch: true,
       });
       recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
@@ -1500,7 +1483,8 @@ async function reclaimOwnedWorktree(
   if (!(await pathExists())) {
     if (await isWorktreeRegistered(repo, path))
       return refuse('checkout is absent but still registered with Git');
-    if (env.status !== 'destroyed') await store.markWorktreeDestroyed(env);
+    if (env.status !== 'destroyed')
+      await store.withWorktreeRegistration(env, markDestroyed => markDestroyed());
     return { warnings: [] };
   }
   if (env.status === 'destroyed')

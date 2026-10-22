@@ -20,6 +20,9 @@ import type {
   WorktreeCreationEnvironment,
 } from './types';
 
+/** Failed resumable runs release only after settlement or their inactivity window; other owners still pin. */
+export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
+
 export interface IIsolationStore {
   getById(id: string): Promise<IsolationEnvironmentRow | null>;
   findActiveByWorkflow(
@@ -28,6 +31,7 @@ export interface IIsolationStore {
     workflowId: string
   ): Promise<IsolationEnvironmentRow | null>;
   listActive(): Promise<readonly IsolationEnvironmentRow[]>;
+  /** Adopted worktrees must still exist when published under the cleanup exclusion. */
   create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow>;
   /** With an observed row, merge atomically only if its active worktree registration is unchanged. */
   updateMetadata(
@@ -35,22 +39,29 @@ export interface IIsolationStore {
     metadata: Record<string, unknown>,
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
-  /** With an observation, restore only that retired worktree without replacing an active workflow. */
+  /**
+   * Worktree retirement requires markWorktreeDestroyed or withWorktreeRegistration.
+   * Worktree activation requires an observation; restore only that retired worktree without replacing an active workflow.
+   */
   updateStatus(
     id: string,
     status: 'active' | 'destroyed',
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
   /**
-   * Retire only the observed worktree registration, atomically. Succeeds if that
-   * registration is already destroyed; throws WorktreeRegistrationChangedError
+   * Retire only the observed worktree registration under the acquisition exclusion.
+   * Claimable run owners veto retirement. Succeeds if the registration is already destroyed; throws WorktreeRegistrationChangedError
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
-  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  /**
+   * Exclude replacement and acquisition until removal ends; retire using the supplied callback.
+   * Owners veto removal by default; only an explicit force operation may override them.
+   */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
-    remove: (markDestroyed: () => Promise<void>) => Promise<T>
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>,
+    options?: { runOwnership?: { releaseFailed?: FailedRunRelease } | false }
   ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }

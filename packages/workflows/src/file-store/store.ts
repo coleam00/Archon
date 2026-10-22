@@ -14,6 +14,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
+import {
+  CheckoutReleasedError,
+  introducesCheckout,
+  type RunCheckout,
+} from '../schemas/checkout-ownership';
 import type { WorkflowRun } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
@@ -49,7 +54,8 @@ export interface FileWorkflowStoreOptions {
   getCodebaseEnvVars?: IWorkflowStore['getCodebaseEnvVars'];
   /** Called under the commit lock; must not enter store recovery or call this store. */
   listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
-  isCheckoutReleased?: (run: WorkflowRun, workingPath?: string) => Promise<boolean>;
+  /** Return the retired managed path under the commit lock, without re-entering the store. */
+  releasedCheckout?: (run: RunCheckout) => Promise<string | undefined>;
 }
 export async function createFileWorkflowStore(
   options: FileWorkflowStoreOptions
@@ -59,6 +65,10 @@ export async function createFileWorkflowStore(
   const getCodebase = options.getCodebase ?? (async (): Promise<null> => null);
   const getCodebaseEnvVars =
     options.getCodebaseEnvVars ?? (async (): Promise<Record<string, string>> => ({}));
+  async function assertCheckoutAvailable(run: RunCheckout | null): Promise<void> {
+    const path = run && (await options.releasedCheckout?.(run));
+    if (path) throw new CheckoutReleasedError(path);
+  }
   async function eventsFor(ids: readonly string[]): Promise<WorkflowEventRow[]> {
     const states = await Promise.all(ids.map(id => readRunState(root, id)));
     return states.flatMap(state => state?.events ?? []);
@@ -184,7 +194,9 @@ export async function createFileWorkflowStore(
       const input = { ...data, id: data.id ?? crypto.randomUUID() };
       return write([input.id], async view => {
         if (await isRunArchived(root, input.id)) throw new Error('Duplicate run');
-        return view.createWorkflowRun(input);
+        const run = await view.createWorkflowRun(input);
+        await assertCheckoutAvailable(run);
+        return run;
       });
     },
     getWorkflowRun: id => readRun(root, id),
@@ -195,14 +207,34 @@ export async function createFileWorkflowStore(
         if (
           !run ||
           !(await admission.canClaim(id)) ||
-          (await options.isCheckoutReleased?.(run, path))
+          (await options.releasedCheckout?.({
+            ...run,
+            working_path: run.working_path ?? path ?? null,
+          }))
         )
           return null;
         return view.claimPendingWorkflowRun(id, path);
       }),
-    updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRun: (id, updates) =>
+      write([id], async view => {
+        const prior = await view.getWorkflowRun(id);
+        await view.updateWorkflowRun(id, updates);
+        const next = await view.getWorkflowRun(id);
+        if (
+          next &&
+          (introducesCheckout(prior, next) ||
+            (updates.status !== undefined && updates.status !== prior?.status))
+        )
+          await assertCheckoutAvailable(next);
+      }),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
-      write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
+      write([id], async view => {
+        const prior = await view.getWorkflowRun(id);
+        const changed = await view.updateWorkflowRunMetadataIfRunning(id, metadata);
+        const next = await view.getWorkflowRun(id);
+        if (changed && next && introducesCheckout(prior, next)) await assertCheckoutAvailable(next);
+        return changed;
+      }),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -210,6 +242,7 @@ export async function createFileWorkflowStore(
       // Repeated waiting refusals must also commit restored historical admission membership.
       const outcome = await write([id], async (view, admission) => {
         const run = view.resumableRun(id, cursor);
+        await assertCheckoutAvailable(run);
         const blocker = await admission.resume(run);
         if (!blocker) return await view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
@@ -228,7 +261,11 @@ export async function createFileWorkflowStore(
         if (released) view.clearCapacityWait(id);
         return { released };
       }),
-    recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
+    recoverCancelledFanOutRun: id =>
+      write([id], async view => {
+        await assertCheckoutAvailable(await view.getWorkflowRun(id));
+        return view.recoverCancelledFanOutRun(id);
+      }),
     pauseWorkflowRun: (id, approval, extra, event) =>
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
@@ -440,7 +477,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root, options.listReusableCheckouts),
+    ...createFileAdmissionStore(root, options.listReusableCheckouts, assertCheckoutAvailable),
     ...createFileStateDocumentStore(root),
   };
   return store;

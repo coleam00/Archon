@@ -46,7 +46,9 @@ mock.module('../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 const isolationDb = await import('../db/isolation-environments');
-const { claimPendingWorkflowRun } = await import('../db/workflows');
+const { claimPendingWorkflowRun, updateWorkflowRun, createWorkflowRun } = await import(
+  '../db/workflows'
+);
 const {
   assessCompletedRunWorktree,
   cleanupStaleWorktrees,
@@ -157,6 +159,57 @@ test.each(['replacement', 'partial', 'dirty'] as const)(
     expect(await readFile(join(env.working_path, 'file'), 'utf8')).toBe(
       mode === 'dirty' ? 'operator edits' : 'original'
     );
+  }
+);
+
+test.each(['claim', 'bind', 'create'] as const)(
+  'conversation close rechecks %s acquisition after its last preliminary ownership check',
+  async mode => {
+    const conversationId = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_conversations
+      (id, platform_type, platform_conversation_id, codebase_id, isolation_env_id, cwd)
+     VALUES ($1, 'github', $1, $2, $3, $4)`,
+      [conversationId, codebaseId, env.id, env.working_path]
+    );
+    const pendingId = await seedRunAt(null, 'pending');
+    const checked = Promise.withResolvers<void>();
+    const continueCleanup = Promise.withResolvers<void>();
+    const lookup = isolationDb.getLiveRunOwningEnv;
+    const racing = spyOn(isolationDb, 'getLiveRunOwningEnv').mockImplementation(async (...args) => {
+      const owner = await lookup(...args);
+      checked.resolve();
+      await continueCleanup.promise;
+      return owner;
+    });
+    const cleanup = onConversationClosed('github', conversationId);
+    try {
+      await checked.promise;
+      let acquiringId = pendingId;
+      if (mode === 'bind') await updateWorkflowRun(pendingId, { working_path: env.working_path });
+      if (mode === 'create')
+        acquiringId = (
+          await createWorkflowRun({
+            workflow_name: 'new-owner',
+            user_message: '',
+            codebase_id: codebaseId,
+            working_path: env.working_path,
+          })
+        ).id;
+      expect(await claimPendingWorkflowRun(acquiringId, env.working_path)).toMatchObject({
+        status: 'running',
+      });
+      continueCleanup.resolve();
+      await expect(cleanup).rejects.toThrow('also uses this checkout');
+    } finally {
+      continueCleanup.resolve();
+      await Promise.allSettled([cleanup]);
+      racing.mockRestore();
+    }
+    expect(await status()).toBe('active');
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await git(repo, 'worktree', 'list', '--porcelain')).toContain(env.working_path);
+    expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
   }
 );
 

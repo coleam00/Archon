@@ -1232,6 +1232,9 @@ describe('DELETE /api/codebases/:id', () => {
     ['unregistered file ancestor', 200],
     ['registered file ancestor', 500],
     ['same-ID re-registration', 409],
+    ['pending owner', 500],
+    ['running owner', 500],
+    ['paused owner', 500],
   ] as const) {
     test(`real Git deletion handles ${scenario}`, async () => {
       const root = await mkdtemp(join(tmpdir(), 'archon-delete-route-'));
@@ -1273,7 +1276,18 @@ describe('DELETE /api/codebases/:id', () => {
           branch_name: toBranchName('checkout'),
         };
         const original = await realEnvironmentStore.create(registration);
-        if (scenario !== 'same-ID re-registration') {
+        if (scenario.endsWith(' owner')) {
+          const conversationId = crypto.randomUUID();
+          await db.query(
+            `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, 'cli', $1)`,
+            [conversationId]
+          );
+          await db.query(
+            `INSERT INTO remote_agent_workflow_runs (id, workflow_name, user_message, codebase_id, working_path, status, conversation_id)
+             VALUES ($1, 'owner', '', $2, $3, $4, $5)`,
+            [crypto.randomUUID(), project.id, checkout, scenario.split(' ')[0], conversationId]
+          );
+        } else if (scenario !== 'same-ID re-registration') {
           if (scenario === 'unregistered file ancestor') {
             await removeRealWorktree(toRepoPath(repo), toWorktreePath(checkout));
           }
@@ -1312,7 +1326,7 @@ describe('DELETE /api/codebases/:id', () => {
           expect((await realEnvironmentStore.getById(original.id))?.status).toBe('active');
           expect(await checkRealRegistration(toRepoPath(repo), checkout)).toBe(true);
           expect(mockDeleteCodebase).not.toHaveBeenCalled();
-          if (scenario === 'same-ID re-registration')
+          if (scenario === 'same-ID re-registration' || scenario.endsWith(' owner'))
             expect(mockRemoveWorktree).not.toHaveBeenCalled();
           if (scenario === 'registered file ancestor') {
             expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();

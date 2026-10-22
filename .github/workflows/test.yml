@@ -434,6 +434,11 @@ jobs:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun test packages/core/src/db/worktree-registration-conformance.integration.test.ts
 
+      - name: Run Postgres checkout ownership conformance
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun run --cwd packages/core test src/db/checkout-ownership.integration.test.ts
+
       - name: Run Postgres resource-slot test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres

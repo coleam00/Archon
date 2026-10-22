@@ -231,6 +231,20 @@ export async function retainSetupRunSource(
   return finalized;
 }
 
+export async function recordSetupRunCheckout(
+  deps: Pick<WorkflowDeps, 'store'>,
+  run: WorkflowRun,
+  cwd: string
+): Promise<void> {
+  if (run.working_path !== null) return;
+  await deps.store.updateWorkflowRun(run.id, {
+    working_path: cwd,
+    metadata: { isolation_env_id: null },
+  });
+  run.working_path = cwd;
+  run.metadata = { ...run.metadata, isolation_env_id: null };
+}
+
 /**
  * Write the source pointer onto a run created before its worktree. The executor keeps a
  * recorded source as-is, so a caller that changes the source origin after isolation (a

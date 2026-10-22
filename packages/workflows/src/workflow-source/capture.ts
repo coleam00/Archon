@@ -96,6 +96,12 @@ export async function captureWorkflowSource(opts: {
       sourceConfig,
     });
 
+    if (!(await isDirectory(sourceRoot)))
+      throw new WorkflowSourceUnavailableError(
+        sourceRoot,
+        new Error('Source root is not a directory')
+      );
+
     // Replace rather than merge: a stale capture at this path would silently mix two
     // vintages of source, which is the failure this module exists to prevent.
     await rm(captureRoot, { recursive: true, force: true });

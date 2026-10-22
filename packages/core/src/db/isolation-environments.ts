@@ -1,6 +1,10 @@
 /**
  * Database operations for isolation environments
  */
+import { worktreeExists, toWorktreePath } from '@archon/git';
+import { CheckoutReleasedError } from '@archon/workflows/schemas/checkout-ownership';
+import { lockCheckoutOwnership } from './checkout-ownership';
+import type { FailedRunRelease } from '@archon/isolation';
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
@@ -11,6 +15,7 @@ import {
 import {
   WORKTREE_REGISTRATION_ID,
   WorktreeRegistrationChangedError,
+  WorktreeInUseError,
 } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
@@ -23,6 +28,8 @@ import { toHydratedTimestamp } from './timestamps';
 import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
+
+export type { FailedRunRelease } from '@archon/isolation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -174,8 +181,9 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
   // re-creation (upsert) we preserve the original creator's attribution.
   // The first user to spin up an environment owns it; subsequent reactivations
   // by different users don't transfer ownership. Mirrors created_by_platform.
-  const result = await pool.query<IsolationEnvironmentRow>(
-    `INSERT INTO remote_agent_isolation_environments
+  const publish = async (query: typeof pool.query) => {
+    const result = await query<IsolationEnvironmentRow>(
+      `INSERT INTO remote_agent_isolation_environments
      (codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, created_by_user_id, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (codebase_id, workflow_type, workflow_id) WHERE status = 'active'
@@ -188,28 +196,43 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
        status = 'active',
        created_at = ${dialect.now()}
      RETURNING *`,
-    [
-      env.codebase_id,
-      env.workflow_type,
-      env.workflow_id,
-      provider,
-      env.working_path,
-      env.branch_name,
-      env.created_by_platform ?? null,
-      env.created_by_user_id ?? null,
-      JSON.stringify(metadata),
-    ]
-  );
+      [
+        env.codebase_id,
+        env.workflow_type,
+        env.workflow_id,
+        provider,
+        env.working_path,
+        env.branch_name,
+        env.created_by_platform ?? null,
+        env.created_by_user_id ?? null,
+        JSON.stringify(metadata),
+      ]
+    );
 
-  if (!result.rows[0]) {
-    throw new Error('Failed to create isolation environment: INSERT succeeded but no row returned');
-  }
+    if (!result.rows[0]) {
+      throw new Error(
+        'Failed to create isolation environment: INSERT succeeded but no row returned'
+      );
+    }
 
-  getLog().debug(
-    { envId: result.rows[0].id, codebaseId: env.codebase_id, branch: env.branch_name },
-    'db.isolation_env_create_completed'
+    getLog().debug(
+      { envId: result.rows[0].id, codebaseId: env.codebase_id, branch: env.branch_name },
+      'db.isolation_env_create_completed'
+    );
+    return normalizeEnvironmentRow(result.rows[0]);
+  };
+  if (provider !== 'worktree' || env.metadata?.adopted !== true)
+    return publish(pool.query.bind(pool));
+  return getDatabase().withTransaction(
+    async query => {
+      await lockCheckoutOwnership(query);
+      if (!(await worktreeExists(toWorktreePath(env.working_path)))) {
+        throw new CheckoutReleasedError(env.working_path);
+      }
+      return publish(query);
+    },
+    { retryOnBusy: 'first-statement' }
   );
-  return normalizeEnvironmentRow(result.rows[0]);
 }
 
 /**
@@ -223,6 +246,8 @@ export async function updateStatus(
   const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2${
+      status === 'destroyed' || !observed ? " AND provider <> 'worktree'" : ''
+    }${
       predicate
         ? ` AND status = 'destroyed'${predicate.sql}
       AND NOT EXISTS (
@@ -243,9 +268,14 @@ export async function updateStatus(
     ]
   );
   if (result.rowCount === 0) {
+    if (status === 'destroyed') {
+      throw new Error(
+        `Cannot retire isolation environment '${id}' by status: it is missing or is a worktree; use markWorktreeDestroyed for worktrees`
+      );
+    }
     if (observed) throw new WorktreeRegistrationChangedError(id);
     throw new Error(
-      `Failed to update isolation environment status: no environment found with id '${id}'`
+      `Cannot activate isolation environment '${id}' by status: it is missing or is a worktree; worktree activation requires an observation`
     );
   }
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');
@@ -315,9 +345,9 @@ function observedRegistrationPredicate(
 }
 
 /** Mark only the observed worktree registration destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(
+async function retireWorktreeRegistration(
   observed: IsolationEnvironmentRow,
-  query: typeof pool.query = pool.query.bind(pool)
+  query: typeof pool.query
 ): Promise<void> {
   const predicate = observedRegistrationPredicate(observed, 2);
   const result = await query(
@@ -331,6 +361,30 @@ export async function markWorktreeDestroyed(
   getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
 }
 
+export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+  return getDatabase().withTransaction(
+    async query => {
+      await lockCheckoutOwnership(query);
+      const predicate = observedRegistrationPredicate(observed, 2);
+      const locked = await query(
+        `UPDATE remote_agent_isolation_environments SET status = status
+         WHERE id = $1${predicate.sql}`,
+        [observed.id, ...predicate.params]
+      );
+      if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
+      const current = await query<{ status: string }>(
+        'SELECT status FROM remote_agent_isolation_environments WHERE id = $1',
+        [observed.id]
+      );
+      if (current.rows[0]?.status === 'destroyed') return;
+      const owner = await getLiveRunOwningEnv(observed.id, undefined, undefined, query);
+      if (owner) throw new WorktreeInUseError(observed.id, owner.id, owner.status);
+      await retireWorktreeRegistration(observed, query);
+    },
+    { retryOnBusy: 'first-statement' }
+  );
+}
+
 /**
  * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
  * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
@@ -338,18 +392,29 @@ export async function markWorktreeDestroyed(
  */
 export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
   observed,
-  remove
+  remove,
+  options
 ) => {
   const predicate = observedRegistrationPredicate(observed, 2);
   return getDatabase().withTransaction(
     async query => {
+      await lockCheckoutOwnership(query);
       const locked = await query(
         `UPDATE remote_agent_isolation_environments SET status = status
        WHERE id = $1 AND status = 'active'${predicate.sql}`,
         [observed.id, ...predicate.params]
       );
       if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
-      return remove(() => markWorktreeDestroyed(observed, query));
+      if (options?.runOwnership !== false) {
+        const owner = await getLiveRunOwningEnv(
+          observed.id,
+          options?.runOwnership?.releaseFailed,
+          undefined,
+          query
+        );
+        if (owner) throw new WorktreeInUseError(observed.id, owner.id, owner.status);
+      }
+      return remove(() => retireWorktreeRegistration(observed, query));
     },
     { retryOnBusy: 'first-statement' }
   );
@@ -415,13 +480,6 @@ export function isSettleableRunStatus(status: string): boolean {
 }
 
 /**
- * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled (the branch merged or its PR closed), or once the run has been inactive
- * longer than the sweep's stale window. The run row itself is never touched.
- */
-export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
-
-/**
  * Find a workflow run that still owns an environment — the one signal that pins an
  * env for cleanup. Historical conversation rows are data, not locks: every
  * CLI-launched run leaves one behind, so counting references pinned every
@@ -440,11 +498,19 @@ export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays:
 export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
-  excludeRunId?: string
+  excludeRunId?: string,
+  query: typeof pool.query = pool.query.bind(pool)
 ): Promise<{ id: string; status: WorkflowRunStatus } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
-  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
+  const stringReference = (path: string): string => {
+    const extract = dialect.jsonText('r.metadata', path);
+    const type = postgres
+      ? `jsonb_typeof(r.metadata #> '{${path.replaceAll('.', ',')}}') = 'string'`
+      : `json_type(r.metadata, '$.${path}') = 'text'`;
+    return `CASE WHEN ${type} THEN ${extract} END`;
+  };
+  const envIdExtract = stringReference('isolation_env_id');
   // UUID identifiers must compare as text so $1 has one type across metadata,
   // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';
@@ -474,17 +540,26 @@ export async function getLiveRunOwningEnv(
     excludeRunId === undefined
       ? ''
       : `AND ${postgres ? 'r.id::text' : 'r.id'} <> $${String(params.push(excludeRunId))}`;
-  const ownedEnvExtract = dialect.jsonText('r.metadata', 'owned_worktree.envId');
-  const result = await pool.query<{ id: string; status: string }>(
+  const ownedEnvExtract = `NULLIF(${stringReference('owned_worktree.envId')}, '')`;
+  const result = await query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON c.id = r.conversation_id
      WHERE (r.status NOT IN (${unclaimable}))
        ${releaseFilter}
        ${exclusion}
-       AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
-         OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
-           WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
+       AND EXISTS (
+         SELECT 1 FROM remote_agent_isolation_environments e
+         WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1
+           AND ((e.codebase_id = r.codebase_id AND e.working_path = r.working_path)
+             OR EXISTS (
+               SELECT 1 FROM remote_agent_isolation_environments alias
+               WHERE alias.codebase_id = e.codebase_id AND alias.working_path = e.working_path
+                 AND (CAST(alias.id AS TEXT) = ${envIdExtract}
+                   OR CAST(alias.id AS TEXT) = ${ownedEnvExtract}
+                   OR (r.working_path IS NULL AND ${envIdExtract} IS NULL
+                     AND ${ownedEnvExtract} IS NULL
+                     AND CAST(alias.id AS TEXT) = ${conversationEnvMatch})))))
      ORDER BY r.started_at DESC
      LIMIT 1`,
     params

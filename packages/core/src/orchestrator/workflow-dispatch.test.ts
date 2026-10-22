@@ -2,7 +2,7 @@
 /** Covers workflow-dispatch.ts, directly and through `handleMessage`; shared mocks live in `../test/orchestrator-agent-harness`. */
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -10,7 +10,7 @@ import type { IPlatformAdapter } from '../types';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toBranchName } from '@archon/git';
-import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
+import { captureWorkflowSource, capturedSourceRoots } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
 
 import {
@@ -61,11 +61,15 @@ import {
   makeResumableRun,
   resetDispatchMocks,
 } from '../test/orchestrator-agent-harness';
+import { SqliteAdapter } from '../db/adapters/sqlite';
+import { assertNewRunCheckoutAvailable } from '../db/checkout-ownership';
+import * as conversationDb from '../db/conversations';
 import { handleMessage } from './orchestrator-agent';
 import { continueResolvedGateRun } from './workflow-dispatch';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 
 const trackTempRoot = trackTempRoots();
+const mockClearConversationCheckout = spyOn(conversationDb, 'clearConversationCheckout');
 
 // ─── Workflow dispatch routing ────────────────────────────────────────────────
 
@@ -96,7 +100,224 @@ describe('workflow dispatch routing', () => {
     };
   }
 
-  beforeEach(resetDispatchMocks);
+  beforeEach(() => {
+    resetDispatchMocks();
+    mockClearConversationCheckout.mockReset();
+  });
+
+  test.each(['fresh', 'checkout-branch'] as const)(
+    'a %s foreground setup clears a retired conversation checkout before insertion',
+    async lane => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-retired-')));
+      const database = new SqliteAdapter(join(root, 'db.sqlite'));
+      const codebase = makeCodebase();
+      const conversation = makeDispatchConversation({ isolation_env_id: 'retired-env' });
+      const retiredPath = join(root, 'retired');
+      try {
+        await database.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+          [codebase.id, codebase.name, root]
+        );
+        await database.query(
+          `INSERT INTO remote_agent_isolation_environments (id, codebase_id, workflow_type, workflow_id, working_path, branch_name, status)
+        VALUES ('retired-env', $1, 'task', 'prior', $2, 'prior', 'destroyed')`,
+          [codebase.id, retiredPath]
+        );
+        await database.query(
+          `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, isolation_env_id)
+        VALUES ($1, 'cli', $1, 'retired-env')`,
+          [conversation.id]
+        );
+        const setupInput = {
+          workflow_name: 'test-workflow',
+          user_message: '',
+          origin: { conversationId: conversation.id },
+        };
+        await expect(
+          assertNewRunCheckoutAvailable(database.query.bind(database), setupInput)
+        ).rejects.toThrow(retiredPath);
+        mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+        mockGetCodebase.mockResolvedValueOnce(codebase);
+        mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+        mockAdoptedEnvironment.mockResolvedValueOnce(
+          makeIsolationEnvironment({
+            id: 'retired-env',
+            working_path: retiredPath,
+            status: 'destroyed',
+          })
+        );
+        mockClearConversationCheckout.mockImplementation(async (id, expectedEnvId) => {
+          await database.query(
+            'UPDATE remote_agent_conversations SET isolation_env_id = NULL WHERE id = $1 AND isolation_env_id = $2',
+            [id, expectedEnvId]
+          );
+          return { ...conversation, isolation_env_id: null };
+        });
+        await mkdir(retiredPath);
+        if (lane === 'checkout-branch')
+          mockResolveWorkflowAdoption.mockResolvedValueOnce({
+            adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+            lane: {
+              kind: 'checkout-branch',
+              taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
+            },
+          });
+        mockCreateWorkflowRun.mockImplementationOnce(async data => {
+          await assertNewRunCheckoutAvailable(database.query.bind(database), data);
+          return makeRun({
+            id: data.id,
+            workflow_name: data.workflow_name,
+            status: 'pending',
+            metadata: data.metadata ?? {},
+          });
+        });
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          ...(lane === 'checkout-branch' ? { workflowAdoptRunId: 'prior-run' } : {}),
+        });
+        expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBeNull();
+        expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockFailPreparedRun).not.toHaveBeenCalled();
+        expect(
+          (
+            await database.query<{ isolation_env_id: string | null }>(
+              'SELECT isolation_env_id FROM remote_agent_conversations WHERE id = $1',
+              [conversation.id]
+            )
+          ).rows[0]?.isolation_env_id
+        ).toBeNull();
+      } finally {
+        await database.close();
+      }
+    }
+  );
+
+  const reconciliationStates = [
+    'removed',
+    'replaced',
+    'absent-row',
+    'destroyed',
+    'removed-before-capture',
+    'override',
+    'override-replaced',
+  ] as const;
+  async function prepareReconciledSource(state: (typeof reconciliationStates)[number]) {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'foreground-source-')));
+    const retiredPath = join(root, 'retired');
+    const replacementPath = join(root, 'replacement');
+    const projectPath = join(root, 'project');
+    const overridePath = join(root, 'override');
+    const hasOverride = state === 'override' || state === 'override-replaced';
+    const hasReplacement = state !== 'removed' && state !== 'override';
+    for (const [path, description] of [
+      [retiredPath, 'obsolete source'],
+      [replacementPath, 'replacement source'],
+      [projectPath, 'registered source'],
+      [overridePath, 'override source'],
+    ]) {
+      await mkdir(join(path, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(path, '.archon', 'workflows', 'test-workflow.yaml'),
+        `name: test-workflow\ndescription: ${description}\nnodes:\n  - id: work\n    prompt: Work\n`
+      );
+    }
+    if (state === 'removed') await rm(retiredPath, { recursive: true });
+    const conversation = makeDispatchConversation({
+      isolation_env_id: 'retired-env',
+      cwd: retiredPath,
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce(conversation);
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase({ default_cwd: projectPath }));
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    mockAdoptedEnvironment.mockResolvedValueOnce(
+      makeIsolationEnvironment({
+        id: 'retired-env',
+        working_path: retiredPath,
+        status: 'destroyed',
+      })
+    );
+    mockClearConversationCheckout.mockResolvedValueOnce({
+      ...conversation,
+      isolation_env_id: hasReplacement ? 'new-env' : null,
+      cwd: hasOverride ? overridePath : null,
+    });
+    if (hasReplacement)
+      mockAdoptedEnvironment.mockResolvedValueOnce(
+        state === 'absent-row'
+          ? null
+          : makeIsolationEnvironment({
+              id: 'new-env',
+              working_path: replacementPath,
+              status: state === 'destroyed' ? 'destroyed' : 'active',
+            })
+      );
+    if (state === 'destroyed') await rm(replacementPath, { recursive: true });
+    const captureRoot = join(root, 'capture');
+    mockPrepareWorkflowSource.mockClear();
+    if (state !== 'destroyed')
+      mockPrepareWorkflowSource.mockImplementationOnce(async (_deps, options) => {
+        if (state === 'removed-before-capture') await rm(replacementPath, { recursive: true });
+        const capture = await captureWorkflowSource({ ...options, captureRoot });
+        return {
+          ...capture,
+          runId: 'prepared-run-id',
+          roots: capturedSourceRoots(capture.anchor),
+        };
+      });
+    mockDiscoverWorkflowsWithConfig.mockImplementation((...args) =>
+      realDiscoverWorkflowsWithConfig(...args)
+    );
+    return { conversation, hasReplacement, hasOverride, replacementPath, captureRoot };
+  }
+
+  test.each(
+    reconciliationStates.flatMap(state => [false, true].map(background => ({ state, background })))
+  )(
+    'fresh background=$background captures reconciled source when its checkout was $state',
+    async ({ state, background }) => {
+      const { conversation, hasReplacement, hasOverride, replacementPath, captureRoot } =
+        await prepareReconciledSource(state);
+      const platform = background ? makePlatform() : makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      if (state === 'destroyed' || state === 'removed-before-capture') {
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+        expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+        expect(platform.sendMessage.mock.calls.map(call => call[1]).join('\n')).toContain(
+          replacementPath
+        );
+        expect(mockPrepareWorkflowSource).toHaveBeenCalledTimes(Number(state !== 'destroyed'));
+        await expect(readFile(join(captureRoot, 'manifest.json'))).rejects.toThrow();
+        return;
+      }
+      const expectedDescription = hasOverride
+        ? 'override source'
+        : state === 'replaced'
+          ? 'replacement source'
+          : 'registered source';
+      expect(mockClearConversationCheckout).toHaveBeenCalledWith(conversation.id, 'retired-env');
+      if (!background)
+        expect(mockValidateAndResolveIsolation.mock.calls[0]?.[0].isolation_env_id).toBe(
+          hasReplacement ? 'new-env' : null
+        );
+      expect(
+        await readFile(join(captureRoot, 'project/.archon/workflows/test-workflow.yaml'), 'utf8')
+      ).toContain(expectedDescription);
+      if (background) {
+        expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockDispatchBackgroundWorkflow.mock.calls[0]?.[1].description).toBe(
+          expectedDescription
+        );
+      } else {
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockExecuteWorkflow.mock.calls[0]?.[4].description).toBe(expectedDescription);
+      }
+    }
+  );
 
   test('a terminal status write failure during worktree preparation is not retried', async () => {
     const { IsolationBlockedError } = await import('@archon/isolation');
@@ -317,6 +538,107 @@ describe('workflow dispatch routing', () => {
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as { adoptedFromRunId?: string };
     expect(opts.adoptedFromRunId).toBe('prior-run');
+  });
+
+  test.each(['reuse-worktree', 'checkout-branch'] as const)(
+    'foreground %s selection replaces the setup run checkout before submission',
+    async kind => {
+      const adapter = await import('../workflows/store-adapter');
+      const original = adapter.createWorkflowDeps();
+      const writes = mock(original.store.updateWorkflowRun);
+      const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+        ...original,
+        store: { ...original.store, updateWorkflowRun: writes },
+      }));
+      mockGetOrCreateConversation.mockResolvedValueOnce(
+        makeDispatchConversation({ isolation_env_id: 'old-env' })
+      );
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+      if (kind === 'checkout-branch')
+        mockValidateAndResolveIsolation.mockResolvedValueOnce({
+          cwd: '/wt/adopted',
+          status: 'new',
+          env: makeIsolationEnvironment(),
+        });
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        lane:
+          kind === 'reuse-worktree'
+            ? { kind, environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }) }
+            : { kind, taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') } },
+      });
+      try {
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          workflowAdoptRunId: 'prior-run',
+        });
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(writes).toHaveBeenCalledWith(expect.any(String), {
+          working_path: '/wt/adopted',
+          metadata: { isolation_env_id: null },
+        });
+        const opts = mockExecuteWorkflow.mock.calls[0]?.at(-1) as { preCreatedRun?: WorkflowRun };
+        expect(opts.preCreatedRun?.working_path).toBe('/wt/adopted');
+        expect(opts.preCreatedRun?.metadata.isolation_env_id).toBeNull();
+      } finally {
+        factory.mockRestore();
+        (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+      }
+    }
+  );
+
+  test('foreground setup failure leaves its unregistered checkout unbound', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const setup = await import('../workflows/worktree-setup');
+    const original = adapter.createWorkflowDeps();
+    const writes = mock(original.store.updateWorkflowRun);
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: { ...original.store, updateWorkflowRun: writes },
+    }));
+    let writesAtExecution: unknown[] = [];
+    const executor = spyOn(setup, 'createRunWorktreeSetupExecutor').mockImplementation(
+      () => async () => {
+        writesAtExecution = [...writes.mock.calls];
+        throw new Error('setup command failed');
+      }
+    );
+    mockGetOrCreateConversation.mockResolvedValueOnce(
+      makeDispatchConversation({ isolation_env_id: 'old-env' })
+    );
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
+    mockValidateAndResolveIsolation.mockImplementationOnce(async (...args) => {
+      const execute = args[7];
+      if (!execute) throw new Error('Missing setup executor');
+      await execute({
+        workingPath: '/wt/selected',
+        canonicalRepoPath: '/repo',
+        codebaseId: 'codebase-1',
+        commands: ['false'],
+        timeout: 1000,
+      });
+      throw new Error('Expected setup failure');
+    });
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const selectedCheckoutWrite = [
+        expect.any(String),
+        expect.objectContaining({ working_path: '/wt/selected' }),
+      ];
+      expect(writesAtExecution).not.toContainEqual(selectedCheckoutWrite);
+      expect(writes.mock.calls).not.toContainEqual(selectedCheckoutWrite);
+      expect(executor).toHaveBeenCalledTimes(1);
+      expect(mockFailPreparedRun).toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      executor.mockRestore();
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   // R7: the resolver short-circuits on `existingEnvId` before hints are read, so a
@@ -2152,7 +2474,7 @@ describe('workflow dispatch routing', () => {
     expect(opts.preCreatedRun).toMatchObject({
       id: 'prepared-run-id',
       status: 'pending',
-      working_path: null,
+      working_path: '/test/cwd',
     });
     expect(opts.priorCompletedNodes).toBeUndefined();
   });

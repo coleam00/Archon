@@ -13,7 +13,11 @@ import {
 import { startRunLiveOwner } from '../../services/run-live-owner';
 import { toError } from '../../utils/error';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
-import { recordSetupRunSource, retainSetupRunSource } from '../../workflows/worktree-setup';
+import {
+  recordSetupRunCheckout,
+  recordSetupRunSource,
+  retainSetupRunSource,
+} from '../../workflows/worktree-setup';
 import { submitFreshForeground } from './fresh';
 import { resolveForegroundIsolation } from './isolation';
 import type { Continuation } from './request';
@@ -94,6 +98,7 @@ export async function dispatchForeground(
     });
     if (isolation === undefined) return;
     const { cwd, cutFromCommit, ownedWorktree } = isolation;
+    if (setupRun) await recordSetupRunCheckout(setupDeps, setupRun, cwd);
 
     if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
       freshCaptured = {
