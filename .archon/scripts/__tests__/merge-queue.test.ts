@@ -493,6 +493,16 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
+  test('a pull request a build round recorded is not enrolled, whatever its head branch', () => {
+    const recorded = { ...BUILT.rounds[0]!, pr_url: PR_URL.replace(/42$/, '50') };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, status: 'next', rounds: [recorded] }));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
+    expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
+    expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
   test('enrollment compares the repository as well as the number', () => {
     const other = { host: PR.repo.host, path: 'someone/else' };
     const otherRound = { ...BUILT.rounds[0]!, pr_url: `https://${other.host}/${other.path}/pull/50` };
