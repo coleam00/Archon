@@ -1610,7 +1610,7 @@ branch, so the run can still be adopted. Otherwise the worktree stays, the run p
 warning naming the path and what removing it would lose, and the run's
 `terminal_record.worktree_disposition` records the reason (see
 [`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
-when its run ends: `--merged` removes it after its pull request merges (or closes, with
+when its run ends: `--merged` removes it after its branch merges (or its pull request closes, with
 `--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a
 pull request rather than to one run; the merged and age-based cleanups remove it. A
 workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
