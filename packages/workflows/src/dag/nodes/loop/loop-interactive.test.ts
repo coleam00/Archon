@@ -19,6 +19,13 @@ import {
   expectLoopGateEvidence,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import {
+  executionMetadata,
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '../../../node-execution';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
 
@@ -1020,6 +1027,8 @@ describe('interactive loop node', () => {
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
     );
     expect(completed?.[0].data?.cost_usd).toBeCloseTo(0.05, 5);
+    // A gate without execution metadata cannot prove the cost it carried in.
+    expect(completed?.[0].data).toMatchObject({ spend: { costUsd: { partial: true } } });
     // The gate paused on a floor, so the resumed node and run totals stay a floor.
     // Decoding the persisted usage without the flag let a resumed loop claim an exact
     // total it never had.
@@ -1040,6 +1049,153 @@ describe('interactive loop node', () => {
         total_cache_partial: true,
       },
     ]);
+  });
+
+  describe('cost carried in from a gate', () => {
+    const refine: DagNode = {
+      id: 'refine',
+      kind: 'loop',
+      loop: {
+        fresh_context: false,
+        prompt: 'Refine.',
+        until: 'APPROVED',
+        max_iterations: 10,
+        interactive: true,
+        gate_message: 'Review.',
+      },
+    };
+    const gate = (overrides: Record<string, unknown>) => ({
+      type: 'interactive_loop',
+      nodeId: 'refine',
+      iteration: 1,
+      sessionId: 'sig-session-1',
+      message: 'gate',
+      completionSignaled: true,
+      signaledOutput: 'REPORT',
+      ...overrides,
+    });
+    const resumeAt = async (
+      runId: string,
+      approval: Record<string, unknown>,
+      feedbackGiven: boolean,
+      nodes: DagNode[] = [refine]
+    ) => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Done. <promise>APPROVED</promise>' };
+        yield { type: 'result', sessionId: 'iter-session-2', cost: 0.03 };
+      });
+      const mockDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'gate-cost', nodes },
+          workflowRun: makeWorkflowRun(runId, {
+            metadata: {
+              approval,
+              loop_user_input: feedbackGiven ? 'again' : 'Approved',
+              loop_feedback_given: feedbackGiven,
+            },
+          }),
+        })
+      );
+      const events = persistedEvents(mockDeps.store);
+      return {
+        store: mockDeps.store,
+        completed: events.find(e => e.event_type === 'node_completed' && e.step_name === 'refine'),
+        snapshot: await foldDagResumeSnapshot(events, runId),
+      };
+    };
+
+    it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
+      const { store, completed, snapshot } = await resumeAt(
+        'legacy-feedback',
+        gate({ signaledCostUsd: null }),
+        true
+      );
+      expect(completed?.data?.cost_usd).toBeCloseTo(0.03, 5);
+      expect(completed?.data).toMatchObject({
+        spend: { costUsd: { source: 'provider', value: 0.03, partial: true } },
+      });
+      expect(runUsageWrites(store)).toEqual([expect.objectContaining({ total_cost_usd: 0.03 })]);
+      expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
+    });
+
+    it('bare approval of a legacy gate with null cost keeps later priced work as the floor', async () => {
+      const { store, completed, snapshot } = await resumeAt(
+        'legacy-approve',
+        gate({ signaledCostUsd: null }),
+        false,
+        [
+          refine,
+          {
+            id: 'after',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Next.' },
+            depends_on: ['refine'],
+          },
+        ]
+      );
+      // Only the downstream node ran: approval still finalizes without an iteration.
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(completed?.data).not.toHaveProperty('cost_usd');
+      expect(completed?.data).not.toHaveProperty('spend');
+      expect(runUsageWrites(store)).toEqual([expect.objectContaining({ total_cost_usd: 0.03 })]);
+      expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
+    });
+
+    it('feedback on a gate whose recorded cost is known keeps the cost complete', async () => {
+      const start = startNodeExecution({
+        runId: 'known-feedback',
+        path: 'refine',
+        node: refine,
+        invocation: newNodeInvocation(),
+        provider: 'claude',
+      });
+      const execution = executionMetadata(
+        finishNodeExecution(
+          start,
+          { status: 'suspended', point: 'interactive_loop' },
+          { costUsd: 0.02 }
+        )
+      );
+      const { completed } = await resumeAt(
+        'known-feedback',
+        gate({ execution, signaledCostUsd: 0.02 }),
+        true
+      );
+      expect(completed?.data?.cost_usd).toBeCloseTo(0.05, 5);
+      expect(completed?.data).toMatchObject({ spend: { costUsd: { source: 'provider' } } });
+      expect(completed?.data).not.toHaveProperty('spend.costUsd.partial');
+    });
+
+    it('bare approval of a gate whose recorded cost is a floor keeps the finalized cost partial', async () => {
+      const start = startNodeExecution({
+        runId: 'floor-approve',
+        path: 'refine',
+        node: refine,
+        invocation: newNodeInvocation(),
+        provider: 'claude',
+      });
+      const execution = executionMetadata(
+        finishNodeExecution(
+          start,
+          { status: 'suspended', point: 'interactive_loop' },
+          { costUsd: 0.02, costPartial: true }
+        )
+      );
+      const { completed } = await resumeAt(
+        'floor-approve',
+        gate({ execution, signaledCostUsd: 0.02 }),
+        false
+      );
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(completed?.data?.cost_usd).toBeCloseTo(0.02, 5);
+      expect(completed?.data).toMatchObject({
+        spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+      });
+    });
   });
 
   it('iterates at resume on a non-signaled gate even without feedback (#2074 C)', async () => {

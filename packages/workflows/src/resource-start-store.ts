@@ -365,6 +365,14 @@ export type QueuedResourceStartInspection =
   | ResourceStartRequestInspection
   | { id: string; resource?: string; receiptId?: string; error: unknown };
 
+/** A stored start receipt that could not be read or validated. Its bindings and their hosts are unknown. */
+export interface DamagedStartReceipt {
+  document: string;
+  error: Error;
+}
+
+export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
@@ -388,10 +396,11 @@ export interface IResourceStartStore {
       'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
+  /** Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only. */
   listPendingStartBindings(options: {
     hostId: string;
     limit?: number;
-  }): Promise<StartBindingInspection[]>;
+  }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;

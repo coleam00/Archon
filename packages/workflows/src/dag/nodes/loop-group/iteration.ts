@@ -19,6 +19,7 @@ import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import {
   aggregateProviderFailure,
+  rootFailures,
   detectCompletionSignal,
   stripCompletionTags,
 } from '../../../executor-shared';
@@ -366,7 +367,7 @@ async function failedBody(
   if (failedBodyOutputs.length === 0) return undefined;
   const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
   const providerFailure = aggregateProviderFailure(
-    failedBodyOutputs.map(({ output }) => output.providerFailure),
+    rootFailures(run.bodyNodes, body.scopedNodeOutputs).map(({ output }) => output.providerFailure),
     Date.now()
   );
   const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;

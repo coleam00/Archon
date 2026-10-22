@@ -106,7 +106,7 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
       return {
         success: true,
         message: result.cancelled
-          ? `Cancelled workflow: \`${result.run.workflow_name}\``
+          ? `Cancelled workflow: \`${result.run.workflow_name}\`${cancelCleanupWarnings(result.cleanupWarnings)}`
           : `Workflow \`${result.run.workflow_name}\` already finished; nothing to cancel.`,
       };
     }
@@ -130,7 +130,7 @@ function stoppedRunMessage(
   result: Extract<CancelWorkflowResult, { kind: 'stopped' }>
 ): string {
   let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: \`${result.run.workflow_name}\``;
-  for (const warning of result.cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
+  message += cancelCleanupWarnings(result.cleanupWarnings);
   if (result.cascadeFailures > 0) {
     message += `\n⚠️ ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${spell(input, 'status')}.`;
   }
@@ -300,4 +300,8 @@ export async function resetWorkflowSessions(input: WorkflowCommand): Promise<Com
       message: `Failed to reset workflow sessions: ${err.message}`,
     };
   }
+}
+
+function cancelCleanupWarnings(warnings: readonly string[] = []): string {
+  return warnings.map(warning => `\n⚠️ ${warning}`).join('');
 }

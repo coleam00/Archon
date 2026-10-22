@@ -252,7 +252,7 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   // parsed positionals so `archon <command> [--subcommand] --help` shows only
   // the matching slice instead of the full index.
   if (values.help) {
-    await printUsageFor(command, subcommand);
+    await printUsageFor(positionals);
     await shutdownTelemetry();
     return 0;
   }

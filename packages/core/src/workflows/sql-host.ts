@@ -46,11 +46,11 @@ export function createSqlWorkflowOperations(
     isRunOwnedByThisProcess,
     isRunOwnerAnswering,
     reclaimRunWorktree: async (run, isolation) => {
-      const { reclaimRunWorktree } = await import('../services/cleanup-service');
+      const { reclaimRunWorktree } = await import('../services/cleanup/run-worktree');
       return reclaimRunWorktree(run, isolation);
     },
     reclaimContainerEnv: async (envId, isolation) => {
-      const { reclaimContainerEnv } = await import('../services/cleanup-service');
+      const { reclaimContainerEnv } = await import('../services/cleanup/containers');
       await reclaimContainerEnv(envId, isolation);
     },
   });

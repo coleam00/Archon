@@ -8,7 +8,6 @@ import {
  */
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
-  workflowRunStatusSchema,
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -17,6 +16,7 @@ import type { TransactionQuery } from './resource-slots';
 import { notOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
+import { readWorkflowRunStatus } from './workflow-run-status';
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   try {
@@ -34,28 +34,28 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
 }
 
 /**
- * Find the workflow run that owns a container isolation environment
- * (`metadata.isolation_env_id === envId`, stamped at run creation for container
- * runs). Used by `isolation cleanup` to decide whether a container is reapable:
- * a paused/running run must NOT be pruned. Returns the newest match, or null when
- * no run references the env (an orphan safe to reap). Dialect-aware JSON extract.
+ * Find the newest run with `metadata.isolation_env_id === envId` for container
+ * listing. A null result only means no metadata match; cleanup uses
+ * `getLiveRunOwningEnv` to check wider ownership before removing an environment.
  */
 export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
   const extract = getDialect().jsonText('metadata', 'isolation_env_id');
-  try {
-    const result = await pool.query<WorkflowRunRow>(
+  const result = await pool
+    .query<Omit<WorkflowRunRow, 'status'> & { status: string }>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE ${extract} = $1
-       ORDER BY started_at DESC LIMIT 1`,
+     WHERE ${extract} = $1
+     ORDER BY started_at DESC LIMIT 1`,
       [envId]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
-    throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
-  }
+    )
+    .catch((error: unknown) => {
+      const err = error as Error;
+      getLog().error({ err, envId }, 'db.workflow_run_get_by_isolation_env_failed');
+      throw new Error(`Failed to look up run for isolation env ${envId}: ${err.message}`);
+    });
+  const row = result.rows[0];
+  return row
+    ? normalizeWorkflowRun({ ...row, status: readWorkflowRunStatus(row.id, row.status) })
+    : null;
 }
 
 /**
@@ -83,18 +83,7 @@ export async function findWorkflowRunsByIdPrefix(
   }
 }
 
-export class WorkflowStatusReadError extends Error {
-  override readonly name = 'WorkflowStatusReadError';
-
-  constructor(
-    readonly workflowRunId: string,
-    readonly storedStatus: string
-  ) {
-    super(
-      `Unsupported workflow run status for run ${workflowRunId}: ${JSON.stringify(storedStatus)}`
-    );
-  }
-}
+export { WorkflowStatusReadError } from './workflow-run-status';
 
 export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null> {
   const result = await pool
@@ -106,9 +95,7 @@ export async function getWorkflowRunStatus(id: string): Promise<WorkflowRunStatu
     });
   const row = result.rows[0];
   if (!row) return null;
-  const status = workflowRunStatusSchema.safeParse(row.status);
-  if (!status.success) throw new WorkflowStatusReadError(id, row.status);
-  return status.data;
+  return readWorkflowRunStatus(id, row.status);
 }
 
 export async function getActiveWorkflowRun(
@@ -133,18 +120,22 @@ export async function getActiveWorkflowRun(
 }
 
 /**
- * Find a paused workflow run for a conversation (or its parent).
+ * Find the newest paused run associated with a conversation, optionally within a project.
  * Used by the message handler to give the chat agent the open approval gate as
  * context for the turn (#2565).
  * Non-throwing: returns null on DB error so the caller can fall through to normal routing.
  */
-export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
+export async function getPausedWorkflowRun(
+  conversationId: string,
+  codebaseId?: string
+): Promise<WorkflowRun | null> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'
+       ${codebaseId ? 'AND codebase_id = $3' : ''}
        ORDER BY started_at DESC LIMIT 1`,
-      [conversationId, conversationId]
+      codebaseId ? [conversationId, conversationId, codebaseId] : [conversationId, conversationId]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;

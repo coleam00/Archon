@@ -5,7 +5,7 @@
  * as added by `retriage_as`; intake decides whether the item is now ready. Every listed
  * item records the revisit, so the next one waits its turn.
  *
- * Bound inputs: INPUTS_BLOCKED from facts, INPUTS_RETRIAGE from revisit, and the
+ * Bound inputs: INPUTS_BLOCKED from blocked, INPUTS_RETRIAGE from revisit, and the
  * workflow inputs INPUTS_REPO_HOST, INPUTS_REPO_PATH and INPUTS_RETRIAGE_AS.
  */
 

@@ -74,8 +74,19 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
 
       const body = (await response.json()) as { success: boolean; message: string };
       expect(body.success).toBe(true);
-      expect(body.message).toBe('Cancelled workflow: deploy');
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
+      // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+      if (process.platform === 'win32') {
+        expect(body.message).toBe('Cancelled workflow: deploy');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
+      } else {
+        expect(body.message).toStartWith('Cancelled workflow: deploy — warning: ');
+        expect(body.message).toContain('untracked background work');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, {
+          cancel_reason: 'operator',
+          reason: expect.stringContaining('untracked background work'),
+          warnings: [expect.stringContaining('untracked background work')],
+        });
+      }
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
     });
   });
@@ -964,6 +975,7 @@ describe('authenticated web run-action actor forwarding', () => {
             kind: 'cooperative',
             run: { ...MOCK_RUNNING_RUN, id: run.id },
             cancelled: true,
+            cleanupWarnings: ['Possible untracked background work.'],
           });
         }
         const factorySpy = spyOn(sqlHost, 'createSqlWorkflowOperations').mockReturnValue(
@@ -980,6 +992,8 @@ describe('authenticated web run-action actor forwarding', () => {
             body: JSON.stringify({ comment: 'LGTM', reason: 'Fix tests', decision: 'approve' }),
           });
           expect(response.status).toBe(200);
+          if (action === 'cancel')
+            expect(await response.text()).toContain('Possible untracked background work.');
           expect(operationSpy).toHaveBeenCalledTimes(1);
           expect(operationSpy.mock.calls[0]).toContainEqual(expectedActor);
           expect(mockFindOrCreateUser).toHaveBeenCalledWith(

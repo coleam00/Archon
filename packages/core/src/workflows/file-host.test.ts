@@ -876,3 +876,112 @@ for (const corruption of [
     }
   );
 }
+
+for (const [damage, owner] of [
+  ['json', 'host'],
+  ['json', 'other'],
+  ['schema', 'host'],
+  ['schema', 'other'],
+  ['unreadable', 'host'],
+  ['unreadable', 'other'],
+  ['healthy', 'other'],
+] as const) {
+  test(`host drain starts independent queued work beside a ${damage} receipt bound to ${owner}`, async () => {
+    const root = roots(await mkdtemp(join(tmpdir(), 'host-receipt-')));
+    const host = await createFileWorkflowHost(root);
+    const store = host.deps.store;
+    const receiptId = crypto.randomUUID();
+    await store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: null,
+          hostId: owner,
+          runAsUserId: 'operator',
+          resource: 'receipt-resource',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: '/receipt',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    const launch = (): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        workflow_name: 'test',
+        codebase_id: 'project',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: '/independent', conversationId: 'test', isolation: { kind: 'in-place' } },
+    });
+    const holder = launch(),
+      queued = launch();
+    for (const prepared of [holder, queued])
+      await store.admitResourceStart({
+        resource: 'independent',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    await store.claimPendingWorkflowRun(holder.run.id);
+    await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+    const document = `resource/receipts/${createHash('sha256').update(receiptId).digest('hex')}.json`;
+    const path = join(root, document);
+    const bytes = await readFile(path, 'utf8');
+    if (damage === 'json') await writeFile(path, '{');
+    if (damage === 'schema')
+      await writeFile(path, JSON.stringify({ ...JSON.parse(bytes), bindings: 42 }));
+    if (damage === 'unreadable') {
+      await fs.unlink(path);
+      await mkdir(path);
+    }
+
+    const started: string[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const error = await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async id => {
+          started.push(id);
+        },
+      }).catch((caught: unknown) => caught);
+      expect(started).toEqual([queued.run.id]);
+      if (damage === 'healthy') {
+        expect(error).toBeUndefined();
+        continue;
+      }
+      if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+      expect(error.failures).toHaveLength(1);
+      expect(error.failures[0]?.receiptId).toBeUndefined();
+      const failure = error.failures[0]?.error;
+      if (!(failure instanceof Error)) throw new Error('expected damaged receipt error');
+      expect(failure.message).toContain(document);
+      expect(failure.cause).toBeInstanceOf(Error);
+    }
+
+    if (damage === 'healthy' || owner !== 'host') return;
+    if (damage === 'unreadable') await rm(path, { recursive: true });
+    await writeFile(path, bytes);
+    expect(await store.listPendingStartBindings({ hostId: 'host' })).toMatchObject([
+      { receiptId, bindingId: 'binding', status: 'pending', ownerId: null },
+    ]);
+  });
+}

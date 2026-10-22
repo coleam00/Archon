@@ -384,10 +384,9 @@ async function recoverTriggerPreparation(
 
 async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void> {
   if (!args[0]) throw new Error('Usage: archon trigger withdraw <queued-request-id>');
-  const request = await host.deps.store.getResourceStartRequest(args[0]);
-  if (!request || !(await host.deps.store.withdrawQueuedResourceStart(args[0])))
-    throw new Error('Only untouched queued requests can be withdrawn.');
-  const source = readWorkflowSourceState(request.launch.run.metadata);
+  const launch = await host.deps.store.withdrawQueuedResourceStart(args[0]);
+  if (!launch) throw new Error('Only untouched queued requests can be withdrawn.');
+  const source = readWorkflowSourceState(launch.run.metadata);
   if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
   if (source.kind === 'unreadable')
     throw new Error(

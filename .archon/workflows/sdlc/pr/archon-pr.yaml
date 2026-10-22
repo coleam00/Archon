@@ -3,8 +3,9 @@ description: |
   Open a pull request for the committed work on the current branch — draft by
   default when composed, template-aware, with the body built from the run's
   artifacts — or push to the one it already has. Pushes and verifies by reading
-  the pull request back. It runs no validation and merges no base: CI judges the
-  pushed head. Never sweeps unrelated changes, never rebases and never
+  the pull request back. When its caller allows it, it also publishes content the
+  run prepared for the description as a marked section of it, and reads that back.
+  It runs no validation and merges no base: CI judges the pushed head. Never sweeps unrelated changes, never rebases and never
   force-pushes.
 
   Use when: committed work on a branch needs a PR — "open a PR", "create a
@@ -26,6 +27,13 @@ inputs:
       The branch a new pull request opens from, as the caller resolved it. When an
       open pull request already has that head, the push updates it instead of
       opening another. Empty opens it from the checkout's branch.
+  publish_description:
+    default: "false"
+    description: >-
+      "true" lets the run publish content it prepared for the pull request's
+      description, as a marked section of it, on any pull request it opens or
+      continues; anything else leaves a continued pull request's description as its
+      author left it.
 
 returns: publish
 
@@ -64,7 +72,7 @@ nodes:
         base: { type: string, pattern: '\S' }
         existing: { type: [integer, 'null'], minimum: 1 }
         title: { type: string, pattern: '\S' }
-        # null when the run continues a pull request: its description is not archon-pr's to write.
+        # The opening description; null when the run continues a pull request.
         body:
           type: [object, 'null']
           properties:
@@ -72,8 +80,16 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [pr-body.md] }
           required: [type, run_id, path]
+        # null unless the caller allows a section and the run prepared content for it.
+        description:
+          type: [object, 'null']
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [pr-description.md] }
+          required: [type, run_id, path]
         summary: { type: string }
-      required: [repo, head_repo, head, base, existing, title, body, summary]
+      required: [repo, head_repo, head, base, existing, title, body, description, summary]
 
   # The durable ownership record for every later public action in delivery and
   # inbound forge event. It pushes the branch, then opens the pull request, or
@@ -93,6 +109,8 @@ nodes:
       existing: { from: "$prepare.output.existing" }
       title: "$prepare.output.title"
       body: { from: "$prepare.output.body" }
+      description: { from: "$prepare.output.description" }
+      publish_description: "$INPUTS.publish_description"
       draft: "$INPUTS.draft"
       pull_request: "$INPUTS.pull_request"
       branch: "$INPUTS.branch"

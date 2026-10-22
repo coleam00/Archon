@@ -3,9 +3,10 @@
  * shared by the executors.
  */
 import { escapeRegExp } from '@archon/paths/regexp';
-import type { WorkflowExecutionResult } from './schemas';
+import type { DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
+import { transitiveDepsLookup } from './depends-on';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -61,10 +62,34 @@ export function providerLimitResumeAt(
 }
 
 /**
+ * The failed nodes of one scope that no failure lies upstream of: none of the nodes they
+ * transitively depend on failed, whatever state lies between. A failure downstream of
+ * another is deferred, whatever caused it: the node may have failed only on its upstream's
+ * poisoned output, and nothing typed tells that from a failure of its own. Continuation runs
+ * it again with its upstream, so it cannot hold a run in a provider-limit wait: once the
+ * upstream succeeds, a failure of its own fails the run.
+ */
+export function rootFailures(
+  nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
+  outputs: ReadonlyMap<string, NodeOutput>
+): { nodeId: string; output: Extract<NodeOutput, { state: 'failed' }> }[] {
+  const depsOf = transitiveDepsLookup(nodes);
+  const inScope = new Set(nodes.map(node => node.id));
+  const failed = (id: string): boolean => inScope.has(id) && outputs.get(id)?.state === 'failed';
+  return nodes.flatMap(node => {
+    const output = outputs.get(node.id);
+    return output?.state === 'failed' && ![...depsOf(node.id)].some(failed)
+      ? [{ nodeId: node.id, output }]
+      : [];
+  });
+}
+
+/**
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
- * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
- * when every one is a provider limit, so the wait never pauses a run beside an unrelated
+ * the aggregate's. Callers pass the {@link rootFailures} of a scope, or the fan-out's sibling
+ * instances. A lone failure is the aggregate's, unchanged. Several are reported only when
+ * every one is a provider limit, so the wait never pauses a run beside an unrelated root
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
  * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.

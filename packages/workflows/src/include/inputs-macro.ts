@@ -10,7 +10,7 @@ import { IncludeExpansionError } from './expansion-error';
 /**
  * Load-time include parameter references. Built from the same identifier source the
  * `with:` key validator uses (INPUT_NAME_SOURCE, homed in output-ref.ts and re-exported
- * by schemas/dag-node.ts) so a key that validates can never fail to match here — see the
+ * by schemas/node-bindings.ts) so a key that validates can never fail to match here — see the
  * re-export's comment for why the drift between the two is silent in one direction.
  */
 const INPUTS_REF = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');

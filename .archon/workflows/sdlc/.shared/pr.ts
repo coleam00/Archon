@@ -18,12 +18,44 @@ import { join } from 'node:path';
 import {
   invokeForge,
   parsePrRecord,
+  qualifiedRepo,
   record,
   sameRepo,
   type ForgeSource,
   type PrRecord,
   type QualifiedPr,
 } from './forge.ts';
+
+export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
+/** The reason a tail's report gives when a node failure ended the run. */
+export const RUN_FAILED = 'failed';
+
+/** Whether a report's reason means the run broke rather than reaching an outcome. */
+export function isFailureReason(reason: unknown): boolean {
+  return reason === RUN_FAILED || reason === PR_CREATE_UNRESOLVED;
+}
+export const PR_CREATE_RECORD = 'pr-create-started';
+
+export type PrPublicationRecord =
+  | { readonly repo: QualifiedPr['repo']; readonly headRepo: QualifiedPr['repo']; readonly head: string }
+  | { readonly pr: PrRecord };
+
+export function encodePrPublicationRecord(value: PrPublicationRecord): string {
+  return JSON.stringify(value);
+}
+
+export function decodePrPublicationRecord(value: unknown):
+  | { readonly state: 'started' }
+  | { readonly state: 'verified'; readonly pr: PrRecord } {
+  const row = record(value);
+  if (row && 'pr' in row) return { state: 'verified', pr: parsePrRecord(row.pr) };
+  if (
+    !qualifiedRepo(row?.repo) ||
+    !qualifiedRepo(row?.headRepo) ||
+    typeof row?.head !== 'string' || row.head === ''
+  ) throw new Error('invalid PR publication record');
+  return { state: 'started' };
+}
 
 export interface PrView {
   readonly pr: PrRecord;
@@ -263,6 +295,44 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   ) {
     throw new Error(
       `the created pull request ${view.pr.url} does not match what was requested; it may need reconciling`
+    );
+  }
+  return view.pr;
+}
+
+/**
+ * The markers around the description section a delivery round publishes.
+ * `deliver/commands/update-pr-body.md` names them literally; a test holds it to these.
+ */
+export const DESCRIPTION_SECTION = {
+  start: '<!-- archon-delivery-description -->',
+  end: '<!-- /archon-delivery-description -->',
+} as const;
+
+/**
+ * Replace a pull request's whole description and return the record read back from
+ * the forge. Neither source has a conditional body write, so an edit saved between
+ * the caller's read and this write is lost.
+ */
+export function editPrBody(ref: QualifiedPr, body: string, source: ForgeSource): PrRecord {
+  if (source === 'forge') {
+    const value = forgeResult('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body });
+    return parsePrRecord(value.pr);
+  }
+  const directory = mkdtempSync(join(tmpdir(), 'archon-pr-body-'));
+  let written: Ran;
+  try {
+    const path = join(directory, 'body.md');
+    writeFileSync(path, body, { mode: 0o600 });
+    written = gh('pr', 'edit', String(ref.number), '--repo', ghRepo(ref.repo), '--body-file', path);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  if (!written.ok) throw new Error(`gh pr edit ${String(ref.number)} failed: ${written.stderr}`);
+  const view = viewPr(ref, source);
+  if (view.body !== body) {
+    throw new Error(
+      `pull request ${String(ref.number)} does not read back the written description; it may have been written`
     );
   }
   return view.pr;

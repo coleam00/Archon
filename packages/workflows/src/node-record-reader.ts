@@ -8,6 +8,7 @@ import {
 } from './schemas/node-execution';
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  isPersistedExecType,
   serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
   type SerializedNodeData,
@@ -31,6 +32,12 @@ export interface ReadNodeRecordEvent {
   /** Raw values retained so accounting can diagnose malformed historical usage. */
   rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown };
   metadata?: NodeExecutionMetadata;
+}
+
+export function isExecNodeRecord(record: ReadNodeRecordEvent): boolean {
+  return record.metadata
+    ? record.metadata.node.kind === 'exec'
+    : isPersistedExecType(record.data.type);
 }
 
 const eventDataSchema = z.record(z.string(), z.unknown());

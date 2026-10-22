@@ -494,6 +494,7 @@ async function completeLoop(
         tokens: state.tokens,
         tokensUnknown: state.tokensUnknown,
         costUsd: state.costUsd,
+        costPartial: !state.priorCostKnown,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,
@@ -521,6 +522,7 @@ async function suppressLoopGate(
     { status: 'skipped', reason: 'trigger_rule', cause: { kind: 'upstream_failed', origin } },
     {
       ...loopSpend(state),
+      costPartial: !state.priorCostKnown,
       stopReason: state.stopReason,
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
@@ -551,6 +553,7 @@ async function pauseAtLoopGate(
       tokens: state.tokens,
       tokensUnknown: state.tokensUnknown,
       costUsd: state.costUsd,
+      costPartial: !state.priorCostKnown,
       stopReason: state.stopReason,
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,

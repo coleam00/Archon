@@ -41,7 +41,8 @@ export async function fail(json: boolean | undefined, message: string): Promise<
   return 1;
 }
 
-export async function printUsageFor(command?: string, subcommand?: string): Promise<void> {
-  const { renderHelp } = await import('../help');
-  console.log(renderHelp(command, subcommand));
+/** Print help for `<command> [subcommand...]` positionals; none prints the global index. */
+export async function printUsageFor(positionals: readonly string[] = []): Promise<void> {
+  const { renderHelpFor } = await import('../help');
+  console.log(renderHelpFor(positionals));
 }

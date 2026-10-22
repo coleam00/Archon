@@ -29,7 +29,7 @@ import * as codebaseDb from '../db/codebases';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
-import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
+import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
@@ -242,7 +242,7 @@ export function initializeWorkflowGitHubAppAuth(
 }
 
 export interface CompletedRunWorktreeTools {
-  cleanup: typeof import('../services/cleanup-service');
+  cleanup: typeof import('../services/cleanup/run-worktree');
   store: IIsolationStore;
   readers: WorktreeOwnershipReaders;
 }
@@ -273,11 +273,11 @@ export function completedRunWorktreeDeps(
   };
 }
 
-// Lazy for the same reason as the SQL host's abandon release: cleanup-service loads
-// the isolation provider and repo config.
+// Lazy for the same reason as the SQL host's abandon release: the run worktree cleanup
+// loads the isolation provider.
 const sqlCompletedRunWorktree = completedRunWorktreeDeps(async () => {
   const [cleanup, isolationDb] = await Promise.all([
-    import('../services/cleanup-service'),
+    import('../services/cleanup/run-worktree'),
     import('../db/isolation-environments'),
   ]);
   return {

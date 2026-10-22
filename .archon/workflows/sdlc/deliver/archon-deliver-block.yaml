@@ -10,8 +10,10 @@ description: |
   the base on a conflict and judges each thread; the round then answers and
   resolves the threads it settled. Every other ending is not ready, with
   its reason. A red PR never stays ready, nor one with an open thread. Threads are
-  read through gh; on the forge source the report records them as not checked. The PR description is updated once the
-  rounds end, and the report relays discoveries to the operator on every ending,
+  read through gh; on the forge source the report records them as not checked. Each
+  round's pr step publishes description content the round prepared before its
+  review reads the PR, and the description is corrected and linked once the
+  rounds end; the report relays discoveries to the operator on every ending,
   a failure included. There is no in-run approval
   gate — the human gate is PR review and merge on the forge, outside the run.
 
@@ -53,8 +55,8 @@ inputs:
 # A composed caller reads the report: ready with the pull request's URL, or not
 # ready with the reason the rounds ended. Not ready is a valid completion, like
 # `delivered: false` in the callers. A delivery that broke still completes the
-# report, not ready with reason `failed`, and the run still fails, naming the node
-# that failed.
+# report, not ready with reason `failed` (`pr_create_unresolved` when a PR create
+# ended unresolved), and the run still fails, naming the node that failed.
 returns: report
 outcome_field: ready
 
@@ -126,6 +128,13 @@ nodes:
               and why — and the round answers and resolves it. Record every disposition — fixed, declined with its
               reason or evidence, or unrelated — in implementation.md.
 
+              Content the work order requires in the pull request's description,
+              such as evidence, measurements, or results, is part of the work.
+              Write it complete in implementation.md under a heading that says it
+              is pull request description content. This round's pr step publishes
+              it before the review reads the pull request, so it is neither a scope
+              conflict nor a blocker, and you publish nothing yourself.
+
               The open pull request this delivery continues, as its caller
               resolved it (empty or `null` when it named none):
               $INPUTS.pull_request. When it names one, the work is to finish that
@@ -143,6 +152,7 @@ nodes:
             draft: "true"
             pull_request: "$INPUTS.pull_request"
             branch: "$INPUTS.branch"
+            publish_description: "true"
 
         - id: review
           include: archon-review-block
@@ -327,7 +337,8 @@ nodes:
   # draft opened, and an implementer can pass red the description must disclose. One
   # agent reads the live description and the final diff, and edits only what is no
   # longer true. It also links the issue by the latest review's coverage: closing
-  # only when nothing is left. It runs once the rounds have ended, never per round.
+  # only when nothing is left. It runs once the rounds have ended, never per round;
+  # content a round prepared for the description is that round's pr step's write.
   - id: update-pr-body
     command: update-pr-body
     model: medium
@@ -370,7 +381,8 @@ nodes:
       type: object
       properties:
         ready: { type: boolean }
-        # The last round's reason, or `failed` when a node failure ended the run.
+        # The last round's reason, or `failed` (`pr_create_unresolved` after an
+        # unresolved PR create) when a node failure ended the run.
         reason: { type: string }
         # The pull request, ready or not; '' when no round opened one.
         pr_url: { type: string }

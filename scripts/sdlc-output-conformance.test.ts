@@ -52,6 +52,7 @@ import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.s
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
 import { claimDisposition } from '../.archon/workflows/sdlc/.shared/state';
+import { newWorkItem } from '../.archon/workflows/sdlc/.shared/workitem';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -98,6 +99,51 @@ const FAKE_ARCHON = join(
   import.meta.dir,
   '../.archon/scripts/__tests__/fixtures/fake-archon-runs.ts'
 );
+
+test('blocked pickup emits identified items admitted by its workflow schema', () => {
+  const at = install('archon-blocked-home-');
+  const item = {
+    ...newWorkItem({ repo: PR.repo, number: 8 }, '2026-10-16T00:00:00.000Z'),
+    stage: 'blocked',
+  };
+  const seeded = Bun.spawnSync(
+    [process.execPath, FAKE_ARCHON, 'state', 'put', 'work/8', '--if-revision', '0'],
+    {
+      cwd: at.checkout,
+      env: { ...process.env, ...at.env },
+      stdin: Buffer.from(JSON.stringify(item)),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  expect({ code: seeded.exitCode, stderr: seeded.stderr.toString() }).toEqual({
+    code: 0,
+    stderr: '',
+  });
+  const output = admitted(
+    runPackScript('build-queue/scripts/blocked', {
+      cwd: at.checkout,
+      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
+      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_RETRIAGE_AS: 'maintainer' },
+    }),
+    'build-queue/archon-build-queue.yaml',
+    'blocked'
+  );
+  expect(output).toEqual({ blocked: [{ number: 8, summary: '' }], blocked_count: 1 });
+  const schema = outputFormat('build-queue/archon-build-queue.yaml', 'blocked');
+  for (const item of [
+    {},
+    { number: 8 },
+    { summary: '' },
+    { number: '8', summary: '' },
+    { number: 0, summary: '' },
+    { number: 8, summary: null },
+  ]) {
+    expect(validateStructuredOutput({ blocked: [item], blocked_count: 1 }, schema).valid).toBe(
+      false
+    );
+  }
+});
 
 describe('triage', () => {
   const TRIAGE = 'triage/archon-triage-block.yaml';

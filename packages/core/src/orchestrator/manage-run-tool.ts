@@ -476,11 +476,11 @@ async function handleWrite(
         const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
         if (result.kind === 'cooperative') {
           return result.cancelled
-            ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.`
+            ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.${cancelCleanupWarnings(result.cleanupWarnings)}`
             : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
         }
         let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
-        for (const warning of result.cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
+        msg += cancelCleanupWarnings(result.cleanupWarnings);
         if (result.cascadeFailures > 0) {
           msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
         }
@@ -712,4 +712,8 @@ async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<Workf
     return `manage_run: no run found for id '${runId}' in this project.`;
   }
   return run;
+}
+
+function cancelCleanupWarnings(warnings: readonly string[] = []): string {
+  return warnings.map(warning => ` Warning: ${warning}`).join('');
 }

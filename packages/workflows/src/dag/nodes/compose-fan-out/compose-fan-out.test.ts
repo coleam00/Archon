@@ -579,58 +579,78 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
   });
 
-  it('waits on the quota reset when a composed instance node reports quota_exhausted', async () => {
-    await writeBlock(
+  it.each([
+    ['alone', []],
+    [
+      'and an all_done node failed reading its output',
       [
-        'name: compose-blk',
-        'description: test block',
-        'mutates_checkout: false',
-        'nodes:',
-        '  - id: work',
-        "    prompt: 'work on $INPUTS.item'",
-      ].join('\n')
-    );
-    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield {
-        type: 'result',
-        isError: true,
-        failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
-      };
-    });
-    const store = createMockStore();
+        '  - id: record',
+        "    bash: 'echo $work.output'",
+        '    depends_on: [work]',
+        '    trigger_rule: all_done',
+      ],
+    ],
+  ])(
+    'waits on the quota reset when a composed instance node reports quota_exhausted %s',
+    async (_, reader) => {
+      await writeBlock(
+        [
+          'name: compose-blk',
+          'description: test block',
+          'mutates_checkout: false',
+          'nodes:',
+          '  - id: work',
+          "    prompt: 'work on $INPUTS.item'",
+          ...reader,
+        ].join('\n')
+      );
+      const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
+        };
+      });
+      const store = createMockStore();
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-compose',
-        cwd: testDir,
-        workflow: {
-          name: 'compose-parent',
-          nodes: [
-            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
-            {
-              id: 'fan',
-              kind: 'compose_fan_out',
-              include: 'compose-blk',
-              depends_on: ['list'],
-              with: { item: 'unused' },
-              fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_success' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('compose-quota-run'),
-        config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-compose',
+          cwd: testDir,
+          workflow: {
+            name: 'compose-parent',
+            nodes: [
+              { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['list'],
+                with: { item: 'unused' },
+                fan_out: {
+                  items: '$list.output',
+                  as: 'item',
+                  max_parallel: 1,
+                  join: 'all_success',
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('compose-quota-run'),
+          config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
+        })
+      );
 
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
-      'compose-quota-run',
-      expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
-      { kind: 'started', stepName: 'fan' }
-    );
-  });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'compose-quota-run',
+        expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
+        { kind: 'started', stepName: 'fan' }
+      );
+    }
+  );
 
   it('fails a composed instance that failed both on a usage limit and for another reason', async () => {
     await writeBlock(

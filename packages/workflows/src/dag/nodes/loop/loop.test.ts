@@ -108,6 +108,67 @@ describe('loop node execution', () => {
     expect(recorded).toEqual(['subtask', 'hook', 'subtask', 'agent_message_chunk']);
   });
 
+  it('retries an iteration once on a fresh session when its resume is rejected as stale', async () => {
+    const platform = createMockPlatform();
+    mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, resumeSessionId) {
+      const calls = mockSendQueryDag.mock.calls.length;
+      if (resumeSessionId === 'loop-sess-1') {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          failure: { class: 'unknown', evidence: 'error_during_execution: evidence' },
+          sessionId: resumeSessionId,
+          resumed: true,
+          sessionNotFound: true,
+        };
+        return;
+      }
+      yield {
+        type: 'agent_message_chunk',
+        text: calls === 4 ? 'Done. <promise>COMPLETE</promise>' : 'working',
+      };
+      yield { type: 'result', sessionId: `loop-sess-${String(calls)}` };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(createMockStore()),
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-stale',
+          nodes: [
+            {
+              id: 'my-loop',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('loop-stale-run'),
+      })
+    );
+
+    // Iteration 2 resumes iteration 1's stale session, retries fresh, and iteration 3
+    // resumes the fresh session.
+    expect(mockSendQueryDag.mock.calls.map(call => call[2])).toEqual([
+      undefined,
+      'loop-sess-1',
+      undefined,
+      'loop-sess-3',
+    ]);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(messages.some(m => m.includes('iteration 2: could not resume'))).toBe(true);
+  });
+
   it('numbers every iteration of a loop attempt from one sequence', async () => {
     const store = createMockStore();
     let iteration = 0;

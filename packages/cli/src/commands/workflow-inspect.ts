@@ -28,7 +28,7 @@ import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import { formatRunUsage } from './workflow-usage';
-import { printVerboseNodes } from './workflow-node-summaries';
+import { formatFanOutOutcome, printVerboseNodes } from './workflow-node-summaries';
 
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
   return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
@@ -482,12 +482,23 @@ function printAttentionWaitLines(
       console.log(`    ${line}`);
 }
 
+/** Unfinished fan-out child work under each node of a finished run. */
+function terminalFanOutLines(nodes: NonNullable<TerminalRecord>['nodes']): string[] {
+  return nodes.flatMap(node => {
+    const lines = formatFanOutOutcome(node.fan_out_outcome);
+    return lines.length === 0
+      ? []
+      : [`    Node ${node.node_id}:`, ...lines.map(line => `      ${line}`)];
+  });
+}
+
 function printTerminalRecord(terminalRecord: TerminalRecord): void {
   if (terminalRecord) {
     console.log('  Terminal record:');
     if (terminalRecord.first_failed_node) {
       console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
     }
+    terminalFanOutLines(terminalRecord.nodes).forEach(line => console.log(line));
     console.log(`    Selected return: ${terminalRecord.returns.availability}`);
     console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
     for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);

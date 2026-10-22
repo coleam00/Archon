@@ -3,7 +3,7 @@ import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
-import { dispatchBackgroundWorkflow } from '../orchestrator';
+import { dispatchBackgroundWorkflow } from './background';
 import { dispatchForeground } from './foreground';
 import { runSignatureGates, sendRunStartNotices } from './gates';
 import {

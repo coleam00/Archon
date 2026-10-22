@@ -2,6 +2,7 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect } from 'bun:test';
 
+import type { NodeOutput } from './schemas';
 import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
   detectCompletionSignal,
@@ -15,6 +16,7 @@ import {
   RATE_LIMIT_PAUSE_DELAY_MS,
   rateLimitResumeAt,
   aggregateProviderFailure,
+  rootFailures,
   nodeFailureKindOf,
   retryClassOf,
 } from './executor-shared';
@@ -388,6 +390,29 @@ describe('aggregateProviderFailure', () => {
     };
     expect(aggregateProviderFailure([expired, noReset], now)).toBe(noReset);
     expect(aggregateProviderFailure([noReset, expired], now)).toBe(noReset);
+  });
+});
+
+describe('rootFailures', () => {
+  it('drops failures downstream of another failure, through skipped nodes and beside a healthy dependency, and keeps independent ones', () => {
+    const failed = (error: string): NodeOutput => ({ state: 'failed', output: '', error });
+    const outputs = new Map<string, NodeOutput>([
+      ['a', failed('limit')],
+      ['b', { state: 'skipped', output: '', cause: { kind: 'upstream_failed', origin: 'a' } }],
+      ['c', failed('reads $b.output')],
+      ['d', failed('own bug')],
+      ['h', { state: 'completed', output: 'ok' }],
+      ['e', failed('reads $a.output beside a healthy branch')],
+    ]);
+    const nodes = [
+      { id: 'a' },
+      { id: 'b', depends_on: ['a'] },
+      { id: 'c', depends_on: ['b'] },
+      { id: 'd' },
+      { id: 'h' },
+      { id: 'e', depends_on: ['a', 'h'] },
+    ];
+    expect(rootFailures(nodes, outputs).map(f => f.nodeId)).toEqual(['a', 'd']);
   });
 });
 

@@ -7,6 +7,9 @@ import type * as Codebases from '@archon/core/db/codebases';
 import type * as IsolationDb from '@archon/core/db/isolation-environments';
 import type * as IsolationOperations from '@archon/core/operations/isolation-operations';
 import type * as CleanupService from '@archon/core/services/cleanup-service';
+import type * as CleanupContainers from '@archon/core/services/cleanup/containers';
+import type * as RemoveEnvironment from '@archon/core/services/cleanup/remove-environment';
+import type * as CleanupRunLock from '@archon/core/services/cleanup/run-lock';
 import type * as Git from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { toBranchName, GitFailure } from '@archon/git';
@@ -15,6 +18,7 @@ import {
   isolationCompleteCommand,
   isolationCleanupCommand,
   isolationCleanupMergedCommand,
+  isolationListCommand,
 } from './isolation';
 import { runIsolation } from '../routes/commands';
 import type { CliRouteContext } from '../routes/context';
@@ -84,27 +88,20 @@ mock.module('@archon/core', () => ({
   loadRepoConfig: mockLoadRepoConfig,
 }));
 
-const mockRemoveEnvironment = mock<typeof CleanupService.removeEnvironment>(() =>
+const mockRemoveEnvironment = mock<typeof RemoveEnvironment.removeEnvironment>(() =>
   Promise.resolve({ worktreeRemoved: true, branchDeleted: true, warnings: [] })
-);
-const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({
-    removed: [],
-    skipped: [],
-    errors: [],
-    releasedFailedRuns: [],
-    warnings: [],
-    baseRef: toBranchName('origin/dev'),
-  })
 );
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
   Promise.resolve(null)
 );
+const mockListContainerEnvironments = mock<typeof CleanupContainers.listContainerEnvironments>(() =>
+  Promise.resolve([])
+);
 
-function liveRunBlocker(runStatus: string): CleanupService.LiveRunBlocker {
+function liveRunBlocker(runStatus: string): CleanupRunLock.LiveRunBlocker {
   return {
     reason: 'live_run',
     display: `run run-live is ${runStatus}`,
@@ -113,16 +110,29 @@ function liveRunBlocker(runStatus: string): CleanupService.LiveRunBlocker {
   };
 }
 
-const mockGetCleanupRunLock = mock<typeof CleanupService.getCleanupRunLock>(() =>
+const mockGetCleanupRunLock = mock<typeof CleanupRunLock.getCleanupRunLock>(() =>
   Promise.resolve({ kind: 'free' })
 );
 
 mock.module('@archon/core/services/cleanup-service', () => ({
-  removeEnvironment: mockRemoveEnvironment,
-  getCleanupRunLock: mockGetCleanupRunLock,
-  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupContainerEnvironments: mockCleanupContainerEnvironments,
+}));
+mock.module('@archon/core/services/cleanup/containers', () => ({
+  listContainerEnvironments: mockListContainerEnvironments,
+  reclaimContainerEnv: mock(),
+  reapContainerEnvironments: mock(),
+}));
+mock.module('@archon/core/services/cleanup/remove-environment', () => ({
+  removeEnvironment: mockRemoveEnvironment,
+  incompleteRemovalReason: mock(),
+}));
+mock.module('@archon/core/services/cleanup/run-lock', () => ({
+  getCleanupRunLock: mockGetCleanupRunLock,
   getLiveRunBlocker: mockGetLiveRunBlocker,
+  toUnpushedLock: mock(),
+  countUnpushedCommits: mock(),
+  readLiveRemoteTips: mock(),
+  checkRemoval: mock(),
 }));
 
 const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>(() =>
@@ -227,6 +237,38 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
 }
 
 const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
+
+describe('isolationListCommand', () => {
+  it.each([
+    { runId: null, runStatus: 'lookup-failed', display: 'run lookup failed' },
+    { runId: null, runStatus: null, display: 'no run (orphan)' },
+    { runId: 'run-12345678', runStatus: 'paused', display: 'run run-1234 (paused)' },
+  ] satisfies (Pick<CleanupContainers.ContainerEnvSummary, 'runId' | 'runStatus'> & {
+    display: string;
+  })[])('displays container run state: $display', async ({ runId, runStatus, display }) => {
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    mockListContainerEnvironments.mockResolvedValue([
+      {
+        envId: 'container-123',
+        codebaseName: 'test-project',
+        workingPath: '/workspace',
+        ageDays: 3,
+        runId,
+        runStatus,
+      },
+    ]);
+    try {
+      await isolationListCommand();
+      expect(log).toHaveBeenCalledWith(`    ${display} | Age: 3d`);
+      if (runStatus === 'lookup-failed') {
+        expect(log.mock.calls.flat().join('\n')).not.toContain('orphan');
+      }
+    } finally {
+      log.mockRestore();
+      mockListContainerEnvironments.mockReset().mockResolvedValue([]);
+    }
+  });
+});
 
 describe('isolationCompleteCommand', () => {
   let consoleLogSpy: ReturnType<typeof spyOn>;

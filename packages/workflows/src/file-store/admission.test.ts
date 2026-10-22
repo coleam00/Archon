@@ -293,10 +293,9 @@ test('admission listings order mixed-case keys by code unit', async () => {
     'a',
   ]);
   const pending = await store.listPendingStartBindings({ hostId: 'host' });
-  expect(pending.filter(b => b.receiptId === receiptIds[0]).map(b => b.bindingId)).toEqual([
-    'B',
-    'a',
-  ]);
+  expect(
+    pending.flatMap(b => ('document' in b || b.receiptId !== receiptIds[0] ? [] : [b.bindingId]))
+  ).toEqual(['B', 'a']);
   for (const resource of ['a', 'B'])
     for (let i = 0; i < 2; i++) {
       const start = intent();
@@ -308,6 +307,78 @@ test('admission listings order mixed-case keys by code unit', async () => {
     'a',
   ]);
 });
+
+test.each(['json', 'schema', 'unreadable'] as const)(
+  'a %s-damaged start receipt is reported beside every host listing without hiding healthy bindings',
+  async damage => {
+    const { root, store } = await fixture();
+    const accept = (id: string) =>
+      store.acceptStartReceipt({
+        receipt: {
+          id,
+          sourceInstanceId: 'source',
+          deliveryId: id,
+          contentDigest: 'digest',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          occurredAt: null,
+          sourceActor: null,
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: 'binding',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'resource',
+            capacity: 1,
+            overlap: 'queue',
+            launch: {
+              cwd: '/test',
+              workflowName: 'test',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        ],
+      });
+    const healthy = crypto.randomUUID(),
+      damaged = crypto.randomUUID();
+    await accept(healthy);
+    await accept(damaged);
+    const document = `resource/receipts/${createHash('sha256').update(damaged).digest('hex')}.json`;
+    const path = join(root, document);
+    if (damage === 'json') await writeFile(path, '{');
+    if (damage === 'schema')
+      await writeFile(
+        path,
+        JSON.stringify({ ...JSON.parse(await readFile(path, 'utf8')), bindings: 42 })
+      );
+    if (damage === 'unreadable') {
+      await unlink(path);
+      await mkdir(path);
+    }
+    const bytes = damage === 'unreadable' ? undefined : await readFile(path, 'utf8');
+
+    const pending = await store.listPendingStartBindings({ hostId: 'host' });
+    expect(pending).toHaveLength(2);
+    expect(pending).toContainEqual(
+      expect.objectContaining({ receiptId: healthy, status: 'pending' })
+    );
+    const report = pending.find(entry => 'document' in entry);
+    expect(report).toMatchObject({ document });
+    const error = report && 'document' in report ? report.error : undefined;
+    expect(error?.message).toContain(document);
+    if (damage === 'json') expect(error?.cause).toBeInstanceOf(SyntaxError);
+    if (damage === 'schema') expect(error?.cause).toBeInstanceOf(ZodError);
+    if (damage === 'unreadable') expect(error?.cause).toMatchObject({ code: 'EISDIR' });
+
+    expect(await store.listPendingStartBindings({ hostId: 'other' })).toEqual([
+      { document, error: expect.any(Error) },
+    ]);
+    if (bytes !== undefined) expect(await readFile(path, 'utf8')).toBe(bytes);
+  }
+);
 
 for (const version of [1, 2] as const) {
   for (const guard of [undefined, false]) {

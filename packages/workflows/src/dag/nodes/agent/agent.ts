@@ -162,6 +162,7 @@ export async function executeAgentNode(
     idleTimeoutMs: node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS,
     nodeKey,
     nodeStartTime,
+    staleResumeRetry: session.namedResumeSourceNodeId === undefined,
   };
 
   let result: WorkloadResult;
