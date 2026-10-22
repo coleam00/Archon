@@ -433,6 +433,13 @@ describe('classifyWorkflowForTelemetry', () => {
     });
   });
 
+  test('installed workflow names are redacted and preserve their source', () => {
+    expect(classifyWorkflowForTelemetry('acme/private:deploy', 'installed')).toEqual({
+      workflow_name: 'custom',
+      workflow_source: 'installed',
+    });
+  });
+
   test('undefined source defaults to the privacy-safe custom/project treatment', () => {
     expect(classifyWorkflowForTelemetry('anything', undefined)).toEqual({
       workflow_name: 'custom',

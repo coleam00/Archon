@@ -245,6 +245,54 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     expect(usage?.total_cache_write_tokens).toBeNull();
   });
 
+  it.each(['node_completed', 'node_failed', 'node_deferred_usage'])(
+    'persists unknown tokens after resuming malformed historical %s usage',
+    async eventType => {
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const workflowRun = makeWorkflowRun('resume-malformed-tokens');
+      const snapshot = await foldDagResumeSnapshot(
+        [
+          {
+            step_name: 'historical',
+            event_type: eventType,
+            data: { tokens: { input: 100, output: 'unreadable' }, cost_usd: 0.1 },
+          },
+          {
+            step_name: 'valid',
+            event_type: 'node_completed',
+            data: { tokens: { input: 7, output: 3 }, cost_usd: 0.2 },
+          },
+        ],
+        workflowRun.id
+      );
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'resumed output' };
+        yield { type: 'result', sessionId: 'resumed', tokens: { input: 5, output: 2 }, cost: 0.3 };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflowRun,
+          workflow: {
+            name: 'resume-malformed',
+            nodes: [
+              { id: 'fresh', kind: 'agent', source: { kind: 'inline', prompt: 'Continue.' } },
+            ],
+          },
+          priorUsage: snapshot,
+        })
+      );
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      const usage = runUsageWrites(store).at(-1);
+      expect(usage?.total_cost_usd).toBeCloseTo(0.6);
+      expect(usage?.total_tokens_unknown).toBe(true);
+      expect(usage?.total_tokens_in).toBeNull();
+      expect(usage?.total_tokens_out).toBeNull();
+    }
+  );
+
   it('stores node_output in node_completed event data for AI nodes', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

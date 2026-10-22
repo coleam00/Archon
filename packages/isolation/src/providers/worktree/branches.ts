@@ -55,8 +55,29 @@ export function generateBranchName(request: IsolationRequest): string {
       if (request.taskBranch?.branch) {
         return request.taskBranch.branch;
       }
-      return `archon/task-${slugify(request.identifier)}`;
+      return generatedTaskBranch(request.identifier);
   }
+}
+
+function generatedTaskBranch(identifier: string): string {
+  return `archon/task-${slugify(identifier)}`;
+}
+
+/**
+ * True when a task worktree's branch is the one generated for its own identifier,
+ * not one its launch named. A named-branch launch uses the branch as its identifier,
+ * so the generated name can never equal it.
+ */
+export function isGeneratedTaskBranch(env: {
+  workflow_type: string;
+  workflow_id: string;
+  branch_name: string;
+}): boolean {
+  return (
+    env.workflow_type === 'task' &&
+    env.branch_name !== env.workflow_id &&
+    env.branch_name === generatedTaskBranch(env.workflow_id)
+  );
 }
 
 /**

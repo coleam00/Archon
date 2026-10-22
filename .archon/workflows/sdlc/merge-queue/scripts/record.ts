@@ -17,9 +17,9 @@
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
- * rest of the batch from being recorded. If facts could not read the default branch,
- * record settlements without further forge reads, leaving open companions untouched,
- * then fail with the original diagnostic.
+ * rest of the batch from being recorded. If facts could not read the default branch
+ * or the maintainer refresh fails, record settlements without further forge reads,
+ * leaving open companions untouched, then fail with the original diagnostic.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
  * from facts; INPUTS_SWEEP,
@@ -347,9 +347,10 @@ function main(): void {
         ? renderAttention('Merge queue: the default branch is red', raised.attention)
         : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
 
+  // Settlements are independent of the policy refresh and the sweep's decisions.
+  recordSettled(writes, settled);
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
-  // Every read and check happens before the first write, so a check that refuses writes nothing.
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
   const contradictions = [...refused, ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]))];
   const silentRed = unraisedRedBase(sweep, base);
@@ -369,7 +370,6 @@ function main(): void {
     const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
     if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
   }
-  recordSettled(writes, settled);
   if (contradictions.length > 0) {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }

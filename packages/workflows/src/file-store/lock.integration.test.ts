@@ -12,6 +12,7 @@ import {
   FileStoreUnsupportedFilesystemError,
   probeFileStoreFilesystem,
   renameReplacing,
+  retryFileStoreHandles,
   withFileStoreLock,
 } from './lock';
 
@@ -118,6 +119,30 @@ function captureLogs(): Record<string, unknown>[] {
   const capture = captureLogLines();
   spies.push({ mockRestore: capture.restore });
   return capture.lines;
+}
+
+/** Runs the rest of the test as if on Windows, where handle errors are retried. */
+function onWindows(): void {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform');
+  if (!original) throw new Error('process.platform has no descriptor');
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  spies.push({ mockRestore: () => Object.defineProperty(process, 'platform', original) });
+}
+
+/** A clock whose sleeps advance virtual time at once, so retry deadlines never depend on the runner. */
+function virtualClock(): { now(): number; sleep(ms: number): Promise<void> } {
+  let time = 0;
+  return {
+    now: () => time,
+    sleep: ms => {
+      time += ms;
+      return Promise.resolve();
+    },
+  };
+}
+
+function busy(): Error {
+  return Object.assign(new Error('busy'), { code: 'EPERM' });
 }
 
 describe('file store filesystem primitives', () => {
@@ -238,6 +263,39 @@ describe('file store filesystem primitives', () => {
       )
     );
     expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test('a Windows handle error that clears before the deadline succeeds', async () => {
+    onWindows();
+    let calls = 0;
+    const result = await retryFileStoreHandles(
+      'rename',
+      'document',
+      () => (++calls <= 50 ? Promise.reject(busy()) : Promise.resolve('done')),
+      virtualClock()
+    );
+    expect(result).toEqual({ value: 'done', retries: 50 });
+  });
+
+  test('a Windows handle never released fails with the original error, bounded', async () => {
+    onWindows();
+    const error = busy();
+    const clock = virtualClock();
+    let calls = 0;
+    const failure = await rejection(
+      retryFileStoreHandles(
+        'rename',
+        'document',
+        () => {
+          calls++;
+          return Promise.reject(error);
+        },
+        clock
+      )
+    );
+    expect(failure).toBe(error);
+    expect(calls).toBe(201);
+    expect(clock.now()).toBe(2000);
   });
 
   test('rename replaces whole files while other processes read', async () => {

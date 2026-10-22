@@ -1,7 +1,8 @@
 // @archon-test-isolated
 /**
  * `@archon/paths` sits below `@archon/workflows` and cannot import its types, so it
- * mirrors the telemetry vocabularies this package owns. These checks make the mirrors
+ * mirrors the telemetry vocabularies this package owns. Workflow sources share an
+ * owner in `@archon/paths`. These checks make either kind of vocabulary disagreement
  * a compile or test failure the moment they drift, instead of a silent wrong enum.
  */
 import { describe, expect, test } from 'bun:test';
@@ -10,12 +11,15 @@ import type {
   WorkflowErrorClass,
   WorkflowExitReason,
   WorkflowNodeType,
+  WorkflowTelemetrySource,
 } from '@archon/paths';
 import { nodeFailureKindSchema, type NodeDescriptor } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
+import type { WorkflowSource } from './schemas/workflow';
 import { telemetryNodeType } from './telemetry-node-type';
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const workflowSourcesMatch: Same<WorkflowSource, WorkflowTelemetrySource> = true;
 const failureKindsMirrored: Same<
   (typeof nodeFailureKindSchema.options)[number],
   WorkflowErrorClass
@@ -27,7 +31,11 @@ const cancelReasonsMirrored: Same<
   WorkflowCancelReason
 > = true;
 
-describe('telemetry vocabularies mirrored in @archon/paths', () => {
+describe('telemetry vocabulary conformance with @archon/paths', () => {
+  test('workflow schema and telemetry accept the same sources', () => {
+    expect(workflowSourcesMatch).toBe(true);
+  });
+
   test('failure kinds, exit reasons and cancel reasons are the same sets', () => {
     expect([failureKindsMirrored, exitReasonsMirrored, cancelReasonsMirrored]).toEqual([
       true,

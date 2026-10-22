@@ -61,11 +61,12 @@ export function readTyped<T>(
   }
   const values: T[] = [];
   const problems: string[] = [];
-  const listed: ListedArtifact[] = entries as ListedArtifact[];
-  for (const entry of listed) {
+  const listed: ListedArtifact[] = [];
+  for (const entry of entries as ListedArtifact[]) {
     const path = join(artifacts, entry.path);
     try {
       values.push(JSON.parse(readFileSync(path, 'utf8')) as T);
+      listed.push(entry);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       problems.push(`${path}: could not read this ${type} record (${reason})`);

@@ -13,6 +13,7 @@ facts:
   pull_request: null
   continues: null
   branch: ""
+blocked:
   blocked: []
   blocked_count: 0
 apply:

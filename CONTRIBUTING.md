@@ -28,8 +28,10 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `ratchet`, `format`,
-`installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and `script-tests`.
+`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `mock-modules`, `ratchet`,
+`format`, `installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
+`script-tests`. `mock-modules` fails when a `mock.module()` factory leaves out an export of
+the module it mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup

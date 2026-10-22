@@ -49,19 +49,22 @@ describe('childOutcomeFromRun cache reporting', () => {
     });
   });
 
-  it('keeps an explicitly unknown child total unavailable despite older numeric metadata', () => {
-    const outcome = childOutcomeFromRun(
-      settledRun({
-        total_tokens_unknown: true,
-        total_tokens_in: 170,
-        total_tokens_out: 20,
-        total_cost_usd: 0.3,
-      })
-    );
-    expect(outcome.tokens).toBeUndefined();
-    expect(outcome.tokensUnknown).toBe(true);
-    expect(outcome.costUsd).toBe(0.3);
-  });
+  it.each([true, null, 'false', 0, undefined, {}, []].map(marker => ({ marker })))(
+    'keeps a present unknown marker unavailable despite numeric metadata: %j',
+    ({ marker }) => {
+      const outcome = childOutcomeFromRun(
+        settledRun({
+          total_tokens_unknown: marker,
+          total_tokens_in: 170,
+          total_tokens_out: 20,
+          total_cost_usd: 0.3,
+        })
+      );
+      expect(outcome.tokens).toBeUndefined();
+      expect(outcome.tokensUnknown).toBe(true);
+      expect(outcome.costUsd).toBe(0.3);
+    }
+  );
 
   it('leaves a complete child total unflagged', () => {
     const outcome = childOutcomeFromRun(
@@ -82,5 +85,34 @@ describe('childOutcomeFromRun cache reporting', () => {
     // toEqual alone would still pass on `cachePartial: undefined`; the key must be absent,
     // because absence is what every reader treats as "this total is exact".
     expect(outcome.tokens).not.toHaveProperty('cachePartial');
+  });
+});
+
+describe('childOutcomeFromRun historical required counters', () => {
+  it.each([
+    { total_tokens_in: 100 },
+    { total_tokens_out: 10 },
+    { total_tokens_in: 100, total_tokens_out: 'unreadable' },
+    { total_tokens_in: 'unreadable', total_tokens_out: 10 },
+    { total_tokens_in: null, total_tokens_out: null },
+    { total_tokens_in: NaN, total_tokens_out: 10 },
+    { total_tokens_in: 100, total_tokens_out: Infinity },
+  ])('keeps malformed counters unknown: %j', metadata => {
+    const outcome = childOutcomeFromRun(settledRun({ ...metadata, total_cost_usd: 0.3 }));
+    expect(outcome.tokensUnknown).toBe(true);
+    expect(outcome.tokens).toBeUndefined();
+    expect(outcome.costUsd).toBe(0.3);
+    expect(outcome.status).toBe('completed');
+  });
+
+  it('preserves absent usage and valid zero totals', () => {
+    const absent = childOutcomeFromRun(settledRun({}));
+    expect(absent.tokens).toBeUndefined();
+    expect(absent.tokensUnknown).toBeUndefined();
+    const zero = childOutcomeFromRun(
+      settledRun({ total_tokens_in: 0, total_tokens_out: 0, total_tokens_unknown: false })
+    );
+    expect(zero.tokens).toEqual({ input: 0, output: 0 });
+    expect(zero.tokensUnknown).toBeUndefined();
   });
 });

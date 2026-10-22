@@ -85,6 +85,61 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     () => workflows
   );
 
+  test.each(['direct', 'parent'] as const)(
+    '%s paused selection filters by project before limiting and leaves runs intact',
+    async association => {
+      const chat = crypto.randomUUID();
+      const worker = crypto.randomUUID();
+      const projectA = crypto.randomUUID();
+      const projectB = crypto.randomUUID();
+      const emptyProject = crypto.randomUUID();
+      for (const id of [projectA, projectB, emptyProject]) {
+        await db.query(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1::uuid, $1::text, '/tmp')",
+          [id]
+        );
+      }
+      for (const id of [chat, worker]) {
+        await db.query(
+          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1::uuid, 'test', $1::text)",
+          [id]
+        );
+      }
+      const newerA = crypto.randomUUID();
+      const olderB = crypto.randomUUID();
+      for (const [id, project, startedAt] of [
+        [newerA, projectA, '2026-10-21T11:00:00Z'],
+        [olderB, projectB, '2026-10-21T10:00:00Z'],
+      ]) {
+        await db.query(
+          `INSERT INTO remote_agent_workflow_runs
+           (id, conversation_id, parent_conversation_id, codebase_id, workflow_name, user_message, status, started_at)
+           VALUES ($1, $2, $3, $4, 'test', '', 'paused', $5::timestamptz)`,
+          [
+            id,
+            association === 'direct' ? chat : worker,
+            association === 'direct' ? null : chat,
+            project,
+            startedAt,
+          ]
+        );
+      }
+      const stored = async () =>
+        (
+          await db.query(
+            'SELECT * FROM remote_agent_workflow_runs WHERE id IN ($1, $2) ORDER BY id',
+            [newerA, olderB]
+          )
+        ).rows;
+      const before = await stored();
+      expect((await workflows.getPausedWorkflowRun(chat, projectB))?.id).toBe(olderB);
+      expect((await workflows.getPausedWorkflowRun(chat, projectA))?.id).toBe(newerA);
+      expect(await workflows.getPausedWorkflowRun(chat, emptyProject)).toBeNull();
+      expect((await workflows.getPausedWorkflowRun(chat))?.id).toBe(newerA);
+      expect(await stored()).toEqual(before);
+    }
+  );
+
   test('a durable attention notification wakes an attached waiter before its poll', async () => {
     mock.module('../services/run-live-owner', () => ({
       watchRunLiveOwner: async () => ({ kind: 'attached', handle: { unsubscribe() {} } }),

@@ -246,6 +246,21 @@ test('cancel renders stopped-owner cleanup and cascade facts', async () => {
   expect(notes).toContain('2 sub-run');
   expect(notes).toContain('parent');
 });
+test('cancel renders cooperative cleanup warnings', async () => {
+  await started();
+  runAction.mockResolvedValue({
+    status: 'done',
+    result: {
+      kind: 'cooperative',
+      cancelled: true,
+      cleanupWarnings: ['Possible untracked background work. Inspect checkout processes.'],
+    },
+  });
+  await click('cancel:run');
+  expect(JSON.stringify(slack.posts)).toContain(
+    'Possible untracked background work. Inspect checkout processes.'
+  );
+});
 test('cancel after terminal uses clicked message as the fallback target', async () => {
   await started();
   await plugin.onRunEvent({ type: 'terminal', runId: 'run', status: 'completed' });
