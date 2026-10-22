@@ -279,7 +279,7 @@ interface FakePr {
   readonly merged?: readonly number[];
   readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -468,7 +468,8 @@ describe('the merge queue scripts', () => {
     seed(at, item());
     const ownPrs = [
       { number: 42, url: PR_URL, isDraft: false },
-      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
+      // Hand-opened on a branch shaped like a build branch; no work item records it.
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
