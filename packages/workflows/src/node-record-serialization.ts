@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { TokenUsage } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
+import { fanOutOutcomeSchema } from './schemas/fan-out-outcome';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
   executionBindingSchema,
@@ -74,6 +75,7 @@ export const serializedNodeDataSchema = z.object({
   child_run_id: z.string().optional(),
   blocked_on_child_run_id: z.string().optional(),
   fan_out: z.boolean().optional(),
+  fan_out_outcome: fanOutOutcomeSchema.optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
@@ -193,6 +195,13 @@ function reportsOwnSpend(record: NodeExecutionRecord): boolean {
   return nodeCostScope(record) === 'own';
 }
 
+const persistedExecTypes = { shell: 'bash', script: 'script' } as const;
+const persistedExecTypeValues = new Set<string>(Object.values(persistedExecTypes));
+
+export function isPersistedExecType(type: string | undefined): boolean {
+  return type !== undefined && persistedExecTypeValues.has(type);
+}
+
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
   const identity = { workflow_run_id: record.runId, step_name: record.path };
   if ('cache' in record) {
@@ -231,7 +240,12 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
     };
   }
   const { node, binding, timing, spend, lifecycle, diagnostics: d } = record;
-  const legacyType = node.kind === 'exec' ? (node.runtime === 'sh' ? 'bash' : 'script') : node.kind;
+  const legacyType =
+    node.kind === 'exec'
+      ? node.runtime === 'sh'
+        ? persistedExecTypes.shell
+        : persistedExecTypes.script
+      : node.kind;
   return {
     ...identity,
     event_type: executionEventTypes[lifecycle.status],
@@ -298,6 +312,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
         ? { blocked_on_child_run_id: d.blockedOnChildRunId }
         : {}),
       ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
+      ...(d?.fanOutOutcome !== undefined ? { fan_out_outcome: d.fanOutOutcome } : {}),
       ...(d?.identity !== undefined ? { identity: d.identity } : {}),
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),

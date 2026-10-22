@@ -1,21 +1,20 @@
 import { declaredOutputPathsSchema } from '../output-ref';
 import { z } from 'zod';
+import { fanOutOutcomeSchema } from './fan-out-outcome';
 import {
   providerFailureSchema,
   SESSION_PREVIEW_LENGTH,
   tokenUsageSchema,
 } from '@archon/provider-contract';
-import {
-  agentNodeSchema,
-  execNodeSchema,
-  loopNodeSchema,
-  loopGroupNodeSchema,
-  gateNodeSchema,
-  haltNodeSchema,
-  waitNodeSchema,
-  workflowNodeSchema,
-  composeFanOutNodeSchema,
-} from './dag-node';
+import { agentNodeSchema } from './agent-node';
+import { execNodeSchema } from './exec-node';
+import { loopNodeSchema } from './loop-node';
+import { loopGroupNodeSchema } from './dag-node';
+import { gateNodeSchema } from './gate-node';
+import { haltNodeSchema } from './halt-node';
+import { waitNodeSchema } from './wait-node';
+import { workflowNodeSchema } from './workflow-node';
+import { composeFanOutNodeSchema } from './include-node';
 import { effortLevelSchema } from './effort';
 import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
@@ -205,6 +204,8 @@ export const executionDiagnosticsSchema = z.object({
    */
   blockedOnChildRunId: z.string().optional(),
   fanOut: z.boolean().optional(),
+  /** A settled `workflow:` fan-out's per-slot record and tally. */
+  fanOutOutcome: fanOutOutcomeSchema.optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approvalDecision: z.string().optional(),
@@ -212,6 +213,7 @@ export const executionDiagnosticsSchema = z.object({
   /** The node's optional MCP servers were not loaded, and why. */
   mcpUnavailable: mcpUnavailableSchema.optional(),
 });
+export type ExecutionDiagnostics = z.infer<typeof executionDiagnosticsSchema>;
 
 export const nodeExecutionMetadataSchema = z.object({
   runId: z.string(),

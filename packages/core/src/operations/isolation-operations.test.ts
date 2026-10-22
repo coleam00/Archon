@@ -3,7 +3,8 @@ import { setPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { toBranchName } from '@archon/git';
 import type * as IsolationDb from '../db/isolation-environments';
-import type * as CleanupService from '../services/cleanup-service';
+import type * as MergedSweep from '../services/cleanup/merged-sweep';
+import type * as CleanupRunLock from '../services/cleanup/run-lock';
 
 beforeEach(() => setPlatformPolicies([{ id: 'web', workspaceRetention: 'age-based' }]));
 
@@ -31,7 +32,7 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 const MERGED_BASE_REF = toBranchName('origin/main');
-const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
+const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
   Promise.resolve({
     removed: [],
     skipped: [],
@@ -41,12 +42,21 @@ const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() 
     baseRef: MERGED_BASE_REF,
   })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
+const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
   Promise.resolve(null)
 );
-mock.module('../services/cleanup-service', () => ({
+mock.module('../services/cleanup/merged-sweep', () => ({
   cleanupMergedWorktrees: mockCleanupMerged,
+  cleanupToMakeRoom: mock(),
+  recordCleanupRemoval: mock(),
+}));
+mock.module('../services/cleanup/run-lock', () => ({
   getLiveRunBlocker: mockGetLiveRunBlocker,
+  getCleanupRunLock: mock(),
+  toUnpushedLock: mock(),
+  countUnpushedCommits: mock(),
+  readLiveRemoteTips: mock(),
+  checkRemoval: mock(),
 }));
 
 const mockLogger = {

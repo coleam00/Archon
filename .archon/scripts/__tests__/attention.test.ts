@@ -147,6 +147,7 @@ describe('answer', () => {
 
   it.each([
     ['a stage that reports reason failed', null, { ...OUTCOME, reason: 'failed' }],
+    ['a stage whose PR create ended unresolved', null, { ...OUTCOME, ready: false, reason: 'pr_create_unresolved', pr_url: '' }],
     ['a stage that left no outcome', null, null],
     ['a rerun whose stage failed', 'rerun', { ...LATER, ready: false, reason: 'failed' }],
   ])('does not judge %s, so nothing is asked', (_name, choice, outcome) => {

@@ -6,7 +6,7 @@ import {
   isWorkflowNode,
   loopGroupOutputNodes,
 } from '../schemas';
-import { isOutputFormatEnforced } from '../schemas/dag-node';
+import { isOutputFormatEnforced } from '../schemas/node-ignored-fields';
 import { declaredFieldsFromSchema } from '../output-ref';
 import { compileOutputSchema } from '../structured-output';
 

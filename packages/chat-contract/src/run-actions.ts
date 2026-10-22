@@ -58,7 +58,11 @@ export const runActionResultSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('answered'), resumed: z.boolean(), waitingForCapacity }),
   z.object({ kind: z.literal('resumed'), resumed: z.boolean(), waitingForCapacity }),
-  z.object({ kind: z.literal('cooperative'), cancelled: z.boolean() }),
+  z.object({
+    kind: z.literal('cooperative'),
+    cancelled: z.boolean(),
+    cleanupWarnings: z.array(z.string()).optional(),
+  }),
   z.object({
     kind: z.literal('stopped'),
     pid: z.number().int().positive(),

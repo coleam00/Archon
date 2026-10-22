@@ -10,6 +10,8 @@ import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
   providerFailureClassSchema,
+  providerLifecycleEventSchema,
+  providerLifecycleWaitedMsSchema,
   type IAgentProvider,
   type CredentialStatus,
   type ProviderChunk,
@@ -202,14 +204,23 @@ function startProcess(
         {
           onLog(record): void {
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
-            // Only the severity and a failure class from the contract's closed enum cross
-            // this boundary. An open plugin-chosen token would let a credential-shaped
-            // word through, so no other plugin field is forwarded. A record without a
-            // valid class would reach the log as severity alone, which no operator can
-            // act on, so it is dropped.
+            // Only the severity, a failure class and a lifecycle event from the contract's
+            // closed enums, and a lifecycle event's numeric `waitedMs`, cross this boundary.
+            // An open plugin-chosen token would let a credential-shaped word through, so no
+            // other plugin field is forwarded. A record with neither enum value would reach
+            // the log as severity alone, which no operator can act on, so it is dropped.
             const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
-            if (!failureClass.success) return;
-            providerLog[record.level]({ failureClass: failureClass.data }, 'provider.plugin.log');
+            const lifecycle = providerLifecycleEventSchema.safeParse(record.bindings.lifecycle);
+            if (!failureClass.success && !lifecycle.success) return;
+            const waitedMs = providerLifecycleWaitedMsSchema.safeParse(record.bindings.waitedMs);
+            providerLog[record.level](
+              {
+                ...(failureClass.success ? { failureClass: failureClass.data } : {}),
+                ...(lifecycle.success ? { lifecycle: lifecycle.data } : {}),
+                ...(lifecycle.success && waitedMs.success ? { waitedMs: waitedMs.data } : {}),
+              },
+              'provider.plugin.log'
+            );
           },
         }
       );

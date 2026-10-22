@@ -142,14 +142,12 @@ export {
   captureApprovalResolved,
   captureCodebaseRegistered,
   captureWorkflowTerminal,
+} from './telemetry';
+export {
   WORKFLOW_TERMINAL_EVENT_TYPE,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
-  shutdownTelemetry,
-  isTelemetryDisabled,
-  getTelemetryStatus,
-  resetTelemetryId,
-} from './telemetry';
+} from './telemetry-events';
 export type {
   WorkflowInvokedProperties,
   ArchonStartedProperties,
@@ -164,6 +162,7 @@ export type {
   WorkflowErrorClass,
   WorkflowNodeType,
   WorkflowTelemetrySource,
-  TelemetryStatus,
-  TelemetryDisabledReason,
-} from './telemetry';
+} from './telemetry-events';
+export { isTelemetryDisabled, getTelemetryStatus, resetTelemetryId } from './telemetry-consent';
+export type { TelemetryStatus, TelemetryDisabledReason } from './telemetry-consent';
+export { shutdownTelemetry } from './telemetry-transport';

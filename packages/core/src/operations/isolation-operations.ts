@@ -8,8 +8,8 @@ import { createLogger } from '@archon/paths';
 import { lstat } from 'node:fs/promises';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as isolationDb from '../db/isolation-environments';
-import { cleanupMergedWorktrees, getLiveRunBlocker } from '../services/cleanup-service';
-import type { MergedCleanupResult } from '../services/cleanup-service';
+import { cleanupMergedWorktrees, type MergedCleanupResult } from '../services/cleanup/merged-sweep';
+import { getLiveRunBlocker } from '../services/cleanup/run-lock';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -37,7 +37,10 @@ export interface EnvironmentListData {
   ghostsReconciled: number;
 }
 
-export { type CleanupOperationResult, type MergedCleanupResult } from '../services/cleanup-service';
+export {
+  type CleanupOperationResult,
+  type MergedCleanupResult,
+} from '../services/cleanup/merged-sweep';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -181,7 +184,7 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
 
 /**
  * Cleanup merged worktrees for a codebase.
- * Wraps cleanupMergedWorktrees from cleanup-service.
+ * Wraps cleanupMergedWorktrees from the merged sweep.
  */
 export async function cleanupMergedEnvironments(
   codebaseId: string,

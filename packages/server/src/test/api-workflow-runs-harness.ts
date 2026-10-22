@@ -435,9 +435,15 @@ export const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () =
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 export { RealDetachedRunOwnerUnavailableError };
 export const mockReclaimContainerEnv = mock(async () => {});
-mock.module('@archon/core/services/cleanup-service', () => ({
+mock.module('@archon/core/services/cleanup/run-worktree', () => ({
   reclaimRunWorktree: async () => ({ warnings: [] }),
+  assessCompletedRunWorktree: mock(),
+  releaseCompletedRunWorktree: mock(),
+}));
+mock.module('@archon/core/services/cleanup/containers', () => ({
   reclaimContainerEnv: mockReclaimContainerEnv,
+  listContainerEnvironments: mock(),
+  reapContainerEnvironments: mock(),
 }));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
 export const mockRequestDetachedRunStop = mock<

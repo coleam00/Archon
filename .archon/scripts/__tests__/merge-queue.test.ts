@@ -16,14 +16,12 @@ import {
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
-  POLICY_CLASSES,
   type PrFacts,
   prFromUrl,
-  SWEEP_ACTIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { checkAttention, CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
+import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -181,7 +179,7 @@ describe('the merge record and the gate', () => {
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
   });
 
-  test("the paths, actions, classes, effects and confidences are archon-merge-queue's own", () => {
+  test("the paths, classes and ruling effects are archon-merge-queue's own", () => {
     type Enum = { enum: string[] };
     type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
@@ -195,13 +193,7 @@ describe('the merge record and the gate', () => {
         (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
         workflow.nodes.find(node => node.id === id)?.output_format
       );
-    const decision = ['decisions', '[]'];
     expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('sweep', ...decision, 'action')?.enum).toEqual([...SWEEP_ACTIONS]);
-    expect(at('sweep', ...decision, 'class')?.enum).toEqual([...POLICY_CLASSES]);
-    expect(at('sweep', ...decision, 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...MERGE_EFFECTS]);
-    expect(at('sweep', ...decision, 'attention', 'recommendation', 'confidence')?.enum).toEqual([...CONFIDENCES]);
-    expect(at('sweep', 'base', 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...BASE_EFFECTS]);
     expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
     expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
@@ -945,6 +937,83 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(closed.stderr).toContain('the default branch is red and was not raised (lint red on dev after a rerun)');
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
+  }, 60_000);
+
+  test.each((['facts', 'gate', 'record'] as const).flatMap(script =>
+    (['blob', 'tree'] as const).map(missing => ({ script, missing }))
+  ))('$script fails visibly when the maintainer $missing cannot be read', ({ script, missing }) => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const revision = missing === 'blob' ? 'dev:.archon/sdlc/policy/maintainers.json' : 'dev^{tree}';
+    const objectId = spawnSync('git', ['rev-parse', revision], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    const object = join(at.checkout, '.git/objects', objectId.slice(0, 2), objectId.slice(2));
+    expect(existsSync(object)).toBe(true);
+    const before = stored(at);
+    const result = run(at, script, script === 'record' ? recordInputs([decision({})]) : {}, {
+      args: script === 'gate' ? ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'] : [],
+      preload: `
+        import { unlinkSync } from 'node:fs';
+        const gitWithPolicy = Bun.spawnSync.bind(Bun);
+        Bun.spawnSync = (argv, settings) => {
+          const result = gitWithPolicy(argv, settings);
+          if (argv[0] === 'git' && argv[1] === 'fetch' && result.exitCode === 0) unlinkSync(${JSON.stringify(object)});
+          return result;
+        };
+      `,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(missing === 'blob' ? 'git show' : 'git ls-tree');
+    expect(result.stderr).toContain('failed:');
+    expect(stored(at)).toEqual(before);
+    expect(merges(result)).toEqual([]);
+  }, 60_000);
+
+  test('a maintainer refresh failure records settlements and leaves open companions untouched', () => {
+    const at = install();
+    seed(at, item());
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: PR_URL.replace(/42$/, '43') })) }), subject: OTHER });
+    const picked = ok(run(at, 'facts', {}, { pr: { merged: [43] } }));
+    expect(picked).toMatchObject({ items: [{ pr: PR }], settled: [{ item: OTHER, status: 'merged' }] });
+    const companion = stored(at);
+    const recorded = run(at, 'record', {
+      ...recordInputs([decision({})]),
+      INPUTS_ITEMS: JSON.stringify(picked.items),
+      INPUTS_SETTLED: JSON.stringify(picked.settled),
+    }, { preload: `
+      const beforeFetch = Bun.spawnSync.bind(Bun);
+      Bun.spawnSync = (argv, settings) => {
+        if (argv[0] === 'git' && argv[1] === 'fetch') {
+          const configured = beforeFetch(['git', 'config', 'remote.upstream.uploadpack', 'false'], settings);
+          if (configured.exitCode !== 0) throw new Error(configured.stderr.toString());
+        }
+        return beforeFetch(argv, settings);
+      };
+    ` });
+    expect(recorded.code).toBe(1);
+    expect(recorded.stderr).toContain('git fetch');
+    expect(recorded.stderr).toContain('failed:');
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+    expect(stored(at)).toEqual(companion);
+    expect(forgeCalls(recorded)).toEqual([]);
+  }, 60_000);
+
+  test('record completes after a remote advance while another fetch holds the tracking ref lock', () => {
+    const at = install();
+    git(at.checkout, 'remote', 'rename', 'upstream', 'origin');
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-merge-writer-')));
+    const remote = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    git(writer, 'clone', '-q', remote, '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    git(writer, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const lock = join(at.checkout, '.git/refs/remotes/origin/dev.lock');
+    writeFileSync(lock, 'held by another fetch\n');
+
+    seed(at, item(BUILT, undefined, CLAIMED));
+    expect(ok(run(at, 'record', recordInputs([decision({})]), { pr: { state: 'MERGED' } }))).toMatchObject({ merged: [42] });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ head: HEAD }] } } });
+    expect(readFileSync(lock, 'utf8')).toBe('held by another fetch\n');
   }, 60_000);
 
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {

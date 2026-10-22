@@ -7,7 +7,7 @@ import {
   isWaitNode,
   isIncludeDirective,
 } from '../schemas';
-import { attentionOptionSchema } from '../schemas/dag-node';
+import { attentionOptionSchema } from '../schemas/wait-node';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,

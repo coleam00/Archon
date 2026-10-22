@@ -35,7 +35,7 @@ const INPUTS_SCOPE = 'INPUTS';
 
 /**
  * An input name, as the engine's `with:` key validator defines it
- * (`INPUT_NAME_SOURCE` in packages/workflows/src/schemas/dag-node.ts).
+ * (`INPUT_NAME_PATTERN` in packages/workflows/src/schemas/node-bindings.ts).
  *
  * Identical to `NODE_ID_SOURCE` today, and kept separate anyway: they are
  * different vocabularies that happen to coincide, and writing the coincidence
