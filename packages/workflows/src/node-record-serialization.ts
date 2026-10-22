@@ -17,6 +17,8 @@ import {
   nodeExecutionMetadataPayloadSchema,
   nodeFailureKindSchema,
   mcpUnavailableSchema,
+  type ExecutionDiagnostics,
+  type NodeCacheRecord,
   type NodeCostScope,
   type NodeDescriptor,
   type NodeExecutionRecord,
@@ -204,131 +206,192 @@ export function isPersistedExecType(type: string | undefined): boolean {
   return type !== undefined && persistedExecTypeValues.has(type);
 }
 
-function childWorkflowFields(d: NodeExecutionRecord['diagnostics']): Partial<SerializedNodeData> {
+export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
+  const identity = { workflow_run_id: record.runId, step_name: record.path };
+  if ('cache' in record) return { ...identity, ...serializeCacheDecision(record) };
   return {
-    ...(d?.childUsage !== undefined ? { child_usage: d.childUsage } : {}),
-    ...(d?.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
-    ...(d?.blockedOnChildRunId !== undefined
-      ? { blocked_on_child_run_id: d.blockedOnChildRunId }
-      : {}),
-    ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
-    ...(d?.fanOutOutcome !== undefined ? { fan_out_outcome: d.fanOutOutcome } : {}),
+    ...identity,
+    event_type: executionEventTypes[record.lifecycle.status],
+    data: serializeExecutionData(record),
   };
 }
 
-export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
-  const identity = { workflow_run_id: record.runId, step_name: record.path };
-  if ('cache' in record) {
-    const cache = record.cache;
-    if (cache.action === 'replayed')
+type SerializedNodeEventBody = Pick<SerializedNodeEvent, 'event_type' | 'data'>;
+
+function serializeCacheDecision({ node, cache }: NodeCacheRecord): SerializedNodeEventBody {
+  switch (cache.action) {
+    case 'replayed':
       return {
-        ...identity,
         event_type: 'node_skipped_prior_success',
-        data: { node: record.node, reason: 'prior_success', ...outputFields(cache.output) },
+        data: { node, reason: 'prior_success', ...outputFields(cache.output) },
       };
-    const prior = outputFields(cache.prior);
-    return {
-      ...identity,
-      event_type:
-        cache.action === 'reset' ? 'node_always_run_reset' : 'node_prior_cache_invalidated',
-      data: {
-        node: record.node,
-        prior_output: prior.node_output,
-        ...(prior.node_output_truncated ? { prior_output_truncated: true } : {}),
-        ...(prior.node_output_original_bytes !== undefined
-          ? { prior_output_original_bytes: prior.node_output_original_bytes }
-          : {}),
-        ...(prior.node_output_spill_path !== undefined
-          ? { prior_output_spill_path: prior.node_output_spill_path }
-          : {}),
-        ...(cache.action === 'invalidated'
-          ? {
-              reason: 'stale_dependency',
-              invalidating_deps: cache.invalidatingDeps,
-              ...(cache.prior.structured !== undefined
-                ? { prior_structured_output: cache.prior.structured }
-                : {}),
-            }
-          : {}),
-      },
-    };
+    case 'reset':
+      return {
+        event_type: 'node_always_run_reset',
+        data: { node, ...priorOutputFields(cache.prior) },
+      };
+    case 'invalidated':
+      return {
+        event_type: 'node_prior_cache_invalidated',
+        data: {
+          node,
+          ...priorOutputFields(cache.prior),
+          reason: 'stale_dependency',
+          invalidating_deps: cache.invalidatingDeps,
+          ...(cache.prior.structured !== undefined
+            ? { prior_structured_output: cache.prior.structured }
+            : {}),
+        },
+      };
   }
-  const { node, binding, timing, spend, lifecycle, diagnostics: d } = record;
-  const legacyType =
-    node.kind === 'exec'
-      ? node.runtime === 'sh'
-        ? persistedExecTypes.shell
-        : persistedExecTypes.script
-      : node.kind;
+}
+
+function priorOutputFields(output: ExecutionOutput): SerializedNodeData {
+  const prior = outputFields(output);
   return {
-    ...identity,
-    event_type: executionEventTypes[lifecycle.status],
-    data: {
-      ...nodeExecutionMetadataPayloadSchema.parse(record),
-      type: legacyType,
-      ...(node.kind === 'agent'
-        ? { command: node.source.kind === 'command' ? node.source.name : null }
-        : {}),
-      ...(node.kind === 'loop' ? { command: node.command ?? null } : {}),
-      ...(node.kind === 'exec' && node.runtime !== 'sh' ? { runtime: node.runtime } : {}),
-      ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
-      ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
-      ...(binding.tier !== undefined ? { tier: binding.tier } : {}),
-      ...(binding.effort !== undefined ? { effort: binding.effort } : {}),
-      ...(timing.durationMs !== undefined ? { duration_ms: timing.durationMs } : {}),
-      ...(spend.tokens.source === 'provider' && node.kind !== 'loop_group'
-        ? { tokens: spend.tokens.value }
-        : {}),
-      ...(spend.costUsd.source === 'provider' ? { cost_usd: spend.costUsd.value } : {}),
-      ...(spend.stopReason.source === 'provider' ? { stop_reason: spend.stopReason.value } : {}),
-      ...(spend.numTurns.source === 'provider' ? { num_turns: spend.numTurns.value } : {}),
-      ...(binding.model?.resolved.source === 'provider'
-        ? {
-            model_usage: {
-              requested: binding.model.requested,
-              resolved: binding.model.resolved.value,
-            },
-          }
-        : {}),
-      ...(!reportsOwnSpend(record) ? { aggregate: true } : {}),
-      ...(lifecycle.status === 'failed'
-        ? {
-            error: lifecycle.error,
-            ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
-            ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
-            ...(lifecycle.providerFailure !== undefined
-              ? { provider_failure: lifecycle.providerFailure }
-              : {}),
-          }
-        : {}),
-      ...(lifecycle.status === 'skipped'
-        ? { reason: lifecycle.reason, cause: lifecycle.cause }
-        : {}),
-      ...(lifecycle.status === 'suspended' ? { suspend_point: lifecycle.point } : {}),
-      ...(record.output !== undefined ? outputFields(record.output) : {}),
-      ...(d?.iteration !== undefined ? { iteration: d.iteration } : {}),
-      ...(d?.command !== undefined ? { command: d.command } : {}),
-      ...(d?.outputType !== undefined ? { output_type: d.outputType } : {}),
-      ...(d?.status !== undefined ? { status: d.status } : {}),
-      ...(d?.maxIterations !== undefined ? { maxIterations: d.maxIterations } : {}),
-      ...(d?.sessionSourceNodeId !== undefined
-        ? { session_source_node_id: d.sessionSourceNodeId }
-        : {}),
-      ...(d?.sessionForkRequested !== undefined
-        ? { session_fork_requested: d.sessionForkRequested }
-        : {}),
-      ...(d?.sessionForked !== undefined ? { session_forked: d.sessionForked } : {}),
-      ...(d?.backgroundTasksIncomplete !== undefined
-        ? { background_tasks_incomplete: d.backgroundTasksIncomplete }
-        : {}),
-      ...childWorkflowFields(d),
-      ...(d?.identity !== undefined ? { identity: d.identity } : {}),
-      ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
-      ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
-      ...(d?.expr !== undefined ? { expr: d.expr } : {}),
-      ...(d?.mcpUnavailable !== undefined ? { mcp_unavailable: d.mcpUnavailable } : {}),
-      ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
-    },
+    prior_output: prior.node_output,
+    ...(prior.node_output_truncated ? { prior_output_truncated: true } : {}),
+    ...(prior.node_output_original_bytes !== undefined
+      ? { prior_output_original_bytes: prior.node_output_original_bytes }
+      : {}),
+    ...(prior.node_output_spill_path !== undefined
+      ? { prior_output_spill_path: prior.node_output_spill_path }
+      : {}),
+  };
+}
+
+// Key order is part of the persisted bytes: a later group that repeats a key (a
+// diagnostic `command`) overwrites the value in the position the first group gave it.
+function serializeExecutionData(record: NodeExecutionRecord): SerializedNodeData {
+  return {
+    ...nodeExecutionMetadataPayloadSchema.parse(record),
+    ...nodeKindFields(record.node),
+    ...bindingFields(record.binding),
+    ...usageFields(record),
+    ...lifecycleFields(record.lifecycle),
+    ...(record.output !== undefined ? outputFields(record.output) : {}),
+    ...(record.diagnostics !== undefined ? diagnosticFields(record.diagnostics) : {}),
+    ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
+  };
+}
+
+function nodeKindFields(node: NodeDescriptor): SerializedNodeData {
+  switch (node.kind) {
+    case 'agent':
+      return {
+        type: node.kind,
+        command: node.source.kind === 'command' ? node.source.name : null,
+      };
+    case 'loop':
+      return { type: node.kind, command: node.command ?? null };
+    case 'exec':
+      return node.runtime === 'sh'
+        ? { type: persistedExecTypes.shell }
+        : { type: persistedExecTypes.script, runtime: node.runtime };
+    default:
+      return { type: node.kind };
+  }
+}
+
+function bindingFields(binding: NodeExecutionRecord['binding']): SerializedNodeData {
+  return {
+    ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
+    ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
+    ...(binding.tier !== undefined ? { tier: binding.tier } : {}),
+    ...(binding.effort !== undefined ? { effort: binding.effort } : {}),
+  };
+}
+
+function usageFields(record: NodeExecutionRecord): SerializedNodeData {
+  const { node, binding, timing, spend } = record;
+  return {
+    ...(timing.durationMs !== undefined ? { duration_ms: timing.durationMs } : {}),
+    ...(spend.tokens.source === 'provider' && node.kind !== 'loop_group'
+      ? { tokens: spend.tokens.value }
+      : {}),
+    ...(spend.costUsd.source === 'provider' ? { cost_usd: spend.costUsd.value } : {}),
+    ...(spend.stopReason.source === 'provider' ? { stop_reason: spend.stopReason.value } : {}),
+    ...(spend.numTurns.source === 'provider' ? { num_turns: spend.numTurns.value } : {}),
+    ...(binding.model?.resolved.source === 'provider'
+      ? {
+          model_usage: {
+            requested: binding.model.requested,
+            resolved: binding.model.resolved.value,
+          },
+        }
+      : {}),
+    ...(!reportsOwnSpend(record) ? { aggregate: true } : {}),
+  };
+}
+
+function lifecycleFields(lifecycle: NodeExecutionRecord['lifecycle']): SerializedNodeData {
+  switch (lifecycle.status) {
+    case 'failed':
+      return {
+        error: lifecycle.error,
+        ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
+        ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
+        ...(lifecycle.providerFailure !== undefined
+          ? { provider_failure: lifecycle.providerFailure }
+          : {}),
+      };
+    case 'skipped':
+      return { reason: lifecycle.reason, cause: lifecycle.cause };
+    case 'suspended':
+      return { suspend_point: lifecycle.point };
+    case 'started':
+    case 'completed':
+      return {};
+  }
+}
+
+function diagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
+  return {
+    ...loopDiagnosticFields(d),
+    ...sessionDiagnosticFields(d),
+    ...childRunDiagnosticFields(d),
+    ...(d.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
+    ...(d.expr !== undefined ? { expr: d.expr } : {}),
+    ...(d.mcpUnavailable !== undefined ? { mcp_unavailable: d.mcpUnavailable } : {}),
+  };
+}
+
+function loopDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
+  return {
+    ...(d.iteration !== undefined ? { iteration: d.iteration } : {}),
+    ...(d.command !== undefined ? { command: d.command } : {}),
+    ...(d.outputType !== undefined ? { output_type: d.outputType } : {}),
+    ...(d.status !== undefined ? { status: d.status } : {}),
+    ...(d.maxIterations !== undefined ? { maxIterations: d.maxIterations } : {}),
+  };
+}
+
+function sessionDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
+  return {
+    ...(d.sessionSourceNodeId !== undefined
+      ? { session_source_node_id: d.sessionSourceNodeId }
+      : {}),
+    ...(d.sessionForkRequested !== undefined
+      ? { session_fork_requested: d.sessionForkRequested }
+      : {}),
+    ...(d.sessionForked !== undefined ? { session_forked: d.sessionForked } : {}),
+    ...(d.backgroundTasksIncomplete !== undefined
+      ? { background_tasks_incomplete: d.backgroundTasksIncomplete }
+      : {}),
+  };
+}
+
+function childRunDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
+  return {
+    ...(d.childUsage !== undefined ? { child_usage: d.childUsage } : {}),
+    ...(d.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
+    ...(d.blockedOnChildRunId !== undefined
+      ? { blocked_on_child_run_id: d.blockedOnChildRunId }
+      : {}),
+    ...(d.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
+    ...(d.fanOutOutcome !== undefined ? { fan_out_outcome: d.fanOutOutcome } : {}),
+    ...(d.identity !== undefined ? { identity: d.identity } : {}),
+    ...(d.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
   };
 }
 

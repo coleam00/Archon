@@ -1,4 +1,14 @@
-import type { DagNode } from './schemas';
+import type {
+  AgentNode,
+  ComposeFanOutNode,
+  DagNode,
+  ExecNode,
+  GateNode,
+  LoopGroupNode,
+  LoopNode,
+  WaitNode,
+  WorkflowNode,
+} from './schemas';
 import type { JsonValue } from './output-ref';
 import {
   isAgentNode,
@@ -138,21 +148,47 @@ type SlotCallback = (slot: TemplateSlot, replace: (value: string) => void) => vo
 type ValueSlotCallback = (slot: TemplateValueSlot, replace: (value: JsonValue) => void) => void;
 type BindingCallback = (binding: TemplateBinding) => void;
 
-function walk(
-  node: DagNode,
-  callback: SlotCallback,
-  valueCallback?: ValueSlotCallback,
-  bindingCallback?: BindingCallback,
-  prefix = '',
-  recursive = true
-): void {
-  const slot = (
+interface WalkCallbacks {
+  slot: SlotCallback;
+  value?: ValueSlotCallback;
+  binding?: BindingCallback;
+}
+
+/** Reports one node's template positions, with paths under the walk's prefix. */
+interface SlotEmitter {
+  slot(name: TemplateSlotName, path: string, value: string, replace: (value: string) => void): void;
+  valueSlot(
     name: TemplateSlotName,
     path: string,
-    value: string,
-    replace: (value: string) => void
-  ): void => {
-    callback(
+    value: JsonValue,
+    replace: (value: JsonValue) => void
+  ): void;
+  bindings(
+    bindings: Record<string, unknown> | undefined,
+    write: (name: string, value: JsonValue) => void
+  ): void;
+}
+
+function walk(node: DagNode, callbacks: WalkCallbacks, prefix = '', recursive = true): void {
+  const emit = slotEmitter(node, callbacks, prefix);
+  walkSharedSlots(node, emit);
+  if (isAgentNode(node)) walkAgent(node, emit);
+  else if (isExecNode(node)) walkExec(node, emit);
+  else if (isLoopNode(node)) walkLoop(node, emit);
+  else if (isLoopGroupNode(node)) {
+    walkLoopGroup(node, emit);
+    if (recursive) walkLoopGroupBodies(node, callbacks, prefix);
+  } else if (isGateNode(node)) walkGate(node, emit);
+  else if (isHaltNode(node))
+    emit.slot('cancel.reason', 'cancel', node.reason, value => (node.reason = value));
+  else if (isWaitNode(node)) walkWait(node, emit);
+  else if (isWorkflowNode(node) || isComposeFanOutNode(node)) walkComposition(node, emit);
+  walkComposedInputs(node, emit);
+}
+
+function slotEmitter(node: DagNode, callbacks: WalkCallbacks, prefix: string): SlotEmitter {
+  const slot: SlotEmitter['slot'] = (name, path, value, replace) => {
+    callbacks.slot(
       {
         owner: node,
         name,
@@ -164,22 +200,14 @@ function walk(
       replace
     );
   };
-  const valueSlot = (
-    name: TemplateSlotName,
-    path: string,
-    value: JsonValue,
-    replace: (value: JsonValue) => void
-  ): void => {
+  const valueSlot: SlotEmitter['valueSlot'] = (name, path, value, replace) => {
     const position = (SLOT_SPEC[name] as SlotDefinition).valuePosition;
     if (position !== undefined)
-      valueCallback?.({ path: `${prefix}${path}`, position, value }, replace);
+      callbacks.value?.({ path: `${prefix}${path}`, position, value }, replace);
   };
-  const walkBindings = (
-    bindings: Record<string, unknown> | undefined,
-    write: (name: string, value: JsonValue) => void
-  ): void => {
+  const bindings: SlotEmitter['bindings'] = (bindings, write) => {
     for (const [name, binding] of Object.entries(bindings ?? {})) {
-      bindingCallback?.({ owner: node, name, path: `${prefix}with.${name}` });
+      callbacks.binding?.({ owner: node, name, path: `${prefix}with.${name}` });
       if (typeof binding === 'string') {
         slot('binding.value', `with.${name}`, binding, value => {
           write(name, value);
@@ -204,160 +232,183 @@ function walk(
       }
     }
   };
+  return { slot, valueSlot, bindings };
+}
 
-  if (node.when !== undefined) slot('when', 'when', node.when, value => (node.when = value));
+/** Slots every node kind can carry. */
+function walkSharedSlots(node: DagNode, emit: SlotEmitter): void {
+  if (node.when !== undefined) emit.slot('when', 'when', node.when, value => (node.when = value));
   if (node.systemPrompt !== undefined)
-    slot('systemPrompt', 'systemPrompt', node.systemPrompt, value => (node.systemPrompt = value));
+    emit.slot(
+      'systemPrompt',
+      'systemPrompt',
+      node.systemPrompt,
+      value => (node.systemPrompt = value)
+    );
   for (const [id, agent] of Object.entries(node.agents ?? {})) {
-    slot('agents.*.prompt', `agents.${id}.prompt`, agent.prompt, value => (agent.prompt = value));
-    slot(
+    emit.slot(
+      'agents.*.prompt',
+      `agents.${id}.prompt`,
+      agent.prompt,
+      value => (agent.prompt = value)
+    );
+    emit.slot(
       'agents.*.description',
       `agents.${id}.description`,
       agent.description,
       value => (agent.description = value)
     );
   }
+}
 
-  if (isAgentNode(node)) {
-    if (node.source.kind === 'inline') {
-      const source = node.source;
-      slot('agent.prompt', 'prompt', source.prompt, value => (source.prompt = value));
-      // A materialized command node keeps its bindings in the engine-private payload
-      // (#2964); they are the same template surface as an unmaterialized `with:` map, so
-      // an enclosing include namespaces their refs and forwards its own inputs into them.
-      const composedBindings = readComposedBindings(node);
-      if (composedBindings !== undefined)
-        walkBindings(composedBindings, (name, value) => (composedBindings[name] = value));
-    } else {
-      walkBindings(node.source.with, (name, value) => {
-        if (node.source.kind === 'command' && node.source.with !== undefined)
-          node.source.with[name] = value as never;
-      });
-    }
-  } else if (isExecNode(node)) {
-    slot(
-      node.runtime === 'sh' ? 'exec.bash' : 'exec.script',
-      node.runtime === 'sh' ? 'bash' : 'script',
-      node.script,
-      value => (node.script = value)
-    );
-    walkBindings(node.with, (name, value) => {
-      if (node.with !== undefined) node.with[name] = value as never;
+function walkAgent(node: AgentNode, emit: SlotEmitter): void {
+  if (node.source.kind === 'inline') {
+    const source = node.source;
+    emit.slot('agent.prompt', 'prompt', source.prompt, value => (source.prompt = value));
+    // A materialized command node keeps its bindings in the engine-private payload
+    // (#2964); they are the same template surface as an unmaterialized `with:` map, so
+    // an enclosing include namespaces their refs and forwards its own inputs into them.
+    const composedBindings = readComposedBindings(node);
+    if (composedBindings !== undefined)
+      emit.bindings(composedBindings, (name, value) => (composedBindings[name] = value));
+  } else {
+    emit.bindings(node.source.with, (name, value) => {
+      if (node.source.kind === 'command' && node.source.with !== undefined)
+        node.source.with[name] = value as never;
     });
-  } else if (isLoopNode(node)) {
-    if (typeof node.loop.prompt === 'string')
-      slot('loop.prompt', 'loop.prompt', node.loop.prompt, value => (node.loop.prompt = value));
-    if (node.loop.until_bash !== undefined)
-      slot(
-        'loop.until_bash',
-        'loop.until_bash',
-        node.loop.until_bash,
-        value => (node.loop.until_bash = value)
-      );
-    const compiled = (node.loop as typeof node.loop & LoopWithCompiledCommand)[
-      COMPILED_LOOP_COMMAND
-    ];
-    if (compiled?.prompt !== undefined)
-      slot(
-        'loop.compiled_prompt',
-        'loop.compiled_prompt',
-        compiled.prompt,
-        value => (compiled.prompt = value)
-      );
-  } else if (isLoopGroupNode(node)) {
-    if (node.loop_group.until_bash !== undefined)
-      slot(
-        'loop_group.until_bash',
-        'loop_group.until_bash',
-        node.loop_group.until_bash,
-        value => (node.loop_group.until_bash = value)
-      );
-    if (recursive)
-      for (const [index, body] of node.loop_group.nodes.entries())
-        if (!isIncludeDirective(body))
-          walk(
-            body,
-            callback,
-            valueCallback,
-            bindingCallback,
-            `${prefix}loop_group.nodes.${index}.`,
-            recursive
-          );
-  } else if (isGateNode(node)) {
-    slot('approval.message', 'approval.message', node.message, value => (node.message = value));
-    for (const decision of node.decisions) {
-      const rework = decision.rework;
-      if (rework !== undefined)
-        slot(
-          'approval.on_reject.prompt',
-          'approval.on_reject.prompt',
-          rework.prompt,
-          value => (rework.prompt = value)
-        );
-    }
-  } else if (isHaltNode(node)) {
-    slot('cancel.reason', 'cancel', node.reason, value => (node.reason = value));
-  } else if (isWaitNode(node)) {
-    if (node.wait.until !== undefined)
-      slot('wait.until', 'wait.until', node.wait.until, value => (node.wait = { until: value }));
-    const deadlineMs = node.wait.deadline_ms;
-    if (node.wait.event !== undefined && deadlineMs !== undefined)
-      slot(
-        'wait.event',
-        'wait.event',
-        node.wait.event,
-        value => (node.wait = { event: value, deadline_ms: deadlineMs })
-      );
-    // Each replace re-reads `node.wait`, so mapping both slots keeps both results.
-    if (node.wait.attention !== undefined)
-      slot('wait.attention', 'wait.attention', node.wait.attention, value => {
-        const wait = node.wait;
-        if (wait.attention !== undefined) node.wait = { ...wait, attention: value };
-      });
-    if (typeof node.wait.options === 'string')
-      slot('wait.options', 'wait.options', node.wait.options, value => {
-        const wait = node.wait;
-        if (wait.attention !== undefined) node.wait = { ...wait, options: value };
-      });
-    for (const [key, label] of Object.entries(node.wait.labels ?? {}))
-      slot('wait.labels.*', `wait.labels.${key}`, label, value => {
-        const wait = node.wait;
-        if (wait.attention !== undefined)
-          node.wait = { ...wait, labels: { ...wait.labels, [key]: value } };
-      });
-  } else if (isWorkflowNode(node) || isComposeFanOutNode(node)) {
-    if (isWorkflowNode(node) && node.input !== undefined)
-      slot('workflow.input', 'input', node.input, value => (node.input = value));
-    const withName: TemplateSlotName = isWorkflowNode(node)
-      ? 'workflow.with.*'
-      : 'compose_fan_out.with.*';
-    const withMap = node.with;
-    if (withMap !== undefined)
-      for (const [name, value] of Object.entries(withMap)) {
-        if (typeof value === 'string')
-          slot(withName, `with.${name}`, value, next => (withMap[name] = next));
-        valueSlot(withName, `with.${name}`, value, next => (withMap[name] = next));
-      }
-    const fanOutName: TemplateSlotName = isWorkflowNode(node)
-      ? 'workflow.fan_out.items'
-      : 'compose_fan_out.fan_out.items';
-    const fanOut = node.fan_out;
-    if (fanOut !== undefined)
-      slot(fanOutName, 'fan_out.items', fanOut.items, value => (fanOut.items = value));
   }
+}
 
-  const inputs = readComposedMeta(node)?.inputs;
-  if (inputs !== undefined)
-    for (const [name, value] of Object.entries(inputs)) {
+function walkExec(node: ExecNode, emit: SlotEmitter): void {
+  emit.slot(
+    node.runtime === 'sh' ? 'exec.bash' : 'exec.script',
+    node.runtime === 'sh' ? 'bash' : 'script',
+    node.script,
+    value => (node.script = value)
+  );
+  emit.bindings(node.with, (name, value) => {
+    if (node.with !== undefined) node.with[name] = value as never;
+  });
+}
+
+function walkLoop(node: LoopNode, emit: SlotEmitter): void {
+  if (typeof node.loop.prompt === 'string')
+    emit.slot('loop.prompt', 'loop.prompt', node.loop.prompt, value => (node.loop.prompt = value));
+  if (node.loop.until_bash !== undefined)
+    emit.slot(
+      'loop.until_bash',
+      'loop.until_bash',
+      node.loop.until_bash,
+      value => (node.loop.until_bash = value)
+    );
+  const compiled = (node.loop as typeof node.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
+  if (compiled?.prompt !== undefined)
+    emit.slot(
+      'loop.compiled_prompt',
+      'loop.compiled_prompt',
+      compiled.prompt,
+      value => (compiled.prompt = value)
+    );
+}
+
+function walkLoopGroup(node: LoopGroupNode, emit: SlotEmitter): void {
+  if (node.loop_group.until_bash !== undefined)
+    emit.slot(
+      'loop_group.until_bash',
+      'loop_group.until_bash',
+      node.loop_group.until_bash,
+      value => (node.loop_group.until_bash = value)
+    );
+}
+
+function walkLoopGroupBodies(node: LoopGroupNode, callbacks: WalkCallbacks, prefix: string): void {
+  for (const [index, body] of node.loop_group.nodes.entries())
+    if (!isIncludeDirective(body))
+      walk(body, callbacks, `${prefix}loop_group.nodes.${index}.`, true);
+}
+
+function walkGate(node: GateNode, emit: SlotEmitter): void {
+  emit.slot('approval.message', 'approval.message', node.message, value => (node.message = value));
+  for (const decision of node.decisions) {
+    const rework = decision.rework;
+    if (rework !== undefined)
+      emit.slot(
+        'approval.on_reject.prompt',
+        'approval.on_reject.prompt',
+        rework.prompt,
+        value => (rework.prompt = value)
+      );
+  }
+}
+
+function walkWait(node: WaitNode, emit: SlotEmitter): void {
+  if (node.wait.until !== undefined)
+    emit.slot('wait.until', 'wait.until', node.wait.until, value => (node.wait = { until: value }));
+  const deadlineMs = node.wait.deadline_ms;
+  if (node.wait.event !== undefined && deadlineMs !== undefined)
+    emit.slot(
+      'wait.event',
+      'wait.event',
+      node.wait.event,
+      value => (node.wait = { event: value, deadline_ms: deadlineMs })
+    );
+  // Each replace re-reads `node.wait`, so mapping both slots keeps both results.
+  if (node.wait.attention !== undefined)
+    emit.slot('wait.attention', 'wait.attention', node.wait.attention, value => {
+      const wait = node.wait;
+      if (wait.attention !== undefined) node.wait = { ...wait, attention: value };
+    });
+  if (typeof node.wait.options === 'string')
+    emit.slot('wait.options', 'wait.options', node.wait.options, value => {
+      const wait = node.wait;
+      if (wait.attention !== undefined) node.wait = { ...wait, options: value };
+    });
+  for (const [key, label] of Object.entries(node.wait.labels ?? {}))
+    emit.slot('wait.labels.*', `wait.labels.${key}`, label, value => {
+      const wait = node.wait;
+      if (wait.attention !== undefined)
+        node.wait = { ...wait, labels: { ...wait.labels, [key]: value } };
+    });
+}
+
+function walkComposition(node: WorkflowNode | ComposeFanOutNode, emit: SlotEmitter): void {
+  const workflow = isWorkflowNode(node);
+  if (workflow && node.input !== undefined)
+    emit.slot('workflow.input', 'input', node.input, value => (node.input = value));
+  const withName: TemplateSlotName = workflow ? 'workflow.with.*' : 'compose_fan_out.with.*';
+  const withMap = node.with;
+  if (withMap !== undefined)
+    for (const [name, value] of Object.entries(withMap)) {
       if (typeof value === 'string')
-        slot('composed.inputs.*', `composed.inputs.${name}`, value, next => (inputs[name] = next));
-      valueSlot(
+        emit.slot(withName, `with.${name}`, value, next => (withMap[name] = next));
+      emit.valueSlot(withName, `with.${name}`, value, next => (withMap[name] = next));
+    }
+  const fanOutName: TemplateSlotName = workflow
+    ? 'workflow.fan_out.items'
+    : 'compose_fan_out.fan_out.items';
+  const fanOut = node.fan_out;
+  if (fanOut !== undefined)
+    emit.slot(fanOutName, 'fan_out.items', fanOut.items, value => (fanOut.items = value));
+}
+
+function walkComposedInputs(node: DagNode, emit: SlotEmitter): void {
+  const inputs = readComposedMeta(node)?.inputs;
+  if (inputs === undefined) return;
+  for (const [name, value] of Object.entries(inputs)) {
+    if (typeof value === 'string')
+      emit.slot(
         'composed.inputs.*',
         `composed.inputs.${name}`,
         value,
         next => (inputs[name] = next)
       );
-    }
+    emit.valueSlot(
+      'composed.inputs.*',
+      `composed.inputs.${name}`,
+      value,
+      next => (inputs[name] = next)
+    );
+  }
 }
 
 export function visitNodeTemplateSlots(
@@ -367,11 +418,12 @@ export function visitNodeTemplateSlots(
 ): void {
   walk(
     node,
-    slot => {
-      visitor(slot);
+    {
+      slot: slot => {
+        visitor(slot);
+      },
+      binding: options?.bindingVisitor,
     },
-    undefined,
-    options?.bindingVisitor,
     '',
     options?.recursive ?? true
   );
@@ -383,8 +435,10 @@ export function mapNodeTemplateSlots(
   mapper: (slot: TemplateSlot) => string
 ): DagNode {
   const clone = cloneNodeWithEngineMetadata(node);
-  walk(clone, (slot, replace) => {
-    replace(mapper(slot));
+  walk(clone, {
+    slot: (slot, replace) => {
+      replace(mapper(slot));
+    },
   });
   return clone;
 }
@@ -395,13 +449,11 @@ export function mapNodeTemplateValueSlots(
   mapper: (slot: TemplateValueSlot) => JsonValue
 ): DagNode {
   const clone = cloneNodeWithEngineMetadata(node);
-  walk(
-    clone,
-    () => undefined,
-    (slot, replace) => {
+  walk(clone, {
+    slot: () => undefined,
+    value: (slot, replace) => {
       replace(mapper(slot));
     },
-    undefined
-  );
+  });
   return clone;
 }
