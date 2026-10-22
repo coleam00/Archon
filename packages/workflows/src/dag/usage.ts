@@ -1,3 +1,4 @@
+import type { RunUsageFigures } from '../schemas/run-usage';
 import { mergeTokenUsage, tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { getLog } from './log';
 
@@ -73,12 +74,7 @@ export function sumFanOutTokens(
   );
 }
 
-/** Run-level usage as either aggregation reports it: the live run total or the event-log fold. */
-export interface RunUsageFigures {
-  costUsd?: number;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-}
+export type { RunUsageFigures } from '../schemas/run-usage';
 
 // Float sums taken in a different order differ in the last bits.
 const COST_TOLERANCE_USD = 1e-9;

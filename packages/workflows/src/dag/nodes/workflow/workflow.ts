@@ -1,4 +1,4 @@
-import { unreportedChildUsage } from '../../child-usage';
+import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
@@ -247,14 +247,7 @@ export async function executeWorkflowNode(
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
-    childUsage = [
-      {
-        childRunId: outcome.childRunId,
-        costUsd: outcome.costUsd,
-        tokens: outcome.tokens,
-        tokensUnknown: outcome.tokensUnknown,
-      },
-    ];
+    childUsage = [reportedChildUsage(outcome)];
     outcome = {
       ...outcome,
       ...unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId),

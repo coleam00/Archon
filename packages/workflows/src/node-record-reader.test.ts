@@ -5,6 +5,7 @@ import {
   readNodeRecordEvent,
   readDeferredNodeUsageEvent,
 } from './node-record-reader';
+import { NODE_STATE_EVENT_TYPES } from './store';
 import { nodeExecutionMetadataPayloadSchema } from './schemas/node-execution';
 
 const metadata = {
@@ -167,3 +168,18 @@ it('reads deferred accounting separately and retains malformed usage for diagnos
   expect(readNodeRecordEvent(envelope)).toBeUndefined();
   expect(readDeferredNodeUsageEvent({ ...envelope, event_type: 'node_started' })).toBeUndefined();
 });
+
+it.each([...NODE_STATE_EVENT_TYPES, 'node_deferred_usage'])(
+  'rejects invalid present child attribution in %s',
+  eventType => {
+    const envelope = {
+      workflow_run_id: 'parent',
+      step_name: 'child',
+      event_type: eventType,
+      data: { child_usage: [{ childRunId: 'child', costUsd: 'bad' }] },
+    };
+    const read =
+      eventType === 'node_deferred_usage' ? readDeferredNodeUsageEvent : readNodeRecordEvent;
+    expect(() => read(envelope)).toThrow();
+  }
+);

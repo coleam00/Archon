@@ -56,6 +56,7 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n" : ''}`
                 data: {
                   type: 'workflow',
                   error: 'interrupted',
+                  child_run_id: 'unreadable-child',
                   cost_usd: 0.01,
                   tokens: { input: 7, output: 3 },
                 },

@@ -1,3 +1,4 @@
+import { runUsageSchema } from './run-usage';
 import { declaredOutputPathsSchema } from '../output-ref';
 import { z } from 'zod';
 import { fanOutOutcomeSchema } from './fan-out-outcome';
@@ -184,12 +185,7 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
-export const childUsageSchema = z.object({
-  childRunId: z.string(),
-  costUsd: z.number().optional(),
-  tokens: tokenUsageSchema.optional(),
-  tokensUnknown: z.boolean().optional(),
-});
+export const childUsageSchema = runUsageSchema.extend({ childRunId: z.string() });
 
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),

@@ -1,10 +1,10 @@
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import { parseRunUsage } from '../schemas/run-usage';
-import type { TokenUsage } from '@archon/provider-contract';
+import type { RunUsageFigures } from '../schemas/run-usage';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
+export interface ChildWorkflowOutcome extends RunUsageFigures {
   childRunId: string;
   status: 'completed' | 'paused' | 'failed' | 'cancelled';
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
@@ -23,10 +23,6 @@ export interface ChildWorkflowOutcome {
    * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
    */
   declaredOutputPaths?: DeclaredOutputPaths;
-  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
   error?: string;
 }
 

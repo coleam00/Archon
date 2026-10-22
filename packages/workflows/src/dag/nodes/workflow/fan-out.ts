@@ -1,4 +1,4 @@
-import { unreportedChildUsage } from '../../child-usage';
+import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -515,12 +515,7 @@ export async function executeFanOutWorkflowNode(
     return outcome;
   });
 
-  childUsage = outcomes.map(outcome => ({
-    childRunId: outcome.childRunId,
-    costUsd: outcome.costUsd,
-    tokens: outcome.tokens,
-    tokensUnknown: outcome.tokensUnknown,
-  }));
+  childUsage = outcomes.map(reportedChildUsage);
   const unreported = outcomes.map(outcome =>
     unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId)
   );

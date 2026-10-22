@@ -445,6 +445,8 @@ ${caller === 'child fan-out' ? "    fan_out:\n      items: '[1,2]'\n      as: it
     { fanOut: true, replacement: true, interrupted: false },
     { fanOut: false, replacement: true, interrupted: true },
     { fanOut: true, replacement: true, interrupted: true },
+    { fanOut: true, replacement: 'mixed', interrupted: false },
+    { fanOut: true, replacement: 'mixed', interrupted: true },
   ])('retains paid usage on recovery: %j', async ({ fanOut, replacement, interrupted }) => {
     await writeWorkflow(
       'block',
@@ -490,8 +492,10 @@ ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parall
     const outer = [...store.runs.values()].find(run => run.workflow_name === 'outer')!;
     expect(outer.status).toBe('failed');
     const children = [...store.runs.values()].filter(run => run.workflow_name === 'target');
+    expect(children).toHaveLength(fanOut ? 2 : 1);
     expect(children.every(run => run.status === 'failed')).toBe(true);
-    if (replacement) children.forEach(child => store.runs.delete(child.id));
+    const replaced = replacement === 'mixed' ? children.slice(1) : replacement ? children : [];
+    replaced.forEach(child => store.runs.delete(child.id));
     await writeFile(join(cwd, 'retry-marker'), 'retry');
     const readStatus = store.getWorkflowRunStatus;
     const cause = new Error('Unsupported workflow status');
@@ -525,7 +529,7 @@ ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parall
         throw new Error('Expected lifecycle interruption');
       expect(error.cause).toBe(cause);
     }
-    const paidCalls = 1 + (fanOut ? 2 : 1) * (replacement ? 3 : 2);
+    const paidCalls = 1 + children.length * 2 + replaced.length;
     expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
       total_cost_usd: paidCalls * 0.01,
       total_tokens_in: paidCalls * 7,

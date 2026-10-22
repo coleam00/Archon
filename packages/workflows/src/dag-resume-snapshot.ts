@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
-import { sumReportedCost } from './dag/usage';
+import { sumFanOutTokens, sumReportedCost } from './dag/usage';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 import {
   nodeInvocationKey,
@@ -204,7 +204,11 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   return undefined;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+function readUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage']
+): UsageContribution {
   const contribution: UsageContribution = {
     stepName,
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
@@ -218,6 +222,11 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
     if (costUsd !== undefined) contribution.costUsd = costUsd;
   }
+  return contribution;
+}
+
+function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+  const contribution = readUsage(fold, stepName, rawUsage);
   if (
     contribution.tokensUnknown ||
     contribution.tokens !== undefined ||
@@ -436,6 +445,33 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   }
 }
 
+function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
+  const { data, path } = record;
+  if (data.child_usage !== undefined) {
+    for (const usage of data.child_usage) fold.reportedChildUsage.set(usage.childRunId, usage);
+    return;
+  }
+  if (data.type !== 'workflow') return;
+  const usage = readUsage(fold, path, record.rawUsage);
+  if (usage.costUsd === undefined && usage.tokens === undefined && !usage.tokensUnknown) return;
+  const ids = new Set(
+    data.fan_out_outcome?.slots.flatMap(slot => ('child_run_id' in slot ? [slot.child_run_id] : []))
+  );
+  if (data.child_run_id !== undefined) ids.add(data.child_run_id);
+  if (ids.size !== 1) {
+    throw new Error(`Cannot attribute historical child usage for '${path}' in run ${fold.runId}`);
+  }
+  // Legacy workflow rows report increments, unlike child_usage's cumulative baselines.
+  for (const id of ids) {
+    const contributions = [fold.reportedChildUsage.get(id) ?? {}, usage];
+    fold.reportedChildUsage.set(id, {
+      costUsd: sumReportedCost(contributions),
+      tokens: sumFanOutTokens(contributions),
+      tokensUnknown: contributions.some(value => value.tokensUnknown),
+    });
+  }
+}
+
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   const nodeStateType = NODE_STATE_EVENT_TYPES.find(type => type === row.event_type);
   if (nodeStateType) foldActiveNodeIds(fold.unresolvedNodeStarts, row.step_name, nodeStateType);
@@ -463,11 +499,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
       await readCompletedOutput(fold, row.step_name, data, data.node_output)
     );
   }
-  if (row.event_type !== 'node_skipped_prior_success') {
-    for (const usage of data.child_usage ?? []) {
-      fold.reportedChildUsage.set(usage.childRunId, usage);
-    }
-  }
+  if (row.event_type !== 'node_skipped_prior_success') foldChildUsage(fold, record);
   foldNodeUsage(fold, row, record);
 }
 

@@ -1,3 +1,4 @@
+import { childUsageSchema } from '../schemas/node-execution';
 import { tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import type { DagResumeSnapshot } from '../store';
 import type { RunUsageFigures } from './usage';
@@ -5,6 +6,10 @@ import type { RunUsageFigures } from './usage';
 const tokenAxes = tokenUsageSchema
   .omit({ cachePartial: true, total: true, cost: true })
   .keyof().options;
+
+export function reportedChildUsage(usage: RunUsageFigures & { childRunId: string }) {
+  return childUsageSchema.parse(usage);
+}
 
 /** Child totals are cumulative; parent events must carry only spend not already reported. */
 export function unreportedChildUsage(

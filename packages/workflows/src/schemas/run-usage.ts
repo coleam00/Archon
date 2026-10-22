@@ -1,6 +1,13 @@
-import type { TokenUsage } from '@archon/provider-contract';
-import type { RunUsageFigures } from '../dag/usage';
+import { z } from 'zod';
+import { tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import type { WorkflowRun } from './workflow-run';
+
+export const runUsageSchema = z.object({
+  costUsd: z.number().optional(),
+  tokens: tokenUsageSchema.optional(),
+  tokensUnknown: z.boolean().optional(),
+});
+export type RunUsageFigures = z.infer<typeof runUsageSchema>;
 
 export function hasUnknownTokenTotal(metadata: WorkflowRun['metadata']): boolean {
   return Object.hasOwn(metadata, fields.unknown) && metadata[fields.unknown] !== false;
