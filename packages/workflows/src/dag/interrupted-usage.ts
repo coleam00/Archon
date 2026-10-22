@@ -23,27 +23,13 @@ export async function readInterruptedRunUsage(
   );
   if (unresolvedChildren.size === 0) return durable;
   const contributions: RunUsageFigures[] = [durable];
-  const childrenByPath = new Map<string, RunUsageFigures[]>();
   for (const child of await store.findChildRuns(runId)) {
     const { parentNodeId } = readSubrunMetadata(child.metadata);
     if (parentNodeId !== undefined && unresolvedChildren.has(parentNodeId)) {
-      const children = childrenByPath.get(parentNodeId) ?? [];
-      children.push(childRunUsage(child));
-      childrenByPath.set(parentNodeId, children);
+      contributions.push(
+        unreportedChildUsage(childRunUsage(child), durable.reportedChildUsage, child.id)
+      );
     }
-  }
-  for (const [path, children] of childrenByPath) {
-    contributions.push(
-      unreportedChildUsage(
-        {
-          costUsd: sumReportedCost(children),
-          tokens: sumFanOutTokens(children),
-          tokensUnknown: children.some(child => child.tokensUnknown),
-        },
-        durable.workflowUsage,
-        path
-      )
-    );
   }
   // This roll-up is telemetry only. Recovery still seeds from durable node events.
   return {

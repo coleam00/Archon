@@ -10,6 +10,7 @@ import type { NodeOutput } from './schemas/workflow-run';
 import { fanOutOutcomeSchema } from './schemas/fan-out-outcome';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
+  childUsageSchema,
   executionBindingSchema,
   executionSpendSchema,
   nodeExecutionMetadataSchema,
@@ -73,6 +74,7 @@ export const serializedNodeDataSchema = z.object({
   session_forked: z.boolean().optional(),
   background_tasks_incomplete: z.array(z.string()).optional(),
   child_run_id: z.string().optional(),
+  child_usage: z.array(childUsageSchema).optional(),
   blocked_on_child_run_id: z.string().optional(),
   fan_out: z.boolean().optional(),
   fan_out_outcome: fanOutOutcomeSchema.optional(),
@@ -202,6 +204,18 @@ export function isPersistedExecType(type: string | undefined): boolean {
   return type !== undefined && persistedExecTypeValues.has(type);
 }
 
+function childWorkflowFields(d: NodeExecutionRecord['diagnostics']): Partial<SerializedNodeData> {
+  return {
+    ...(d?.childUsage !== undefined ? { child_usage: d.childUsage } : {}),
+    ...(d?.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
+    ...(d?.blockedOnChildRunId !== undefined
+      ? { blocked_on_child_run_id: d.blockedOnChildRunId }
+      : {}),
+    ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
+    ...(d?.fanOutOutcome !== undefined ? { fan_out_outcome: d.fanOutOutcome } : {}),
+  };
+}
+
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
   const identity = { workflow_run_id: record.runId, step_name: record.path };
   if ('cache' in record) {
@@ -307,12 +321,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.backgroundTasksIncomplete !== undefined
         ? { background_tasks_incomplete: d.backgroundTasksIncomplete }
         : {}),
-      ...(d?.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
-      ...(d?.blockedOnChildRunId !== undefined
-        ? { blocked_on_child_run_id: d.blockedOnChildRunId }
-        : {}),
-      ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
-      ...(d?.fanOutOutcome !== undefined ? { fan_out_outcome: d.fanOutOutcome } : {}),
+      ...childWorkflowFields(d),
       ...(d?.identity !== undefined ? { identity: d.identity } : {}),
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),

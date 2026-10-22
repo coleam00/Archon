@@ -9,10 +9,10 @@ const tokenAxes = tokenUsageSchema
 /** Child totals are cumulative; parent events must carry only spend not already reported. */
 export function unreportedChildUsage(
   total: RunUsageFigures,
-  reportedByPath: DagResumeSnapshot['workflowUsage'],
-  path: string
+  reportedByChild: DagResumeSnapshot['reportedChildUsage'],
+  childRunId: string
 ): RunUsageFigures {
-  const reported = reportedByPath?.get(path);
+  const reported = reportedByChild?.get(childRunId);
   if (reported === undefined) return total;
   const tokensUnknown = total.tokensUnknown === true || reported.tokensUnknown === true;
   let tokens: TokenUsage | undefined;

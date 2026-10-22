@@ -36,8 +36,8 @@ export interface PriorFailedNode {
 }
 
 export interface DagResumeSnapshot extends RunUsageFigures {
-  /** Durable spend by workflow-node path, used to report only new child spend on recovery. */
-  workflowUsage?: Map<string, RunUsageFigures>;
+  /** Cumulative usage already reported for each child run, keyed by child run id. */
+  reportedChildUsage?: Map<string, RunUsageFigures>;
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;

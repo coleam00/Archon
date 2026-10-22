@@ -438,21 +438,26 @@ ${caller === 'child fan-out' ? "    fan_out:\n      items: '[1,2]'\n      as: it
     }
   }
 
-  it.each([false, true])(
-    'retains interrupted usage when retrying a failed child (fan-out=%p)',
-    async fanOut => {
-      await writeWorkflow(
-        'block',
-        `name: block
+  it.each([
+    { fanOut: false, replacement: false, interrupted: true },
+    { fanOut: true, replacement: false, interrupted: true },
+    { fanOut: false, replacement: true, interrupted: false },
+    { fanOut: true, replacement: true, interrupted: false },
+    { fanOut: false, replacement: true, interrupted: true },
+    { fanOut: true, replacement: true, interrupted: true },
+  ])('retains paid usage on recovery: %j', async ({ fanOut, replacement, interrupted }) => {
+    await writeWorkflow(
+      'block',
+      `name: block
 description: paid work
 nodes:
   - id: work
     prompt: work
 `
-      );
-      await writeWorkflow(
-        'target',
-        `name: target
+    );
+    await writeWorkflow(
+      'target',
+      `name: target
 description: fails after paid work on its first pass
 nodes:
   - id: paid
@@ -467,10 +472,10 @@ nodes:
       items: '[1]'
       as: item
 `
-      );
-      await writeWorkflow(
-        'outer',
-        `name: outer
+    );
+    await writeWorkflow(
+      'outer',
+      `name: outer
 description: retrying parent
 nodes:
   - id: sibling
@@ -478,20 +483,19 @@ nodes:
   - id: sub
     workflow: target
 ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parallel: 1\n      join: all_success\n" : ''}`
-      );
-      const store = new InMemoryStore();
-      const deps = makeDeps(store);
-      await executeWorkflow(deps, makePlatform(), 'test', cwd, await discover('outer'), 'goal');
-      const outer = [...store.runs.values()].find(run => run.workflow_name === 'outer')!;
-      expect(outer.status).toBe('failed');
-      expect(
-        [...store.runs.values()]
-          .filter(run => run.workflow_name === 'target')
-          .every(run => run.status === 'failed')
-      ).toBe(true);
-      await writeFile(join(cwd, 'retry-marker'), 'retry');
-      const readStatus = store.getWorkflowRunStatus;
-      const cause = new Error('Unsupported workflow status');
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    await executeWorkflow(deps, makePlatform(), 'test', cwd, await discover('outer'), 'goal');
+    const outer = [...store.runs.values()].find(run => run.workflow_name === 'outer')!;
+    expect(outer.status).toBe('failed');
+    const children = [...store.runs.values()].filter(run => run.workflow_name === 'target');
+    expect(children.every(run => run.status === 'failed')).toBe(true);
+    if (replacement) children.forEach(child => store.runs.delete(child.id));
+    await writeFile(join(cwd, 'retry-marker'), 'retry');
+    const readStatus = store.getWorkflowRunStatus;
+    const cause = new Error('Unsupported workflow status');
+    if (interrupted)
       store.getWorkflowRunStatus = async id => {
         if (
           store.events.some(
@@ -504,33 +508,37 @@ ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parall
           throw cause;
         return readStatus(id);
       };
-      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(outer.id))!);
-      if (!hydrated) throw new Error('Parent not resumable');
-      const error: unknown = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'test',
-        cwd,
-        await discover('outer'),
-        'goal',
-        undefined,
-        hydrated
-      ).catch((error: unknown) => error);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(outer.id))!);
+    if (!hydrated) throw new Error('Parent not resumable');
+    const error: unknown = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('outer'),
+      'goal',
+      undefined,
+      hydrated
+    ).catch((error: unknown) => error);
+    if (interrupted) {
       if (!(error instanceof ParentStatusReadError))
         throw new Error('Expected lifecycle interruption');
       expect(error.cause).toBe(cause);
-      expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
-        total_cost_usd: fanOut ? 0.05 : 0.03,
-        total_tokens_in: fanOut ? 35 : 21,
-        total_tokens_out: fanOut ? 15 : 9,
-        total_cache_read_tokens: fanOut ? 25 : 15,
-        total_cache_write_tokens: 0,
-      });
-      expect((await store.getWorkflowRun(outer.id))?.status).toBe('running');
-      store.getWorkflowRunStatus = readStatus;
-      await recoverInterruptedChildren(store, deps, fanOut, fanOut ? 2 : 1);
     }
-  );
+    const paidCalls = 1 + (fanOut ? 2 : 1) * (replacement ? 3 : 2);
+    expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
+      total_cost_usd: paidCalls * 0.01,
+      total_tokens_in: paidCalls * 7,
+      total_tokens_out: paidCalls * 3,
+      total_cache_read_tokens: paidCalls * 5,
+      total_cache_write_tokens: 0,
+    });
+    expect((await store.getWorkflowRun(outer.id))?.status).toBe(
+      interrupted ? 'running' : 'completed'
+    );
+    store.getWorkflowRunStatus = readStatus;
+    if (!replacement) await recoverInterruptedChildren(store, deps, fanOut, fanOut ? 2 : 1);
+  });
 
   it.each(['dag', 'loop group', 'composed instance'] as const)(
     'stops on a rejected between-layer status read in %s',

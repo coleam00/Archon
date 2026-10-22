@@ -153,6 +153,7 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
         error: 'interrupted child',
         cost_usd: 0.01,
         tokens: { input: 7, output: 3 },
+        child_usage: [{ childRunId: 'child', costUsd: 0.01, tokens: { input: 7, output: 3 } }],
       },
     });
     if (paidSibling) {

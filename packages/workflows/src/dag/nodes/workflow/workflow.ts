@@ -7,7 +7,7 @@ import {
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type ExecutionDiagnostics, type NodeFailureKind } from '../../../schemas/node-execution';
 import {
   NodeEventWriteError,
   recordDerivedExecution,
@@ -57,6 +57,8 @@ export async function executeWorkflowNode(
   const execution = beginExecution(ctx, node);
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
 
+  let childUsage: ExecutionDiagnostics['childUsage'];
+
   // Build the failed result AND persist a node_failed event with the reason. Unlike
   // command/prompt/bash/script nodes (which write their own node_failed inside their
   // executor), the workflow node returns a failed NodeExecutionResult that runLayers
@@ -82,6 +84,7 @@ export async function executeWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
+          diagnostics: { childUsage },
         }
       )
     );
@@ -201,7 +204,7 @@ export async function executeWorkflowNode(
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
           tokensUnknown: outcome.tokensUnknown,
-          diagnostics: { childRunId: outcome.childRunId },
+          diagnostics: { childRunId: outcome.childRunId, childUsage },
         }
       )
     );
@@ -244,9 +247,17 @@ export async function executeWorkflowNode(
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    childUsage = [
+      {
+        childRunId: outcome.childRunId,
+        costUsd: outcome.costUsd,
+        tokens: outcome.tokens,
+        tokensUnknown: outcome.tokensUnknown,
+      },
+    ];
     outcome = {
       ...outcome,
-      ...unreportedChildUsage(outcome, ctx.workflowUsage, executionNodeId),
+      ...unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId),
     };
     switch (outcome.status) {
       case 'completed':

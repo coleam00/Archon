@@ -329,11 +329,7 @@ describe('TokenUsage axis seam guard', () => {
     const { store } = await runSpecimenDag();
     const written = runUsageWrites(store);
     expect(written.length).toBe(1);
-    // Writer: persistRunUsage's `total_*` key list.
     expectSeamCarriesAxes('run metadata (write)', RUN_METADATA_AXIS_KEYS, written[0]);
-    // Reader: childOutcomeFromRun's SEPARATE, independently maintained key list.
-    // Nothing in production fails if the two disagree — this is the pair the
-    // issue calls the sharpest illustration of the seam.
     expectSeamCarriesAxes(
       'run metadata (read)',
       WHOLE_OBJECT_AXIS_KEYS,

@@ -276,6 +276,7 @@ export async function executeFanOutWorkflowNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const stepName = ctx.stepNamePrefix + node.id;
   let tokensUnknown = false;
+  let childUsage: ExecutionDiagnostics['childUsage'];
 
   // node_failed writer (mirrors executeWorkflowNode.failResult) — a fan-out failure may
   // still carry accumulated cost/tokens so spend over already-run children is tracked.
@@ -296,7 +297,7 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
-          diagnostics: { fanOut: true, ...diagnostics },
+          diagnostics: { fanOut: true, childUsage, ...diagnostics },
         }
       )
     );
@@ -322,7 +323,11 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
-          diagnostics: { fanOut: true, ...(fanOutOutcome !== undefined ? { fanOutOutcome } : {}) },
+          diagnostics: {
+            fanOut: true,
+            childUsage,
+            ...(fanOutOutcome !== undefined ? { fanOutOutcome } : {}),
+          },
         }
       )
     );
@@ -510,15 +515,20 @@ export async function executeFanOutWorkflowNode(
     return outcome;
   });
 
-  const usage = unreportedChildUsage(
-    {
-      costUsd: sumReportedCost(outcomes),
-      tokens: sumFanOutTokens(outcomes),
-      tokensUnknown: outcomes.some(outcome => outcome.tokensUnknown === true),
-    },
-    ctx.workflowUsage,
-    stepName
+  childUsage = outcomes.map(outcome => ({
+    childRunId: outcome.childRunId,
+    costUsd: outcome.costUsd,
+    tokens: outcome.tokens,
+    tokensUnknown: outcome.tokensUnknown,
+  }));
+  const unreported = outcomes.map(outcome =>
+    unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId)
   );
+  const usage = {
+    costUsd: sumReportedCost(unreported),
+    tokens: sumFanOutTokens(unreported),
+    tokensUnknown: unreported.some(outcome => outcome.tokensUnknown === true),
+  };
   const totalCostUsd = usage.costUsd;
   const totalTokens = usage.tokens;
   tokensUnknown = usage.tokensUnknown === true;
