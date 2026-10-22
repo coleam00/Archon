@@ -16,18 +16,16 @@ import {
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
-  POLICY_CLASSES,
   type PrFacts,
   prFromUrl,
-  SWEEP_ACTIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
+import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhCommentRow, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
+import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -181,7 +179,7 @@ describe('the merge record and the gate', () => {
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
   });
 
-  test("the paths, actions, classes, effects and confidences are archon-merge-queue's own", () => {
+  test("the paths, classes and ruling effects are archon-merge-queue's own", () => {
     type Enum = { enum: string[] };
     type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
@@ -195,13 +193,7 @@ describe('the merge record and the gate', () => {
         (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
         workflow.nodes.find(node => node.id === id)?.output_format
       );
-    const decision = ['decisions', '[]'];
     expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('sweep', ...decision, 'action')?.enum).toEqual([...SWEEP_ACTIONS]);
-    expect(at('sweep', ...decision, 'class')?.enum).toEqual([...POLICY_CLASSES]);
-    expect(at('sweep', ...decision, 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...MERGE_EFFECTS]);
-    expect(at('sweep', ...decision, 'attention', 'recommendation', 'confidence')?.enum).toEqual([...CONFIDENCES]);
-    expect(at('sweep', 'base', 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...BASE_EFFECTS]);
     expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
     expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
@@ -355,15 +347,15 @@ const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommen
 
 function run(
   at: Install,
-  script: 'facts' | 'gate' | 'record' | 'ruling',
+  script: 'facts' | 'gate' | 'record' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string } = {}
+  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string; issues?: readonly GhIssue[] } = {}
 ): ScriptRun {
   return runPackScript(`merge-queue/scripts/${script}`, {
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     preload: forgePreload(options.pr ?? {}) + (options.preload ?? ''),
-    gh: { issue: { number: 7, author: 'Maintainer', body: 'The contract.' }, comments: options.comments ?? [REVIEWED] },
+    gh: { issue: { number: 7, author: 'Maintainer', body: 'The contract.' }, comments: options.comments ?? [REVIEWED], issues: options.issues },
     args: options.args,
     artifacts: options.artifacts,
     inputs: {
@@ -947,6 +939,83 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
 
+  test.each((['facts', 'gate', 'record'] as const).flatMap(script =>
+    (['blob', 'tree'] as const).map(missing => ({ script, missing }))
+  ))('$script fails visibly when the maintainer $missing cannot be read', ({ script, missing }) => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const revision = missing === 'blob' ? 'dev:.archon/sdlc/policy/maintainers.json' : 'dev^{tree}';
+    const objectId = spawnSync('git', ['rev-parse', revision], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    const object = join(at.checkout, '.git/objects', objectId.slice(0, 2), objectId.slice(2));
+    expect(existsSync(object)).toBe(true);
+    const before = stored(at);
+    const result = run(at, script, script === 'record' ? recordInputs([decision({})]) : {}, {
+      args: script === 'gate' ? ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'] : [],
+      preload: `
+        import { unlinkSync } from 'node:fs';
+        const gitWithPolicy = Bun.spawnSync.bind(Bun);
+        Bun.spawnSync = (argv, settings) => {
+          const result = gitWithPolicy(argv, settings);
+          if (argv[0] === 'git' && argv[1] === 'fetch' && result.exitCode === 0) unlinkSync(${JSON.stringify(object)});
+          return result;
+        };
+      `,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(missing === 'blob' ? 'git show' : 'git ls-tree');
+    expect(result.stderr).toContain('failed:');
+    expect(stored(at)).toEqual(before);
+    expect(merges(result)).toEqual([]);
+  }, 60_000);
+
+  test('a maintainer refresh failure records settlements and leaves open companions untouched', () => {
+    const at = install();
+    seed(at, item());
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: PR_URL.replace(/42$/, '43') })) }), subject: OTHER });
+    const picked = ok(run(at, 'facts', {}, { pr: { merged: [43] } }));
+    expect(picked).toMatchObject({ items: [{ pr: PR }], settled: [{ item: OTHER, status: 'merged' }] });
+    const companion = stored(at);
+    const recorded = run(at, 'record', {
+      ...recordInputs([decision({})]),
+      INPUTS_ITEMS: JSON.stringify(picked.items),
+      INPUTS_SETTLED: JSON.stringify(picked.settled),
+    }, { preload: `
+      const beforeFetch = Bun.spawnSync.bind(Bun);
+      Bun.spawnSync = (argv, settings) => {
+        if (argv[0] === 'git' && argv[1] === 'fetch') {
+          const configured = beforeFetch(['git', 'config', 'remote.upstream.uploadpack', 'false'], settings);
+          if (configured.exitCode !== 0) throw new Error(configured.stderr.toString());
+        }
+        return beforeFetch(argv, settings);
+      };
+    ` });
+    expect(recorded.code).toBe(1);
+    expect(recorded.stderr).toContain('git fetch');
+    expect(recorded.stderr).toContain('failed:');
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+    expect(stored(at)).toEqual(companion);
+    expect(forgeCalls(recorded)).toEqual([]);
+  }, 60_000);
+
+  test('record completes after a remote advance while another fetch holds the tracking ref lock', () => {
+    const at = install();
+    git(at.checkout, 'remote', 'rename', 'upstream', 'origin');
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-merge-writer-')));
+    const remote = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    git(writer, 'clone', '-q', remote, '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    git(writer, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const lock = join(at.checkout, '.git/refs/remotes/origin/dev.lock');
+    writeFileSync(lock, 'held by another fetch\n');
+
+    seed(at, item(BUILT, undefined, CLAIMED));
+    expect(ok(run(at, 'record', recordInputs([decision({})]), { pr: { state: 'MERGED' } }))).toMatchObject({ merged: [42] });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ head: HEAD }] } } });
+    expect(readFileSync(lock, 'utf8')).toBe('held by another fetch\n');
+  }, 60_000);
+
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;
@@ -971,7 +1040,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     for (const [declared, refusal] of [
       [decision({ action: 'return', brief: ' ', reason: 'CI red in its test' }), 'the sweep returned pull request 42 with no brief'],
       [decision({ action: 'ask', class: 'unclear', attention: null, brief: 'rework PR 42' }), 'the sweep asked about pull request 42 with no question'],
-      [decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: '' }), 'the sweep asked about pull request 42 with no brief for a return'],
     ] as const) {
       seed(at, item(BUILT, undefined, CLAIMED));
       const refused = run(at, 'record', recordInputs([declared]));
@@ -1041,12 +1109,97 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
-  test("an own pull request's ask offers no way back to the build queue: a declared `return` is dropped and its `other` parks", () => {
+  test.each([
+    { name: 'empty', brief: '', returnOnly: false },
+    { name: 'whitespace-only', brief: ' \n ', returnOnly: true },
+  ])('an ask with an $name brief raises its question without return effects and other parks', ({ brief, returnOnly }) => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
+    const rework = { id: 'revise-scope', label: 'Rework it', does: 'sends it back', effect: 'return', ruling: '' } as const;
+    const attention: MergeAttention = {
+      ...ATTENTION,
+      recommendation: { ...ATTENTION.recommendation, choice: returnOnly ? rework.id : 'merge' },
+      choices: [...(returnOnly ? [] : ATTENTION.choices), rework],
+    };
+    const output = ok(run(at, 'record', {
+      ...recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief }), decision({ number: 43 })]),
+      INPUTS_ITEMS: BOTH_ITEMS,
+    }, { pr: { merged: [43] } })) as {
+      attention: string;
+      options: { id: string; label: string }[];
+      asked: { attention: MergeAttention };
+    };
+    expect(output).toMatchObject({ merged: [43], class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief } });
+    const prepared = output.asked.attention;
+    expect(prepared.choices.map(choice => choice.effect)).not.toContain('return');
+    expect(prepared.choices.map(choice => choice.id)).toEqual(returnOnly ? ['other'] : ['merge', 'park', 'other']);
+    expect(prepared.choices.find(choice => choice.id === 'other')).toMatchObject({ effect: 'park' });
+    expect(output.options).toEqual(prepared.choices.map(({ id, label }) => ({ id, label })));
+    expect(() => checkAttention(prepared)).not.toThrow();
+    if (returnOnly) {
+      expect(prepared.recommendation.choice).toBe('other');
+      expect(prepared.recommendation).toMatchObject({
+        evidence: 'Return is unavailable because the sweep supplied no build brief.',
+        confidence: 'high',
+        would_change: 'A nonblank build brief would make return available.',
+      });
+      expect(output.attention).toContain(prepared.why);
+      expect(output.attention).toContain('Recommendation: `other`** (high confidence)');
+      expect(output.attention).toContain('Evidence: Return is unavailable because the sweep supplied no build brief.');
+      expect(output.attention).toContain('What would change it: A nonblank build brief would make return available.');
+    } else expect(prepared.recommendation).toEqual(attention.recommendation);
+    for (const part of [attention.what, attention.why, PR_URL, 'no build brief']) {
+      expect(output.attention).toContain(part);
+    }
+    if (returnOnly) expect(output.attention).toContain('Recommendation: `other`');
+    expect(output.attention).not.toContain('`revise-scope` (Rework it)');
+    expect(output.attention).toContain('until the build queue readies the item again');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+
+    const calls = join(at.checkout, 'calls.jsonl');
+    const words = 'Hold this while I reconsider the scope.';
+    const ruled = run(at, 'ruling', {
+      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: 'other', INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
+    });
+    expect(ok(ruled).decision).toBe('park');
+    expect(ruled.bodies[0]).toContain(words);
+    expect(stored(at).value).toMatchObject({
+      claim: null,
+      facts: { build: { status: 'ready' }, merge: { status: 'parked', decisions: expect.arrayContaining([
+        expect.objectContaining({ answer: expect.objectContaining({ choice: 'other', text: words }) }),
+      ]) } },
+    });
+    expect(launchOf(calls)).toBeUndefined();
+  }, 60_000);
+
+  test.each([
+    { recommended: 'merge', brief: '', name: 'merge with an empty brief' },
+    { recommended: 'return', brief: '', name: 'return with an empty brief' },
+    { recommended: 'return', brief: ' \n ', name: 'return with a whitespace-only brief' },
+    { recommended: 'return', brief: 'Rework PR 42.', name: 'return with a nonblank brief' },
+  ])("an own pull request's ask recommending $name offers no return and its other parks", ({ recommended, brief }) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]);
-    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { asked: { attention: { choices: { id: string; effect: string }[] } } };
+    const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
+    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief })]);
+    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { attention: string; asked: { attention: MergeAttention } };
+    expect(() => checkAttention(asked.asked.attention)).not.toThrow();
+    expect(asked.asked.attention.recommendation.choice).toBe(recommended === 'return' ? 'other' : recommended);
+    if (recommended === 'return') {
+      const prepared = asked.asked.attention;
+      expect(prepared.recommendation).toMatchObject({
+        evidence: 'Return is unavailable because no build round owns this pull request.',
+        confidence: 'high',
+        would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
+      });
+      expect(asked.attention).toContain(prepared.why);
+      expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
+      expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
+      expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
+    } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
     expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
   }, 60_000);
@@ -1086,8 +1239,51 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
+  test('an issue its merged pull request left open goes back to intake; a closed issue, an own pull request and an unmerged one do not, and one failure stops nothing', () => {
+    const at = install();
+    const issue = (number: number) => ({ repo: PR.repo, number });
+    const listed = (number: number, pr: number) => ({ item: issue(number), pr: issue(pr), url: PR_URL.replace(/42$/, String(pr)), facts: FACTS, record: null });
+    const inputs = {
+      // Issue 9 cannot be read, issue 8 the merge closed, PR 45 is an own pull request, and PR 46 did not merge.
+      INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), { ...listed(45, 45), own_pr: true }, listed(10, 46)]),
+      // Issue 7's pull request was found merged before the sweep.
+      INPUTS_SETTLED: JSON.stringify([{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before this sweep' }]),
+      INPUTS_MERGED: JSON.stringify([44, 43, 45]),
+    };
+    const issues: GhIssue[] = [
+      { number: 8, title: 'Done', body: 'Closes it.', state: 'CLOSED' },
+      { number: 10, title: 'Open', body: 'Not merged yet.', state: 'OPEN' },
+    ];
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const sent = run(at, 'retriage', { ...inputs, INPUTS_RETRIAGE_AS: 'maintainer', ARCHON_CALL_LOG: calls }, { issues });
+    expect(sent.code).toBe(0);
+    const output = JSON.parse(sent.stdout) as { retriaged: number[]; summary: string };
+    expect(output.retriaged).toEqual([7]);
+    expect(output.summary).toStartWith('Sent 1 of 3 merged issue(s) back to intake.');
+    expect(output.summary).toContain('issue 9: not re-triaged');
+    expect(output.summary).not.toContain('issue 45');
+    expect(output.summary).toContain('issue 8: closed after PR 43 merged');
+    expect(sent.stderr).toContain('merge-queue retriage: issue 9: not re-triaged');
+    expect(sent.gh.filter(line => line.startsWith('issue edit'))).toEqual([
+      `issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`,
+    ]);
+    const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toEqual(expect.arrayContaining([
+      'archon-intake', `repo_host=${PR.repo.host}`, `repo_path=${PR.repo.path}`, 'number=7',
+      'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach',
+    ]));
+
+    // Without retriage_as nothing is read, labelled or launched.
+    const unset = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const quiet = run(at, 'retriage', { ...inputs, INPUTS_RETRIAGE_AS: '', ARCHON_CALL_LOG: unset }, { issues });
+    expect(ok(quiet)).toMatchObject({ retriaged: [] });
+    expect(quiet.gh).toEqual([]);
+    expect(existsSync(unset)).toBe(false);
+  }, 60_000);
+
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge' };
+  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
   const launchOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
 
@@ -1101,7 +1297,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(mergeWaits(doc)).toBe(true);
     // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
     expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', '--config-from-run', 'run-1', '--detach'])
+      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
     );
   }, 60_000);
 

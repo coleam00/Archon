@@ -66,7 +66,7 @@ ls ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/
 cat ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/issues/issue-42.md
 ```
 
-Artifacts are **external** to the repo on purpose — they don't pollute git.
+Artifacts are **external** to the repo on purpose — they don't pollute git. They are kept until you remove them, except `.archon/scratch/` inside the run's directory, which holds throwaway checkouts and installs and is deleted once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed). A run whose nodes Archon cannot confirm stopped keeps its scratch.
 
 ## Common Failure Modes
 
@@ -170,7 +170,7 @@ Invalid values for optional workflow-level fields (`effort`, `sandbox`, `fallbac
 
 ### Persisted session didn't restore (cold resume)
 
-A `persist_session` node whose provider couldn't restore the prior session runs FRESH with a warning (it does not fail). The warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
+When a node resumes a session that no longer exists, what happens depends on the provider. Pi starts a fresh session with a warning. Claude rejects the resume; when Archon confirms on the host that the transcript is gone and the rejection came before any output or tool call, it runs the node once more on a fresh session with the same warning. A second rejection, a rejection after output, a container run, or a named resume (`context: { resume }`) fails the node. Codex fails the node every time, so clear its saved session with `archon workflow reset-sessions <workflow>`. The fresh-session warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
 
 ### `cannot fork a session` warning
 

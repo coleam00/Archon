@@ -85,17 +85,14 @@ nodes:
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
-        # The number of that pull request when the round continues it: it is open and
-        # its head is in the item's repository. Null otherwise.
+        # The number of that pull request when a round may continue it: it is open and
+        # its head is in the item's repository. Null otherwise. Route decides whether
+        # the round does.
         continues: { type: [integer, 'null'] }
-        # The branch the round opens its pull request from when it continues none: a new
-        # build/<issue>-<slug>-<run>. Empty when it continues one, or with no item.
+        # The branch the round opens its pull request from when route continues none: a
+        # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-        # The blocked items due a revisit; empty unless retriage_as is set and no item
-        # is named.
-        blocked: { type: array, items: { type: object } }
-        blocked_count: { type: integer }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch, blocked, blocked_count]
+      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -113,10 +110,15 @@ nodes:
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
       pull_request: { from: "$facts.output.pull_request" }
+      continues: "$facts.output.continues"
     output_format:
       type: object
       properties:
         decision: { type: string, enum: [launch, ask, ready] }
+        # On launch, the number of the pull request the round continues: the candidate
+        # facts reports, or null when the issue's dated scope or a recorded answer
+        # supersedes it and the round starts fresh from the new branch. Null otherwise.
+        continues: { type: [integer, 'null'] }
         # On ready, the full head SHA the pull request is already reviewed Ready and
         # green at; apply takes it out of draft only while its head is still this
         # commit. Null otherwise.
@@ -157,23 +159,34 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, ready_head, brief, reason, attention]
+      required: [decision, continues, ready_head, brief, reason, attention]
 
-  # A round that continues a pull request starts from that pull request's head, not
-  # from the branch the run's checkout was cut from, so its publish fast-forwards.
+  # A round that continues a pull request (route's declaration) starts from that pull
+  # request's head, not from the branch the run's checkout was cut from, so its publish
+  # fast-forwards. A fresh round stays on the base, and refuses when it is not on it.
   - id: checkout
     script: checkout
     runtime: bun
     depends_on: [facts, route]
     when: "$route.output.decision == 'launch'"
     with:
+      item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
-      continues: "$facts.output.continues"
+      candidate: "$facts.output.continues"
+      continues: "$route.output.continues"
     output_format:
       type: object
       properties:
         head: { type: [string, 'null'] }
-      required: [head]
+        # What ship continues: the number, `none` when the item has a pull request
+        # the round does not continue, or null when it has none and ship's triage
+        # decides.
+        pull_request:
+          anyOf:
+            - { type: integer, minimum: 1 }
+            - { type: string, enum: [none] }
+            - { type: 'null' }
+      required: [head, pull_request]
 
   - id: ship
     include: archon-ship-block
@@ -181,7 +194,7 @@ nodes:
     when: "$route.output.decision == 'launch'"
     with:
       target: "$route.output.brief"
-      pull_request: "$facts.output.continues"
+      pull_request: "$checkout.output.pull_request"
       branch: "$facts.output.branch"
 
   - id: answer
@@ -287,16 +300,33 @@ nodes:
         summary: { type: string }
       required: [decision, section, summary]
 
-  # Intake's blocked verdict can go stale while work lands in parallel. The revisit
-  # runs beside the item's path and changes nothing on it.
+  # Revisit pickup is independent of item pickup: an unresolved PR create must
+  # not suppress revisits of other items.
+  - id: blocked
+    script: blocked
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        blocked:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer, minimum: 1 }
+              summary: { type: string }
+            required: [number, summary]
+        blocked_count: { type: integer }
+      required: [blocked, blocked_count]
+
   - id: revisit
     command: revisit
-    depends_on: [facts]
-    when: "$facts.output.blocked_count > 0"
+    depends_on: [blocked]
+    when: "$blocked.output.blocked_count > 0"
     model: medium
     mutates_checkout: false
     with:
-      blocked: { from: "$facts.output.blocked" }
+      blocked: { from: "$blocked.output.blocked" }
     output_format:
       type: object
       properties:
@@ -314,9 +344,9 @@ nodes:
   - id: retriage
     script: retriage
     runtime: bun
-    depends_on: [facts, revisit]
+    depends_on: [blocked, revisit]
     with:
-      blocked: { from: "$facts.output.blocked" }
+      blocked: { from: "$blocked.output.blocked" }
       retriage: { from: "$revisit.output.retriage" }
     output_format:
       type: object

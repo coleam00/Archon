@@ -133,6 +133,31 @@ describe('the build record', () => {
     expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
+  test("a fresh round's replacement pull request wins over the superseded one and triage's stale reference", () => {
+    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43' };
+    expect(itemPullRequest([round('r1', AT), replacement], { ...TRIAGE, pull_request: 42 }, PR.repo)).toEqual({ repo: PR.repo, number: 43 });
+  });
+
+  test('an unresolved create refuses PR selection until a later round identifies the PR', () => {
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    for (const prior of [[], [round('r1', AT)]]) {
+      expect(() => itemPullRequest([...prior, unresolved], TRIAGE, PR.repo)).toThrow('unresolved PR create');
+    }
+    expect(itemPullRequest([unresolved, round('r3', AT)], TRIAGE, PR.repo)).toEqual(PR);
+  });
+
+  test('a newer re-triage settles an unresolved create: its PR overrides an older one, and no PR opens a new one', () => {
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    for (const prior of [[], [round('r1', AT)]]) {
+      for (const at of ['2026-10-15T23:00:00.000Z', AT]) {
+        expect(() => itemPullRequest([...prior, unresolved], { ...TRIAGE, at, pull_request: 43 }, PR.repo)).toThrow('unresolved PR create');
+      }
+      const newer = { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 43 };
+      expect(itemPullRequest([...prior, unresolved], newer, PR.repo)).toEqual({ ...PR, number: 43 });
+      expect(itemPullRequest([...prior, unresolved], { ...newer, pull_request: null }, PR.repo)).toBeNull();
+    }
+  });
+
   test('the rounds since a re-triage or a maintainer answer count toward the round cap', () => {
     const rounds = [round('a', '2026-10-16T00:30:00.000Z'), round('b', '2026-10-16T01:30:00.000Z'), round('c', '2026-10-16T02:30:00.000Z')];
     expect(countedRounds(triaged({}, record({ rounds })))).toBe(3);
@@ -249,7 +274,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'apply' | 'checkout' | 'ruling' | 'retriage',
+  script: 'facts' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: {
     issue?: GhApiIssue;
@@ -537,14 +562,24 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', at_cap: false });
   }, 60_000);
 
+  test('facts verifies a PR explicitly reconciled by newer triage before continuing it', () => {
+    const at = install();
+    const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
+    seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
+    const result = run(at, 'facts', {}, { source: 'gh' });
+    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
+    expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
+  });
+
   test("facts puts an item with an open pull request on that pull request's branch, and names a first round's branch after the issue", () => {
     const at = install();
     // A failed round after the pull request's round opened none; the item's PR is still 42.
     const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
     seed(at, triaged({}, record({ rounds })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
     seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: 'build/7-an-issue-run-1' });
     seed(at, triaged({ claim: null }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
@@ -584,10 +619,35 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
+  test('an unresolved PR create does not suppress revisits of another blocked item', () => {
+    const at = install();
+    const unresolved = { ...round('failed', AT), reason: 'pr_create_unresolved', pr_url: '' };
+    seed(at, triaged({}, record({ rounds: [unresolved] })));
+    const other = triaged({ subject: { ...SUBJECT, number: 8 }, stage: 'blocked' });
+    inProcess(at, () => expect(statePut('work/8', other, stateGet('work/8').revision)).toBe('ok'));
+    const inputs = { INPUTS_RETRIAGE_AS: 'maintainer' };
+    expect(ok(run(at, 'blocked', {})).blocked).toEqual([]);
+    expect(ok(run(at, 'blocked', { ...inputs, INPUTS_NUMBER: '7' })).blocked).toEqual([]);
+    const refused = run(at, 'facts', inputs);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('unresolved PR create');
+    expect(refused.stdout).toBe('');
+    const blocked = ok(run(at, 'blocked', inputs)).blocked;
+    expect(blocked).toEqual([{ number: 8, summary: '' }]);
+    const sent = run(at, 'retriage', {
+      ...inputs,
+      INPUTS_BLOCKED: JSON.stringify(blocked),
+      INPUTS_RETRIAGE: JSON.stringify([{ number: 8, reason: 'its dependency merged' }]),
+    }, { issue: { number: 8 } });
+    expect(ok(sent)).toMatchObject({ retriaged: [8] });
+    expect(sent.gh).toContain(`issue edit 8 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
+    expect(stored(at).value?.facts.build?.rounds).toEqual([unresolved]);
+  }, 60_000);
+
   test('a blocked item judged unblocked gets archon-triage and an intake run, and is not listed again until its revisit is due', () => {
     const at = install();
     seed(at, triaged({ stage: 'blocked' }));
-    const blocked = ok(run(at, 'facts', { INPUTS_RETRIAGE_AS: 'maintainer' })).blocked;
+    const blocked = ok(run(at, 'blocked', { INPUTS_RETRIAGE_AS: 'maintainer' })).blocked;
     expect(blocked).toEqual([{ number: 7, summary: '' }]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
@@ -604,7 +664,7 @@ describe('the build queue scripts', () => {
     expect(sent.gh).toContain(`issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
     const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
     expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach']));
-    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
+    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
   }, 60_000);
 
   test('a closed issue is parked without an agent', () => {
@@ -860,11 +920,37 @@ describe('the build queue checkout', () => {
     const result = run(
       at,
       'checkout',
-      { INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
+      { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
       { pr: { headRefOid: head } }
     );
-    expect(ok(result)).toEqual({ head });
+    expect(ok(result)).toEqual({ head, pull_request: 42 });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
+  }, 60_000);
+
+  test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    git(at.checkout, 'checkout', '-q', 'dev');
+    const base = git(at.checkout, 'rev-parse', 'HEAD');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const item = JSON.stringify(SUBJECT);
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
+    // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
+    expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
+  }, 60_000);
+
+  test('a fresh round refuses a checkout left off the base, such as an adopted one at the superseded head', () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const result = run(at, 'checkout', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("a fresh round must start on dev, but the checkout's HEAD is not on it");
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
   }, 60_000);
 });

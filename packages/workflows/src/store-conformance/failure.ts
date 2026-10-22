@@ -1,14 +1,7 @@
 import { expect, test } from 'bun:test';
 import { DETACHED_LAUNCH_METADATA_KEY, executionClaim } from '../store';
 import type { WorkflowStoreHarness } from '../store-conformance';
-import type { ApprovalContext } from '../schemas/workflow-run';
-
-const approval: ApprovalContext = {
-  nodeId: 'review',
-  message: 'Choose',
-  type: 'approval',
-  pauseId: 'first',
-};
+import { approval } from './fixtures';
 
 export function describeExecutionFailureConformance(getHarness: () => WorkflowStoreHarness): void {
   test.each([

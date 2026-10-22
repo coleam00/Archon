@@ -1,6 +1,9 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
+import { isExecNodeRecord, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
@@ -10,7 +13,10 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
-  store: Pick<IWorkflowStore, 'failWorkflowRun'>;
+  store: Pick<
+    IWorkflowStore,
+    'failWorkflowRun' | 'getWorkflowRun' | 'listWorkflowEvents' | 'findChildRuns'
+  >;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
   /** The engine supplies this execution's claim; undefined until admission. */
@@ -45,8 +51,36 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   const nodeTrees =
     detachedTrees ?? (input.detachedProcessOwner ? undefined : recordNodeProcessTrees());
   const unregisterPreparation = detachedTrees
-    ? liveOwner.registerTerminationPreparation(() => detachedTrees.prepareTermination())
+    ? liveOwner.registerTerminationPreparation(() => {
+        const prepared = detachedTrees.prepareTermination();
+        return {
+          ...prepared,
+          ready: Promise.all([prepared.ready, priorHostCommands(runId)]).then(
+            ([warnings, hasPriorCommands]) =>
+              hasPriorCommands && !warnings.includes(COMPLETED_HOST_COMMAND_WARNING)
+                ? [...warnings, COMPLETED_HOST_COMMAND_WARNING]
+                : warnings
+          ),
+        };
+      })
     : undefined;
+  async function priorHostCommands(id: string): Promise<boolean> {
+    const run = await input.store.getWorkflowRun(id);
+    if (run && !isContainerRun(run)) {
+      const events = await input.store.listWorkflowEvents(id);
+      if (
+        events.some(event => {
+          const record = readNodeRecordEvent(event);
+          return record?.eventType === 'node_started' && isExecNodeRecord(record);
+        })
+      )
+        return true;
+    }
+    for (const child of await input.store.findChildRuns(id)) {
+      if (await priorHostCommands(child.id)) return true;
+    }
+    return false;
+  }
   let registered = true;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
@@ -131,5 +165,30 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     process.off('SIGINT', sigintHandler);
     unregisterPreparation?.();
     nodeTrees?.release();
+  };
+}
+
+/**
+ * Let in-flight setup settle before failing the run. Exiting or racing setup
+ * would leave Docker work running after the claim becomes available to a successor.
+ */
+export function registerResumePreparationTermination(): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const interrupt = (signal: TerminationSignal): void => {
+    controller.abort(new Error(`Resume preparation interrupted (${signal})`));
+  };
+  const sigint = (): void => interrupt('SIGINT');
+  const sigterm = (): void => interrupt('SIGTERM');
+  process.on('SIGINT', sigint);
+  process.on('SIGTERM', sigterm);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      process.off('SIGINT', sigint);
+      process.off('SIGTERM', sigterm);
+    },
   };
 }

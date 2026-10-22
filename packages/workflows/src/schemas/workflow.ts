@@ -3,6 +3,7 @@
  * workflow loading and execution (non-schema hand-written discriminated unions).
  */
 import { z } from 'zod';
+import { WORKFLOW_SOURCES } from '@archon/paths/workflow-source';
 import type { deadlineWaitCursor } from '../store';
 import type { WorkflowRunStatus } from './workflow-run';
 import {
@@ -440,7 +441,7 @@ export type WorkflowExecutionResult =
  * Precedence for same-named files: `bundled` < `global` < `project`. Installed
  * workflows take no part in it: their qualified names cannot collide with a file.
  */
-export const workflowSourceSchema = z.enum(['project', 'bundled', 'global', 'installed']);
+export const workflowSourceSchema = z.enum(WORKFLOW_SOURCES);
 
 export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 

@@ -52,6 +52,10 @@ import {
   parse,
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
+import {
+  LOOP_COMPLETION_CHANNELS,
+  type LoopCompletionChannel,
+} from '../packages/workflows/src/schemas/loop';
 import { dagNodeSchema } from '../packages/workflows/src/schemas';
 import {
   MAX_DURABLE_WAIT_MS as BUILDER_MAX_DURABLE_WAIT_MS,
@@ -418,28 +422,14 @@ describe('loop completion-channel parity', () => {
     required: ['done'],
   };
 
-  type Channels = { until?: string; until_bash?: string; until_field?: string };
+  type Channels = Partial<Record<LoopCompletionChannel, string>>;
 
   const CORPUS: Channels[] = [
     {},
-    { until: 'COMPLETE' },
-    { until_bash: 'bun run test' },
-    { until_field: 'done' },
     { until: 'COMPLETE', until_bash: 'bun run test' },
     { until: 'COMPLETE', until_field: 'done' },
     { until_bash: 'bun run test', until_field: 'done' },
     { until: 'COMPLETE', until_bash: 'bun run test', until_field: 'done' },
-    // Blank in each position, beside a valid sibling and alone — the shape that
-    // broke once already: an aggregate-only gate accepted a blank field whenever
-    // another channel was valid, while the builder rejected it.
-    { until: '' },
-    { until: '   ' },
-    { until: '\t' },
-    { until_bash: '' },
-    { until_bash: '   ' },
-    { until_bash: '\n' },
-    { until_field: '' },
-    { until_field: '  ' },
     { until: '   ', until_bash: 'bun run test' },
     { until: 'COMPLETE', until_bash: '   ' },
     { until: 'COMPLETE', until_field: '  ' },
@@ -452,10 +442,9 @@ describe('loop completion-channel parity', () => {
   ];
 
   function engineAccepts(channels: Channels): boolean {
-    const needsSchema = channels.until_field !== undefined;
     return dagNodeSchema.safeParse({
       id: 'l',
-      ...(needsSchema ? { output_format: OUTPUT_FORMAT } : {}),
+      output_format: OUTPUT_FORMAT,
       loop: { prompt: 'iterate', max_iterations: 5, ...channels },
     }).success;
   }
@@ -469,14 +458,39 @@ describe('loop completion-channel parity', () => {
         {
           id: 'l',
           variant: 'loop',
-          base: { output_format: channels.until_field !== undefined ? OUTPUT_FORMAT : undefined },
+          base: { output_format: OUTPUT_FORMAT },
           data: { prompt: 'iterate', max_iterations: 5, fresh_context: false, ...channels },
         },
       ],
     });
     // Only the channel fields — the builder also reports unrelated required-field
     // issues, and this check owns the channel rule alone.
-    return !issues.some(issue => issue.path.field?.startsWith('loop.until'));
+    return !issues.some(issue =>
+      LOOP_COMPLETION_CHANNELS.some(({ field }) => issue.path.field === `loop.${field}`)
+    );
+  }
+
+  for (const { field } of LOOP_COMPLETION_CHANNELS) {
+    test(`accepts ${field} alone`, () => {
+      const channels = { [field]: 'done' };
+      expect(engineAccepts(channels)).toBe(true);
+      expect(builderAccepts(channels)).toBe(true);
+    });
+    for (const blank of ['', '  ', '\t\n']) {
+      test(`rejects blank ${field} (${JSON.stringify(blank)}) alone`, () => {
+        const channels = { [field]: blank };
+        expect(engineAccepts(channels)).toBe(false);
+        expect(builderAccepts(channels)).toBe(false);
+      });
+      for (const sibling of LOOP_COMPLETION_CHANNELS) {
+        if (sibling.field === field) continue;
+        test(`rejects blank ${field} (${JSON.stringify(blank)}) beside ${sibling.field}`, () => {
+          const channels = { [field]: blank, [sibling.field]: 'done' };
+          expect(engineAccepts(channels)).toBe(false);
+          expect(builderAccepts(channels)).toBe(false);
+        });
+      }
+    }
   }
 
   for (const channels of CORPUS) {

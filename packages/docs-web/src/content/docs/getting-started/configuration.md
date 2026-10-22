@@ -10,7 +10,7 @@ sidebar:
 
 ## Environment Variables
 
-Set these in your shell or `.env` file:
+Set these in your shell, `~/.archon/.env` for user-wide settings, or `<cwd>/.archon/.env` for project overrides. The CLI strips keys named in a target repository's `<cwd>/.env`; use the Archon-owned files for credentials. See [environment file locations and load order](/reference/configuration/#env-file-locations), including the source-server exception.
 
 | Variable | Required | Description |
 |----------|----------|-------------|

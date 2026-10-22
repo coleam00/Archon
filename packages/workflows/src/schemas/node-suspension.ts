@@ -5,10 +5,10 @@ import {
   isWorkflowNode,
   isLoopNode,
   isLoopGroupNode,
-  loopGroupSoleTerminalSink,
-  type DagNode,
-  type IncludeDirective,
-} from './dag-node';
+} from './node-guards';
+import { loopGroupSoleTerminalSink } from './loop-group-body';
+import { type DagNode } from './dag-node';
+import { type IncludeDirective } from './include-node';
 
 export function canSuspend(node: DagNode | IncludeDirective): boolean {
   if (isIncludeDirective(node)) return false;

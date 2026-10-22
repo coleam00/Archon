@@ -768,6 +768,12 @@ string. Field access uses the same strict semantics as `$nodeId.output.field`
 (a field not in the producer's declared schema fails the consuming node rather
 than silently degrading).
 
+The group's `until_bash` sees current outputs through `$nodeId.output` and the
+preceding iteration through `$LOOP_PREV.*`, including after a terminal pause is
+answered. `LOOP_PREV_OUTPUT` contains the preceding iteration's chosen output with
+completion tags removed. The next body iteration instead receives the answered
+iteration's outputs as its previous snapshot.
+
 A `command:` body node's command file gets the same `$LOOP_PREV.*` substitution as
 the same text written as an inline `prompt:`.
 
@@ -902,7 +908,11 @@ Suspension and failure have different recovery rules:
   answered): the engine compares the question on the first answer and may ask again
   in the same iteration. After one re-ask, it accepts the next answer even if the
   question changes again, as described [above](#pausing-to-ask-inside-the-body). Once an
-  answer is accepted, the group rechecks `until_bash` against it and, if it does not pass,
+  answer is accepted, the group rechecks `until_bash` against the answered iteration's
+  current outputs and its own preceding snapshot. If historical ownership or full
+  output bytes cannot be restored, the group fails restoration rather than treating
+  the history as empty. Only iteration one has a known empty preceding snapshot;
+  explicitly skipped nodes have no output. If the check does not pass, the group
   continues with the **next** iteration's whole body. With
   `fresh_context: false`, the body's AI session continues from where it paused (the
   session cursor is persisted across the pause). `$LOOP_PREV.*` refs on the first resumed

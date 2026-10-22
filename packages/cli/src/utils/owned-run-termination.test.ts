@@ -78,6 +78,9 @@ async function interruptWithNodeInFlight(
   const run = await runningRun();
   const deregister = registerOwnedRunTermination({
     store: {
+      getWorkflowRun: async () => null,
+      listWorkflowEvents: async () => [],
+      findChildRuns: async () => [],
       failWorkflowRun: async (_runId, _error, reason) => {
         // Long enough for a tree ended before this write to have exited.
         await new Promise<void>(resolve => setTimeout(resolve, 300));
@@ -178,6 +181,9 @@ posixOnly(
     let teardownCalls = 0;
     const deregister = registerOwnedRunTermination({
       store: {
+        getWorkflowRun: async () => null,
+        listWorkflowEvents: async () => [],
+        findChildRuns: async () => [],
         failWorkflowRun: async () => {
           throw new Error('Controller owns the terminal write');
         },
@@ -243,6 +249,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         getExecutionClaim: () => executionClaim(predecessor.metadata),
         logModule: 'owned-run-termination.test',
         store: {
+          getWorkflowRun: async () => null,
+          listWorkflowEvents: async () => [],
+          findChildRuns: async () => [],
           failWorkflowRun: async (...args) => {
             entered();
             await writeReleased;
@@ -346,6 +355,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       const before = process.listeners(signal);
       const deregister = registerOwnedRunTermination({
         store: {
+          getWorkflowRun: async () => null,
+          listWorkflowEvents: async () => [],
+          findChildRuns: async () => [],
           failWorkflowRun: async () => {
             if (failure === 'rejected write') throw new Error('store unavailable');
             return { failed: false };
@@ -381,6 +393,73 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         deregister();
         warning.mockRestore();
         exit.mockRestore();
+      }
+    }
+  );
+}
+
+for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
+  posixOnly.each(['sh', 'bun', 'uv'] as const)(
+    `a fresh detached owner classifies persisted %s history in ${scope} without targeting old groups`,
+    async runtime => {
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const { startRunLiveOwner, requestRunLiveOwnerStop } = await import(
+        '@archon/core/services/run-live-owner'
+      );
+      const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-prior-command-')));
+      const store = await createFileWorkflowStore({ root });
+      const run = await store.createWorkflowRun({
+        workflow_name: 'continued',
+        working_path: root,
+        user_message: '',
+        metadata: scope === 'container' ? { isolation: 'container' } : {},
+      });
+      const evidenceRun =
+        scope === 'descendant'
+          ? await store.createWorkflowRun({
+              workflow_name: 'child',
+              working_path: root,
+              user_message: '',
+              parent_run_id: run.id,
+            })
+          : run;
+      await store.persistWorkflowEvent({
+        workflow_run_id: evidenceRun.id,
+        event_type: 'node_started',
+        step_name: 'completed',
+        data: { type: scope === 'agent' ? 'agent' : runtime === 'sh' ? 'bash' : 'script', runtime },
+      });
+      await store.persistWorkflowEvent({
+        workflow_run_id: evidenceRun.id,
+        event_type: 'node_completed',
+        step_name: 'completed',
+        data: { type: scope === 'agent' ? 'agent' : runtime === 'sh' ? 'bash' : 'script', runtime },
+      });
+      const owner = await startRunLiveOwner(run.id, { detachedProcessPid: process.pid });
+      const unregister = registerOwnedRunTermination({
+        store,
+        runId: run.id,
+        getExecutionClaim: () => null,
+        logModule: 'test',
+        liveOwner: owner,
+        detachedProcessOwner: true,
+      });
+      try {
+        const lease = await requestRunLiveOwnerStop(run.id);
+        try {
+          const prepared = await lease.commit();
+          expect(prepared?.groups).toEqual([]);
+          expect(prepared?.warnings).toEqual(
+            scope === 'container' || scope === 'agent'
+              ? []
+              : [expect.stringContaining('may have left untracked background work')]
+          );
+        } finally {
+          lease.release();
+        }
+      } finally {
+        unregister();
+        await owner.close();
       }
     }
   );

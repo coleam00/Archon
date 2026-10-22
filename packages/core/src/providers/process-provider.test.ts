@@ -631,7 +631,29 @@ test('provider logs dispatch at the plugin severity', async () => {
   }
 });
 
-test('provider log records without a contract failure class are dropped', async () => {
+test('provider lifecycle events reach the host log as closed values', async () => {
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+  const error = spyOn(providerLog, 'error').mockImplementation(() => {});
+  try {
+    await collect(provider('logs-untrusted', 'warn').sendQuery('process_still_exiting', tmpdir()));
+    await collect(provider('logs-untrusted', 'error').sendQuery('process_abnormal_exit', tmpdir()));
+    expect(warn.mock.calls).toEqual([
+      [{ lifecycle: 'process_still_exiting', waitedMs: 60_000 }, 'provider.plugin.log'],
+    ]);
+    expect(error.mock.calls).toEqual([
+      [{ lifecycle: 'process_abnormal_exit', waitedMs: 60_000 }, 'provider.plugin.log'],
+    ]);
+    const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+    expect(logged).not.toContain('credential-secret');
+    expect(logged).not.toContain('provider.forged');
+    expect(logged).not.toContain('forgedCount');
+  } finally {
+    warn.mockRestore();
+    error.mockRestore();
+  }
+});
+
+test('provider log records without a contract failure class or lifecycle event are dropped', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   try {
     await collect(provider('logs-untrusted', 'warn').sendQuery('credentialsecret', tmpdir()));

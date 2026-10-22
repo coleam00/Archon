@@ -854,7 +854,7 @@ nodes:
     expect(childA?.status).toBe('failed');
     expect((childA?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
     // User cancels child A out-of-band (a failed child → cancellable; no fan-out tag).
-    await store.cancelWorkflowRun(childA!.id);
+    await store.cancelWorkflowRun(childA!.id, { cancel_reason: 'operator' });
     expect((await store.getWorkflowRun(childA!.id))?.status).toBe('cancelled');
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
@@ -877,6 +877,20 @@ nodes:
     const childAafter = await store.getWorkflowRun(childA!.id);
     expect(childAafter?.status).toBe('cancelled');
     expect((childAafter?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
+    const failed = store.events
+      .filter(e => e.event_type === 'node_failed' && e.step_name === 'work')
+      .at(-1);
+    expect(failed?.data?.fan_out_outcome).toMatchObject({
+      slots: [
+        {
+          index: 0,
+          outcome: 'cancelled_out_of_band',
+          child_run_id: childA!.id,
+          cancel_reason: 'operator',
+        },
+        { index: 1, outcome: 'completed' },
+      ],
+    });
     // Exactly one row for index 0 — never re-driven.
     expect(
       [...store.runs.values()].filter(

@@ -25,6 +25,14 @@ import {
 } from './test-harness';
 
 const trackTempRoot = trackTempRoots();
+// Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+const posix = process.platform === 'win32' ? test.skip : test;
+
+function expectHostCommandWarnings(cleanupWarnings: string[] | undefined): void {
+  expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(cleanupWarnings);
+  if (process.platform === 'win32') expect(cleanupWarnings).toBeUndefined();
+  else expect(cleanupWarnings?.join(' ')).toContain('Cooperative cancellation cannot rule out');
+}
 
 describe('cancelWorkflow', () => {
   beforeEach(() => {
@@ -59,7 +67,7 @@ describe('cancelWorkflow', () => {
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await owner.close();
     }
@@ -91,7 +99,7 @@ describe('cancelWorkflow', () => {
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
       expect(mockGetRunAncestry).toHaveBeenCalledWith('run-1');
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await rootOwner.close();
     }
@@ -108,9 +116,69 @@ describe('cancelWorkflow', () => {
       const result = await cancelWorkflow('run-1', operator);
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+      expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await new Promise(resolve => listener.close(resolve));
+    }
+  });
+
+  posix('omits result warnings when cancellation loses the race', async () => {
+    const id = `cancel-child-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(id);
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id, status: 'running' }));
+    mockFindChildRuns.mockResolvedValueOnce([
+      makePausedRun({ id: 'child', parent_run_id: id, status: 'completed' }),
+    ]);
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    try {
+      const result = await cancelWorkflow(id, operator);
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: false });
+      expect(result.cleanupWarnings).toBeUndefined();
+      expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings?.join(' ')).toContain(
+        'untracked background work'
+      );
+    } finally {
+      await owner.close();
+    }
+  });
+
+  posix('reports every known host checkout without relying on command history', async () => {
+    const id = `cancel-checkouts-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(id);
+    const parent = makePausedRun({ id, status: 'running', working_path: '/parent' });
+    const child = makePausedRun({ id: 'child', parent_run_id: id, working_path: '/child' });
+    const grandchild = makePausedRun({
+      id: 'grandchild',
+      parent_run_id: child.id,
+      working_path: '/grandchild',
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(parent);
+    mockFindChildRuns.mockImplementation(async runId =>
+      runId === id ? [child] : runId === child.id ? [grandchild] : []
+    );
+    try {
+      const result = await cancelWorkflow(id, operator);
+      for (const run of [parent, child, grandchild]) {
+        expect(result.cleanupWarnings).toContainEqual(
+          expect.stringContaining(`Run ${run.id} checkout ${JSON.stringify(run.working_path)}`)
+        );
+      }
+      expect(mockCancelWorkflowRun.mock.calls[0]?.[1]?.warnings).toEqual(result.cleanupWarnings);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test('a completed container command produces no host cleanup warning', async () => {
+    const id = `cancel-container-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(id);
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ id, status: 'running', metadata: { isolation: 'container' } })
+    );
+    try {
+      expect((await cancelWorkflow(id, operator)).cleanupWarnings).toBeUndefined();
+    } finally {
+      await owner.close();
     }
   });
 

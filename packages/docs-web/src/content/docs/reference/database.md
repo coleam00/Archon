@@ -106,7 +106,7 @@ database storage.
 
 ## SQLite (Default - No Setup Required)
 
-With `store: database` (the default), **omit `DATABASE_URL`** from your `.env` file. The app will automatically:
+With `store: database` (the default), **leave `DATABASE_URL` unset** in your shell and Archon's environment files. The app will automatically:
 - Create a SQLite database at `~/.archon/archon.db`
 - Initialize the schema on first run
 - Use this database for operations with `store: database`
@@ -142,7 +142,7 @@ commits. No remote deletion runs under the SQLite writer. Enable GitHub's
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 
-Set your remote connection string in `.env`:
+Set your remote connection string in `~/.archon/.env` for user-wide settings or `<cwd>/.archon/.env` for project overrides. A target repository's `<cwd>/.env` is stripped at startup. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence and the source-server exception. For Docker, use the [Compose `.env` file](/deployment/docker/#configure-env).
 
 ```ini
 DATABASE_URL=postgresql://user:password@host:5432/dbname
@@ -316,8 +316,9 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 ## Schema initialization and upgrades
 
 The PostgreSQL adapter applies `migrations/000_combined.sql` idempotently on startup
-for both fresh installs and upgrades. SQLite initializes and upgrades its schema
-in `packages/core/src/db/adapters/sqlite.ts`. Neither adapter uses a numbered
+for both fresh installs and upgrades. SQLite initializes its schema
+in `packages/core/src/db/adapters/sqlite.ts` and upgrades it in
+`packages/core/src/db/adapters/sqlite-migrations.ts`. Neither adapter uses a numbered
 migration runner or migration ledger.
 
 ### Workflow origin compatibility

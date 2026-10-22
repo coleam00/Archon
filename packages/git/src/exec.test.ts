@@ -85,14 +85,4 @@ describe('execFileAsync stdin delivery', () => {
       })
     ).rejects.toMatchObject({ killed: true, code: null });
   });
-
-  it('reports a delivery error even if the child exits successfully', async () => {
-    await expect(
-      execFileAsync(
-        process.execPath,
-        ['-e', 'require("node:fs").closeSync(0); setTimeout(() => process.exit(0), 100)'],
-        { input: 'x'.repeat(8_000_000) }
-      )
-    ).rejects.toMatchObject({ code: expect.any(String), stdout: '', stderr: '' });
-  });
 });

@@ -6833,6 +6833,57 @@ export interface components {
                   kind: 'upstream_skipped';
                   origin: string;
                 };
+            fan_out_outcome?: {
+              tally: {
+                total: number;
+                completed: number;
+                failed: number;
+                not_started: number;
+                cancelled_by_engine: number;
+                cancelled_by_workflow: number;
+                cancelled_out_of_band: number;
+                cancelled_unattributed: number;
+              };
+              slots: (
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'completed';
+                    child_run_id: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'failed';
+                    child_run_id: string;
+                    error?: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'not_started';
+                    error: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome:
+                      | 'cancelled_by_engine'
+                      | 'cancelled_by_workflow'
+                      | 'cancelled_out_of_band'
+                      | 'cancelled_unattributed';
+                    child_run_id: string;
+                    /** @enum {string} */
+                    cancel_reason?:
+                      | 'approval_rejected'
+                      | 'operator'
+                      | 'halt_node'
+                      | 'precondition_failed'
+                      | 'conversation_reset'
+                      | 'fan_out';
+                  }
+              )[];
+            };
           }[];
           returns:
             | {
@@ -6950,6 +7001,57 @@ export interface components {
                 kind: 'upstream_skipped';
                 origin: string;
               };
+          fan_out_outcome?: {
+            tally: {
+              total: number;
+              completed: number;
+              failed: number;
+              not_started: number;
+              cancelled_by_engine: number;
+              cancelled_by_workflow: number;
+              cancelled_out_of_band: number;
+              cancelled_unattributed: number;
+            };
+            slots: (
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'completed';
+                  child_run_id: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'failed';
+                  child_run_id: string;
+                  error?: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'not_started';
+                  error: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome:
+                    | 'cancelled_by_engine'
+                    | 'cancelled_by_workflow'
+                    | 'cancelled_out_of_band'
+                    | 'cancelled_unattributed';
+                  child_run_id: string;
+                  /** @enum {string} */
+                  cancel_reason?:
+                    | 'approval_rejected'
+                    | 'operator'
+                    | 'halt_node'
+                    | 'precondition_failed'
+                    | 'conversation_reset'
+                    | 'fan_out';
+                }
+            )[];
+          };
         }[];
       };
       events: components['schemas']['WorkflowEvent'][];

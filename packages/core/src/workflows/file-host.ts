@@ -33,7 +33,7 @@ import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
-import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
+import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
@@ -365,7 +365,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   const deps: ReturnType<typeof createWorkflowDeps> = {
     ...createWorkflowDeps(store, 'files'),
     completedRunWorktree: completedRunWorktreeDeps(async () => ({
-      cleanup: await import('../services/cleanup-service'),
+      cleanup: await import('../services/cleanup/run-worktree'),
       store: records.isolation,
       readers: worktreeReaders,
     })),
@@ -385,13 +385,13 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
       reclaimRunWorktree: async (run, isolation) =>
-        (await import('../services/cleanup-service')).reclaimRunWorktree(
+        (await import('../services/cleanup/run-worktree')).reclaimRunWorktree(
           run,
           isolation,
           worktreeReaders
         ),
       reclaimContainerEnv: async (id, isolation) =>
-        (await import('../services/cleanup-service')).reclaimContainerEnv(id, isolation),
+        (await import('../services/cleanup/containers')).reclaimContainerEnv(id, isolation),
     }),
   };
 }

@@ -53,8 +53,25 @@ function resumeCauseOf(candidate: WorkflowRun, resumed: WorkflowRun): ResumeCaus
 export interface ResumeStoreDeps {
   store: Pick<
     WorkflowDeps['store'],
-    'getDagResumeSnapshot' | 'listWorkflowRunNodeSessions' | 'resumeWorkflowRun'
+    | 'getDagResumeSnapshot'
+    | 'listWorkflowRunNodeSessions'
+    | 'resumeWorkflowRun'
+    | 'listEventsForRuns'
   >;
+}
+
+async function hasUnexecutedSourceRelease(
+  deps: ResumeStoreDeps,
+  candidate: WorkflowRun
+): Promise<boolean> {
+  if (candidate.status !== 'failed') return false;
+  // Admission clears source_release before container preparation can fail. Its event
+  // remains retry evidence until a node starts, which may perform side effects.
+  const events = await deps.store.listEventsForRuns(
+    [candidate.id],
+    ['source_released', 'node_started']
+  );
+  return events.get(candidate.id)?.at(-1)?.event_type === 'source_released';
 }
 
 /** Read whether a candidate has state worth resuming without claiming or mutating it. */
@@ -89,7 +106,8 @@ export async function inspectResumableRun(
     !hasWaitState &&
     !hasScheduledResume &&
     !hasSourceRelease &&
-    !hasFanOutRecoveryState
+    !hasFanOutRecoveryState &&
+    !(await hasUnexecutedSourceRelease(deps, candidate))
   ) {
     getLog().info(
       { resumableRunId: candidate.id },
@@ -107,7 +125,7 @@ export async function inspectResumableRun(
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * `executeWorkflow` expects. Returns `null` when the candidate has no
- * completed nodes, durable fan-out recovery state, or resumable gate/wait state.
+ * completed nodes, durable fan-out/source-release recovery, or resumable gate/wait state.
  *
  * The return shape is spread-compatible with `ExecuteWorkflowOptions`
  * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.

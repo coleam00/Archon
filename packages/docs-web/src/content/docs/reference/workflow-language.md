@@ -176,7 +176,13 @@ remain held after safe group signals, cancellation still ends the run and warns 
 cancel result and run event that some process outside the run's process group holds the
 output and was not signalled. Archon does not identify that holder. Use `lsof` on the run's
 checkout to find it before reusing or removing the checkout.
-Background jobs of already-completed nodes are excluded. Detached POSIX commands rely on
+Background jobs of already-completed nodes are excluded from automatic signalling.
+For POSIX host commands that started or completed, cancellation reports possible untracked
+background work in the cancel result and run event, including after continuation under a
+new detached owner. Neither a survivor nor cleanup is confirmed. Inspect checkout processes
+with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal.
+Owner-stop warnings retain owned checkouts for inspection.
+Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
 owner's Job Object, which also holds node processes whose parent already exited.
@@ -884,7 +890,7 @@ See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/pac
 
 ### One retry layer
 
-The node retry is the only retry Archon adds. Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
+The node retry is the only retry Archon adds, with one exception: when the provider reports that the session a node resumed no longer exists, the engine makes a single fresh-session attempt (see [When a resume can't be restored](#when-a-resume-cant-be-restored)). Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
 
 ## Run budgets
 
@@ -1091,7 +1097,9 @@ If the stored session is gone (for example, a Pi JSONL file was moved), the prov
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
-The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
+The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only when a resumed session became unavailable; warm resumes and first-time runs are unaffected.
+
+Claude does not fall back on its own: it rejects a resume whose session transcript no longer exists. When Archon confirms on the host that the transcript is gone and the rejection arrived before any output or tool call, it runs the node once more on a fresh session and shows the same warning. This covers `persist_session` nodes, sessions threaded from an earlier node in the run, and plain `loop:` iterations with `fresh_context: false`, which get a loop-specific notice instead. A second rejection, a rejection after output, or a run inside a container fails the node as before. A named resume (`context: { resume }`) never falls back and fails.
 
 Codex does not fall back: a thread it cannot resume or fork fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. A `persist_session` node on Codex forks the thread an earlier run saved, so once that thread is gone (its rollout under the Codex home was deleted, or the run uses another `CODEX_HOME`) the node fails on every run in that scope. Clear the saved session with [`archon workflow reset-sessions`](/reference/cli/#workflow-reset-sessions) to start the node fresh.
 
@@ -2298,6 +2306,34 @@ Resume uses the captured parent source, so correcting a binding in that source r
 a fresh launch. Project child workflows still resolve from the live authoring directory
 when spawned; installed packs remain captured. A transient refusal may also clear before
 resume.
+
+##### A completed fan-out node is not completed child work
+
+Under `all_done` the node completes when every child is terminal, not when every child
+succeeded. Once every slot settles, the node records what became of each one as
+`fan_out_outcome` on its `node_completed` or `node_failed` event: one slot per item, in item
+order, plus a tally that always agrees with the slots. Each slot is one of:
+
+| Outcome | Meaning |
+|---------|---------|
+| `completed` | the child run completed |
+| `failed` | a child run exists and failed |
+| `not_started` | no child run exists for this item; the slot's `error` is the refusal, its only record |
+| `cancelled_by_engine` | the engine cancelled the child: a fan-out cancel or a failed start-time precondition |
+| `cancelled_by_workflow` | the child's own workflow ended it: a `cancel:` node or a rejected approval gate |
+| `cancelled_out_of_band` | an operator, or a conversation reset, cancelled the child |
+| `cancelled_unattributed` | the child was cancelled before cancellation reasons were recorded, so who cancelled it cannot be told |
+
+Each slot is read from the child's durable run, so the same child gets the same outcome
+whatever `max_parallel` was and however many resumes it took. When a completed node has
+unfinished slots, the engine logs `workflow.fan_out_completed_with_unfinished_children` and
+sends one notice. The node and the run still complete. The all-refused failure above still
+applies, and its `node_failed` event carries the `not_started` slots.
+
+Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
+in the console. It is not a `$node.*` reference: a downstream node that decides what the
+results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
 
 ##### Why `all_done` is the default
 

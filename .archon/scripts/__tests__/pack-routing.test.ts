@@ -5,7 +5,7 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, forgePrRecord, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -216,6 +216,87 @@ describe("deliver's report after a node failure", () => {
     expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
+  it('selects the latest publication across typed output and the creation record', () => {
+    for (const recoveryIsLatest of [true, false]) {
+      const run = runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+        artifacts: {
+          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+          'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+          'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
+        },
+        preload: `import { utimesSync } from 'node:fs';
+          utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${recoveryIsLatest ? 100 : 300});
+          utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+      });
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.stdout)).toMatchObject({
+        reason: 'failed', pr_url: recoveryIsLatest ? 'https://ghe.example.com/example/repo/pull/43' : PR_URL,
+      });
+    }
+  });
+
+  it('keeps the timestamp with the readable typed publication when a later artifact is missing', () => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }, { path: 'nodes/missing.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 300, 300);
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).pr_url).toBe(PR_URL);
+  });
+
+  it('does not certify a URL without a complete PR record', () => {
+    const result = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: { 'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }) },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      reason: 'pr_create_unresolved',
+      pr_url: '', summary: expect.stringContaining('invalid pull-request record'),
+    });
+  });
+
+  it.each([true, false])('orders an unresolved claim against typed output (claim latest: %s)', claimIsLatest => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${claimIsLatest ? 100 : 300});
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      ready: false, reason: claimIsLatest ? 'pr_create_unresolved' : 'failed', pr_url: claimIsLatest ? '' : PR_URL,
+    });
+  });
+
+  for (const script of ['deliver/scripts/report', 'ship/scripts/report']) {
+    it.each(['unverified', 'unreadable', 'directory'])(
+      'distinguishes an unresolved %s create from no PR', kind => {
+        const run = runPackScript(script, {
+          inputs: { INPUTS_OUTCOME: 'null' },
+          artifacts: kind === 'directory' ? {} : {
+            'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
+          },
+          preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
+        });
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '', summary: expect.stringContaining('pr-create-started') });
+      }
+    );
+  }
 });
 
 describe("ship's continued pull request", () => {
@@ -227,6 +308,13 @@ describe("ship's continued pull request", () => {
     expect(JSON.parse(continues('', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('42', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('null', 'null').stdout)).toEqual({ pull_request: null });
+    expect(JSON.parse(continues('none', 'null').stdout)).toEqual({ pull_request: null });
+  });
+
+  it('refuses when the caller decided none but triage routed the run to continue one', () => {
+    const result = continues('none', '42');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller decided the run continues no pull request, but triage routed it to continue 42');
   });
 
   it('refuses when the caller and triage name different pull requests', () => {

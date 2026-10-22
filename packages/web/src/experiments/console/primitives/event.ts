@@ -445,6 +445,8 @@ export interface NodeRun {
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
+  /** A `workflow:` fan-out node's per-slot record, from the engine's node state. */
+  fanOutOutcome: RunNodeState['fan_out_outcome'];
 }
 
 const TRANSITION_FOR_STATE: Partial<
@@ -511,6 +513,7 @@ export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[])
       // Only a `skipped` state's own transition carries these; a replay's are not shown.
       skipReason: ended?.skipReason ?? null,
       skipExpr: ended?.skipExpr ?? null,
+      fanOutOutcome: node.fan_out_outcome,
     });
   }
   return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());

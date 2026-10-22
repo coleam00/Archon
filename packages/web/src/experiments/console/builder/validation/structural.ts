@@ -152,9 +152,9 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       } else if ((node.data.prompt ?? '').trim().length === 0)
         missing('loop.prompt', 'loop requires a prompt (or a command file)');
       // Completion channels (#2563) — a hand-written mirror of the two rules in
-      // the engine's `loopControlSchema`, because @archon/web cannot import
-      // @archon/workflows. Keep the pair in step; verify by parsing both, not by
-      // reading them — `scripts/node-ref-parity.test.ts` does exactly that, in CI.
+      // the engine's `loopNodeConfigSchema`, because @archon/web cannot import
+      // @archon/workflows. `scripts/node-ref-parity.test.ts` derives its cases
+      // from the engine's channel tuple to enforce agreement in CI.
       //
       // 1. A declared channel must be non-blank. Blank is broken at runtime, not
       //    just untidy: `bash -c "   "` exits 0, and a blank signal matches any

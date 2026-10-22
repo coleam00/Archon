@@ -279,14 +279,14 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | Flag | Effect |
 |------|--------|
 | `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this directory instead of `--cwd`. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only; rejected with `--resume`, because a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
-| `--branch`, `-b <name>` | Branch name for the worktree; reuses an existing worktree for it |
+| `--branch`, `-b <name>` | Branch name for the worktree; reuses an existing worktree for it. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. Unlike `--base`, it does not change the PR target. |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, resume/adoption/supersedes, and dry runs. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
 | `--folder` | Register the current directory, git or not, as a folder project on first use and run in place, without a worktree. Rejects `--branch`, `--from` and `--base`. |
-| `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it. See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
+| `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Normal gate pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it after resume admission. Failed resume setup marks the run failed. Failed setup or suspension can leave its container running and consuming resources; see [Pause economics](/guides/container-isolation/#pause-economics). See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
 | `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/reference/workflow-language/#running-a-workflow-that-declares-inputs). |
 | `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
 | `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
@@ -678,6 +678,14 @@ transcripts retain the names `node_start`, `node_complete` and `node_error`; the
 metadata describes the same fact as the durable node event. Suspended nodes remain active and
 appear as running until their gate or wait resolves.
 
+A `workflow:` fan-out node whose children did not all complete prints a `Fan-out work:`
+line with the tally, then up to 10 unfinished slots (item index, outcome, child run and
+error). The rest are counted as `… and N more`; the complete record is
+`terminal_record.nodes[].fan_out_outcome` in `--json`, or `nodes[].fanOutOutcome` with
+`--json --verbose`. The text view shows it under the terminal record for a finished run and
+under the node with `--verbose`. See
+[fan-out join semantics](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work).
+
 Every `workflow get --json` shape includes `terminal_record`. The API detail endpoint,
 `GET /api/workflows/runs/:runId`, exposes the same value as `run.terminal_record`.
 The engine persists this record with the terminal status transition, including detached
@@ -689,12 +697,16 @@ An event-query failure exits non-zero with `error: "workflow_events_unavailable"
 JSON; it does not masquerade as a missing historical record.
 
 When the run holds proof that it created its worktree, the record has
-`worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote and unpublished, so the engine removes it after the
-completion write, keeping the branch. The record is written before the removal, so a
-removal that is refused because work appeared in the meantime, or that fails, leaves the
-checkout and is logged. Otherwise it is
-`{ "disposition": "retained", "reason": ... }` with an optional `detail`:
+`worktree_disposition`; a completed run has it only when that worktree is on the run's own
+generated branch (launched without `--branch`). `{ "disposition": "release" }` means the
+completed run's checkout was clean and every commit on its HEAD and branch was on a
+remote, whether or not the branch was published, so the engine removes it after the
+completion write, keeping the local and remote branch. The record is written before the
+removal, so a removal that is refused because work appeared in the meantime, or that
+fails, leaves the checkout and the run's output says so. Otherwise it is
+`{ "disposition": "retained", "reason": ... }` with an optional `detail`. A completed
+run whose checkout is kept for uncommitted changes, unpushed commits, another run or a
+failed check also prints a warning naming the path:
 
 | Reason | Meaning |
 |---|---|
@@ -704,7 +716,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch, retaining the remote branch |
+| `published_branch` | Written by earlier versions: the configured remote had the branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1158,7 +1170,13 @@ who owns the run:
 
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
-  status check.
+  status check. On macOS and Linux, cooperative cancellation reports possible
+  background work for every host run, even when no command appears in its history.
+  Commands can start or complete while cancellation is in progress, so history cannot
+  establish their absence. The warning appears in `cleanupWarnings` and the cancellation
+  event and identifies each known host run and its recorded checkout, including isolated
+  child and grandchild checkouts. Inspect descendant checkouts too: new sub-runs can
+  appear during cancellation. This warning confirms neither command execution nor survivors.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
   contacts that process and stops its owner before recording the run as `cancelled`.
   On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
@@ -1167,7 +1185,12 @@ who owns the run:
   the run and reports in `cleanupWarnings` and the run's cancellation event that some
   process outside the run's process group holds the output and was not signalled.
   Archon does not identify it; use `lsof` on the run's checkout before reusing or removing
-  that checkout. Background jobs left by completed nodes are excluded. Windows uses
+  that checkout. Background jobs left by completed nodes are outside automatic cleanup.
+  If an earlier host bash or script command exited, cancellation warns that it may have
+  left untracked background work. This warning does not establish that any process
+  survived or confirm cleanup; even an ordinary command with no background jobs can
+  trigger it. Inspect processes using the checkout (for example with `lsof`), verify
+  ownership, and stop any leftovers before reusing or removing it. Windows uses
   the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
@@ -1230,8 +1253,11 @@ the run stays `cancelled`, but container resources may remain allocated. Every c
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
 `cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
-and output pipes still held by an unsignalled process; the field is omitted
-when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
+output pipes still held by an unsignalled process, and possible untracked background
+work from started or completed host commands; the field is omitted when there are no
+cleanup warnings. Owner-stop warnings retain run scratch and owned checkouts for
+inspection. Inspect processes using the checkout, verify ownership, and stop any
+leftovers before reusing or removing it. A cleanup warning does not change `ok: true`.
 
 ### `workflow abandon`
 
@@ -1241,11 +1267,12 @@ this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
   (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
-  The output-holder warning and `lsof` action described above apply here too; inspect
-  warnings before reusing or removing the checkout. Abandon retains owned checkouts
-  when owner-stop warnings report held output, including descendant checkouts and
-  their root. Warnings learned after cancellation during descendant cleanup or
-  conversation reset are appended to that run as `workflow_cleanup_warning` events.
+  The output-holder and possible-leftovers warnings and inspection steps described
+  above apply here too; inspect warnings before reusing or removing the checkout.
+  Abandon retains owned checkouts
+  when owner-stop warnings report held output or possible leftovers, including
+  descendant checkouts and their root. Warnings learned after cancellation during
+  descendant cleanup or conversation reset are appended to that run as `workflow_cleanup_warning` events.
   If writing a warning event fails, cleanup continues and the command reports the
   persistence failure with the cleanup warnings. Keep that command result: those
   warnings may be missing from the run history.
@@ -1462,6 +1489,12 @@ archon isolation list
 
 Groups by codebase, shows branch, workflow type, platform, and days since activity.
 
+Also lists active container environments. `run lookup failed` means the listing's
+environment-ID lookup failed; `no run (orphan)` means no run matched that lookup
+(`metadata.isolation_env_id`). Neither label establishes cleanup eligibility:
+cleanup checks wider live ownership through run metadata, conversation links, and
+same-codebase checkout paths before removing an environment.
+
 Includes worktrees created for `workflow:` sub-run children that declared `isolation: worktree`
 (branch `archon/task-<parentRunId8>-<nodeId>-<hash>-child-<n>`). They are tracked and cleaned
 up exactly like top-level run worktrees. Avoid `complete` on one while its run tree is still
@@ -1584,13 +1617,19 @@ any other as `<n> unpushed commit(s); remove it explicitly with archon complete 
 The scheduled cleanup keeps an environment whose checkout is missing the same way while
 the branch Archon created for it holds such a commit.
 
-A completed run removes the worktree it created when it completes, if the checkout is
-clean, every commit on its HEAD and branch is on a remote, and the configured remote
-does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which removes the local
-branch and retains the remote branch with a warning. When the remote cannot be read, the worktree stays and the record says `check_failed`. The
-run's `terminal_record.worktree_disposition` says what happened and why (see
-[`workflow get`](#workflow-get)).
+A completed run removes the worktree it created on its own generated branch when it
+completes, if the checkout is clean and every commit on its HEAD and branch is on a
+remote. A published branch does not keep it. The removal keeps the local and remote
+branch, so the run can still be adopted. Otherwise the worktree stays, the run prints a
+warning naming the path and what removing it would lose, and the run's
+`terminal_record.worktree_disposition` records the reason (see
+[`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
+when its run ends: `--merged` removes it after its branch merges (or its pull request closes, with
+`--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a
+pull request rather than to one run; the merged and age-based cleanups remove it. A
+workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
+and completion removes it the same way. A failed run keeps its worktree so it
+can resume.
 
 #### Recovering remote branch cleanup
 

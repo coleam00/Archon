@@ -35,8 +35,10 @@ inputs:
     default: ""
     description: >-
       The number of an open pull request this run continues, as the caller
-      resolved it; empty or `null` when it names none. Delivery finishes it
-      whichever route triage takes; triage naming a different one refuses the run.
+      resolved it; `none` when the caller decided the run continues none; empty
+      or `null` when it names none and leaves it to triage. Delivery finishes a
+      named one whichever route triage takes; triage naming a different one, or
+      naming one after `none`, refuses the run.
   branch:
     default: ""
     description: >-
@@ -108,9 +110,9 @@ nodes:
     depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
-  # The pull request delivery continues has one owner: the caller's number when it
-  # resolved one, else triage's `continue` route. Two different numbers refuse
-  # before delivery spends.
+  # The pull request delivery continues has one owner: the caller's number or `none`
+  # when it resolved one, else triage's `continue` route. Two different answers
+  # refuse before delivery spends.
   - id: continues
     script: continues
     runtime: bun
@@ -158,9 +160,9 @@ nodes:
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
   #
-  # A failed delivery reaches this node through deliver's report (`reason: failed`)
-  # and is relayed like any other not-ready delivery. A failure before delivery
-  # skips this node, and `report` answers.
+  # A failed delivery reaches this node through deliver's report (`reason: failed`
+  # or `pr_create_unresolved`) and is relayed like any other not-ready delivery. A
+  # failure before delivery skips this node, and `report` answers.
   - id: outcome
     script: outcome
     runtime: bun
@@ -195,8 +197,9 @@ nodes:
       type: object
       properties:
         delivered: { type: boolean }
-        # Deliver's reason when it ran (or `failed`), otherwise why no delivery ran:
-        # no_action, blocked, needs_contract, refuted, not_rooted or ask.
+        # Deliver's reason when it ran (or `failed` / `pr_create_unresolved`),
+        # otherwise why no delivery ran: no_action, blocked, needs_contract, refuted,
+        # not_rooted or ask.
         reason: { type: string }
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }

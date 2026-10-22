@@ -65,14 +65,18 @@ Optional inputs, with their defaults in each workflow's YAML:
   re-triages blocked items that no longer look blocked) and `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
   converge.
-- `archon-merge-queue`: `limit` (default `10` items claimed) and `merge_method`
-  (`squash` or `merge`).
+- `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
+  (`squash` or `merge`) and `retriage_as` (a maintainer login; set, an issue still
+  open after its pull request merged goes back to intake).
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
-The build queue changes its checkout, so each run needs its own worktree. A plain
-launch from a git checkout gets one. The merge queue never changes its checkout and
-needs none.
+Intake, the merge queue and the discoveries drain never change their checkout. They
+create no worktree and run in the launch checkout as it stands, so launch them from a
+checkout that tracks the default branch. The build queue changes its checkout, so each
+run gets its own worktree on a run-named branch. A completed round removes that
+worktree when it is clean and every commit is on a remote, and keeps the branch;
+otherwise the run names the path and what removing it would lose.
 
 ## Intake
 
@@ -122,8 +126,8 @@ A round ends one of three ways, recorded on the item:
   ready without another round.
 - `continue`: the issue already answers what stopped the round. The run starts the
   item's next round at once, as a detached `archon-build-queue --input number=<n>`
-  run on the same run config. If that launch fails, the item waits for the next queue
-  run.
+  run on the same run config and the same `order`, `retriage_as` and `round_limit`.
+  If that launch fails, the item waits for the next queue run.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
@@ -166,21 +170,17 @@ most one attention item: the red default branch first, otherwise the first pull
 request the sweep asked about. A later sweep decides the rest again.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
-the answer starts merges it once the gate passes. The approval carries to a later head
-only when the sweep judges that everything since is merges of the default branch and
-their conflict resolutions, and the verdict is Ready at the later head.
+the answer starts, on the answered run's `order`, `limit`, `merge_method` and
+`retriage_as`, merges it once the gate passes. The approval carries to a later head only when the sweep
+judges that everything since is merges of the default branch and their conflict
+resolutions, and the verdict is Ready at the later head. A `return` hands the item
+back to the build queue, whose next round starts at once on the build queue's own
+input defaults. A `park` stops work on the item until the build queue readies it again.
 
-A maintainer's own pull request enrolled through `merge_queue: "own-prs"` has no
-build round to return to, so its question offers no `return`. Answering `park` or
-`other` stops queue work until a later sweep observes a head different from the
-head asked about. At the same head it stays parked, even after green CI or a new
-review. The `other` text is recorded as the ruling on the work item; it starts no
-build round. Recovery preserves the approval's original head and every merge gate.
-
-A build item parked by an answer waits for renewed build readiness. A pull request
-whose read fails twice consecutively is also parked: renewed build readiness can
-bring a build item back, but an unreadable own-PR park stays parked. Changed-head
-recovery applies only to answered own-PR parks, never merged or superseded items.
+For an own pull request, `park` and `other` stop queue work until a later sweep
+observes a head different from the head asked about. At the same head it stays
+parked, even after green CI or a new review. The `other` text is recorded as the
+ruling on the work item; it starts no build round.
 
 ## Discoveries drain
 
@@ -208,7 +208,8 @@ own PR keeps the answer on its work item's merge decision entry; it writes no is
 section. Write the reason as a ruling a later round can act on: what is in scope,
 what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
-run at once, on the run config the answered run started with, so you don't relaunch.
+run at once, on the run config the answered run started with, so you don't relaunch. A
+follow-up in the same queue also keeps the answered run's input selections.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to

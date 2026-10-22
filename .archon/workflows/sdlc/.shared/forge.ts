@@ -241,7 +241,7 @@ export function forgeResult(
   return value;
 }
 
-function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
+export function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
   const repo = record(value);
   return typeof repo?.host === 'string' &&
     repo.host.trim() !== '' &&

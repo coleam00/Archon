@@ -6,6 +6,7 @@ import { finishNodeExecution } from '../node-execution';
 import { persistedOutputContract, type NodeExecutionResult } from '../node-record-serialization';
 import { declaredOutputPathsFromSchema } from '../output-ref';
 import type { LoopGroupNode, LoopNode, WorkflowRun } from '../schemas';
+import type { LoopCompletionChannel } from '../schemas/loop';
 import { type NodeExecutionRecord } from '../schemas/node-execution';
 import { getLog } from './log';
 
@@ -14,10 +15,15 @@ import { getLog } from './log';
  *  tool-input truncation used for progress events). */
 export const GATE_EXCERPT_MAX = 500;
 
-export type LoopCompletionCheck =
-  | { channel: 'until'; signal: string; completed: boolean }
-  | { channel: 'until_bash'; completed: boolean }
-  | { channel: 'until_field'; field: string; completed: boolean };
+type LoopCompletionResults = {
+  until: { signal: string; completed: boolean };
+  until_bash: { completed: boolean };
+  until_field: { field: string; completed: boolean };
+};
+
+export type LoopCompletionCheck = {
+  [Channel in LoopCompletionChannel]: { channel: Channel } & LoopCompletionResults[Channel];
+}[LoopCompletionChannel];
 
 export function describeLoopCompletionCheck(check: LoopCompletionCheck): string {
   switch (check.channel) {
@@ -70,7 +76,7 @@ export async function finalizeLoopFromSignal(
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
-  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
+  finalizeUsage: { costUsd?: number; costPartial?: boolean; tokens?: TokenUsage } | undefined,
   finalizeStructuredOutput: unknown,
   logDir: string,
   execution?: NodeExecutionRecord,
@@ -142,7 +148,8 @@ export async function finalizeLoopFromSignal(
     ...(output.declaredOutputPaths !== undefined
       ? { declaredOutputPaths: output.declaredOutputPaths }
       : {}),
-    ...finalizeUsage,
+    ...(finalizeUsage?.costUsd !== undefined ? { costUsd: finalizeUsage.costUsd } : {}),
+    ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
   };
 }

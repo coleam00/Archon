@@ -13,16 +13,18 @@ facts:
   policy_defaults: "/stub/policy"
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1
-  branch: ""
+  branch: "build/7-stub-fixture"
+blocked:
   blocked: []
   blocked_count: 0
 route:
   decision: launch
+  continues: 1
   ready_head: null
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
   attention: null
-checkout: { head: fixturehead }
+checkout: { head: fixturehead, pull_request: 1 }
 ship__forge: { source: forge }
 ship__deliver__forge: { source: forge }
 ship__triage__triage:
@@ -43,7 +45,7 @@ implement__implement:
   red_cause: ""
   summary: "stub: merged the pull request's head and fixed the finding"
 pr__forge: { source: forge }
-pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "build/7-stub-fixture", base: "dev", existing: 1, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: continues pull request 1" }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "build/7-stub-fixture", base: "dev", existing: 1, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, description: null, summary: "stub: continues pull request 1" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead2", base_revision: "fixturebase", maintainer_can_modify: null }
 review__route: { seams: false, code: true, tests: false, errors: false, docs: false, reason: "stub: a small fix" }
 review__scope:

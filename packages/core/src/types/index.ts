@@ -8,7 +8,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 
 // TokenUsage is used by IPlatformAdapter below.
 import type { TokenUsage } from '@archon/providers/types';
-import type { PlatformStructuredEvent } from '@archon/workflows/deps';
+import type { PlatformStructuredEvent, WorkflowMessageMetadata } from '@archon/workflows/deps';
 
 // Re-export schema-derived types so existing imports from '@archon/core/types' keep working.
 export type {
@@ -102,21 +102,7 @@ export interface CommandResult {
   workflow?: WorkflowRequest;
 }
 
-/**
- * Generic platform adapter interface
- * Allows supporting multiple platforms (Telegram, Slack, GitHub, etc.)
- */
-export interface MessageMetadata {
-  category?:
-    | 'tool_call_formatted'
-    | 'workflow_status'
-    | 'workflow_dispatch_status'
-    | 'isolation_context'
-    | 'workflow_result';
-  segment?: 'new' | 'auto';
-  workflowDispatch?: { workerConversationId: string; workflowName: string };
-  workflowResult?: { workflowName: string; runId: string };
-}
+export type MessageMetadata = WorkflowMessageMetadata;
 
 export { toPersistedMessageMetadata } from './message-metadata';
 
