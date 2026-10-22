@@ -1,5 +1,6 @@
 /** Re-entering a run paused on its sub-runs once they release it, and returning a paused run's slot. */
 import { createLogger } from '@archon/paths';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import type { ChildIsolationResolver } from './child-isolation';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
@@ -17,7 +18,7 @@ import type {
 } from './schemas';
 import { isApprovalContext, isFanOutBlockReleased, isRunBlockedOnChild } from './schemas';
 import { continuablePauseCursor } from './store';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 
 /** Lazy-initialized logger, under the executor name these events have always carried. */
@@ -41,8 +42,8 @@ function getLog(): ReturnType<typeof createLogger> {
  *  - the parent is a fan-out still waiting on other children (`isFanOutBlockReleased`).
  *
  * Failures before the parent resumes leave the child result intact. Once the parent
- * has resumed, a rejected terminal status write propagates because the child cannot
- * report an ordinary result while the parent remains running.
+ * has resumed, lifecycle interruptions propagate because the child cannot report an
+ * ordinary result while the parent lifecycle remains unresolved.
  *
  * `resolveChildIsolation` is a plain parameter rather than part of the resume state:
  * `executeWorkflow`'s resume state carries what was RECORDED about the prior run, and a resolver
@@ -251,7 +252,7 @@ export async function continueBlockedRun(
       }
     );
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError || err instanceof WorkflowExecutionHandoffError)
+    if (isWorkflowExecutionInterruption(err) || err instanceof WorkflowExecutionHandoffError)
       throw err;
 
     // The hydrate CAS above already flipped the parent paused→running, and

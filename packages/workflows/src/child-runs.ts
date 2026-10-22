@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
@@ -23,7 +24,7 @@ import {
 import type { ResolvedWorkflow, WorkflowRun } from './schemas';
 import { SUBRUN_METADATA_KEYS } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import {
@@ -106,7 +107,7 @@ type ChildPhase<T> =
 const proceed = <T>(value: T): ChildPhase<T> => ({ stopped: false, value });
 
 // Ordinary refusals return a failed outcome; failures before a child row exists
-// carry an empty childRunId. Terminal-write rejection escapes to the run owner.
+// carry an empty childRunId. Lifecycle interruptions escape to the run owner.
 function failedOutcome(error: string, childRunId = ''): ChildWorkflowOutcome {
   return { childRunId, status: 'failed', error };
 }
@@ -145,7 +146,7 @@ interface ChildRunStart {
  * executeWorkflow derives the ancestor chain from the child's own parent_run_id
  * to exclude it from the path-lock.
  * Ordinary failures return a `{ status: 'failed' }` outcome so the calling node
- * fails cleanly rather than the whole DAG throwing. Terminal status-write failures
+ * fails cleanly rather than the whole DAG throwing. Lifecycle interruptions
  * propagate because the child has no trustworthy terminal outcome to return.
  */
 export async function runChildWorkflow(
@@ -655,10 +656,10 @@ async function executeChildRun(
     }
     return childOutcomeFromRun(finalChild);
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
+    if (isWorkflowExecutionInterruption(err)) throw err;
 
     // Ordinary setup/read-back failures become failed child outcomes after cleanup.
-    // A terminal write rejection escapes instead: cleanup may not have released the lock.
+    // Lifecycle interruptions escape: compensation cannot establish a terminal outcome.
     //
     // Wedge guard (symmetric to continueBlockedRun's post-CAS handler): a throw in
     // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token

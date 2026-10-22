@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
@@ -183,15 +184,13 @@ function blocked(
 async function readParentStatus(
   ctx: RunLayersContext,
   node: ComposeFanOutNode
-): Promise<'accepting' | 'stopped' | { error: string }> {
+): Promise<'accepting' | 'stopped'> {
   const parentRunId = ctx.workflowRun.id;
   let runStatus: WorkflowRunStatus | null;
   try {
     runStatus = await ctx.deps.store.getWorkflowRunStatus(parentRunId);
   } catch (err) {
-    return {
-      error: `could not verify parent status after composed fan-out: ${(err as Error).message}`,
-    };
+    throw new ParentStatusReadError(parentRunId, ctx.stepNamePrefix + node.id, err);
   }
   const claimedWorkMayFinishPaused =
     runStatus === 'paused' && ctx.claimedWorkPausePolicy === 'finish_through_parent_pause';
@@ -368,9 +367,6 @@ export async function executeComposeFanOutNode(
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   const parent = await readParentStatus(ctx, node);
-  if (typeof parent === 'object') {
-    return failResult(parent.error, 'unknown', totalCostUsd, totalTokens);
-  }
   if (parent === 'stopped') {
     return {
       ...serializeNodeOutput(execution),

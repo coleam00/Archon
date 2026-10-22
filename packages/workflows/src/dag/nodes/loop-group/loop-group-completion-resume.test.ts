@@ -7,6 +7,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '../../../file-store/store';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { hydrateResumableRun } from '../../../run-resume';
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { readNodeRecordEvent } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeStateRecord } from '../../../node-record-serialization';
@@ -64,54 +65,94 @@ async function answerAndResume(
   await executeDagWorkflow({ ...options, ...resumed, workflowRun: resumed.preCreatedRun });
 }
 
-test('resumed terminal wait completes from the existing until signal without repeating work', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'loop-signal-resume-'));
-  try {
-    let count = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      count++;
-      yield { type: 'agent_message_chunk', text: 'finished\n<promise>DONE</promise>' };
-      yield { type: 'result', sessionId: `session-${count}` };
-    });
-    const store = await createFileWorkflowStore({ root });
-    const created = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
-    const run = await store.claimPendingWorkflowRun(created.id, root);
-    if (!run) throw new Error('Claim failed');
-    const options = dagOptions({
-      deps: createMockDeps(store),
-      cwd: root,
-      workflowRun: run,
-      workflow: {
-        name: 'signal',
-        nodes: [
-          dagNodeSchema.parse({
-            id: 'grp',
-            loop_group: {
-              max_iterations: 2,
-              until: 'DONE',
-              nodes: [
-                { id: 'work', prompt: 'Produce a value and DONE' },
-                { id: 'check', depends_on: ['work'], wait: { attention: 'Continue?' } },
-              ],
-            },
-          }),
-        ],
-      },
-    });
-    await executeDagWorkflow(options);
-    expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
-    expect(count).toBe(1);
-    await answerAndResume(store, options);
-    expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
-    expect(count).toBe(1);
-    const completed = (await store.listWorkflowEvents(run.id)).find(
-      event => event.step_name === 'grp' && event.event_type === 'node_completed'
-    );
-    expect(completed?.data.node_output).toBe('finished');
-  } finally {
-    await removeTempTree(root);
-  }
-});
+for (const rejectStatus of [false, true]) {
+  test(`resumed terminal wait preserves completion or unreadable parent status: reject=${rejectStatus}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'loop-signal-resume-'));
+    try {
+      let count = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        count++;
+        yield { type: 'agent_message_chunk', text: 'finished\n<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: `session-${count}` };
+      });
+      const store = await createFileWorkflowStore({ root });
+      const created = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
+      const run = await store.claimPendingWorkflowRun(created.id, root);
+      if (!run) throw new Error('Claim failed');
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: root,
+        workflowRun: run,
+        workflow: {
+          name: 'signal',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'grp',
+              loop_group: {
+                max_iterations: 2,
+                until: 'DONE',
+                nodes: [
+                  { id: 'work', prompt: 'Produce a value and DONE' },
+                  { id: 'check', depends_on: ['work'], wait: { attention: 'Continue?' } },
+                ],
+              },
+            }),
+          ],
+        },
+      });
+      await executeDagWorkflow(options);
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+      expect(count).toBe(1);
+      const cause = new Error('Parent status unavailable');
+      const readStatus = store.getWorkflowRunStatus.bind(store);
+      let rejected = false;
+      if (rejectStatus) {
+        store.getWorkflowRunStatus = async id => {
+          const events = await store.listWorkflowEvents(id);
+          if (
+            !rejected &&
+            events.some(
+              event => event.step_name === 'grp.check' && event.event_type === 'node_completed'
+            )
+          ) {
+            rejected = true;
+            throw cause;
+          }
+          return readStatus(id);
+        };
+      }
+      if (rejectStatus) {
+        const error = await answerAndResume(store, options).catch((error: unknown) => error);
+        expect(rejected).toBe(true);
+        expect(error).toBeInstanceOf(ParentStatusReadError);
+        if (!(error instanceof ParentStatusReadError)) throw error;
+        expect(error.cause).toBe(cause);
+        expect(error.workflowRunId).toBe(run.id);
+        expect(error.nodeId).toBe('grp');
+        expect(await readStatus(run.id)).toBe('running');
+      } else {
+        await answerAndResume(store, options);
+        expect(await readStatus(run.id)).toBe('completed');
+      }
+      expect(count).toBe(1);
+      const events = await store.listWorkflowEvents(run.id);
+      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+      const completed = events.find(
+        event => event.step_name === 'grp' && event.event_type === 'node_completed'
+      );
+      if (rejectStatus) {
+        expect(completed).toBeUndefined();
+        expect(
+          events.some(event => ['workflow_failed', 'workflow_completed'].includes(event.event_type))
+        ).toBe(false);
+      } else {
+        expect(completed?.data.node_output).toBe('finished');
+      }
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+}
 
 for (const pause of [false, true]) {
   test(`completion keeps preceding iteration after terminal approval: pause=${pause}`, async () => {

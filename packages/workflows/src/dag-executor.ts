@@ -8,6 +8,9 @@
  * (`dag/run-terminal`).
  */
 
+import { serializeRunUsage } from './schemas/run-usage';
+import { readInterruptedRunUsage } from './dag/interrupted-usage';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -231,6 +234,8 @@ export async function executeDagWorkflow(
     containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    reportedChildUsage: resumeSnapshot?.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
     runBudget,
     deps,
     platform,
@@ -333,34 +338,11 @@ export async function executeDagWorkflow(
   const persistRunUsage = async (): Promise<void> => {
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
-    const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
-      ...(runCtx.totalTokensUnknown
-        ? {
-            total_tokens_unknown: true,
-            total_tokens_in: null,
-            total_tokens_out: null,
-            total_cache_read_tokens: null,
-            total_cache_write_tokens: null,
-            total_cache_partial: null,
-          }
-        : {}),
-      ...(runCtx.totalTokens !== undefined
-        ? {
-            total_tokens_in: runCtx.totalTokens.input,
-            total_tokens_out: runCtx.totalTokens.output,
-            ...(runCtx.totalTokens.cacheRead !== undefined
-              ? { total_cache_read_tokens: runCtx.totalTokens.cacheRead }
-              : {}),
-            ...(runCtx.totalTokens.cacheWrite !== undefined
-              ? { total_cache_write_tokens: runCtx.totalTokens.cacheWrite }
-              : {}),
-            // Marks the two cache totals above as a floor rather than an exact figure.
-            ...(runCtx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
-          }
-        : {}),
-    };
+    const usage = serializeRunUsage({
+      costUsd: runCtx.totalCostUsd,
+      tokens: runCtx.totalTokens,
+      tokensUnknown: runCtx.totalTokensUnknown,
+    });
     if (Object.keys(usage).length === 0) return;
     await deps.store
       .updateWorkflowRun(workflowRun.id, { metadata: usage })
@@ -475,11 +457,15 @@ export async function executeDagWorkflow(
     // execution error already in flight. A run-budget refusal also escapes the join; it
     // fails the run here instead of propagating. An unreadable source escapes it too; the
     // run is released below after persisting the settled usage and outcome.
-    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
+    if (
+      error instanceof RunBudgetRefusedError ||
+      error instanceof RunSourceUnreadableError ||
+      isWorkflowExecutionInterruption(error)
+    ) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
+      // the in-memory totals miss it. Rebuild from node events and child run telemetry.
       try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+        const durable = await readInterruptedRunUsage(deps.store, workflowRun.id, error);
         runCtx.totalCostUsd = durable.costUsd;
         runCtx.totalTokens = durable.tokens;
         runCtx.totalTokensUnknown = durable.tokensUnknown;

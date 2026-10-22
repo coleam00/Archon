@@ -1,3 +1,4 @@
+import { inMemoryEventRows } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -278,9 +279,11 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
+      inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
+        event => event.workflow_run_id === runId
+      )
+    ),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),

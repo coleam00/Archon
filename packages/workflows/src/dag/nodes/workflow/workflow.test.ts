@@ -20,6 +20,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { fanOutOutcome } from '../../../schemas/fan-out-outcome';
 import { type RunChildWorkflowFn } from '../../child-run';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -56,6 +57,123 @@ describe('executeDagWorkflow -- workflow: node', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each(
+    [false, true].flatMap(fanOut =>
+      ['node_completed', 'node_failed'].flatMap(eventType =>
+        [false, true].map(identified => ({ fanOut, eventType, identified }))
+      )
+    )
+  )(
+    'refuses ambiguous historical child recovery before dispatch: %j',
+    async ({ fanOut, eventType, identified }) => {
+      await writeBlock(
+        'name: child\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
+        'child'
+      );
+      const store = createMockStore();
+      const historical = {
+        step_name: 'sub',
+        event_type: eventType,
+        data: {
+          type: 'workflow',
+          node_output: fanOut ? '["old output"]' : 'old output',
+          cost_usd: 0.02,
+          tokens: { input: 14, output: 6 },
+          ...(identified
+            ? {
+                fan_out_outcome: fanOutOutcome([
+                  { index: 0, outcome: 'completed', child_run_id: 'a' },
+                  { index: 1, outcome: 'failed', child_run_id: 'b' },
+                ]),
+              }
+            : {}),
+        },
+      };
+      const snapshot = await foldDagResumeSnapshot([historical], 'parent');
+      store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('b', {
+          status: 'failed',
+          metadata: {
+            parent_node_id: 'sub',
+            total_cost_usd: 0.02,
+            total_tokens_in: 14,
+            total_tokens_out: 6,
+          },
+        }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        status: 'completed',
+        childRunId: 'b',
+        costUsd: 0.03,
+        tokens: { input: 21, output: 9 },
+      }));
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('parent'),
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'sub',
+              kind: 'workflow',
+              workflow: 'child',
+              ...(fanOut
+                ? { fan_out: { items: '[1,2]', max_parallel: 2, join: 'all_success' as const } }
+                : {}),
+            },
+          ],
+        },
+        runChildWorkflow,
+        priorCompletedNodes: new Map(),
+        priorUsage: snapshot,
+      });
+      await executeDagWorkflow(options);
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.findChildRuns).not.toHaveBeenCalled();
+      expect(eventsOf(store)).toContainEqual({
+        event_type: 'node_failed',
+        step_name: 'sub',
+        data: expect.objectContaining({
+          failure_kind: 'config',
+          error: expect.stringContaining('historical child usage'),
+        }),
+      });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.02,
+        total_tokens_in: 14,
+        total_tokens_out: 6,
+      });
+      const folded = await foldDagResumeSnapshot([historical, ...persistedEvents(store)], 'parent');
+      expect(folded.costUsd).toBeCloseTo(0.02);
+      expect(folded.tokens).toEqual({ input: 14, output: 6 });
+      expect(folded.reportedChildUsage?.size).toBe(0);
+      expect(folded.unattributedChildUsagePaths).toEqual(new Set(['sub']));
+      if (eventType === 'node_completed') {
+        const replayStore = createMockStore();
+        replayStore.getDagResumeSnapshot.mockResolvedValue(snapshot);
+        await executeDagWorkflow({
+          ...options,
+          deps: createMockDeps(replayStore),
+          priorCompletedNodes: snapshot.completedNodeOutputs,
+        });
+        expect(runChildWorkflow).not.toHaveBeenCalled();
+        expect(replayStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(replayStore.failWorkflowRun).not.toHaveBeenCalled();
+        expect(runUsageWrites(replayStore).at(-1)).toMatchObject({
+          total_cost_usd: 0.02,
+          total_tokens_in: 14,
+          total_tokens_out: 6,
+        });
+      }
+
+      expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe(
+        eventType === 'node_completed' ? historical.data.node_output : undefined
+      );
+    }
+  );
 
   it.each([
     { label: 'valid', malformed: false, counters: { total_tokens_out: 10 } },
@@ -123,6 +241,89 @@ describe('executeDagWorkflow -- workflow: node', () => {
       expect(writes[1]?.total_tokens_out).toBe(malformed ? null : 10);
       expect(writes[1]?.total_tokens_unknown).toBe(malformed ? true : undefined);
       expect(store.completeWorkflowRun).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each(['pending', 'running', 'paused'] as const)(
+    'waits on supported live child status %s on re-entry',
+    async status => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        store.pauseWorkflowRun.mock.calls.length > 0 ? 'paused' : 'running'
+      );
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('live-child', { status, metadata: { parent_node_id: 'sub' } }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+        throw new Error('Live child must not be dispatched');
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('live-child-reentry'),
+          workflow: {
+            name: 'parent',
+            nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          runChildWorkflow,
+        })
+      );
+
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    }
+  );
+
+  it.each(['unsupported', ''])(
+    'rejects unsupported persisted child status %j on re-entry',
+    async status => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const child = makeWorkflowRun('invalid-child', {
+        metadata: { parent_node_id: 'sub' },
+      });
+      Object.defineProperty(child, 'status', { value: status });
+      store.findChildRuns.mockResolvedValue([child]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+        throw new Error('Invalid child must not be dispatched');
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('invalid-child-reentry'),
+          workflow: {
+            name: 'parent',
+            nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          runChildWorkflow,
+        })
+      );
+
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(eventsOf(store)).toContainEqual({
+        event_type: 'node_failed',
+        step_name: 'sub',
+        data: expect.objectContaining({
+          failure_kind: 'unknown',
+          error: `Sub-run 'child-workflow' returned unexpected status '${status}'`,
+        }),
+      });
     }
   );
 

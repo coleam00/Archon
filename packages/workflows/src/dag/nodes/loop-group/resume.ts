@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { resolveBashPath } from '@archon/git';
 import { executeWaitNode } from '../wait/wait';
@@ -333,7 +334,12 @@ export async function resumeTerminalWait(
       ...snapshotBodySessionCursorAncestry(resume.bodySessionCursorAncestry),
     }
   );
-  const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  let status;
+  try {
+    status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  } catch (cause) {
+    throw new ParentStatusReadError(ctx.workflowRun.id, node.id, cause);
+  }
   if (ctx.containerPause?.publish !== undefined || status === 'paused') {
     return {
       state: 'running',
