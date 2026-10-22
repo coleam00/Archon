@@ -136,8 +136,8 @@ interface ResumeFold {
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
   readonly openAgentAttempts: Map<string, string>;
-  /** An attempt can carry a second terminal row (the dispatch catch re-finishes its start
-   * record after an engine-side throw); the live ledger charged only the first. */
+  /** A rejected terminal write may have committed before deferred usage is recorded.
+   * Both telemetry and budget charge each own-scope agent attempt once. */
   readonly settledAgentAttempts: Set<string>;
 }
 
@@ -242,7 +242,11 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
       cause: parseErr,
     });
   }
-  if (usage && nodeCostScope(usage.data) !== 'total') {
+  if (
+    usage &&
+    nodeCostScope(usage.data) !== 'total' &&
+    claimAgentUsage(fold, usage.data, usage.path)
+  ) {
     addUsage(
       fold,
       row.step_name,
@@ -293,19 +297,12 @@ function readRecord(
   }
 }
 
-function foldAgentAttempt(fold: ResumeFold, record: NodeRecord): void {
+function trackAgentStart(fold: ResumeFold, record: NodeRecord): void {
   const metadata = record.metadata;
   if (metadata?.node.kind !== 'agent' || metadata.accounting !== 'node') return;
-  const attemptId = metadata.attempt.id;
   if (record.eventType === 'node_started') {
-    fold.openAgentAttempts.set(attemptId, record.path);
-    return;
+    fold.openAgentAttempts.set(metadata.attempt.id, record.path);
   }
-  if (record.eventType !== 'node_completed' && record.eventType !== 'node_failed') return;
-  fold.openAgentAttempts.delete(attemptId);
-  if (fold.settledAgentAttempts.has(attemptId)) return;
-  fold.settledAgentAttempts.add(attemptId);
-  addAttemptSpend(fold.budget, record.path, metadata);
 }
 
 function foldInvocation(fold: ResumeFold, record: NodeRecord): void {
@@ -435,6 +432,15 @@ async function readCompletedOutput(
   };
 }
 
+function claimAgentUsage(fold: ResumeFold, data: SerializedNodeData, path: string): boolean {
+  if (data.node?.kind !== 'agent' || data.accounting !== 'node' || !data.attempt) return true;
+  fold.openAgentAttempts.delete(data.attempt.id);
+  if (fold.settledAgentAttempts.has(data.attempt.id)) return false;
+  fold.settledAgentAttempts.add(data.attempt.id);
+  addAttemptSpend(fold.budget, path, data.spend ? { spend: data.spend } : undefined);
+  return true;
+}
+
 function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): void {
   // Composed-instance terminals are the durable accounting source for their whole
   // scope. Their inner rows are observability writes and may be missing after a crash.
@@ -445,6 +451,7 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type === 'node_skipped_prior_success') return;
+  if (!claimAgentUsage(fold, record.data, record.path)) return;
   addUsage(
     fold,
     row.step_name,
@@ -475,7 +482,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   }
   const record = readRecord(fold, row, rawData);
   if (!record) return;
-  foldAgentAttempt(fold, record);
+  trackAgentStart(fold, record);
   foldInvocation(fold, record);
   const data = record.data;
   recordPriorFailure(fold.failedNodes, row.event_type, row.step_name, data);

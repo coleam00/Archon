@@ -163,8 +163,14 @@ it('reads deferred accounting separately and retains malformed usage for diagnos
   expect(usage?.data.tokens).toEqual({ input: 1, output: 2, cacheRead: 3 });
   expect(usage?.data.cost_usd).toBeUndefined();
   expect(usage?.rawUsage.costUsd).toBe('bad');
-  expect(Object.keys(usage!.data).sort()).toEqual(['accounting', 'invocation', 'tokens']);
+  expect(Object.keys(usage!.data).sort()).toEqual([
+    'accounting',
+    'attempt',
+    'invocation',
+    'tokens',
+  ]);
   expect(usage?.data.invocation).toEqual(metadata.invocation);
+  expect(usage?.data.attempt).toEqual(metadata.attempt);
   expect(readNodeRecordEvent(envelope)).toBeUndefined();
   expect(readDeferredNodeUsageEvent({ ...envelope, event_type: 'node_started' })).toBeUndefined();
 });

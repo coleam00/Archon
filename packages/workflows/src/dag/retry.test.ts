@@ -197,89 +197,156 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     );
   }
 
-  for (const rejection of ['next-start', 'next-completion', 'failure-settlement'] as const) {
-    it.each([
-      { label: 'priced', cost: 0.1 },
-      { label: 'unpriced', cost: undefined },
-    ])(`recovers durable retry usage after ${rejection} rejection ($label)`, async ({ cost }) => {
-      let calls = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        calls++;
-        if (calls > 1) yield { type: 'agent_message_chunk', text: 'Recovered.' };
-        yield {
-          type: 'result',
-          sessionId: 'retry',
-          cost: calls === 1 ? cost : 0.2,
-          tokens: { input: 10, output: 2 },
-          ...(calls === 1
-            ? { isError: true, failure: { class: 'transient' as const, evidence: 'interrupted' } }
-            : {}),
-        };
-      });
-      const store = createMockStore();
-      const platform = createMockPlatform();
-      const events: Array<Parameters<typeof foldDagResumeSnapshot>[0][number]> = [];
-      const error = new Error(`${rejection} unavailable`);
-      let rejected = false;
-      store.createWorkflowEvent.mockImplementation(async event => {
-        if (
-          !rejected &&
-          events.some(e => e.event_type === 'node_failed') &&
-          ((rejection === 'next-start' && event.event_type === 'node_started') ||
-            (rejection === 'next-completion' && event.event_type === 'node_completed') ||
-            (rejection === 'failure-settlement' && event.event_type === 'node_failed'))
-        ) {
-          rejected = true;
-          throw error;
-        }
-        events.push(event);
-      });
-      store.getDagResumeSnapshot.mockImplementation(() =>
-        foldDagResumeSnapshot(events, 'retry-event-rejected')
-      );
-      if (rejection === 'failure-settlement') {
-        platform.getStreamingMode.mockImplementation(() => {
-          if (calls === 1) throw new Error('preparation failed');
-          return 'batch';
-        });
-      }
-      let caught: unknown;
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform,
-            cwd: testDir,
-            workflowRun: makeWorkflowRun('retry-event-rejected'),
-            workflow: {
-              name: 'retry-event-rejected',
-              nodes: [
-                {
-                  id: 'work',
-                  kind: 'agent',
-                  source: { kind: 'inline', prompt: 'Work.' },
-                  retry: { max_attempts: 2, delay_ms: 0 },
-                },
-              ],
+  for (const rejection of [
+    'next-start',
+    'next-completion',
+    'next-failure',
+    'failure-settlement',
+  ] as const) {
+    const measuredSecondAttempt = rejection === 'next-completion' || rejection === 'next-failure';
+    const cases = [
+      ...[
+        { label: 'priced', cost: 0.1, secondCost: 0.2 },
+        { label: 'unpriced', cost: undefined, secondCost: 0.2 },
+        ...(measuredSecondAttempt ? [{ label: 'zero', cost: undefined, secondCost: 0 }] : []),
+      ].flatMap(testCase =>
+        (measuredSecondAttempt ? [false, true] : [false]).map(committed => ({
+          ...testCase,
+          committed,
+          recoveryRejected: false,
+        }))
+      ),
+      ...(measuredSecondAttempt
+        ? [
+            {
+              label: 'recovery also rejects',
+              cost: 0.1,
+              secondCost: 0.2,
+              committed: false,
+              recoveryRejected: true,
             },
-          })
+          ]
+        : []),
+    ];
+    it.each(cases)(
+      `recovers durable retry usage after ${rejection} rejection ($label, committed=$committed)`,
+      async ({ cost, secondCost, committed, recoveryRejected }) => {
+        let calls = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          calls++;
+          if (calls > 1) yield { type: 'agent_message_chunk', text: 'Recovered.' };
+          yield {
+            type: 'result',
+            sessionId: 'retry',
+            cost: calls === 1 ? cost : secondCost,
+            tokens: { input: 10, output: 2 },
+            ...(calls === 1 || (calls === 2 && rejection === 'next-failure')
+              ? { isError: true, failure: { class: 'transient' as const, evidence: 'interrupted' } }
+              : {}),
+          };
+        });
+        const store = createMockStore();
+        const platform = createMockPlatform();
+        const events: Array<Parameters<typeof foldDagResumeSnapshot>[0][number]> = [];
+        const error = new Error(`${rejection} unavailable`);
+        const recoveryError = new Error('accounting unavailable');
+        let rejected = false;
+        store.createWorkflowEvent.mockImplementation(async event => {
+          if (recoveryRejected && event.event_type === 'node_deferred_usage') throw recoveryError;
+          if (
+            !rejected &&
+            events.some(e => e.event_type === 'node_failed') &&
+            ((rejection === 'next-start' && event.event_type === 'node_started') ||
+              (rejection === 'next-completion' && event.event_type === 'node_completed') ||
+              (rejection === 'next-failure' && event.event_type === 'node_failed') ||
+              (rejection === 'failure-settlement' && event.event_type === 'node_failed'))
+          ) {
+            rejected = true;
+            if (committed) events.push(event);
+            throw error;
+          }
+          events.push(event);
+        });
+        store.getDagResumeSnapshot.mockImplementation(() =>
+          foldDagResumeSnapshot(events, 'retry-event-rejected')
         );
-      } catch (failure) {
-        caught = failure;
+        if (rejection === 'failure-settlement') {
+          platform.getStreamingMode.mockImplementation(() => {
+            if (calls === 1) throw new Error('preparation failed');
+            return 'batch';
+          });
+        }
+        const options = dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('retry-event-rejected'),
+          workflow: {
+            name: 'retry-event-rejected',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Work.' },
+                retry: { max_attempts: 2, delay_ms: 0 },
+              },
+            ],
+          },
+        });
+        let caught: unknown;
+        try {
+          await executeDagWorkflow(options);
+        } catch (failure) {
+          caught = failure;
+        }
+        expect(rejected).toBe(true);
+        expect(caught).toBeInstanceOf(NodeEventWriteError);
+        if (!(caught instanceof NodeEventWriteError)) throw caught;
+        expect(caught.cause).toBe(error);
+        const durable = await foldDagResumeSnapshot(events, 'retry-event-rejected');
+        if (recoveryRejected) {
+          expect(caught.unresolvedUsage?.cause).toBe(recoveryError);
+          expect(caught.unresolvedUsage?.event.data.cost_usd).toBe(secondCost);
+          expect(caught.message).toContain('unresolved measured usage');
+          expect(caught.message).toContain('"value":0.2');
+          expect(caught.message).toContain('accounting unavailable');
+          const usage = runUsageWrites(store).at(-1);
+          expect(usage?.total_cost_usd).toBe(cost);
+          expect(usage?.total_cost_incomplete).toBe(true);
+          expect(usage?.total_tokens_unknown).toBe(true);
+          return;
+        }
+        expect(caught.unresolvedUsage).toBeUndefined();
+        const expectedCost = measuredSecondAttempt ? (cost ?? 0) + secondCost : cost;
+        expect(durable.costUsd).toBe(expectedCost);
+        expect(durable.costIncomplete === true).toBe(cost === undefined);
+        const usage = runUsageWrites(store).at(-1);
+        expect(usage?.total_cost_usd).toBe(durable.costUsd);
+        expect(usage?.total_cost_incomplete === true).toBe(durable.costIncomplete === true);
+        expect(usage?.total_tokens_in).toBe(measuredSecondAttempt ? 20 : 10);
+        expect(usage?.total_tokens_out).toBe(measuredSecondAttempt ? 4 : 2);
+        if (measuredSecondAttempt) {
+          expect(durable.budget.spendUsd).toBeCloseTo((cost ?? 0) + secondCost);
+          expect(durable.budget.costUnavailable !== undefined).toBe(cost === undefined);
+          const callsBeforeResume = calls;
+          await executeDagWorkflow({
+            ...options,
+            workflowRun: makeWorkflowRun('retry-event-rejected'),
+            priorCompletedNodes: durable.completedNodeOutputs,
+            priorUsage: durable,
+          });
+          const resumed = await foldDagResumeSnapshot(events, 'retry-event-rejected');
+          const newAttempts = calls - callsBeforeResume;
+          expect(newAttempts).toBe(durable.completedNodeOutputs.has('work') ? 0 : 1);
+          expect(resumed.costUsd).toBeCloseTo((expectedCost ?? 0) + newAttempts * secondCost);
+          expect(resumed.costIncomplete === true).toBe(cost === undefined);
+          const resumedUsage = runUsageWrites(store).at(-1);
+          expect(resumedUsage?.total_cost_usd).toBeCloseTo(resumed.costUsd ?? 0);
+          expect(resumedUsage?.total_cost_incomplete === true).toBe(cost === undefined);
+          expect(resumedUsage?.total_tokens_in).toBe(20 + 10 * newAttempts);
+        }
       }
-      expect(rejected).toBe(true);
-      expect(caught).toBeInstanceOf(NodeEventWriteError);
-      if (!(caught instanceof NodeEventWriteError)) throw caught;
-      expect(caught.cause).toBe(error);
-      const durable = await foldDagResumeSnapshot(events, 'retry-event-rejected');
-      expect(durable.costUsd).toBe(cost);
-      expect(durable.costIncomplete === true).toBe(cost === undefined);
-      const usage = runUsageWrites(store).at(-1);
-      expect(usage?.total_cost_usd).toBe(durable.costUsd);
-      expect(usage?.total_cost_incomplete === true).toBe(durable.costIncomplete === true);
-      expect(usage?.total_tokens_in).toBe(10);
-      expect(usage?.total_tokens_out).toBe(2);
-    });
+    );
   }
 
   it('node succeeds on retry after a transient error', async () => {

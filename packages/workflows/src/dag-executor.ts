@@ -435,7 +435,7 @@ export async function executeDagWorkflow(
   };
 
   await persistAuthoredOutcome();
-  const refreshRunUsage = async (): Promise<void> => {
+  const refreshRunUsage = async (error: unknown): Promise<void> => {
     try {
       const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
       runCtx.totalCostUsd = durable.costUsd;
@@ -447,6 +447,11 @@ export async function executeDagWorkflow(
         { err: readError as Error, workflowRunId: workflowRun.id },
         'dag.unwind_usage_refresh_failed'
       );
+    }
+    if (error instanceof NodeEventWriteError && error.unresolvedUsage) {
+      runCtx.totalCostIncomplete = true;
+      runCtx.totalTokensUnknown = true;
+      runCtx.totalTokens = undefined;
     }
   };
 
@@ -467,7 +472,7 @@ export async function executeDagWorkflow(
       error instanceof NodeEventWriteError
     ) {
       // These exits skip layer aggregation. Recover the usage that reached durable storage.
-      await refreshRunUsage();
+      await refreshRunUsage(error);
     }
     if (error instanceof RunSourceUnreadableError) {
       sourceUnreadable = error;
