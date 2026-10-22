@@ -335,4 +335,9 @@ describe('loop wiring', () => {
       expect(readFileSync(resolve(pack, file), 'utf8')).not.toMatch(/consumer\.py|factory\//);
     }
   });
+
+  it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
+    const manage = readFileSync(resolve(pack, 'manager/commands/manage.md'), 'utf8');
+    expect(manage).toContain('When the default branch moves during your pass, do not rerun anything');
+  });
 });
