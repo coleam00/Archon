@@ -51,7 +51,7 @@ describe('the default branch snapshot', () => {
     expect(JSON.parse(run.stdout)).toEqual([]);
   });
 
-  it.each(['before lookup', 'after lookup'])('fetches fresh objects when the remote advances %s without changing tracking refs or FETCH_HEAD', timing => {
+  it.each(['before fetch', 'at fetch'])('fetches fresh objects when the remote advances %s without changing tracking refs or FETCH_HEAD', timing => {
     const cwd = gitCheckout({}, track);
     const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
     git(cwd, 'fetch', '-q', 'upstream', 'dev');
@@ -64,22 +64,21 @@ describe('the default branch snapshot', () => {
     writeFileSync(join(writer, '.archon/sdlc/policy/maintainers.json'), '["NewMaintainer"]');
     git(writer, 'add', '.archon/sdlc/policy/maintainers.json');
     git(writer, 'commit', '-q', '-m', 'new maintainer');
-    if (timing === 'before lookup') git(writer, 'push', '-q', 'origin', 'dev');
+    if (timing === 'before fetch') git(writer, 'push', '-q', 'origin', 'dev');
     const fresh = git(writer, 'rev-parse', 'HEAD');
 
     const run = spawnSync(process.execPath, ['-e', `
       import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
       const nativeGit = Bun.spawnSync.bind(Bun);
-      let advance = ${JSON.stringify(timing === 'after lookup')};
+      let advance = ${JSON.stringify(timing === 'at fetch')};
       Bun.spawnSync = (argv, options) => {
-        const result = nativeGit(argv, options);
-        if (advance && argv[0] === 'git' && argv[1] === 'ls-remote') {
+        if (advance && argv[0] === 'git' && argv[1] === 'fetch') {
           advance = false;
           const pushed = nativeGit(['git', '-C', ${JSON.stringify(writer)}, 'push', '-q', 'origin', 'dev']);
           if (pushed.exitCode !== 0) throw new Error(pushed.stderr.toString());
         }
-        return result;
+        return nativeGit(argv, options);
       };
       const repo = ${JSON.stringify(PR.repo)};
       console.log(JSON.stringify({ base: fetchDefaultBranch(repo), maintainers: [...readMaintainers(repo)] }));
@@ -90,6 +89,51 @@ describe('the default branch snapshot', () => {
     expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
     expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
   });
+
+  it.each(['switch before fetch', 'switch after fetch', 'advance after fetch', 'missing default after fetch'])(
+    'binds the default branch identity to the fetched snapshot: %s', change => {
+      const cwd = gitCheckout({}, track);
+      const remote = git(cwd, 'remote', 'get-url', 'upstream');
+      const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
+      const fresh = git(cwd, 'rev-parse', 'HEAD');
+      git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/heads/main');
+      git(cwd, 'fetch', '-q', 'upstream', 'dev');
+      const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
+      const run = spawnSync(process.execPath, ['-e', `
+        import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
+        const nativeGit = Bun.spawnSync.bind(Bun);
+        const change = ${JSON.stringify(change)};
+        const mutate = () => {
+          const argv = change === 'advance after fetch'
+            ? ['git', 'push', '-q', ${JSON.stringify(remote)}, 'HEAD:refs/heads/dev']
+            : ['git', '--git-dir', ${JSON.stringify(remote)}, 'symbolic-ref', 'HEAD',
+                change === 'missing default after fetch' ? 'refs/heads/missing' : 'refs/heads/main'];
+          const changed = nativeGit(argv);
+          if (changed.exitCode !== 0) throw new Error(changed.stderr.toString());
+        };
+        Bun.spawnSync = (argv, options) => {
+          if (argv[0] === 'git' && argv[1] === 'fetch' && change === 'switch before fetch') mutate();
+          const result = nativeGit(argv, options);
+          if (argv[0] === 'git' && argv[1] === 'fetch' && change !== 'switch before fetch') mutate();
+          return result;
+        };
+        console.log(JSON.stringify(fetchDefaultBranch(${JSON.stringify(PR.repo)})));
+      `], { cwd, encoding: 'utf8' });
+      if (change === 'switch before fetch') {
+        expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(JSON.parse(run.stdout)).toEqual({ branch: 'main', sha: fresh });
+        expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/dev')).toContain(stale);
+      } else {
+        expect(run.status).not.toBe(0);
+        expect(run.stderr).toContain(change === 'missing default after fetch'
+          ? 'reports no default branch' : 'default branch changed during fetch');
+        expect(run.stdout).toBe('');
+      }
+      expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);
+      expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
+      expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
+    }
+  );
 });
 
 // pushHead is publish-pr's push; a driver runs it alone against real git remotes.

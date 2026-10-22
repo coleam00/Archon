@@ -990,12 +990,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }, { preload: `
       const beforeFetch = Bun.spawnSync.bind(Bun);
       Bun.spawnSync = (argv, settings) => {
-        const result = beforeFetch(argv, settings);
-        if (argv[0] === 'git' && argv[1] === 'ls-remote' && result.exitCode === 0) {
+        if (argv[0] === 'git' && argv[1] === 'fetch') {
           const configured = beforeFetch(['git', 'config', 'remote.upstream.uploadpack', 'false'], settings);
           if (configured.exitCode !== 0) throw new Error(configured.stderr.toString());
         }
-        return result;
+        return beforeFetch(argv, settings);
       };
     ` });
     expect(recorded.code).toBe(1);

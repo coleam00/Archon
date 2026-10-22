@@ -98,13 +98,17 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
  */
 export function fetchDefaultBranch(repo: Repo): { readonly branch: string; readonly sha: string } {
   const remote = remoteFor(repo);
-  const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
-  const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
-  if (branch === undefined) throw new Error(`${remote} reports no default branch`);
   const ref = `refs/archon/fetch/${randomUUID()}`;
   try {
-    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `refs/heads/${branch}:${ref}`);
-    return { branch, sha: gitOrThrow('rev-parse', '--verify', ref) };
+    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `HEAD:${ref}`);
+    const sha = gitOrThrow('rev-parse', '--verify', ref);
+    const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
+    const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
+    if (branch === undefined) throw new Error(`${remote} reports no default branch`);
+    if (!head.split('\n').includes(`${sha}\tHEAD`)) {
+      throw new Error(`${remote} default branch changed during fetch; cannot verify the fetched snapshot`);
+    }
+    return { branch, sha };
   } finally {
     gitOrThrow('update-ref', '-d', ref);
   }
