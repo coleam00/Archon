@@ -712,6 +712,17 @@ then the project's file, whose lines win where the two conflict.
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.
+- **Merged issues.** A pull request that links its issue with `Refs #N` merges
+  without closing it, and the issue keeps its intake stage, so the build queue could
+  claim it again. When `retriage_as` names a maintainer login, `retriage` reads the
+  issue of each build item whose pull request merged, by the gate this run or before
+  it. One still open gets `archon-triage` and an `archon-intake` run started detached
+  with that label event, recorded as added by `retriage_as`. Intake stays the judge:
+  it re-triages only when that login is on the maintainer list, and closes the issue
+  as delivered or keeps it with what is still open. A closed issue and an own pull
+  request, which has no issue, are left alone. A failed read, label write or launch
+  is named in the node's summary and stops nothing else. Empty `retriage_as`
+  re-triages nothing.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
   one choice holds merges until it is green, or else the first pull request the sweep
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
@@ -728,7 +739,7 @@ then the project's file, whose lines win where the two conflict.
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config and its `order`,
-  `limit` and `merge_method`) merges it once the
+  `limit`, `merge_method` and `retriage_as`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue, whose next round starts at once on the build queue's own

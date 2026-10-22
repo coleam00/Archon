@@ -90,6 +90,7 @@ function main(): void {
     order: text(process.env.INPUTS_ORDER),
     limit: text(process.env.INPUTS_LIMIT),
     merge_method: text(process.env.INPUTS_MERGE_METHOD),
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
   };
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
