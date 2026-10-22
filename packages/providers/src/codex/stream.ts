@@ -251,6 +251,8 @@ export interface TurnRequest {
   onThread: (threadId: string) => void;
   /** Receives the turn id as soon as it exists, so cancel can interrupt it. */
   onTurn: (turnId: string) => void;
+  /** Receives the context window Codex reports for the turn's model. */
+  onContextWindow: (tokens: number) => void;
 }
 
 /** The ids of the parent thread and turn this stream observes. */
@@ -466,6 +468,8 @@ async function* observeNotification(
       // Usage reported for another turn of the thread is not this turn's.
       const { params } = notification;
       if (params.threadId === ids.threadId && params.turnId === ids.turnId) {
+        const contextWindow = params.tokenUsage.modelContextWindow;
+        if (contextWindow !== null) request.onContextWindow(contextWindow);
         observation.usageSpan = {
           first: observation.usageSpan?.first ?? params.tokenUsage,
           end: params.tokenUsage.total,

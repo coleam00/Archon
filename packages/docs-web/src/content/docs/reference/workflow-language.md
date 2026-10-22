@@ -121,7 +121,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 |-------|------|---------|-------------|
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
-| `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi/Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
+| `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi (answered through a `structured_output` tool call, with JSON extracted from the reply as the fallback) and Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
 | `allowed_tools` | string[] | unset | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
 | `denied_tools` | string[] | unset | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
@@ -176,7 +176,13 @@ remain held after safe group signals, cancellation still ends the run and warns 
 cancel result and run event that some process outside the run's process group holds the
 output and was not signalled. Archon does not identify that holder. Use `lsof` on the run's
 checkout to find it before reusing or removing the checkout.
-Background jobs of already-completed nodes are excluded. Detached POSIX commands rely on
+Background jobs of already-completed nodes are excluded from automatic signalling.
+For POSIX host commands that started or completed, cancellation reports possible untracked
+background work in the cancel result and run event, including after continuation under a
+new detached owner. Neither a survivor nor cleanup is confirmed. Inspect checkout processes
+with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal.
+Owner-stop warnings retain owned checkouts for inspection.
+Detached POSIX commands rely on
 explicit cancellation; abrupt owner death does not run their group cleanup.
 On Windows, cancellation ends the
 owner's Job Object, which also holds node processes whose parent already exited.
@@ -211,7 +217,7 @@ nodes:
 `synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source takes one of two forms:
 
 - **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
-- **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body wait moves on to the next iteration once answered. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
+- **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body attention wait compares the question on the first answer and may ask again in the same iteration; after one re-ask, it accepts the next answer even if the question changes again. Once an answer is accepted, `until_bash` determines whether the group completes or starts the next iteration. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
 
 Scalar `context: shared` is only for ambient session threading through a sequential layer. It is rejected on a node in a structurally parallel layer because there is no single unambiguous ambient lineage there. Use named resume as above, or add dependencies to serialize the nodes. This remains a structural rule when sibling `when:` conditions appear mutually exclusive: Archon constructs the parallel layer before evaluating those conditions.
 
@@ -743,6 +749,8 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
+On the first answer, an attention wait compares its current message, form, and options with the question it paused on. If they changed, it discards the old answer and asks a fresh question. After this one re-ask, the next answer is accepted without comparing the question again, even if it changed. This bound prevents a question built from a value that changes on every resume from blocking the run forever. Loop-owned questions use the paused iteration's body outputs and saved loop reference values without repeating body work. Older loop waits without saved loop references can still resume when their question does not use those references; otherwise validation fails with a restart explanation. An older Archon binary can strip the saved references when writing the wait, so keep the newer binary for runs using this protection.
+
 A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
 
 Before forms existed, an attention wait produced `{ status, waited_ms }`. It now produces only its answer, so a workflow that reads `status` or `waited_ms` from an attention wait fails to load; read `text` instead. A run paused at such a wait usually resumes from the workflow source it captured, which still reads the old fields, so it cannot resume: abandon it and start a fresh run of the edited workflow.
@@ -882,7 +890,7 @@ See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/pac
 
 ### One retry layer
 
-The node retry is the only retry Archon adds. Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
+The node retry is the only retry Archon adds, with one exception: when the provider reports that the session a node resumed no longer exists, the engine makes a single fresh-session attempt (see [When a resume can't be restored](#when-a-resume-cant-be-restored)). Each provider makes one attempt per call and reports a typed failure, and the engine decides whether to try again. Before each retry the conversation receives a notice such as ``Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...``. A vendor's own client may still retry a single API request inside one attempt, such as Claude Code's API retries or Pi's `retry` setting. When every node retry is spent, the run fails; resuming it is your choice (see [DAG Resume on Failure](#dag-resume-on-failure)).
 
 ## Run budgets
 
@@ -1089,7 +1097,9 @@ If the stored session is gone (for example, a Pi JSONL file was moved), the prov
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
-The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
+The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run: the fresh session is already a clean start, so re-running would only repeat it. Expect this only when a resumed session became unavailable; warm resumes and first-time runs are unaffected.
+
+Claude does not fall back on its own: it rejects a resume whose session transcript no longer exists. When Archon confirms on the host that the transcript is gone and the rejection arrived before any output or tool call, it runs the node once more on a fresh session and shows the same warning. This covers `persist_session` nodes, sessions threaded from an earlier node in the run, and plain `loop:` iterations with `fresh_context: false`, which get a loop-specific notice instead. A second rejection, a rejection after output, or a run inside a container fails the node as before. A named resume (`context: { resume }`) never falls back and fails.
 
 Codex does not fall back: a thread it cannot resume or fork fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. A `persist_session` node on Codex forks the thread an earlier run saved, so once that thread is gone (its rollout under the Codex home was deleted, or the run uses another `CODEX_HOME`) the node fails on every run in that scope. Clear the saved session with [`archon workflow reset-sessions`](/reference/cli/#workflow-reset-sessions) to start the node fresh.
 
@@ -1382,10 +1392,13 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
   matter.
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
-  one working path, and the path lock **rejects** a second run on that path outright: it
-  does not queue it. So concurrent state writes cannot arise there in the first place; the
-  second invocation fails fast with "This worktree is in use" and the operator re-runs it
-  afterwards.
+  one working path. With the default `mutates_checkout: true`, direct executor dispatch
+  rejects a second run on a held path with "This worktree is in use"; the operator must
+  re-run it afterwards. Trigger admission instead queues or skips the request according
+  to `overlap`, naming the holding run as its blocker. See
+  [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+  `mutates_checkout: false` bypasses the executor's path lock, so it does not prevent
+  concurrent state writes.
 
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
@@ -2178,7 +2191,9 @@ nodes:
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
-lock, serialize runs on the same path). It is author-declared on purpose: the author of a
+lock, prevent overlapping execution on the same path). Direct executor dispatch rejects a
+run on a held path; [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
+queues or skips it according to `overlap`. It is author-declared on purpose: the author of a
 review or research workflow is the one who knows it only reads. Children launched by
 separate `workflow:` nodes still compete for the path lock unless they declare it.
 Children of the same `fan_out:` node and their nested sub-runs may share the checkout
@@ -2287,6 +2302,34 @@ Resume uses the captured parent source, so correcting a binding in that source r
 a fresh launch. Project child workflows still resolve from the live authoring directory
 when spawned; installed packs remain captured. A transient refusal may also clear before
 resume.
+
+##### A completed fan-out node is not completed child work
+
+Under `all_done` the node completes when every child is terminal, not when every child
+succeeded. Once every slot settles, the node records what became of each one as
+`fan_out_outcome` on its `node_completed` or `node_failed` event: one slot per item, in item
+order, plus a tally that always agrees with the slots. Each slot is one of:
+
+| Outcome | Meaning |
+|---------|---------|
+| `completed` | the child run completed |
+| `failed` | a child run exists and failed |
+| `not_started` | no child run exists for this item; the slot's `error` is the refusal, its only record |
+| `cancelled_by_engine` | the engine cancelled the child: a fan-out cancel or a failed start-time precondition |
+| `cancelled_by_workflow` | the child's own workflow ended it: a `cancel:` node or a rejected approval gate |
+| `cancelled_out_of_band` | an operator, or a conversation reset, cancelled the child |
+| `cancelled_unattributed` | the child was cancelled before cancellation reasons were recorded, so who cancelled it cannot be told |
+
+Each slot is read from the child's durable run, so the same child gets the same outcome
+whatever `max_parallel` was and however many resumes it took. When a completed node has
+unfinished slots, the engine logs `workflow.fan_out_completed_with_unfinished_children` and
+sends one notice. The node and the run still complete. The all-refused failure above still
+applies, and its `node_failed` event carries the `not_started` slots.
+
+Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
+in the console. It is not a `$node.*` reference: a downstream node that decides what the
+results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
 
 ##### Why `all_done` is the default
 

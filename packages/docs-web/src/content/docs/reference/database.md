@@ -106,7 +106,7 @@ database storage.
 
 ## SQLite (Default - No Setup Required)
 
-With `store: database` (the default), **omit `DATABASE_URL`** from your `.env` file. The app will automatically:
+With `store: database` (the default), **leave `DATABASE_URL` unset** in your shell and Archon's environment files. The app will automatically:
 - Create a SQLite database at `~/.archon/archon.db`
 - Initialize the schema on first run
 - Use this database for operations with `store: database`
@@ -142,7 +142,7 @@ commits. No remote deletion runs under the SQLite writer. Enable GitHub's
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 
-Set your remote connection string in `.env`:
+Set your remote connection string in `~/.archon/.env` for user-wide settings or `<cwd>/.archon/.env` for project overrides. A target repository's `<cwd>/.env` is stripped at startup. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence and the source-server exception. For Docker, use the [Compose `.env` file](/deployment/docker/#configure-env).
 
 ```ini
 DATABASE_URL=postgresql://user:password@host:5432/dbname
@@ -211,7 +211,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_workflow_runs`** - Workflow execution tracking
   - Tracks active workflows per conversation
-  - Locks concurrent execution per `working_path`: a second dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Stale `pending` rows older than 5 minutes are treated as orphaned and ignored. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
+  - Guards concurrent execution per `working_path`: direct executor dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Workflows declaring `mutates_checkout: false` bypass this executor guard. [Trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) queues or skips guarded starts on held paths according to `overlap`, including paths held by manual runs or other resources. Read-only starts may proceed beside foreign holders; same-resource checkout serialization still applies. Pending rows older than 5 minutes are ignored by the path guard without changing their lifecycle state. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.

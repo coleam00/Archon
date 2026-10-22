@@ -260,7 +260,10 @@ the include.
 On a `workflow:` node, `fan_out.max_parallel` limits unfinished children (default
 `5`). `max_parallel: all` starts every item at once: use it when each child asks an
 independent attention question, because a paused child keeps its slot and a numeric
-window leaves later questions unstarted.
+window leaves later questions unstarted. Under `join: all_done` the node completes once
+every child is terminal, even when some failed, never started or were cancelled; the run
+records each slot's outcome for operators (`workflow get`), but a downstream node that
+judges the results reads the `archon_failed` markers in `$<id>.output`.
 
 Put `fan_out:` on `include:` when runtime data determines how many copies of a
 static block should run inside the parent run:
@@ -359,7 +362,11 @@ concurrently.
   producer fails the binding
 - `$INPUTS.<name>` — declared workflow inputs, also delivered as
   `INPUTS_<UPPER_SNAKE>` to bash/script
-- `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read
+- `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.
+  Throwaway checkouts and dependency installs go under `$ARTIFACTS_DIR/.archon/scratch/`
+  (create it with `mkdir -p`), which Archon deletes once the run ends and its nodes have
+  stopped (a container run's when its container is removed); the rest of
+  `$ARTIFACTS_DIR` is kept
 - In `bash:` and `script:` sources, user-controlled variables (`$ARGUMENTS`,
   `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`,
   `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as

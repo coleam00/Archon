@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { validateCommand, terminateTree } from '@archon/paths/plugin-process';
+import type { PluginMetadata } from './operations';
 export const FORGE_PLUGIN_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 export const FORGE_PLUGIN_TIMEOUT_MS = 30_000;
 
@@ -39,11 +40,16 @@ const SAFE_ENV = new Set([
   'TZ',
 ]);
 
-export function pluginProcessEnv(env: NodeJS.ProcessEnv, token?: string): NodeJS.ProcessEnv {
+export function pluginProcessEnv(
+  env: NodeJS.ProcessEnv,
+  token?: string,
+  forge?: PluginMetadata['forge']
+): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (SAFE_ENV.has(key.toUpperCase()) && value !== undefined) clean[key] = value;
   }
+  if (forge === 'github' && env.GITHUB_URL !== undefined) clean.GITHUB_URL = env.GITHUB_URL;
   if (token !== undefined) clean.ARCHON_FORGE_TOKEN = token;
   return clean;
 }
@@ -61,6 +67,7 @@ export async function runPluginProcess(
     env: NodeJS.ProcessEnv;
     stdin?: string;
     token?: string;
+    forge?: PluginMetadata['forge'];
     timeoutMs?: number;
     maxOutputBytes?: number;
     signal?: AbortSignal;
@@ -100,7 +107,7 @@ export async function runPluginProcess(
     try {
       child = spawn(argv.command, [...argv.args, ...operationArgs], {
         detached: process.platform !== 'win32',
-        env: pluginProcessEnv(options.env, options.token),
+        env: pluginProcessEnv(options.env, options.token, options.forge),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
         timeout: (options.timeoutMs ?? FORGE_PLUGIN_TIMEOUT_MS) + 5_000,

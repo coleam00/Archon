@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   isRunBlockedOnChild,
@@ -303,6 +304,8 @@ export async function cancelRunAndCleanup(
   let cancelledRuns: WorkflowRun[] = [];
   if (cancelled) {
     ({ failures: cascadeFailures, runs: cancelledRuns } = await cascadeCancelChildren(ctx, run.id));
+    // An output holder the stop left running may still write a descendant's scratch.
+    if (!stopWarnings.length) for (const child of cancelledRuns) await releaseRunScratch(child);
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 

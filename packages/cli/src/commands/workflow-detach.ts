@@ -1,3 +1,4 @@
+import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
   getArchonHome,
@@ -25,12 +26,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
-import {
-  DETACHED_LAUNCH_TOKEN_ENV,
-  DETACHED_LAUNCH_METADATA_KEY,
-  matchesDetachedLaunch,
-  DETACHED_RUN_OWNER_ENV,
-} from '../utils/detached-run-control';
+import { DETACHED_LAUNCH_TOKEN_ENV, DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
@@ -329,15 +325,12 @@ export async function recordDetachedChildStartupFailure(
   error: Error
 ): Promise<void> {
   const { detachedRunId, detachedProcessOwner, launchToken } = request;
-  if (detachedRunId === undefined || !detachedProcessOwner) return;
+  if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
-    const row = await host.deps.store.getWorkflowRun(detachedRunId);
-    if (row?.status !== 'pending' || !matchesDetachedLaunch(row.metadata, launchToken)) return;
-    if ((await host.deps.store.getWorkflowRunStatus(detachedRunId)) !== 'pending') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
-      { exitReason: 'launch_failed' }
+      { exitReason: 'launch_failed', pendingLaunchToken: launchToken }
     );
   } catch (dbError) {
     getLog().error(

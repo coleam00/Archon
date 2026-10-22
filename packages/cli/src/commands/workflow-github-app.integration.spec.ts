@@ -7,7 +7,10 @@ import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  DetachedRunOwnerUnavailableError,
+  requestDetachedRunStop,
+} from '@archon/core/services/run-owner-stop';
 
 const repo = resolve(import.meta.dir, '../../../..');
 const roots: string[] = [];
@@ -23,10 +26,7 @@ afterEach(async () => {
   try {
     for (const run of detachedRuns.splice(0)) {
       process.env.ARCHON_HOME = run.home;
-      if (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) {
-        const target = await requestDetachedRunStop(run.id);
-        await target.stop();
-      }
+      await stopOwnerIfLive(run.id);
     }
   } finally {
     if (savedHome === undefined) delete process.env.ARCHON_HOME;
@@ -34,6 +34,17 @@ afterEach(async () => {
   }
   for (const root of roots.splice(0)) await removeTempTree(root);
 });
+
+/** A finished run's owner exits on its own, so it may be gone by the time it is asked to stop. */
+async function stopOwnerIfLive(runId: string): Promise<void> {
+  try {
+    await (await requestDetachedRunStop(runId)).stop();
+  } catch (error) {
+    if (error instanceof DetachedRunOwnerUnavailableError && error.reason === 'unreachable') return;
+    throw error;
+  }
+}
+
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({
     type: 'pkcs1',

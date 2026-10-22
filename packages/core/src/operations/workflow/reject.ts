@@ -1,4 +1,5 @@
 import { captureApprovalResolved } from '@archon/paths';
+import { noExecutorCanWrite, releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   isApprovalContext,
   isGateResolved,
@@ -29,6 +30,7 @@ import {
   gateCompletionEvent,
   publishGateExecution,
 } from './gate-publishing';
+import { reclaimCancelledRunContainer } from './teardown';
 
 export interface RejectionOperationResult {
   workflowName: string;
@@ -343,6 +345,15 @@ async function rejectGate(
     completedGateEvent === undefined ? [rejectionEvent] : [completedGateEvent, rejectionEvent]
   );
 
+  const cancelled = !plan.willStageRework && !plan.willResolveNewMode;
+  // The container backend removes a container run's scratch only with its container, so
+  // the container is reclaimed only once no executor can still run in it. A reclaim
+  // failure is logged there.
+  if (cancelled && noExecutorCanWrite(run)) {
+    await reclaimCancelledRunContainer(ctx, run);
+    await releaseRunScratch(run);
+  }
+
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.
   captureApprovalResolved({ resolution: 'rejected' });
@@ -353,7 +364,7 @@ async function rejectGate(
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
-    cancelled: !plan.willStageRework && !plan.willResolveNewMode,
+    cancelled,
     maxAttemptsReached: plan.maxAttemptsReached,
     writeBack: false,
     newMode: plan.willResolveNewMode,

@@ -28,43 +28,6 @@ import { getLog } from './log';
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
 export type ScopeFiles = Map<string, ScopeFile>;
 
-/**
- * One-time deprecation warning for the pre-refactor `~/.archon/.archon/workflows/`
- * location. Scoped to the process so the warning fires exactly once regardless
- * of how many times discovery runs.
- *
- * The legacy path is ONLY probed for detection — workflows placed there are not
- * read. Users migrate manually via the `mv` command printed in the warning.
- * Exported so tests can reset it between cases.
- */
-let hasWarnedLegacyHomePath = false;
-export function resetLegacyHomeWarningForTests(): void {
-  hasWarnedLegacyHomePath = false;
-}
-
-async function maybeWarnLegacyHomePath(): Promise<void> {
-  if (hasWarnedLegacyHomePath) return;
-  // Set the flag eagerly so concurrent discovery calls (e.g. parallel codebase
-  // resolution at server startup) can't both pass the guard and double-warn.
-  hasWarnedLegacyHomePath = true;
-
-  const legacyPath = archonPaths.getLegacyHomeWorkflowsPath();
-  const newPath = archonPaths.getHomeWorkflowsPath();
-  try {
-    await access(legacyPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return; // happy path — legacy location not in use
-    // EACCES/EPERM/EIO: directory exists but we can't read it. Surface at WARN
-    // so the user sees it — silent debug would hide a real permission issue.
-    getLog().warn({ err, legacyPath }, 'workflow.legacy_home_path_probe_error');
-    return;
-  }
-  // Legacy directory exists — surface an actionable migration hint exactly once.
-  const moveCommand = `mv "${legacyPath}" "${newPath}" && rmdir "${join(archonPaths.getArchonHome(), '.archon')}"`;
-  getLog().warn({ legacyPath, newPath, moveCommand }, 'workflow.legacy_home_path_detected');
-}
-
 function accessError(filename: string, error: unknown): WorkflowLoadError {
   return {
     filename,
@@ -107,7 +70,10 @@ export async function loadBundledScope(
     }
     if (appResult.errors.length > 0) {
       getLog().warn(
-        { errorCount: appResult.errors.length, errors: appResult.errors },
+        {
+          errorCount: appResult.errors.length,
+          errors: appResult.errors.map(({ filename, errorType }) => ({ filename, errorType })),
+        },
         'app_default_workflow_errors'
       );
       context.allErrors.push(...appResult.errors);
@@ -141,10 +107,7 @@ function loadEmbeddedWorkflows(context: WorkflowParseContext): DirLoadResult {
     const result = parseWorkflow(content, filename, context.providers, context.configuredEnvNames);
     if (!result.workflow) {
       // Bundled workflows should ALWAYS be valid - this indicates a build-time error
-      getLog().error(
-        { filename, contentPreview: content.slice(0, 200) + '...' },
-        'bundled_workflow_parse_failed'
-      );
+      getLog().error({ filename }, 'bundled_workflow_parse_failed');
       errors.push(result.error);
       continue;
     }
@@ -204,7 +167,6 @@ async function loadCapturedBundle(
  * responsible for surfacing home-scoped content everywhere.
  */
 export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFiles): Promise<void> {
-  await maybeWarnLegacyHomePath();
   const homeWorkflowPath = context.roots.globalWorkflows;
   getLog().debug({ homeWorkflowPath }, 'searching_home_workflows');
   try {

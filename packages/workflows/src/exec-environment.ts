@@ -1,4 +1,5 @@
 import type { NodeExecutionMetadata } from './schemas/node-execution';
+import { USER_CONTROLLED_VARIABLES } from './user-controlled-variables';
 
 /** The part of a node's execution record its own process may read. */
 export type NodeExecutionIdentity = Pick<
@@ -35,7 +36,10 @@ export interface ExecNodeEnvironmentContext {
 }
 
 export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): NodeJS.ProcessEnv {
-  const issueContext = context.issueContext ?? '';
+  const userVariables: Record<string, string> = {};
+  for (const group of USER_CONTROLLED_VARIABLES) {
+    for (const name of group.names) userVariables[name] = context[group.source] ?? '';
+  }
   return {
     ARTIFACTS_DIR: context.artifactsDir,
     STATE_DIR: context.stateDir,
@@ -46,14 +50,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // present. Deliver it the same way.
     WORKFLOW_ID: context.workflowId,
     BASE_BRANCH: context.baseBranch,
-    USER_MESSAGE: context.userMessage,
-    ARGUMENTS: context.userMessage,
-    LOOP_USER_INPUT: context.loopUserInput,
-    LOOP_PREV_OUTPUT: context.loopPrevOutput,
-    REJECTION_REASON: context.rejectionReason,
-    CONTEXT: issueContext,
-    EXTERNAL_CONTEXT: issueContext,
-    ISSUE_CONTEXT: issueContext,
+    ...userVariables,
     // The listing path, delivered like the other engine-reserved keys: configured
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,

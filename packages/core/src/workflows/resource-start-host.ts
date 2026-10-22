@@ -1,3 +1,4 @@
+import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -39,6 +40,7 @@ import {
 } from '@archon/workflows/run-config';
 import {
   RESOURCE_START_METADATA_KEY,
+  ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
   type ResourceStartDisposition,
@@ -207,6 +209,7 @@ async function prepareBinding(
       [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
       [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
       [RESOURCE_START_METADATA_KEY]: { ...origin },
+      [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
       // Persist only authored inputs; defaults stay derived from the frozen workflow.
       ...(Object.keys(inputs).length > 0
         ? {
@@ -296,7 +299,10 @@ export interface ResourceStartHost extends WorkflowHost {
   startAdmitted: (requestId: string) => Promise<void>;
 }
 
-/** One failed start from a drain. `receiptId` is unset for queued work of unknown origin. */
+/**
+ * A preparation, dispatch, resource drain, or damaged receipt failure. Unknown or untrusted
+ * receipt origins omit `receiptId`.
+ */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
   error: unknown;
@@ -310,7 +316,7 @@ export class ResourceStartDrainError extends AggregateError {
   constructor(readonly failures: readonly ResourceStartDrainFailure[]) {
     super(
       failures.map(failure => failure.error),
-      `${String(failures.length)} resource start(s) failed; inspect their receipt records.`
+      `${String(failures.length)} resource start operation(s) failed; inspect their receipts or resources.`
     );
     this.name = 'ResourceStartDrainError';
   }
@@ -325,7 +331,7 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 /**
  * One host pass: prepare this host's pending receipt bindings, then admit its queued
  * requests while their slots have capacity. Every admitted request is handed to the
- * host. Safe to run concurrently with other hosts and processes: preparation and
+ * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
  * admission are claimed atomically by the store.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
@@ -339,6 +345,10 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   };
 
   for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
+    if ('document' in binding) {
+      failures.push({ error: binding.error });
+      continue;
+    }
     if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
@@ -357,22 +367,55 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
-  for (const resource of new Set(queued.map(request => request.resource))) {
-    for (const decision of await host.deps.store.drainResourceStarts({
-      hostId: host.hostId,
-      resource,
-    })) {
+  const drain = async (resource: string): Promise<void> => {
+    let decisions: ResourceStartDisposition[];
+    try {
+      decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
+    } catch (error) {
+      const receiptIds = new Set(
+        queued
+          .filter(request => request.resource === resource)
+          .map(request =>
+            'error' in request ? request.receiptId : receiptIdOfLaunch(request.launch)
+          )
+      );
+      const failure = new Error(
+        `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+      for (const receiptId of receiptIds) failures.push({ receiptId, error: failure });
+      return;
+    }
+    for (const decision of decisions) {
       if (decision.status === 'admitted') {
         // A queued request names its receipt in the run metadata written at preparation.
         const request = queued.find(item => item.id === decision.requestId);
-        await start(decision.requestId, receiptIdOfLaunch(request?.launch));
+        const launch = request && !('error' in request) ? request.launch : undefined;
+        await start(decision.requestId, receiptIdOfLaunch(launch));
       }
     }
-  }
+  };
+  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);
   }
+}
+
+function queuedDrainResources(
+  queued: readonly QueuedResourceStartInspection[],
+  failures: ResourceStartDrainFailure[]
+): string[] {
+  for (const request of queued) {
+    if (!('error' in request)) continue;
+    failures.push({
+      receiptId: request.receiptId,
+      error: new Error(`Queued request '${request.id}' is invalid`, {
+        cause: request.error,
+      }),
+    });
+  }
+  return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
 }
 
 async function worktreeLane(

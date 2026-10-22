@@ -288,7 +288,7 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     '- **✅¹ (superscript)** — supported, but with semantics that differ from the headline',
     '  meaning of the axis — see [Caveats](#caveats).',
     '- **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),',
-    '  `best-effort` (schema appended to the prompt, then validated + re-asked up to 3×),',
+    '  `best-effort` (the model is asked for the schema, then validated + re-asked up to 3×),',
     '  or ❌ (unsupported). See [AI Assistants → Structured output guarantees](/getting-started/ai-assistants/#structured-output-guarantees).',
     '- **In-process native tools** — the provider can register Archon `NativeTool`s for a',
     "  turn. It gates auto-injection of Archon's `invoke_workflow` and `register_project` tools",

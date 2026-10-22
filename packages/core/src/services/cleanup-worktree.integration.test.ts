@@ -636,32 +636,7 @@ describe('completed run worktree release', () => {
       expect(await assessCompletedRunWorktree(completed, target, readers())).toEqual({
         disposition: 'release',
       });
-      let inClaim = false;
-      const registrationStore: IIsolationStore = {
-        ...target,
-        withWorktreeRegistration: async (observed, remove) => {
-          inClaim = true;
-          try {
-            return await target.withWorktreeRegistration(observed, remove);
-          } finally {
-            inClaim = false;
-          }
-        },
-      };
-      const networkClaims: boolean[] = [];
-      const originalExec = gitModule.execFileAsync;
-      const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
-        async (file, args, options) => {
-          if (args.includes('ls-remote')) networkClaims.push(inClaim);
-          return originalExec(file, args, options);
-        }
-      );
-      try {
-        await releaseCompletedRunWorktree(completed, registrationStore, readers());
-        expect(networkClaims).toEqual([false]);
-      } finally {
-        exec.mockRestore();
-      }
+      await releaseCompletedRunWorktree(completed, target, readers());
 
       expect(existsSync(env.working_path)).toBe(false);
       expect((await target.getById(env.id))?.status).toBe('destroyed');
@@ -678,19 +653,29 @@ describe('completed run worktree release', () => {
     });
   });
 
+  test('a commit made after a push that left tracking refs stale keeps the checkout', async () => {
+    await commitInWorktree();
+    await pushByUrl();
+    await writeFile(join(env.working_path, 'later'), 'later');
+    await git(env.working_path, 'add', 'later');
+    await git(env.working_path, 'commit', '-qm', 'later');
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '1 commit(s) on no remote',
+    });
+  });
+
   test('uncommitted changes keep the checkout', async () => {
     await writeFile(join(env.working_path, 'file'), 'edited');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'uncommitted_changes' });
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'uncommitted_changes',
+    });
   });
 
-  test('a branch published to the configured remote waits for the merged sweep', async () => {
-    await commitInWorktree();
-    await git(env.working_path, 'push', '-q', 'upstream', `HEAD:refs/heads/${env.branch_name}`);
-    await git(repo, 'fetch', '-q', 'upstream');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
-  });
-
-  test('a published branch with no remote-tracking ref still waits for the merged sweep', async () => {
+  // A push by URL leaves no remote-tracking ref, so only the live remote proves it.
+  const pushByUrl = async (): Promise<void> => {
     await git(
       env.working_path,
       'push',
@@ -700,24 +685,108 @@ describe('completed run worktree release', () => {
     );
     // Git on Windows matches the path to the upstream URL and writes the tracking ref anyway.
     await git(repo, 'update-ref', '-d', `refs/remotes/upstream/${env.branch_name}`);
-    expect(await git(repo, 'branch', '-r', '--list', `upstream/${env.branch_name}`)).toBe('');
-    expect(await assess()).toEqual({ disposition: 'retained', reason: 'published_branch' });
+  };
+
+  test('a pushed run-named checkout is removed, keeping its local and remote branch', async () => {
+    await commitInWorktree();
+    await pushByUrl();
+    expect(await git(repo, 'branch', '--remotes')).not.toContain(env.branch_name);
+    const completed = { ...run, status: 'completed' as const };
+    expect(await assessCompletedRunWorktree(completed, store, readers())).toEqual({
+      disposition: 'release',
+    });
+
+    let inClaim = false;
+    const registrationStore: IIsolationStore = {
+      ...store,
+      withWorktreeRegistration: async (observed, remove) => {
+        inClaim = true;
+        try {
+          return await store.withWorktreeRegistration(observed, remove);
+        } finally {
+          inClaim = false;
+        }
+      },
+    };
+    const networkClaims: boolean[] = [];
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (args.includes('ls-remote')) networkClaims.push(inClaim);
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      await releaseCompletedRunWorktree(completed, registrationStore, readers());
+      expect(networkClaims).toEqual([false]);
+    } finally {
+      exec.mockRestore();
+    }
+
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await status()).toBe('destroyed');
+    expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+    expect(await git(repo, 'ls-remote', 'upstream', `refs/heads/${env.branch_name}`)).not.toBe('');
   });
 
-  test('a remote that cannot be read keeps the checkout', async () => {
+  test('a remote that cannot be read keeps a checkout with commits tracking refs miss', async () => {
+    await commitInWorktree();
     await git(repo, 'remote', 'set-url', 'upstream', join(root, 'missing.git'));
     expect(await assess()).toMatchObject({ disposition: 'retained', reason: 'check_failed' });
+    await expect(
+      releaseCompletedRunWorktree({ ...run, status: 'completed' }, store, readers())
+    ).rejects.toThrow();
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
   });
 
-  test('the completing run does not hold its own checkout, another claimable run does', async () => {
+  test('a worktree created for a named branch is never released at run end', async () => {
+    const named = await provider.create({
+      ...request(),
+      identifier: 'build/7-x',
+      taskBranch: { kind: 'new', branch: toBranchName('build/7-x') },
+    });
+    if (named.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+    const namedEnv = await isolationDb.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'build/7-x',
+      working_path: named.workingPath,
+      branch_name: named.branchName,
+      metadata: { ...worktreeRegistrationMetadata(named.metadata) },
+    });
+    // Clean and fully pushed, so only the named branch can keep it.
+    await git(named.workingPath, 'push', '-q', 'upstream', 'HEAD:refs/heads/build/7-x');
+    await git(repo, 'fetch', '-q', 'upstream');
+
+    expect(
+      await assessCompletedRunWorktree(
+        {
+          ...run,
+          status: 'completed',
+          working_path: named.workingPath,
+          metadata: {
+            owned_worktree: { envId: namedEnv.id, creationId: named.metadata.creationId },
+          },
+        },
+        store,
+        readers()
+      )
+    ).toBeNull();
+    expect(existsSync(named.workingPath)).toBe(true);
+  });
+
+  test('the completing run does not hold its own checkout', async () => {
     run.id = await seedRunAt(env.working_path, 'running');
     expect(await assess()).toEqual({ disposition: 'release' });
+  });
 
-    const other = await seedRunAt(env.working_path, 'paused');
+  test.each(['running', 'paused'])('another %s run keeps the checkout', async otherStatus => {
+    const other = await seedRunAt(env.working_path, otherStatus);
     expect(await assess()).toEqual({
       disposition: 'retained',
       reason: 'in_use',
-      detail: `run ${other} (paused)`,
+      detail: `run ${other} (${otherStatus})`,
     });
   });
 

@@ -29,7 +29,7 @@ import {
 import { readComposedMeta } from '../compiled-command';
 import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../exec-environment';
 import { substituteWorkflowVariables, type TemplateReferences } from '../workflow-variables';
-import { type AttentionOption, attentionOptionsSchema } from '../schemas/dag-node';
+import { type AttentionOption, attentionOptionsSchema } from '../schemas/wait-node';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import { type LoopBodyScope, loopScopeTokens, substituteLoopBodyText } from './loop-scope';

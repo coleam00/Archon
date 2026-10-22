@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { setLogSink } from '@archon/paths';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { WorkflowDeps } from './deps';
 
@@ -244,6 +245,55 @@ test('binary discovery preserves an authored yml filename when a project overrid
     Reflect.deleteProperty(paths, name);
   }
 });
+
+test.each([false, true])(
+  'bundled parse logs exclude source in binary mode %s',
+  async binaryMode => {
+    const name = 'private-bundle';
+    const filename = `${name}.yaml`;
+    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL\nnodes: [';
+    const path = join(app, 'workflows', 'shipped', name, filename);
+    const lines: string[] = [];
+    await write(path, yaml);
+    Object.assign(defaults.BUNDLED_WORKFLOWS, { [name]: yaml });
+    Object.assign(defaults.BUNDLED_WORKFLOW_PATHS, {
+      [name]: `workflows/shipped/${name}/${filename}`,
+    });
+    binary = binaryMode;
+    const message = 'Unexpected token at line 3: ARCHON_BUNDLE_SECRET_SENTINEL';
+    const parse = Bun.YAML.parse;
+    const parser = spyOn(Bun.YAML, 'parse').mockImplementation(content => {
+      if (content === yaml) throw new SyntaxError(message);
+      return parse(content);
+    });
+    setLogSink(line => lines.push(line));
+    try {
+      const result = await discoverWorkflows(project, { providers: providerRegistry });
+      expect(result.errors).toContainEqual({
+        filename,
+        errorType: 'parse_error',
+        error: `YAML parse error (near line 3): ${message}`,
+      });
+      expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
+      expect(lines.join('')).not.toContain('name: private');
+      const event = lines
+        .map(line => JSON.parse(line))
+        .find(
+          entry =>
+            entry.msg ===
+            (binaryMode ? 'bundled_workflow_parse_failed' : 'app_default_workflow_errors')
+        );
+      expect(event).toBeDefined();
+      expect(JSON.stringify(event)).toContain(filename);
+    } finally {
+      parser.mockRestore();
+      setLogSink(undefined);
+      Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
+      Reflect.deleteProperty(defaults.BUNDLED_WORKFLOW_PATHS, name);
+      await removeTempTree(join(app, 'workflows', 'shipped', name));
+    }
+  }
+);
 
 test('SDK discovery without an installed source tree retains project and home resources', async () => {
   app = join(root, 'absent-app');

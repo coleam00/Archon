@@ -37,13 +37,6 @@ export {
 
 /**
  * Reset persisted per-node provider sessions for a workflow.
- *
- * Filter rules:
- *   - workflow-name required (positional)
- *   - --scope <key>: restrict to one scope (e.g. a conversation UUID); when
- *     omitted, deletes across ALL scopes (use --yes to skip the confirmation)
- *   - --node <id>: restrict to one node within the scope
- *   - --json: machine-readable output
  */
 export async function workflowResetSessionsCommand(
   host: WorkflowHost,

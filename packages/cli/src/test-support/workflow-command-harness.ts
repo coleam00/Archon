@@ -832,10 +832,8 @@ mock.module('@archon/core/workflows/sql-host', () => ({
         labelAttentionWait: (...args) => operationWorkflowDb.labelAttentionWait(...args),
         cancelResumableRunsForConversation: (...args) =>
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
-        deleteWorkflowNodeSessions: (...args) =>
-          operationSessionDb.deleteWorkflowNodeSessions(...args),
-        findWorkflowRunsByIdPrefix: (...args) =>
-          operationWorkflowDb.findWorkflowRunsByIdPrefix(...args),
+        deleteWorkflowNodeSessions: operationSessionDb.deleteWorkflowNodeSessions,
+        findWorkflowRunsByIdPrefix: operationWorkflowDb.findWorkflowRunsByIdPrefix,
         listWorkflowRuns: (...args) => operationWorkflowDb.listDashboardRuns(...args),
       },
       hostStore: {

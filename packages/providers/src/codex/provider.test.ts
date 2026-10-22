@@ -3,6 +3,7 @@ import * as binaryResolver from './binary-resolver';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
+import { existsSync } from 'fs';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -160,6 +161,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  mockLogger.error.mockClear();
   mockLogger.warn.mockClear();
   mockLogger.info.mockClear();
 });
@@ -710,6 +712,15 @@ describe('CodexProvider', () => {
       expect(server.processes[0].stdinEnded).toBe(true);
     });
 
+    test('a Codex slow to exit after its turn is awaited without SIGTERM and settles', async () => {
+      // Codex shutting down on a loaded machine outlasts the cancel grace. A SIGTERM in
+      // that window would make it exit 1 and lose the settle.
+      const server = createFakeAppServer(() => ({ exitsAfterStdinCloseMs: 100 }));
+      const chunks = await run(new CodexProvider(server, 20));
+      expect(server.processes[0].signals).toEqual([]);
+      expect(chunks.map(c => c.type)).toEqual(['result', 'settled']);
+    });
+
     test('an abnormal process exit after the final notification is not a settle', async () => {
       const { provider, server } = providerWith({
         notifications: [turnCompleted('completed')],
@@ -718,6 +729,18 @@ describe('CodexProvider', () => {
       const chunks = await run(provider);
       expect(chunks.map(c => c.type)).toEqual(['result']);
       expect(server.processes[0].signals).toEqual([]);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ lifecycle: 'process_abnormal_exit' }),
+        'codex.app_server_abnormal_exit'
+      );
+    });
+
+    test('a spawn failure is logged without the abnormal-exit lifecycle tag', async () => {
+      await run(providerWith({ spawnError: 'ENOENT' }).provider);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.not.objectContaining({ lifecycle: expect.anything() }),
+        'codex.app_server_abnormal_exit'
+      );
     });
 
     test('lost observation after the result never invents an end or settles', async () => {
@@ -1366,7 +1389,12 @@ describe('CodexProvider', () => {
           threadId: THREAD_ID,
           config: TOOL_FREE_THREAD_CONFIG,
         });
-        expect(server.processes[1].args).toEqual(['app-server']);
+        const [, catalogFlag, catalogArg] = server.processes[1].args;
+        expect(catalogFlag).toBe('-c');
+        expect(catalogArg).toStartWith('model_catalog_json=');
+        // The final turn's catalog file lives only as long as the call.
+        const catalogPath = JSON.parse(catalogArg.slice('model_catalog_json='.length)) as string;
+        expect(existsSync(catalogPath)).toBe(false);
         expect(second('turn/start')).toMatchObject({
           outputSchema: { required: ['summary'], additionalProperties: false },
         });
@@ -1402,15 +1430,15 @@ describe('CodexProvider', () => {
         expect(result.tokens).toMatchObject({ input: 100, output: 10 });
       });
 
-      test('a tool turn process that needed SIGTERM never settles, even when the final turn then fails', async () => {
+      test('a tool turn process that exited abnormally never settles, even when the final turn then fails', async () => {
         const server = createFakeAppServer(
           scripted(
-            { ...toolTurn, ignoreStdinClose: true },
+            { ...toolTurn, stdinCloseExitCode: 1 },
             { errors: { 'thread/resume': { code: -32603, message: 'resume failed' } } }
           )
         );
         const chunks = await run(new CodexProvider(server, 20), options('glm-5.3'));
-        expect(server.processes[0].signals).toEqual(['SIGTERM']);
+        expect(server.processes).toHaveLength(2);
         expect(resultOf(chunks).failure).toBeDefined();
         expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
       });

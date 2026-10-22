@@ -211,6 +211,7 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
   if (rawUsage.tokens !== undefined) {
     const tokens = readTokens(fold.runId, stepName, rawUsage.tokens);
     if (tokens !== undefined) contribution.tokens = tokens;
+    else contribution.tokensUnknown = true;
   }
   if (rawUsage.costUsd !== undefined) {
     const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);

@@ -176,6 +176,46 @@ describe('checkRatchet', () => {
     expect(result.allowed).toHaveLength(2);
   });
 
+  test('refuses entries the mock-module baseline gains unless a trailer allows them', () => {
+    const repo = repoOnBranch();
+    const baseline = (names: string[]): string =>
+      JSON.stringify({ factories: { 'src/a.test.ts': ['./db'] }, exports: { 'src/db.ts': names } });
+    write(repo, 'scripts/mock-module-baseline.json', baseline(['a']));
+    commitAll(repo, 'baseline');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'scripts/mock-module-baseline.json', baseline(['a', 'b']));
+    commitAll(repo, 'grow');
+    const result = checkRatchet(repo, 'main', NO_CEILING);
+    expect(result.failures).toEqual([
+      'scripts/mock-module-baseline.json: gains export src/db.ts b',
+    ]);
+    expect(result.remedies).toEqual(['Ratchet-Allow: scripts/mock-module-baseline.json']);
+
+    git(
+      repo,
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'waive\n\nRatchet-Allow: scripts/mock-module-baseline.json'
+    );
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([]);
+  });
+
+  test('refuses a grandfathered factory the mock-module baseline gains', () => {
+    const repo = repoOnBranch();
+    const baseline = (factories: Record<string, string[]>): string =>
+      JSON.stringify({ factories, exports: { 'src/db.ts': ['a'] } });
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'] }));
+    commitAll(repo, 'baseline');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'], b: ['./db'] }));
+    commitAll(repo, 'grow');
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
+      "scripts/mock-module-baseline.json: gains factory b './db'",
+    ]);
+  });
+
   test('ignores a trailer the base already contains', () => {
     const repo = repoOnBranch();
     git(repo, 'checkout', '-q', 'main');

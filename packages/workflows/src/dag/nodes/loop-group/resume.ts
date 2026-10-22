@@ -42,6 +42,7 @@ import {
   type LoopGroupState,
 } from './loop-group-state';
 import { runGroupUntilBash } from './until-bash';
+import { restorePreviousIteration } from './previous-iteration';
 
 interface ResumeShape {
   loopGateMeta: ApprovalContext | undefined;
@@ -313,6 +314,7 @@ export async function resumeTerminalWait(
   const waitOutput = await executeWaitNode(
     {
       ...ctx,
+      nodeOutputs: new Map([...ctx.nodeOutputs, ...(restoreLoopPrevOutputs(run) ?? [])]),
       stepNamePrefix: bodyStepNamePrefix,
       nodeInvocation: undefined,
       loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: resumeIteration }],
@@ -399,21 +401,27 @@ export function restoreLoopPrevOutputs(run: LoopGroupRun): Map<string, NodeOutpu
  */
 export async function completeEscalatedResume(
   run: LoopGroupRun,
-  loopPrevOutputs: Map<string, NodeOutput> | undefined
+  currentBodyOutputs: Map<string, NodeOutput> | undefined
 ): Promise<LoopGroupBodyResult | undefined> {
   const { resume, bodyNodes } = run;
   if (!(resume.isEscalatedGateResume || resume.isEscalatedWaitResume)) return undefined;
-  if (loopPrevOutputs === undefined) return undefined;
+  if (currentBodyOutputs === undefined) return undefined;
   const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
-  if (terminalNode === undefined || !loopPrevOutputs.has(terminalNode.id)) return undefined;
+  if (terminalNode === undefined || !currentBodyOutputs.has(terminalNode.id)) return undefined;
   const group = run.node.loop_group;
-  const resumedResult = loopGroupIterationOutput(bodyNodes, loopPrevOutputs);
+  const resumedResult = loopGroupIterationOutput(bodyNodes, currentBodyOutputs);
   const rawIterationOutput = resumedResult?.output ?? '';
   const resumedSignalDetected =
     group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
   let resumedBashComplete = false;
   if (group.until_bash && !resumedSignalDetected) {
-    const bash = await resumedUntilBash(run, group.until_bash, loopPrevOutputs);
+    const previousBodyOutputs = await restorePreviousIteration(run);
+    const bash = await resumedUntilBash(
+      run,
+      group.until_bash,
+      currentBodyOutputs,
+      previousBodyOutputs
+    );
     if (typeof bash !== 'boolean') return bash;
     resumedBashComplete = bash;
   }
@@ -449,25 +457,14 @@ async function completeResumedIteration(
 async function resumedUntilBash(
   run: LoopGroupRun,
   untilBash: string,
-  loopPrevOutputs: Map<string, NodeOutput>
+  currentBodyOutputs: Map<string, NodeOutput>,
+  previousBodyOutputs: Map<string, NodeOutput>
 ): Promise<boolean | LoopGroupBodyResult> {
   const { ctx, node } = run;
   const { workflowRun, artifactsDir } = ctx;
   // Fresh observation for this resumed iteration's condition.
   const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
-  // No $LOOP_PREV history survives a resume beyond the single reconstructed
-  // iteration — #2748 restores only the LATEST persisted body outputs,
-  // not a full history — so an until_bash referencing $LOOP_PREV from the
-  // iteration BEFORE this one resolves empty here, same as a fresh
-  // iteration 1. Not expected to matter in practice: Design A's canonical
-  // pattern reads only $<gateId>.output inside until_bash, never $LOOP_PREV.
-  // Merge outer-DAG outputs underneath the reconstructed body outputs —
-  // mirrors how a normal (non-resumed) iteration seeds scopedNodeOutputs
-  // (`new Map(outerNodeOutputs)`, then overwritten by this iteration's own
-  // body results) — so an until_bash combining an outer-scope ref with the
-  // gate's own decision resolves the outer ref correctly on resume too,
-  // not just mid-loop.
-  const resumedScope = new Map([...ctx.nodeOutputs, ...loopPrevOutputs]);
+  const resumedScope = new Map([...ctx.nodeOutputs, ...currentBodyOutputs]);
   const { prompt: resumedSubstitutedBash } = substituteWorkflowVariables(
     untilBash,
     workflowRun.id,
@@ -485,7 +482,18 @@ async function resumedUntilBash(
       typedArtifactsFile,
       references: nodeTemplateReferences(
         untilBash,
-        { nodeOutputs: resumedScope, loopBodyScopes: ctx.loopBodyScopes },
+        {
+          nodeOutputs: resumedScope,
+          loopBodyScopes: [
+            ...ctx.loopBodyScopes,
+            {
+              loopPrevOutputs: previousBodyOutputs,
+              outputFileDir: artifactsDir,
+              knownBodyIds: run.directBodyIds,
+              directBodyIds: run.directBodyIds,
+            },
+          ],
+        },
         'shell',
         {
           artifactsDir,
@@ -498,7 +506,10 @@ async function resumedUntilBash(
     path: resolveBashPath(),
     script: () => resumedSubstitutedBash,
     loopUserInput: '',
-    loopPrevOutput: '',
+    loopPrevOutput: stripCompletionTags(
+      loopGroupIterationOutput(run.bodyNodes, previousBodyOutputs)?.output ?? '',
+      node.loop_group.until
+    ),
     typedArtifactsFile,
   });
 }

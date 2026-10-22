@@ -15,6 +15,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -198,18 +199,43 @@ export function caveats(
   return discoveries(artifacts, options.listingFile);
 }
 
+/** A verified publication can outlive a failed node with no typed output. */
+function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
+  const path = join(artifacts, PR_CREATE_RECORD);
+  try {
+    const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
+    const at = modified(path);
+    return claim.state === 'verified' ? { url: claim.pr.url, at } : { url: '', unresolvedAt: at };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
+    return {
+      url: '',
+      unresolvedAt: modified(path) ?? Infinity,
+      problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 /**
- * The URL of the pull request this run last published, from the engine's
- * typed-artifact listing; empty when it published none. A tail that failed after
- * publishing still names its pull request, so the next run continues that one
- * instead of opening another. An unreadable listing is named by `failed`'s summary.
+ * Verified publication records outlive failed nodes that produced no typed output.
+ * An unresolved creation claim must not look like permission to open another PR.
  */
-export function publishedPrUrl(
+export function failedPublication(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
-): string {
-  const latest = readTyped<unknown>(options.listingFile, artifacts, 'pull-request').values.at(-1);
-  return isObject(latest) && typeof latest.url === 'string' ? latest.url : '';
+): { reason: string; pr_url: string } {
+  const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
+  const latest = read.values.at(-1);
+  const entry = read.entries?.at(-1);
+  const created = createdPr(artifacts);
+  const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
+  const { url, at } = isObject(latest) && typeof latest.url === 'string' &&
+    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))
+    ? { url: latest.url, at: publishedAt } : created;
+  if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
+    return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
+  }
+  return { reason: RUN_FAILED, pr_url: url };
 }
 
 /**
@@ -221,9 +247,13 @@ export function failed(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
 ): string {
+  const { problem } = createdPr(artifacts);
+  const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
   return (
     'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
     'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
+    (!unresolved ? '' : `\n\nReconcile the PR create recorded at ${join(artifacts, PR_CREATE_RECORD)} before continuing; its identity may not have been saved.`) +
+    (problem ? `\n\n${problem}` : '') +
     caveats(artifacts, options)
   );
 }

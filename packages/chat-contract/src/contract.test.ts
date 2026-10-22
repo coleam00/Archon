@@ -163,6 +163,14 @@ test('bidirectional requests preserve messages, every action result, send, foote
       {
         status: 'done',
         result: {
+          kind: 'cooperative',
+          cancelled: true,
+          cleanupWarnings: ['Possible untracked background work.'],
+        },
+      },
+      {
+        status: 'done',
+        result: {
           kind: 'stopped',
           pid: 123,
           cleanupWarnings: ['cleanup failed'],

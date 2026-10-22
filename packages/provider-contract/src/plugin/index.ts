@@ -7,6 +7,7 @@ export {
   PluginProtocolMismatchError,
   PluginRemoteError,
   type PluginIO,
+  type PluginMessageEvidence,
 } from './rpc';
 export { serveProvider } from './serve';
 export { connectProvider, type ConnectedProvider } from './connect';

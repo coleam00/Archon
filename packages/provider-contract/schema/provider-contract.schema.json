@@ -126,6 +126,10 @@
         },
         "resumed": {
           "type": "boolean"
+        },
+        "sessionNotFound": {
+          "type": "boolean",
+          "const": true
         }
       }
     },
@@ -654,6 +658,10 @@
             },
             "resumed": {
               "type": "boolean"
+            },
+            "sessionNotFound": {
+              "type": "boolean",
+              "const": true
             },
             "type": {
               "type": "string",
