@@ -133,6 +133,11 @@ describe('the build record', () => {
     expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
+  test("a fresh round's replacement pull request wins over the superseded one and triage's stale reference", () => {
+    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43' };
+    expect(itemPullRequest([round('r1', AT), replacement], { ...TRIAGE, pull_request: 42 }, PR.repo)).toEqual({ repo: PR.repo, number: 43 });
+  });
+
   test('an unresolved create refuses PR selection until a later round identifies the PR', () => {
     const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
     for (const prior of [[], [round('r1', AT)]]) {
@@ -563,7 +568,7 @@ describe('the build queue scripts', () => {
     const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
     seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
     const result = run(at, 'facts', {}, { source: 'gh' });
-    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
     expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
   });
 
@@ -572,9 +577,9 @@ describe('the build queue scripts', () => {
     // A failed round after the pull request's round opened none; the item's PR is still 42.
     const rounds = [round('r1', AT), { ...round('r2', LATER, 'failed'), pr_url: '' }];
     seed(at, triaged({}, record({ rounds })));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
     seed(at, triaged({ claim: null, facts: { triage: { ...TRIAGE, pull_request: 42 } } }));
-    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: '' });
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: { number: 42 }, continues: 42, branch: 'build/7-an-issue-run-1' });
     seed(at, triaged({ claim: null }));
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
@@ -915,11 +920,37 @@ describe('the build queue checkout', () => {
     const result = run(
       at,
       'checkout',
-      { INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
+      { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
       { pr: { headRefOid: head } }
     );
-    expect(ok(result)).toEqual({ head });
+    expect(ok(result)).toEqual({ head, pull_request: 42 });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
+  }, 60_000);
+
+  test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    git(at.checkout, 'checkout', '-q', 'dev');
+    const base = git(at.checkout, 'rev-parse', 'HEAD');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const item = JSON.stringify(SUBJECT);
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
+    // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
+    expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
+  }, 60_000);
+
+  test('a fresh round refuses a checkout left off the base, such as an adopted one at the superseded head', () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const result = run(at, 'checkout', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("a fresh round must start on dev, but the checkout's HEAD is not on it");
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
   }, 60_000);
 });

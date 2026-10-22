@@ -308,6 +308,13 @@ describe("ship's continued pull request", () => {
     expect(JSON.parse(continues('', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('42', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('null', 'null').stdout)).toEqual({ pull_request: null });
+    expect(JSON.parse(continues('none', 'null').stdout)).toEqual({ pull_request: null });
+  });
+
+  it('refuses when the caller decided none but triage routed the run to continue one', () => {
+    const result = continues('none', '42');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller decided the run continues no pull request, but triage routed it to continue 42');
   });
 
   it('refuses when the caller and triage name different pull requests', () => {

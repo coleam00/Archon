@@ -538,12 +538,19 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   --input number=<n>` on the run config and the `order`, `retriage_as` and
   `round_limit` this run started with; if that launch fails, the item waits for the
   next queue run.
-  A round for an item with an open pull request in its repository passes it to
+  Facts reports the open pull request in the item's repository as the candidate, and
+  the `route` agent declares whether the round continues it: unless a dated scope
+  section or a recorded answer supersedes it. A continued pull request goes to
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
-  takes, pushing onto its head so the same pull request updates. A round that failed
-  after publishing still records its pull request. Otherwise the round opens its
+  takes, pushing onto its head so the same pull request updates. A superseded one is
+  never checked out or pushed to: ship gets `none`, so its triage cannot route the
+  round back onto it. The round starts fresh, refusing a checkout that is not on the
+  default branch, and its brief asks for the old
+  pull request to be closed as superseded once the replacement opens. A round that failed
+  after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
-  merged pull request, or one from a fork, is asked about.
+  merged pull request, or one from a fork, is asked about; a round launched anyway
+  never continues it, since ship gets `none` for it too.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
