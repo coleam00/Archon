@@ -47,27 +47,6 @@ export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
 export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** The `trust` input. No value is `maintainer`, so no input can raise trust. */
-export const TRUST_INPUTS = ['auto', 'outside'] as const;
-export type TrustInput = (typeof TRUST_INPUTS)[number];
-
-function oneOf<const Values extends readonly string[]>(
-  name: string,
-  values: Values,
-  text: string
-): Values[number] {
-  const value = text.trim() === '' ? values[0] : text.trim();
-  if (!values.includes(value)) {
-    throw new Error(`${name} must be one of ${values.join(', ')}, not "${value}"`);
-  }
-  return value as Values[number];
-}
-
-/** The `trust` input; empty means `auto`. */
-export function parseTrustInput(text: string): TrustInput {
-  return oneOf('trust', TRUST_INPUTS, text);
-}
-
 /** One event intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {
   readonly at: string;
@@ -415,18 +394,13 @@ export function isMaintainer(login: string | null, maintainers: ReadonlySet<stri
 /**
  * Decide what the claimed item needs, from the document, its claimed requests and
  * the live issue. Pure: the outcome node applies the result.
- *
- * `trustInput: 'outside'` decides an item with no recorded trust as outside without
- * reading its author. It never rewrites recorded trust, so it refuses an item already
- * recorded as a maintainer's. Label actors are still checked against the real list.
  */
 export function decideIntake(
   doc: WorkItem,
   issue: IssueFacts,
   maintainers: ReadonlySet<string>,
   at: string,
-  runId: string,
-  trustInput: TrustInput = 'auto'
+  runId: string
 ): IntakeDecision {
   let trust = doc.trust;
   let promoted = doc.promoted;
@@ -462,14 +436,7 @@ export function decideIntake(
     noted('closed', 'the issue is closed; intake changes nothing on it');
     return { ...quiet(), path: 'closed' };
   }
-  if (trustInput === 'outside' && trust === 'maintainer') {
-    throw new Error(
-      "trust: outside cannot lower trust this item already recorded as maintainer; a work item's trust is decided once"
-    );
-  }
-  if (trust === null && trustInput === 'outside') {
-    trust = 'outside';
-  } else if (trust === null) {
+  if (trust === null) {
     if (issue.author === undefined) {
       throw new Error(
         'the selected forge source does not report issue authors, so trust cannot be decided'
