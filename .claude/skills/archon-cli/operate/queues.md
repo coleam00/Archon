@@ -174,7 +174,7 @@ it once the gate passes. The approval carries to a later head only when the swee
 judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item
 back to the build queue, whose next round starts at once on the build queue's own
-input defaults. A `park` stops working it until the build queue readies it again.
+input defaults. A `park` stops work on the item until the build queue readies it again.
 
 For an own pull request, `park` and `other` stop queue work until a later sweep
 observes a head different from the head asked about. At the same head it stays

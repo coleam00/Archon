@@ -270,8 +270,8 @@ the user.
 
 A completed `workflow:` fan-out node is not completed child work: under the default
 `join: all_done` it completes once every child is terminal, whatever each child's
-result. `workflow get <run-id>` prints a `Fan-out work:` line with the tally and the
-unfinished slots for such a node. The full per-slot record (`completed`, `failed`,
+result. When some slots did not complete, `workflow get <run-id>` prints a
+`Fan-out work:` line with the tally and those slots' outcomes. The full per-slot record (`completed`, `failed`,
 `not_started`, or a `cancelled_*` outcome naming who cancelled it) is
 `terminal_record.nodes[].fan_out_outcome` with `--json`.
 

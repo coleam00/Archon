@@ -365,7 +365,8 @@ concurrently.
 - `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.
   Throwaway checkouts and dependency installs go under `$ARTIFACTS_DIR/.archon/scratch/`
   (create it with `mkdir -p`), which Archon deletes once the run ends and its nodes have
-  stopped; the rest of `$ARTIFACTS_DIR` is kept
+  stopped (a container run's when its container is removed); the rest of
+  `$ARTIFACTS_DIR` is kept
 - In `bash:` and `script:` sources, user-controlled variables (`$ARGUMENTS`,
   `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`,
   `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as

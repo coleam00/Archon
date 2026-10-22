@@ -66,7 +66,7 @@ ls ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/
 cat ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/issues/issue-42.md
 ```
 
-Artifacts are **external** to the repo on purpose — they don't pollute git. They are kept until you remove them, except `.archon/scratch/` inside the run's directory, which holds throwaway checkouts and installs and is deleted once the run is completed, failed or cancelled and its nodes have stopped. A run whose nodes Archon cannot confirm stopped keeps its scratch.
+Artifacts are **external** to the repo on purpose — they don't pollute git. They are kept until you remove them, except `.archon/scratch/` inside the run's directory, which holds throwaway checkouts and installs and is deleted once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed). A run whose nodes Archon cannot confirm stopped keeps its scratch.
 
 ## Common Failure Modes
 
