@@ -135,6 +135,8 @@ interface ResumeFold {
   /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
   readonly usageContributions: UsageContribution[];
+  // A workflow node re-inspects cumulative child totals on every parent continuation.
+  readonly childWorkflowUsage: Map<string, UsageContribution>;
   readonly authoritativeInstanceScopes: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
@@ -204,7 +206,12 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   return undefined;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
+function addUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage'],
+  childInvocationKey?: string
+): void {
   const contribution: UsageContribution = {
     stepName,
     costIncomplete: rawUsage.costIncomplete,
@@ -225,7 +232,9 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     contribution.tokens !== undefined ||
     contribution.costUsd !== undefined
   ) {
-    fold.usageContributions.push(contribution);
+    if (childInvocationKey !== undefined)
+      fold.childWorkflowUsage.set(childInvocationKey, contribution);
+    else fold.usageContributions.push(contribution);
   }
 }
 
@@ -239,7 +248,14 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
     });
   }
   if (usage && nodeCostScope(usage.data) !== 'total') {
-    addUsage(fold, row.step_name, usage.rawUsage);
+    addUsage(
+      fold,
+      row.step_name,
+      usage.rawUsage,
+      usage.data.node?.kind === 'workflow'
+        ? nodeInvocationKey(usage.path, usage.data.invocation?.loopPath ?? [])
+        : undefined
+    );
   }
 }
 
@@ -433,9 +449,15 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   if (isAuthoritativeInstanceUsage) fold.authoritativeInstanceScopes.add(row.step_name);
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
-  if (row.event_type !== 'node_skipped_prior_success') {
-    addUsage(fold, row.step_name, record.rawUsage);
-  }
+  if (row.event_type === 'node_skipped_prior_success') return;
+  addUsage(
+    fold,
+    row.step_name,
+    record.rawUsage,
+    record.data.node?.kind === 'workflow'
+      ? nodeInvocationKey(record.path, record.metadata?.invocation.loopPath ?? [])
+      : undefined
+  );
 }
 
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
@@ -453,6 +475,10 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   foldInvocation(fold, record);
   const data = record.data;
   recordPriorFailure(fold.failedNodes, row.event_type, row.step_name, data);
+  if (row.event_type === 'node_suspended' && data.node?.kind === 'workflow') {
+    foldNodeUsage(fold, row, record);
+    return;
+  }
   if (
     row.event_type !== 'node_completed' &&
     row.event_type !== 'node_skipped_prior_success' &&
@@ -490,7 +516,7 @@ function countedUsage(
   const authoritativeInstancePrefixes = [...fold.authoritativeInstanceScopes].map(
     scope => `${scope}__`
   );
-  const counted = fold.usageContributions.filter(
+  const counted = [...fold.usageContributions, ...fold.childWorkflowUsage.values()].filter(
     contribution =>
       !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
   );
@@ -570,6 +596,7 @@ export async function foldDagResumeSnapshot(
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
     usageContributions: [],
+    childWorkflowUsage: new Map(),
     authoritativeInstanceScopes: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
@@ -583,6 +610,7 @@ export async function foldDagResumeSnapshot(
   }
   return {
     unfinishedInvocations: fold.unfinishedInvocations,
+    childWorkflowUsage: fold.childWorkflowUsage,
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,
     fanOutSnapshots: fold.fanOutSnapshots,

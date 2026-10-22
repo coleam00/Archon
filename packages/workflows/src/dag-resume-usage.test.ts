@@ -248,3 +248,37 @@ describe('historical cost accounting', () => {
     expect(snapshot.costIncomplete).not.toBe(true);
   });
 });
+
+it('replaces cumulative child snapshots within an invocation while counting distinct loop invocations', async () => {
+  const started = (iteration: number) =>
+    startNodeExecution({
+      runId: 'run',
+      path: 'group.sub',
+      node: { id: 'sub', kind: 'workflow', workflow: 'child' },
+      invocation: newNodeInvocation([{ groupId: 'group', iteration }]),
+    });
+  const first = started(0);
+  const second = started(1);
+  const suspended = (execution: ReturnType<typeof started>, costUsd: number) =>
+    finishNodeExecution(
+      execution,
+      { status: 'suspended', point: 'child_workflow' },
+      { costUsd, costIncomplete: true, output: { text: '' } }
+    );
+  const rows = [
+    serializeNodeStateRecord(suspended(first, 0.2)),
+    serializeDeferredNodeUsage(suspended(first, 0.3)),
+    serializeNodeStateRecord(
+      finishNodeExecution(
+        first,
+        { status: 'completed' },
+        { costUsd: 0.5, costIncomplete: true, output: { text: 'done' } }
+      )
+    ),
+    serializeNodeStateRecord(suspended(second, 0.7)),
+  ];
+  const snapshot = await foldDagResumeSnapshot(rows, 'run');
+  expect(snapshot.costUsd).toBe(1.2);
+  expect(snapshot.costIncomplete).toBe(true);
+  expect(snapshot.childWorkflowUsage?.size).toBe(2);
+});

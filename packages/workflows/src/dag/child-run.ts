@@ -1,3 +1,4 @@
+import type { IWorkflowStore } from '../store';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import { hasUnknownTokenTotal, hasIncompleteCostTotal } from '../schemas/run-usage';
 import type { TokenUsage } from '@archon/provider-contract';
@@ -159,4 +160,20 @@ function childTokenUsage(
       }
     : undefined;
   return tokensUnknown ? { tokensUnknown: true } : { tokens };
+}
+
+export async function readChildOutcome(
+  store: Pick<IWorkflowStore, 'getDagResumeSnapshot'>,
+  run: WorkflowRun
+): Promise<ChildWorkflowOutcome> {
+  // A live child's usage is observable while its parent stays held; this never transitions the child.
+  const outcome = childOutcomeFromRun(
+    run.status === 'running' || run.status === 'pending' ? { ...run, status: 'paused' } : run
+  );
+  // Older runs have no positive marker, so their events still own evidence of unpriced work.
+  if (!outcome.costIncomplete) {
+    const usage = await store.getDagResumeSnapshot(run.id);
+    if (usage.costIncomplete) outcome.costIncomplete = true;
+  }
+  return outcome;
 }

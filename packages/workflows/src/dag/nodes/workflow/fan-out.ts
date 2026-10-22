@@ -3,6 +3,7 @@ import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
 import {
   serializeNodeStateRecord,
+  serializeDeferredNodeUsage,
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
@@ -12,7 +13,11 @@ import {
   type NodeFailureKind,
 } from '../../../schemas/node-execution';
 import { describeUnfinishedFanOut, type FanOutOutcome } from '../../../schemas/fan-out-outcome';
-import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
+import {
+  persistNodeEvent,
+  recordDerivedExecution,
+  recordNodeState,
+} from '../../../node-event-write';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
@@ -144,6 +149,7 @@ function resolveFanOutStaticInputs(
  * window get no run row until a held child finishes and the parent continues.
  */
 async function driveChildWindow(
+  store: RunLayersContext['deps']['store'],
   itemCount: number,
   maxParallel: number,
   state: FanOutChildState,
@@ -171,6 +177,7 @@ async function driveChildWindow(
     );
     claimed.forEach(({ index }, k) => {
       const outcome = outcomes[k];
+      state.observedByIndex.set(index, outcome);
       if (outcome.status === 'paused') state.heldByIndex.set(index, outcome.childRunId);
       else state.settledByIndex.set(index, outcome);
     });
@@ -182,7 +189,11 @@ async function driveChildWindow(
     } catch (lookupError) {
       return { lookupError };
     }
-    settleFinishedHeldChildren(rows, state);
+    try {
+      await settleFinishedHeldChildren(store, rows, state);
+    } catch (lookupError) {
+      return { lookupError };
+    }
   }
   return undefined;
 }
@@ -212,7 +223,7 @@ async function suspendOnHeldChildren(
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'fan_out' },
-    { output: { text: '' }, diagnostics: { fanOut: true } }
+    { ...observedChildUsage(state), output: { text: '' }, diagnostics: { fanOut: true } }
   );
   const paused = await pauseGateRespectingExternalTransition(
     ctx.deps,
@@ -226,7 +237,10 @@ async function suspendOnHeldChildren(
     },
     { event: serializeNodeStateRecord(suspended) }
   );
-  if (!paused) return serializeNodeOutput(execution);
+  if (!paused) {
+    await persistNodeEvent(ctx.deps.store, serializeDeferredNodeUsage(suspended));
+    return serializeNodeOutput(suspended);
+  }
   await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
   await notify(
     `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
@@ -343,10 +357,14 @@ export async function executeFanOutWorkflowNode(
     return failResult(msg, 'config');
   };
 
-  const failChildLookup = async (error: unknown): Promise<NodeExecutionResult> => {
+  const failChildLookup = async (
+    error: unknown,
+    costUsd?: number,
+    tokens?: TokenUsage
+  ): Promise<NodeExecutionResult> => {
     const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
     await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown');
+    return failResult(msg, 'unknown', costUsd, tokens);
   };
 
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
@@ -424,7 +442,7 @@ export async function executeFanOutWorkflowNode(
       blockedOnChildRunId: ambiguous.child.id,
     });
   }
-  const state = classifyExistingChildren(existingByIndex, continuing);
+  const state = await classifyExistingChildren(deps.store, existingByIndex, continuing);
 
   if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
     await notify(
@@ -490,6 +508,7 @@ export async function executeFanOutWorkflowNode(
   };
 
   const windowFailure = await driveChildWindow(
+    deps.store,
     items.length,
     fanOut.max_parallel === 'all' ? items.length : fanOut.max_parallel,
     state,
@@ -497,7 +516,12 @@ export async function executeFanOutWorkflowNode(
     () => findFanOutChildRuns(deps.store, parentRun.id, stepName),
     parentRun.id
   );
-  if (windowFailure !== undefined) return failChildLookup(windowFailure.lookupError);
+  const observed = observedChildUsage(state);
+  tokensUnknown = observed.tokensUnknown;
+  costIncomplete = observed.costIncomplete;
+  if (windowFailure !== undefined) {
+    return failChildLookup(windowFailure.lookupError, observed.costUsd, observed.tokens);
+  }
 
   // 6. Some children are unfinished: pause the parent on them.
   if (state.heldByIndex.size > 0) {
@@ -593,4 +617,14 @@ async function joinSettledChildren(
     );
   }
   return completed;
+}
+
+function observedChildUsage(state: FanOutChildState) {
+  const outcomes = [...state.observedByIndex.values()];
+  return {
+    costUsd: sumReportedCost(outcomes),
+    tokens: sumFanOutTokens(outcomes),
+    tokensUnknown: outcomes.some(outcome => outcome.tokensUnknown === true),
+    costIncomplete: outcomes.some(outcome => outcome.costIncomplete === true),
+  };
 }

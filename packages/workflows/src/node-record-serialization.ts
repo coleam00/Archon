@@ -105,6 +105,8 @@ export interface SerializedNodeEvent {
 
 export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
 export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
+  node: true,
+  invocation: true,
   accounting: true,
   spend: true,
   aggregate: true,
@@ -311,17 +313,16 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
   };
 }
 
-export type NodeExecutionResult = NodeOutput & {
+export interface NodeUsage {
   costUsd?: number;
   costIncomplete?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
-  loopIterations?: number;
-};
+}
 
-function nodeOutputUsage(
-  spend: NodeExecutionRecord['spend']
-): Pick<NodeExecutionResult, 'costUsd' | 'costIncomplete' | 'tokens' | 'tokensUnknown'> {
+export type NodeExecutionResult = NodeOutput & NodeUsage & { loopIterations?: number };
+
+function nodeOutputUsage(spend: NodeExecutionRecord['spend']): NodeUsage {
   return {
     ...(spend.tokens.source === 'provider' ? { tokens: spend.tokens.value } : {}),
     ...(spend.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete'

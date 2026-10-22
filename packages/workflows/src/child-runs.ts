@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
-import { childOutcomeFromRun } from './dag/child-run';
+import { readChildOutcome } from './dag/child-run';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import type { ResolvedRunModelOverrides } from './model-validation';
@@ -492,7 +492,7 @@ export async function runChildWorkflow(
       if (!finalChild) {
         return failOutcome('Child run row disappeared after execution.', childRunId);
       }
-      return childOutcomeFromRun(finalChild);
+      return await readChildOutcome(deps.store, finalChild);
     } catch (err) {
       if (err instanceof TerminalStatusWriteError) throw err;
 

@@ -2,11 +2,13 @@ import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
   serializeNodeStateRecord,
+  serializeDeferredNodeUsage,
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
 import {
+  persistNodeEvent,
   NodeEventWriteError,
   recordDerivedExecution,
   recordNodeState,
@@ -23,7 +25,7 @@ import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { executeFanOutWorkflowNode } from './fan-out';
-import { childOutcomeFromRun, type ChildWorkflowOutcome } from '../../child-run';
+import { readChildOutcome, type ChildWorkflowOutcome } from '../../child-run';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
@@ -219,14 +221,17 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
+  const pauseParentOnChild = async (
+    outcome: ChildWorkflowOutcome
+  ): Promise<NodeExecutionResult> => {
+    const { childRunId } = outcome;
     const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
     const approveChild = (surface: WorkflowCommandSurface): string =>
       `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },
-      { output: { text: '' }, diagnostics: { childRunId } }
+      { ...outcome, output: { text: '' }, diagnostics: { childRunId } }
     );
     const paused = await pauseGateRespectingExternalTransition(
       deps,
@@ -234,7 +239,10 @@ export async function executeWorkflowNode(
       { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
       { event: serializeNodeStateRecord(suspended) }
     );
-    if (!paused) return serializeNodeOutput(execution);
+    if (!paused) {
+      await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+      return serializeNodeOutput(suspended);
+    }
     await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
     await safeSendMessage(
       platform,
@@ -250,7 +258,7 @@ export async function executeWorkflowNode(
       case 'completed':
         return await asCompleted(outcome);
       case 'paused':
-        return pauseParentOnChild(outcome.childRunId);
+        return pauseParentOnChild(outcome);
       case 'failed':
         return failResult(
           outcome.error ?? `Sub-run '${node.workflow}' failed`,
@@ -329,11 +337,11 @@ export async function executeWorkflowNode(
     ) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
-      return await pauseParentOnChild(existing.id);
+      return await pauseParentOnChild(await readChildOutcome(deps.store, existing));
     }
     // completed / cancelled — thread the outcome through the same state table a
     // freshly-run child uses (interpret handles both).
-    return await interpret(childOutcomeFromRun(existing));
+    return await interpret(await readChildOutcome(deps.store, existing));
   } catch (err) {
     if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
 

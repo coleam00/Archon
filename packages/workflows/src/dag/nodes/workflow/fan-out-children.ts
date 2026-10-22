@@ -4,7 +4,7 @@ import { readSubrunMetadata, isTerminalRunStatus } from '../../../schemas';
 import { FAN_OUT_CANCEL_REASONS } from '../../../store';
 import { canonicalValueText } from '../../../output-ref';
 import { getLog } from '../../log';
-import { childOutcomeFromRun, type ChildWorkflowOutcome } from '../../child-run';
+import { readChildOutcome, type ChildWorkflowOutcome } from '../../child-run';
 
 /**
  * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
@@ -223,6 +223,7 @@ export function findAmbiguousChild(
 /** The children a fan-out pass starts from, by item index. */
 export interface FanOutChildState {
   settledByIndex: Map<number, ChildWorkflowOutcome>;
+  observedByIndex: Map<number, ChildWorkflowOutcome>;
   /** Child run id of every held (non-terminal) child, by item index. */
   heldByIndex: Map<number, string>;
 }
@@ -232,13 +233,17 @@ export interface FanOutChildState {
  * child as it is; a recovery leaves failed and fan-out-cancelled children unsettled so
  * they are re-driven. A non-terminal child is held in either mode.
  */
-export function classifyExistingChildren(
+export async function classifyExistingChildren(
+  store: WorkflowDeps['store'],
   existingByIndex: ReadonlyMap<number, WorkflowRun>,
   continuing: boolean
-): FanOutChildState {
+): Promise<FanOutChildState> {
   const settledByIndex = new Map<number, ChildWorkflowOutcome>();
+  const observedByIndex = new Map<number, ChildWorkflowOutcome>();
   const heldByIndex = new Map<number, string>();
   for (const [index, child] of existingByIndex) {
+    const outcome = await readChildOutcome(store, child);
+    observedByIndex.set(index, outcome);
     switch (child.status) {
       case 'paused':
       case 'running':
@@ -246,21 +251,21 @@ export function classifyExistingChildren(
         heldByIndex.set(index, child.id);
         break;
       case 'completed':
-        settledByIndex.set(index, childOutcomeFromRun(child));
+        settledByIndex.set(index, outcome);
         break;
       case 'failed':
-        if (continuing) settledByIndex.set(index, childOutcomeFromRun(child));
+        if (continuing) settledByIndex.set(index, outcome);
         break;
       case 'cancelled':
         // A user-cancelled child (no fan-out tag) is terminal in either mode — it fails
         // all_success and is represented in all_done.
         if (continuing || !isFanOutRecoverableCancel(child)) {
-          settledByIndex.set(index, childOutcomeFromRun(child));
+          settledByIndex.set(index, outcome);
         }
         break;
     }
   }
-  return { settledByIndex, heldByIndex };
+  return { settledByIndex, heldByIndex, observedByIndex };
 }
 
 /** Indices with neither a settled outcome nor a held child: the ones still to spawn. */
@@ -274,14 +279,18 @@ export function unclaimedIndices(itemCount: number, state: FanOutChildState): nu
  * A held child may have finished while this pass ran (answered and continued in another
  * process). Take its row's outcome so its slot frees for the next round.
  */
-export function settleFinishedHeldChildren(
+export async function settleFinishedHeldChildren(
+  store: WorkflowDeps['store'],
   rows: readonly WorkflowRun[],
   state: FanOutChildState
-): void {
+): Promise<void> {
   for (const [index, childRunId] of state.heldByIndex) {
     const row = rows.find(r => r.id === childRunId);
-    if (row !== undefined && isTerminalRunStatus(row.status)) {
-      state.settledByIndex.set(index, childOutcomeFromRun(row));
+    if (row === undefined) continue;
+    const outcome = await readChildOutcome(store, row);
+    state.observedByIndex.set(index, outcome);
+    if (isTerminalRunStatus(row.status)) {
+      state.settledByIndex.set(index, outcome);
       state.heldByIndex.delete(index);
     }
   }

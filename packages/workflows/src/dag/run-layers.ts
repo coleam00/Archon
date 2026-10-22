@@ -3,6 +3,8 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import type { NodeUsage } from '../node-record-serialization';
+import type { TokenUsage } from '@archon/provider-contract';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
@@ -553,34 +555,7 @@ async function aggregateLayerResults(
   for (const result of layerResults) {
     if (result.status === 'fulfilled') {
       const { nodeId, output, sessionProvider } = result.value;
-      // SINGLE aggregation point for this segment's run-level usage: the run
-      // row's persisted totals and the transcript. Per-node cost/tokens must be
-      // summed here and ONLY here. Terminal telemetry does not read this: it
-      // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          ctx.totalCostIncomplete = true;
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
-      }
-      ctx.totalCostIncomplete ||= output.costIncomplete === true;
-      ctx.totalTokensUnknown ||= output.tokensUnknown === true;
-      if (ctx.totalTokensUnknown) {
-        ctx.totalTokens = undefined;
-      } else if (output.tokens !== undefined) {
-        ctx.totalTokens = sumTokenUsage(
-          [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
-          { nodeId }
-        );
-      }
+      accumulateNodeUsage(ctx, nodeId, nodeUsageDelta(ctx, nodeById.get(nodeId), nodeId, output));
       ctx.nodeOutputs.set(nodeId, output);
       if (
         ctx.nodeSessionHandles !== undefined &&
@@ -716,4 +691,60 @@ async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Prom
     );
   }
   return false;
+}
+
+function childTokenDelta(tokens: TokenUsage, prior?: TokenUsage) {
+  if (prior === undefined) return tokens;
+  return {
+    ...tokens,
+    input: tokens.input - prior.input,
+    output: tokens.output - prior.output,
+    ...(tokens.cacheRead !== undefined
+      ? { cacheRead: tokens.cacheRead - (prior.cacheRead ?? 0) }
+      : {}),
+    ...(tokens.cacheWrite !== undefined
+      ? { cacheWrite: tokens.cacheWrite - (prior.cacheWrite ?? 0) }
+      : {}),
+  };
+}
+
+function nodeUsageDelta(
+  ctx: RunLayersContext,
+  node: DagNode | undefined,
+  nodeId: string,
+  output: NodeUsage
+): NodeUsage {
+  // Child outcomes restate cumulative usage; the resume baseline already includes the prior snapshot.
+  const prior =
+    node?.kind === 'workflow'
+      ? ctx.childWorkflowUsage?.get(
+          nodeInvocationKey(ctx.stepNamePrefix + nodeId, ctx.loopGroupPath)
+        )
+      : undefined;
+  if (prior === undefined) return output;
+  return {
+    ...output,
+    costUsd: output.costUsd === undefined ? undefined : output.costUsd - (prior.costUsd ?? 0),
+    tokens: output.tokens === undefined ? undefined : childTokenDelta(output.tokens, prior.tokens),
+  };
+}
+
+function accumulateNodeUsage(ctx: RunLayersContext, nodeId: string, usage: NodeUsage): void {
+  if (usage.costUsd !== undefined) {
+    if (Number.isFinite(usage.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + usage.costUsd;
+    } else {
+      ctx.totalCostIncomplete = true;
+      getLog().warn({ nodeId, costUsd: usage.costUsd }, 'dag.usage_cost_non_finite_ignored');
+    }
+  }
+  ctx.totalCostIncomplete ||= usage.costIncomplete === true;
+  ctx.totalTokensUnknown ||= usage.tokensUnknown === true;
+  if (ctx.totalTokensUnknown) ctx.totalTokens = undefined;
+  else if (usage.tokens !== undefined) {
+    ctx.totalTokens = sumTokenUsage(
+      [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), usage.tokens],
+      { nodeId }
+    );
+  }
 }

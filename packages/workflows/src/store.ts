@@ -29,7 +29,7 @@ import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
-  type NodeExecutionResult,
+  type NodeUsage,
 } from './node-record-serialization';
 import type {
   NodeExecutionMetadata,
@@ -98,10 +98,11 @@ export interface PriorFailedNode {
   failureKind?: NodeFailureKind;
 }
 
-export interface DagResumeSnapshot
-  extends Pick<NodeExecutionResult, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costIncomplete'> {
+export interface DagResumeSnapshot extends NodeUsage {
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
+  /** Latest cumulative child usage per invocation, already included in this snapshot's totals. */
+  childWorkflowUsage?: Map<string, NodeUsage>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
   /** Nodes whose latest record is `node_failed`; a run continued after a pause replays them. */
   failedNodes: Map<string, PriorFailedNode>;

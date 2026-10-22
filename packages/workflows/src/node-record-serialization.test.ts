@@ -100,7 +100,7 @@ describe('node record serializers', () => {
       },
     });
     expect(Object.keys(event.data).sort()).toEqual(
-      ['accounting', 'spend', 'tokens', 'cost_usd'].sort()
+      ['node', 'invocation', 'accounting', 'spend', 'tokens', 'cost_usd'].sort()
     );
     expect(readNodeRecordEvent(event)).toBeUndefined();
   });
