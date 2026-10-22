@@ -28,10 +28,10 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `mock-modules`, `ratchet`, `format`, `installer`
-(POSIX only), `package-tests`, `cli-tests`, `core-tests`, and `script-tests`.
-`mock-modules` fails when a `mock.module()` factory leaves out an export of the module it
-mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
+`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `mock-modules`, `ratchet`,
+`format`, `installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
+`script-tests`. `mock-modules` fails when a `mock.module()` factory leaves out an export of
+the module it mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
@@ -91,8 +91,9 @@ said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`.
 
-CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) or the
-workflow fixtures on pull requests or pushes. Run them with `bun run test --plan pack` and
+CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
+tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
+do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
 `.archon/scripts/`; a single test file runs with
 `bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the

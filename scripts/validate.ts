@@ -37,6 +37,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     ],
   },
   {
+    id: 'merge-sweep-contract',
+    label: 'Merge sweep schema agrees with its recorder contract',
+    commands: [['bun', 'run', 'test', '.archon/scripts/__tests__/merge-sweep-contract.test.ts']],
+  },
+  {
     id: 'type-check',
     label: 'TypeScript across every package and script project',
     commands: [['bun', 'run', 'type-check']],

@@ -104,7 +104,7 @@ interface Decision {
   readonly attention: MergeAttention | null;
 }
 
-interface Sweep {
+export interface Sweep {
   readonly decisions: readonly Decision[];
   readonly base: {
     readonly summary: string;

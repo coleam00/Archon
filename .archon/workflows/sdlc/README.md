@@ -231,8 +231,9 @@ covers every TypeScript file under `.archon/workflows/`, so it needs no globs of
 own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
 rather than going quietly unchecked.
 
-The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI does not run
-them on pull requests or pushes. Run `bun run test --plan pack` when you change
+The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the
+merge-sweep conformance test through `merge-sweep-contract`; the other pack tests do not run
+on pull requests or pushes. Run `bun run test --plan pack` when you change
 `.archon/workflows/` or `.archon/scripts/`, or dispatch the Test Suite workflow with
 `pack-tests` set. The workflow fixtures likewise run only locally
 (`bun run validate --only workflow-fixtures`) or on a dispatch with `pack-fixtures` set.

@@ -16,14 +16,12 @@ import {
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
-  POLICY_CLASSES,
   type PrFacts,
   prFromUrl,
-  SWEEP_ACTIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { checkAttention, CONFIDENCES, withOther } from '../../workflows/sdlc/.shared/queue';
+import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -181,7 +179,7 @@ describe('the merge record and the gate', () => {
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
   });
 
-  test("the paths, actions, classes, effects and confidences are archon-merge-queue's own", () => {
+  test("the paths, classes and ruling effects are archon-merge-queue's own", () => {
     type Enum = { enum: string[] };
     type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
@@ -195,13 +193,7 @@ describe('the merge record and the gate', () => {
         (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
         workflow.nodes.find(node => node.id === id)?.output_format
       );
-    const decision = ['decisions', '[]'];
     expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('sweep', ...decision, 'action')?.enum).toEqual([...SWEEP_ACTIONS]);
-    expect(at('sweep', ...decision, 'class')?.enum).toEqual([...POLICY_CLASSES]);
-    expect(at('sweep', ...decision, 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...MERGE_EFFECTS]);
-    expect(at('sweep', ...decision, 'attention', 'recommendation', 'confidence')?.enum).toEqual([...CONFIDENCES]);
-    expect(at('sweep', 'base', 'attention', 'choices', '[]', 'effect')?.enum).toEqual([...BASE_EFFECTS]);
     expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
     expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
