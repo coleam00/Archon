@@ -9,7 +9,7 @@ describe('checkDatabase', () => {
     appliedAt: '2026-07-01T00:00:00.000Z',
   };
 
-  // Mirrors the makeDeps() helper in the checkFolderProject block below, so each
+  // Mirrors the makeDeps() helper in doctor-folder-project.test.ts, so each
   // test states only the field it varies.
   function makeDeps(over: Partial<DatabaseDeps> = {}): DatabaseDeps {
     return {
