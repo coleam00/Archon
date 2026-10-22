@@ -336,6 +336,18 @@ describe('loop wiring', () => {
     }
   });
 
+  it('every builder and checker iterates on the smallest run and samples the deciding states', () => {
+    for (const file of ['implement/commands/implement.md', 'loop/commands/loop-work.md']) {
+      const text = readFileSync(resolve(pack, file), 'utf8');
+      expect(text).toContain('Make every check you run as small as the question it answers');
+      expect(text).toContain('is never an iteration step');
+    }
+    const check = readFileSync(resolve(pack, 'loop/commands/loop-check-app.md'), 'utf8');
+    expect(check).toContain('never every tick, frame or combination of inputs');
+    const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
+    expect(pick).not.toContain('tries every user action');
+  });
+
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
     const manage = readFileSync(resolve(pack, 'manager/commands/manage.md'), 'utf8');
     expect(manage).toContain('When the default branch moves during your pass, do not rerun anything');

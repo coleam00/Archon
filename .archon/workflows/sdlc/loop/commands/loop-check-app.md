@@ -33,6 +33,12 @@ the default branch, not yours.
 The pick chose this depth from the work item and its risk. Stay inside it: every minute past what the
 change needs is a minute another change waits.
 
+At every depth, observe each criterion at the states that decide it (the ones the work item names, the
+ones the change touches, and a few around them), never every tick, frame or combination of inputs:
+exhaustive coverage is the project's own checks' job. Use the project's checks and tools before writing
+your own, and run each of your own checks once; when one would take more than a few minutes, it is
+checking more than the question needs, so make it smaller before you run it.
+
 - **light** (nothing a user can see changes: tests, tools, documentation, a refactor whose contract
   says behaviour is unchanged): build, run the project's checks once, start the app once to confirm
   it runs, and check each criterion. No probes, no holdout scenarios.
