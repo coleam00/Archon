@@ -458,19 +458,66 @@ async function endDetachedNodeTree(
   await confirmProcessGroupsGone([pgid], TERMINATION_CONFIRM_MS);
 }
 
+type OwnedProcessGroupOptions = {
+  cwd: string;
+  timeout?: number;
+  env: NodeJS.ProcessEnv;
+} & ({ node?: NodeProcessOptions; input?: never } | { node: NodeProcessOptions; input?: string });
+
+/** One spawned group, and the evidence its handlers record until it settles. */
+interface OwnedGroup {
+  readonly cmd: string;
+  readonly args: string[];
+  readonly timeout: number | undefined;
+  readonly child: ChildProcess;
+  readonly node: NodeProcessOptions | undefined;
+  readonly recorder: NodeProcessRecorder | undefined;
+  readonly posix: boolean;
+  /** A setup command, run under the watcher that ends its group when the owner's pipe closes. */
+  readonly lifeline: boolean;
+  stdout: Buffer;
+  stderr: Buffer;
+  failure?: RawSubprocessRejection;
+  inputError?: Error;
+  timedOut: boolean;
+  cancelled: boolean;
+  exited: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+  termination?: Promise<void>;
+  terminationError?: Error;
+}
+
+const OUTPUT_MAX_BUFFER = 1024 * 1024;
+
 /** Exported for tests, which mock it where a Windows bash or script node runs through it. */
 export async function execOwnedProcessGroup(
   cmd: string,
   args: string[],
-  options: {
-    cwd: string;
-    timeout?: number;
-    env: NodeJS.ProcessEnv;
-  } & ({ node?: NodeProcessOptions; input?: never } | { node: NodeProcessOptions; input?: string })
+  options: OwnedProcessGroupOptions
 ): Promise<{ stdout: string; stderr: string }> {
+  assertRecorderActive(options.node?.recorder);
+  const group = spawnOwnedGroup(cmd, args, options);
+  recordNodeProcess(group.child, group.recorder, error => {
+    error.message = `could not start the node's owner-death watcher: ${error.message}`;
+    group.failure ??= error;
+    stopGroup(group, false);
+  });
+  armTimeout(group);
+  const disarmAbort = armAbort(group);
+  watchChild(group, options.input);
+  const closed = await waitForClose(group.child);
+  clearTimeout(group.timer);
+  disarmAbort();
+  await releaseGroup(group);
+  return settleOwnedGroup(group, closed);
+}
+
+function spawnOwnedGroup(
+  cmd: string,
+  args: string[],
+  options: OwnedProcessGroupOptions
+): OwnedGroup {
   const { node } = options;
-  const recorder = node?.recorder;
-  assertRecorderActive(recorder);
   const posix = process.platform !== 'win32';
   const lifeline = posix && !node;
   const child = spawn(cmd, lifeline ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
@@ -480,159 +527,198 @@ export async function execOwnedProcessGroup(
     detached: posix,
     stdio: [lifeline || node ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
-  const maxBuffer = 1024 * 1024;
-  let stdout = Buffer.alloc(0);
-  let stderr = Buffer.alloc(0);
-  let failure: RawSubprocessRejection | undefined;
-  let inputError: Error | undefined;
-  let timedOut = false;
-  let cancelled = false;
-  let exited = false;
-  let termination: Promise<void> | undefined;
-  let terminationError: Error | undefined;
-  const endTree = (pid: number, signal: NodeJS.Signals): void => {
-    if (recorder?.mode === 'detached-posix') {
-      termination = endDetachedNodeTree(recorder, pid, signal).catch((error: unknown) => {
-        terminationError = error instanceof Error ? error : new Error(String(error));
-        if (!exited) child.kill('SIGKILL');
-      });
-      return;
-    }
-    termination = terminateTree(pid, signal).catch((error: unknown) => {
-      terminationError = error instanceof Error ? error : new Error(String(error));
-      // `close` waits for the root, so a root left running would hang the caller. SIGKILL,
-      // because a root that ignores SIGTERM would otherwise outlive the deadline.
-      if (!exited) child.kill('SIGKILL');
-    });
+  return {
+    cmd,
+    args,
+    timeout: options.timeout,
+    child,
+    node,
+    recorder: node?.recorder,
+    posix,
+    lifeline,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    timedOut: false,
+    cancelled: false,
+    exited: false,
   };
-  const stop = (whole: boolean): void => {
-    // Never signal a group after its leader exited: that PID may already be reused.
-    if (termination || child.pid === undefined) return;
-    if (exited && recorder?.mode !== 'detached-posix') return;
-    if (!whole) {
-      child.kill('SIGTERM');
-      return;
-    }
-    endTree(child.pid, node ? 'SIGTERM' : 'SIGKILL');
-  };
-  const rootPid = child.pid;
-  recordNodeProcess(child, recorder, error => {
-    error.message = `could not start the node's owner-death watcher: ${error.message}`;
-    failure ??= error;
-    stop(false);
+}
+
+function endTree(group: OwnedGroup, pid: number, signal: NodeJS.Signals): void {
+  const { recorder } = group;
+  const ending =
+    recorder?.mode === 'detached-posix'
+      ? endDetachedNodeTree(recorder, pid, signal)
+      : terminateTree(pid, signal);
+  group.termination = ending.catch((error: unknown) => {
+    group.terminationError = error instanceof Error ? error : new Error(String(error));
+    // `close` waits for the root, so a root left running would hang the caller. SIGKILL,
+    // because a root that ignores SIGTERM would otherwise outlive the deadline.
+    if (!group.exited) group.child.kill('SIGKILL');
   });
-  const closeOutput = (): void => {
-    const destroy = (): void => {
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    };
-    if (recorder?.mode === 'detached-posix') {
-      void Promise.resolve(termination)
-        .then(() => recorder.waitForOutput(child))
-        .then(destroy);
-    } else destroy();
+}
+
+function stopGroup(group: OwnedGroup, whole: boolean): void {
+  const { child } = group;
+  // Never signal a group after its leader exited: that PID may already be reused.
+  if (group.termination || child.pid === undefined) return;
+  if (group.exited && group.recorder?.mode !== 'detached-posix') return;
+  if (!whole) {
+    child.kill('SIGTERM');
+    return;
+  }
+  endTree(group, child.pid, group.node ? 'SIGTERM' : 'SIGKILL');
+}
+
+function closeOutput(group: OwnedGroup): void {
+  const { child, recorder } = group;
+  const destroy = (): void => {
+    child.stdout?.destroy();
+    child.stderr?.destroy();
   };
-  const timer =
-    options.timeout === undefined
-      ? undefined
-      : setTimeout(() => {
-          timedOut = true;
-          stop(!node || node.endTreeOnTimeout);
-          closeOutput();
-        }, options.timeout);
-  const abortSignal = recorder ? node?.abortSignal : undefined;
+  if (recorder?.mode === 'detached-posix') {
+    void Promise.resolve(group.termination)
+      .then(() => recorder.waitForOutput(child))
+      .then(destroy);
+  } else destroy();
+}
+
+function armTimeout(group: OwnedGroup): void {
+  if (group.timeout === undefined) return;
+  group.timer = setTimeout(() => {
+    group.timedOut = true;
+    stopGroup(group, !group.node || group.node.endTreeOnTimeout);
+    closeOutput(group);
+  }, group.timeout);
+}
+
+function armAbort(group: OwnedGroup): () => void {
+  const abortSignal = group.recorder ? group.node?.abortSignal : undefined;
+  if (!abortSignal) return () => undefined;
+  const rootPid = group.child.pid;
   const abort = (): void => {
-    cancelled = true;
-    clearTimeout(timer);
-    if (!termination && rootPid !== undefined && (posix || !exited)) endTree(rootPid, 'SIGKILL');
-    closeOutput();
+    group.cancelled = true;
+    clearTimeout(group.timer);
+    if (!group.termination && rootPid !== undefined && (group.posix || !group.exited))
+      endTree(group, rootPid, 'SIGKILL');
+    closeOutput(group);
   };
-  if (abortSignal?.aborted) abort();
-  else abortSignal?.addEventListener('abort', abort, { once: true });
-  const collect = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-    const previous = stream === 'stdout' ? stdout : stderr;
-    const buffer = Buffer.concat([previous, chunk.subarray(0, maxBuffer - previous.length)]);
-    if (stream === 'stdout') stdout = buffer;
-    else stderr = buffer;
-    if (previous.length + chunk.length > maxBuffer && !failure) {
-      failure = Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
-        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-      });
-      clearTimeout(timer);
-      stop(!node || recorder?.mode === 'detached-posix');
-      closeOutput();
-    }
+  if (abortSignal.aborted) abort();
+  else abortSignal.addEventListener('abort', abort, { once: true });
+  return () => {
+    abortSignal.removeEventListener('abort', abort);
   };
-  child.stdout?.on('data', (chunk: Buffer) => collect('stdout', chunk));
-  child.stderr?.on('data', (chunk: Buffer) => collect('stderr', chunk));
+}
+
+function collectOutput(group: OwnedGroup, stream: 'stdout' | 'stderr', chunk: Buffer): void {
+  const previous = group[stream];
+  group[stream] = Buffer.concat([previous, chunk.subarray(0, OUTPUT_MAX_BUFFER - previous.length)]);
+  if (previous.length + chunk.length <= OUTPUT_MAX_BUFFER || group.failure) return;
+  group.failure = Object.assign(new Error(`${stream} maxBuffer length exceeded`), {
+    code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+  });
+  clearTimeout(group.timer);
+  stopGroup(group, !group.node || group.recorder?.mode === 'detached-posix');
+  closeOutput(group);
+}
+
+function watchChild(group: OwnedGroup, input: string | undefined): void {
+  const { child } = group;
+  child.stdout?.on('data', (chunk: Buffer) => collectOutput(group, 'stdout', chunk));
+  child.stderr?.on('data', (chunk: Buffer) => collectOutput(group, 'stderr', chunk));
   child.once('error', error => {
-    failure = error;
+    group.failure = error;
   });
   child.once('exit', () => {
-    exited = true;
+    group.exited = true;
     // The watcher ends leftovers from inside its group, without a stale-PID signal.
     child.stdin?.destroy();
   });
-  if (options.input !== undefined) {
+  if (input !== undefined) {
     child.stdin?.on('error', error => {
-      inputError = error;
+      group.inputError = error;
     });
-    child.stdin?.end(options.input, 'utf8');
+    child.stdin?.end(input, 'utf8');
   }
-  const closed = await new Promise<{ code: number | null; signal: string | null }>(resolve => {
+}
+
+function waitForClose(
+  child: ChildProcess
+): Promise<{ code: number | null; signal: string | null }> {
+  return new Promise(resolve => {
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
-  clearTimeout(timer);
-  abortSignal?.removeEventListener('abort', abort);
+}
+
+/** Waits until nothing of the group can still run or write, recording a tree that survived. */
+async function releaseGroup(group: OwnedGroup): Promise<void> {
+  const { child, recorder } = group;
   child.stdin?.destroy();
-  await termination;
+  await group.termination;
   if (recorder?.mode === 'detached-posix') {
     await recorder.waitForRelease();
     recorder.forget(child);
   }
-  if (lifeline && child.pid !== undefined) {
+  if (group.lifeline && child.pid !== undefined) {
     try {
       await confirmGroupGone(child.pid);
     } catch (error) {
-      terminationError = error instanceof Error ? error : new Error(String(error));
+      group.terminationError = error instanceof Error ? error : new Error(String(error));
     }
   }
-  if (terminationError) {
-    failure ??= new Error(
-      cancelled
-        ? 'Command cancelled'
-        : node
-          ? `Command timed out after ${options.timeout} ms`
-          : 'Setup process group termination failed'
-    );
-    failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
-  }
+}
+
+function settleOwnedGroup(
+  group: OwnedGroup,
+  closed: { code: number | null; signal: string | null }
+): { stdout: string; stderr: string } {
+  if (group.terminationError) failWithSurvivingTree(group, group.terminationError);
   // taskkill ends the root with exit code 1; a node deadline keeps the SIGTERM that
   // child.kill reported for it, as documented for `exit_code`.
-  const exit = node && termination && !posix ? { code: null, signal: 'SIGTERM' } : closed;
-  const output = { stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8') };
-  if (timedOut || cancelled || failure || exit.code !== 0) {
-    throw Object.assign(
-      failure ??
-        new Error(
-          timedOut
-            ? `Command timed out after ${options.timeout} ms`
-            : cancelled
-              ? 'Command cancelled'
-              : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
-        ),
-      {
-        ...output,
-        ...(!failure ? { code: exit.code } : {}),
-        signal: exit.signal,
-        timedOut,
-        ...(node && terminationError ? { treeSurvived: true as const } : {}),
-        ...(cancelled ? { cancelled: true as const } : {}),
-        cmd: `${cmd} ${args.join(' ')}`,
-        spawnargs: args,
-      }
-    );
-  }
-  if (inputError) throw Object.assign(inputError, output);
+  const exit =
+    group.node && group.termination && !group.posix ? { code: null, signal: 'SIGTERM' } : closed;
+  const output = { stdout: group.stdout.toString('utf8'), stderr: group.stderr.toString('utf8') };
+  if (group.timedOut || group.cancelled || group.failure || exit.code !== 0)
+    throw ownedGroupRejection(group, exit, output);
+  if (group.inputError) throw Object.assign(group.inputError, output);
   return output;
+}
+
+function failWithSurvivingTree(group: OwnedGroup, terminationError: Error): void {
+  group.failure ??= new Error(
+    group.cancelled
+      ? 'Command cancelled'
+      : group.node
+        ? `Command timed out after ${group.timeout} ms`
+        : 'Setup process group termination failed'
+  );
+  group.failure.message += `; could not terminate subprocess tree: ${terminationError.message}`;
+}
+
+function ownedGroupRejection(
+  group: OwnedGroup,
+  exit: { code: number | null; signal: string | null },
+  output: { stdout: string; stderr: string }
+): Error {
+  const { cmd, args, failure, timedOut, cancelled } = group;
+  return Object.assign(
+    failure ??
+      new Error(
+        timedOut
+          ? `Command timed out after ${group.timeout} ms`
+          : cancelled
+            ? 'Command cancelled'
+            : `Command failed: ${cmd} ${args.join(' ')}\n${output.stderr}`
+      ),
+    {
+      ...output,
+      ...(!failure ? { code: exit.code } : {}),
+      signal: exit.signal,
+      timedOut,
+      ...(group.node && group.terminationError ? { treeSurvived: true as const } : {}),
+      ...(cancelled ? { cancelled: true as const } : {}),
+      cmd: `${cmd} ${args.join(' ')}`,
+      spawnargs: args,
+    }
+  );
 }
