@@ -140,6 +140,35 @@ describe('workflowRunCommand — dry-run', () => {
     }
   });
 
+  it('simulates stub-only runs without reading the registered environment', async () => {
+    const host = createTestWorkflowHost();
+    const lookup = spyOn(host.records.codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const env = spyOn(host.deps.store, 'getCodebaseEnvVars').mockRejectedValue(
+      new Error('store unavailable')
+    );
+    try {
+      const dryRun = await import('@archon/workflows/dry-run');
+      await workflowRunCommand(host, '/test/path', 'plan', '', { dryRun: true, json: true });
+      expect(env).not.toHaveBeenCalled();
+      expect(dryRun.dryRunWorkflow).toHaveBeenCalled();
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ outcome: 'completed' });
+    } finally {
+      lookup.mockRestore();
+      env.mockRestore();
+    }
+  });
+
   it('emits authored outcome in JSON without using it as the exit verdict', async () => {
     const dryRun = await import('@archon/workflows/dry-run');
     (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
