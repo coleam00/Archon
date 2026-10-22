@@ -1,3 +1,4 @@
+import { scriptInvocation } from '../../../script-invocation';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -152,26 +153,13 @@ export async function executeScriptNode(
     PYTHONDONTWRITEBYTECODE: '1',
   };
 
-  // Build the command and args based on runtime and inline vs named
-  let cmd = '';
-  let args: string[] = [];
-
-  const nodeDeps = node.deps ?? [];
-
+  let invocation: ReturnType<typeof scriptInvocation>;
   if (isInlineScript(finalScript)) {
-    // Inline code execution
-    if (node.runtime === 'bun') {
-      cmd = 'bun';
-      // --no-env-file prevents Bun from auto-loading .env from the execution
-      // cwd (the target repo). Without this, repo .env leaks into the script
-      // subprocess despite Archon's parent process cleanup.
-      args = ['--no-env-file', '-e', finalScript];
-    } else {
-      // uv run --with dep1 --with dep2 python -c <code>
-      cmd = 'uv';
-      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-      args = ['run', ...withFlags, 'python', '-c', finalScript];
-    }
+    invocation = scriptInvocation(
+      node.runtime === 'bun' ? 'bun' : 'uv',
+      { kind: 'inline', code: finalScript },
+      node.deps
+    );
   } else {
     // Named script — look up across repo and home scopes.
     // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
@@ -207,16 +195,13 @@ export async function executeScriptNode(
       );
     }
 
-    // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
-    if (scriptDef.runtime === 'uv') {
-      cmd = 'uv';
-      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-      args = ['run', ...withFlags, scriptDef.path];
-    } else {
-      cmd = 'bun';
-      args = ['--no-env-file', 'run', scriptDef.path];
-    }
+    invocation = scriptInvocation(
+      scriptDef.runtime,
+      { kind: 'file', path: scriptDef.path },
+      node.deps
+    );
   }
+  const { command: cmd, args } = invocation;
 
   // After dispatch, a rejection may follow user side effects; source recovery must not
   // replace that outcome. Recheck while execution is still known not to have started.

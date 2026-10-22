@@ -2,7 +2,7 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect } from 'bun:test';
 
-import { redactSubprocessError } from './subprocess';
+import { redactSubprocessError, runSubprocess, type RawSubprocessRejection } from './subprocess';
 import type { NodeOutput } from './schemas';
 import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
@@ -210,9 +210,38 @@ describe('formatSubprocessFailure', () => {
       ['failed']
     );
     const formatted = formatSubprocessFailure(err, 'Script');
-    expect(formatted.userMessage).toBe('Script failed: spawn bun ENOENT');
+    expect(formatted.userMessage).toBe('Script failed [error ENOENT]: spawn bun ENOENT');
     expect(formatted.logFields.exitCode).toBeUndefined();
   });
+
+  it.each(['stdout', 'stderr'] as const)(
+    'preserves the cause of a real %s overflow with nonempty output',
+    async stream => {
+      const error = await runSubprocess(
+        { kind: 'host' },
+        process.execPath,
+        [
+          '--no-env-file',
+          '-e',
+          `// private-body-marker\nprocess.${stream}.write('x'.repeat(2 * 1024 * 1024));`,
+        ],
+        { cwd: import.meta.dir, env: {}, timeout: 5000, retention: { standalone: true } }
+      ).then(
+        () => undefined,
+        (error: unknown) => error as RawSubprocessRejection
+      );
+      expect(error?.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      expect(error?.[stream]?.length).toBeGreaterThan(0);
+      const { userMessage, logFields } = formatSubprocessFailure(error ?? {}, 'Script');
+      expect(userMessage).toContain('[error ERR_CHILD_PROCESS_STDIO_MAXBUFFER]');
+      expect(logFields.errorCode).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      expect(logFields.exitCode).toBeUndefined();
+      expect(userMessage).toContain('xxx');
+      expect(userMessage).not.toContain('private-body-marker');
+      expect(userMessage).not.toContain('Command failed:');
+      expect(userMessage.length).toBeLessThan(2100);
+    }
+  );
 
   it('prefers stderr over message body when both are present', () => {
     const err = {

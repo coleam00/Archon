@@ -260,6 +260,18 @@ export function formatHostSpawnFailure(
   return undefined;
 }
 
+const STDERR_LABEL = '[stderr]\n';
+const STDOUT_LABEL = '\n[stdout]\n';
+
+function subprocessDiagnostic(
+  stderrTail: string | undefined,
+  stdoutTail: string | undefined,
+  fallback: string
+): string {
+  if (stderrTail && stdoutTail) return `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
+  return stderrTail || stdoutTail || fallback;
+}
+
 /**
  * Produce a concise, diagnostic-first summary of a failed subprocess.
  *
@@ -292,8 +304,6 @@ export function formatSubprocessFailure(
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
   // stream is labelled only when both are present. The budget accounts for the
   // label overhead so the joined diagnostic never truncates away a label.
-  const STDERR_LABEL = '[stderr]\n';
-  const STDOUT_LABEL = '\n[stdout]\n';
   const bothPresent = stderr.length > 0 && stdout.length > 0;
   const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
   const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
@@ -303,28 +313,30 @@ export function formatSubprocessFailure(
     SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
   );
 
-  let diagnostic: string;
-  if (stderrTail && stdoutTail) {
-    diagnostic = `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
-  } else if (stderrTail || stdoutTail) {
-    diagnostic = (stderrTail ?? '') + (stdoutTail ?? '');
-  } else if (hasCommandFailedPrefix) {
-    diagnostic = 'no diagnostic output';
-  } else {
-    diagnostic = rawMessage || 'unknown error';
-  }
+  const diagnostic = subprocessDiagnostic(
+    stderrTail,
+    stdoutTail,
+    hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage || 'unknown error'
+  );
 
   const truncated =
     diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
       ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
       : diagnostic;
 
-  const exitSuffix = typeof err.code === 'number' ? ` [exit ${String(err.code)}]` : '';
+  const errorCode = typeof err.code === 'string' ? err.code : undefined;
+  const codeSuffix =
+    typeof err.code === 'number'
+      ? ` [exit ${String(err.code)}]`
+      : errorCode
+        ? ` [error ${errorCode}]`
+        : '';
 
   return {
-    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
+    userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
       exitCode: typeof err.code === 'number' ? err.code : undefined,
+      errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,

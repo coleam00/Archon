@@ -1,3 +1,4 @@
+import { scriptInvocation } from '../../script-invocation';
 import { bashInvocation } from '../../bash-invocation';
 import { mkdir } from 'node:fs/promises';
 import { execFileAsync, resolveBashPath } from '@archon/git';
@@ -99,29 +100,14 @@ async function resolveCodeInvocation(
   code: string,
   ctx: DryRunContext
 ): Promise<{ command: string; args: string[]; input?: string }> {
-  let command: string;
-  let args: string[];
-  let input: string | undefined;
   if (node.runtime === 'sh') {
-    command = resolveBashPath();
-    ({ args, input } = bashInvocation(code));
-  } else if (isInlineScript(code)) {
-    if (node.runtime === 'bun') {
-      command = 'bun';
-      args = ['--no-env-file', '-e', code];
-    } else {
-      command = 'uv';
-      args = ['run', ...(node.deps ?? []).flatMap(dep => ['--with', dep]), 'python', '-c', code];
-    }
-  } else {
-    await assertWorkflowSourceIntegrity(ctx.sourceRoots);
-    const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
-    if (!script) throw new Error(`Named script '${code}' was not found`);
-    command = script.runtime === 'bun' ? 'bun' : 'uv';
-    args =
-      script.runtime === 'bun'
-        ? ['--no-env-file', 'run', script.path]
-        : ['run', ...(node.deps ?? []).flatMap(dep => ['--with', dep]), script.path];
+    return { command: resolveBashPath(), ...bashInvocation(code) };
   }
-  return { command, args, input };
+  if (isInlineScript(code)) {
+    return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps);
+  }
+  await assertWorkflowSourceIntegrity(ctx.sourceRoots);
+  const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
+  if (!script) throw new Error(`Named script '${code}' was not found`);
+  return scriptInvocation(script.runtime, { kind: 'file', path: script.path }, node.deps);
 }
