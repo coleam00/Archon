@@ -1,11 +1,12 @@
 import type { IWorkflowStore } from '../store';
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
 import { hasUnknownTokenTotal, hasIncompleteCostTotal } from '../schemas/run-usage';
-import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
+import type { NodeUsage } from '../node-record-serialization';
+import { getLog } from './log';
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
+export interface ChildWorkflowOutcome extends NodeUsage {
   childRunId: string;
   status: 'completed' | 'paused' | 'failed' | 'cancelled';
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
@@ -24,11 +25,6 @@ export interface ChildWorkflowOutcome {
    * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
    */
   declaredOutputPaths?: DeclaredOutputPaths;
-  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
-  costIncomplete?: boolean;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
   error?: string;
 }
 
@@ -177,13 +173,24 @@ export async function readChildOutcome(
   // Held children can write new events before their next run-tail metadata update.
   // Terminal legacy rows still need their events to establish cost completeness.
   if (held || !outcome.costIncomplete || outcome.costUsd === undefined) {
-    const usage = await store.getDagResumeSnapshot(run.id);
-    if (usage.costIncomplete) outcome.costIncomplete = true;
-    // A signed contribution can reduce the newer cumulative total; taking the maximum
-    // of the two snapshots would discard that reported amount.
-    outcome.costUsd = held
-      ? (usage.costUsd ?? outcome.costUsd)
-      : (outcome.costUsd ?? usage.costUsd);
+    try {
+      const usage = await store.getDagResumeSnapshot(run.id);
+      if (usage.costIncomplete) outcome.costIncomplete = true;
+      // Signed contributions can reduce cumulative totals; never take the maximum.
+      outcome.costUsd = held
+        ? (usage.costUsd ?? outcome.costUsd)
+        : (outcome.costUsd ?? usage.costUsd);
+      if (usage.tokensUnknown) outcome.tokensUnknown = true;
+      outcome.tokens = outcome.tokensUnknown
+        ? undefined
+        : held
+          ? (usage.tokens ?? outcome.tokens)
+          : (outcome.tokens ?? usage.tokens);
+    } catch (err) {
+      // Enrichment cannot undo accepted usage or send a settled child through setup cleanup.
+      outcome.costIncomplete = true;
+      getLog().warn({ err, childRunId: run.id }, 'workflow.child_usage_read_failed');
+    }
   }
   return outcome;
 }

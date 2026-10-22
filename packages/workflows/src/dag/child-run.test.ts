@@ -160,3 +160,56 @@ for (const status of [
     );
   }
 }
+
+it.each(['completed', 'failed', 'cancelled', 'paused', 'running', 'pending'] as const)(
+  'retains accepted metadata and lifecycle when %s child enrichment fails',
+  async status => {
+    const outcome = await readChildOutcome(
+      {
+        getDagResumeSnapshot: async () => {
+          throw new Error('history unavailable');
+        },
+      },
+      { ...settledRun({ total_cost_usd: 0.2, total_tokens_in: 10, total_tokens_out: 2 }), status }
+    );
+    expect(outcome).toMatchObject({
+      status: status === 'running' || status === 'pending' ? 'paused' : status,
+      costUsd: 0.2,
+      costIncomplete: true,
+      tokens: { input: 10, output: 2 },
+    });
+  }
+);
+
+it.each([false, true])('refreshes held child tokens (unknown: %s)', async unknown => {
+  const outcome = await readChildOutcome(
+    {
+      getDagResumeSnapshot: id =>
+        foldDagResumeSnapshot(
+          [
+            {
+              step_name: 'new',
+              event_type: 'node_completed',
+              data: {
+                type: 'agent',
+                cost_usd: 0.3,
+                ...(unknown
+                  ? { tokens: { input: 'invalid', output: 6 } }
+                  : { tokens: { input: 30, output: 6, cacheRead: 5, cacheWrite: 0 } }),
+              },
+            },
+          ],
+          id
+        ),
+    },
+    {
+      ...settledRun({ total_cost_usd: 0.2, total_tokens_in: 10, total_tokens_out: 2 }),
+      status: 'paused',
+    }
+  );
+  expect(outcome.costUsd).toBe(0.3);
+  expect(outcome.tokensUnknown).toBe(unknown ? true : undefined);
+  expect(outcome.tokens).toEqual(
+    unknown ? undefined : { input: 30, output: 6, cacheRead: 5, cacheWrite: 0 }
+  );
+});

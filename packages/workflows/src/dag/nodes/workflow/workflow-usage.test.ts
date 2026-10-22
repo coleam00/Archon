@@ -433,9 +433,14 @@ for (const fanOut of [false, true]) {
 
 for (const fanOut of [false, true]) {
   for (const marker of [undefined, true]) {
-    it.each([0.3, 0, -0.2, -0.3])(
-      `reads newer held child events (${fanOut ? 'fan-out' : 'single'}, marker ${String(marker)}, later cost %s)`,
-      async laterCost => {
+    it.each([
+      { laterCost: 0.3, unknownTokens: false },
+      { laterCost: 0, unknownTokens: true },
+      { laterCost: -0.2, unknownTokens: false },
+      { laterCost: -0.3, unknownTokens: false },
+    ])(
+      `reads newer held child events (${fanOut ? 'fan-out' : 'single'}, marker ${String(marker)}, %j)`,
+      async ({ laterCost, unknownTokens }) => {
         const store = createMockStore();
         store.findChildRuns.mockResolvedValue([
           makeWorkflowRun('held', {
@@ -444,6 +449,8 @@ for (const fanOut of [false, true]) {
               parent_node_id: 'sub',
               child_index: 0,
               total_cost_usd: 0.2,
+              total_tokens_in: 10,
+              total_tokens_out: 2,
               ...(marker ? { total_cost_incomplete: marker } : {}),
             },
           }),
@@ -454,12 +461,16 @@ for (const fanOut of [false, true]) {
               {
                 step_name: 'old',
                 event_type: 'node_completed',
-                data: { type: 'agent', cost_usd: 0.2 },
+                data: { type: 'agent', cost_usd: 0.2, tokens: { input: 10, output: 2 } },
               },
               {
                 step_name: 'new',
                 event_type: 'node_completed',
-                data: { type: 'agent', cost_usd: laterCost },
+                data: {
+                  type: 'agent',
+                  cost_usd: laterCost,
+                  tokens: { input: unknownTokens ? 'unreadable' : 20, output: 4 },
+                },
               },
             ],
             id
@@ -501,7 +512,78 @@ for (const fanOut of [false, true]) {
         const usage = runUsageWrites(store).at(-1);
         expect(usage?.total_cost_usd).toBeCloseTo(0.2 + laterCost);
         expect(usage?.total_cost_incomplete).toBe(marker);
+        expect(usage?.total_tokens_in).toBe(unknownTokens ? null : 30);
+        expect(usage?.total_tokens_out).toBe(unknownTokens ? null : 6);
+        expect(usage?.total_tokens_unknown).toBe(unknownTokens ? true : undefined);
       }
     );
   }
+}
+
+for (const fanOut of [false, true]) {
+  it.each(['completed', 'paused'] as const)(
+    `retains child spend after a supplemental read failure (${fanOut ? 'fan-out' : 'single'}, %s)`,
+    async status => {
+      const store = createMockStore();
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('existing', {
+          status,
+          metadata: {
+            parent_node_id: 'sub',
+            child_index: 0,
+            total_cost_usd: 0.2,
+            total_tokens_in: 10,
+            total_tokens_out: 2,
+            summary: 'done',
+          },
+        }),
+      ]);
+      store.getDagResumeSnapshot.mockImplementation(async id => {
+        if (id === 'existing') throw new Error('history unavailable');
+        return foldDagResumeSnapshot(
+          persistedEvents(store).filter(e => e.workflow_run_id === id),
+          id
+        );
+      });
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        childRunId: 'independent',
+        status: 'completed',
+        output: 'done',
+        costUsd: 0.1,
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          cwd,
+          deps: createMockDeps(store),
+          workflowRun: makeWorkflowRun(),
+          runChildWorkflow,
+          workflow: {
+            name: 'parent',
+            nodes: [
+              {
+                id: 'sub',
+                kind: 'workflow',
+                workflow: 'child',
+                ...(fanOut
+                  ? {
+                      fan_out: {
+                        items: '[1,2]',
+                        as: 'item',
+                        max_parallel: 2,
+                        join: 'all_done',
+                      } as const,
+                    }
+                  : {}),
+              },
+            ],
+          },
+        })
+      );
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeCloseTo(fanOut ? 0.3 : 0.2);
+      expect(runUsageWrites(store).at(-1)?.total_cost_incomplete).toBe(true);
+      expect(runChildWorkflow).toHaveBeenCalledTimes(fanOut ? 1 : 0);
+      expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+      if (status === 'paused') expect(store.pauseWorkflowRun).toHaveBeenCalled();
+    }
+  );
 }

@@ -440,6 +440,65 @@ nodes:
     }
   });
 
+  it('keeps a paid child paused when supplemental usage enrichment fails', async () => {
+    await writeWorkflow(
+      'paid-child',
+      `name: paid-child
+description: child
+nodes:
+  - id: paid
+    prompt: work
+  - id: gate
+    approval:
+      message: approve
+    depends_on: [paid]
+`
+    );
+    await writeWorkflow(
+      'paid-parent',
+      `name: paid-parent
+description: parent
+nodes:
+  - id: sub
+    workflow: paid-child
+`
+    );
+    const store = new InMemoryStore();
+    const snapshot = store.getDagResumeSnapshot;
+    const readError = new Error('supplemental history unavailable');
+    store.getDagResumeSnapshot = async id => {
+      const row = store.runs.get(id);
+      if (
+        row?.workflow_name === 'paid-child' &&
+        row.status === 'paused' &&
+        typeof row.metadata.total_cost_usd === 'number'
+      )
+        throw readError;
+      return snapshot(id);
+    };
+    const cancel = spyOn(store, 'cancelWorkflowRun');
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv',
+      cwd,
+      await discover('paid-parent'),
+      'goal'
+    );
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'paid-child');
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'paid-parent');
+    expect(child?.status).toBe('paused');
+    expect(child?.metadata.total_cost_usd).toBe(0.01);
+    expect(parent?.status).toBe('paused');
+    expect(parent?.metadata.total_cost_usd).toBe(0.01);
+    expect(parent?.metadata.total_cost_incomplete).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { err: readError, childRunId: child?.id },
+      'workflow.child_usage_read_failed'
+    );
+  });
+
   it('runs, pauses and resumes the real engine without conversation or user records', async () => {
     await writeWorkflow(
       'originless-resume',
