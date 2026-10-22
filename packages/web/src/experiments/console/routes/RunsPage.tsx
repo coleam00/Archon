@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
@@ -289,7 +289,6 @@ function attentionKey(run: Run): string {
 
 export function RunsPage(): ReactElement {
   const { projectId } = useParams<{ projectId?: string }>();
-  const navigate = useNavigate();
   const scope: Scope = projectId ?? 'all';
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get('demo') === '1';
@@ -298,12 +297,7 @@ export function RunsPage(): ReactElement {
   // retrospective view, not the first thing to see.
   const [filter, setFilter] = useState<Filter>('running');
   const [query, setQuery] = useState('');
-  // Selection index for j/k navigation. -1 = nothing selected.
-  const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const searchRef = useRef<HTMLInputElement | null>(null);
-  // Pending-input runs the user has dismissed from the banner this session.
-  // Not persisted — the run is still paused, so it re-surfaces on reload.
-  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
 
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
     skill.listRuns(scope === 'all' ? {} : { codebaseId: scope })
@@ -331,7 +325,71 @@ export function RunsPage(): ReactElement {
   const counts = demoMode ? mergeCounts(realCounts, demoCounts) : realCounts;
   const runs = useMemo(() => filterRuns(allRuns, filter, query), [allRuns, filter, query]);
 
-  const { data: attentionRuns, error: attentionError } = useEntity<Run[]>(
+  const pending = usePendingInput(demoRuns, scope);
+  const selectedRunId = useRunsKeymap(runs, setFilter, searchRef);
+
+  const scopedProject = scope !== 'all' && project !== undefined ? project : null;
+  const draftProject =
+    scopedProject !== null ? { id: scopedProject.id, path: scopedProject.path } : null;
+
+  return (
+    <section className="flex h-full flex-col">
+      <RunsHeader
+        scope={scope}
+        project={project}
+        demoMode={demoMode}
+        query={query}
+        onQueryChange={setQuery}
+        searchRef={searchRef}
+      />
+
+      {/* Status sub-tabs — their own strip; the active underline overlaps the
+          hairline below (design: .subtabs). */}
+      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
+        <FilterChips value={filter} onChange={setFilter} counts={counts} />
+      </div>
+
+      {pending.error !== undefined ? (
+        <p role="alert" className="px-6 py-3 text-error">
+          Could not load runs needing your input: {pending.error.message}
+        </p>
+      ) : null}
+      <PendingInputBanner
+        runs={pending.visible}
+        showProject={scope === 'all'}
+        onDismiss={pending.dismiss}
+      />
+
+      <div className="flex-1 overflow-y-auto px-[30px] pb-[30px] pt-[22px]">
+        <RunsFeedBody
+          feedError={demoMode ? undefined : error}
+          loading={loading && !demoMode}
+          filter={filter}
+          scope={scope}
+          runs={runs}
+          draftProject={draftProject}
+          selectedRunId={selectedRunId}
+          promotedRunIds={pending.promotedRunIds}
+        />
+      </div>
+    </section>
+  );
+}
+
+interface PendingInput {
+  /** Pending-input runs the banner shows: in scope and not dismissed. */
+  visible: Run[];
+  promotedRunIds: ReadonlySet<string>;
+  error: Error | undefined;
+  dismiss: (runId: string) => void;
+}
+
+/** Runs waiting on the user, for the pending-input banner, minus the ones dismissed this session. */
+function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
+  // Pending-input runs the user has dismissed from the banner this session.
+  // Not persisted — the run is still paused, so it re-surfaces on reload.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const { data: attentionRuns, error } = useEntity<Run[]>(
     K.runsAttention,
     skill.listRunsNeedingAttention
   );
@@ -363,15 +421,31 @@ export function RunsPage(): ReactElement {
     });
   }, [pendingRuns]);
 
-  const visiblePending = useMemo(
+  const visible = useMemo(
     () => pendingRuns.filter(r => !dismissed.has(attentionKey(r))),
     [pendingRuns, dismissed]
   );
-  const promotedRunIds = useMemo(() => new Set(visiblePending.map(r => r.id)), [visiblePending]);
+  const promotedRunIds = useMemo(() => new Set(visible.map(r => r.id)), [visible]);
+  const dismiss = (runId: string): void => {
+    setDismissed(prev => {
+      const next = new Set(prev);
+      const run = pendingRuns.find(run => run.id === runId);
+      if (run !== undefined) next.add(attentionKey(run));
+      return next;
+    });
+  };
+  return { visible, promotedRunIds, error, dismiss };
+}
 
-  const heading = scope === 'all' ? 'All projects' : (project?.name ?? 'Project');
-  const hasScopedProject = scope !== 'all' && project !== undefined && project !== null;
-  const draftProject = hasScopedProject ? { id: project.id, path: project.path } : null;
+/** j/k selection over the visible runs plus the page's other shortcuts; returns the selected run id. */
+function useRunsKeymap(
+  runs: Run[],
+  setFilter: (filter: Filter) => void,
+  searchRef: RefObject<HTMLInputElement | null>
+): string | null {
+  const navigate = useNavigate();
+  // Selection index for j/k navigation. -1 = nothing selected.
+  const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
   // Clamp selection when the visible run set changes so j/k never lands on
   // an out-of-range index after a filter / search shrinks the list.
@@ -392,8 +466,12 @@ export function RunsPage(): ReactElement {
     if (el !== null) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedRunId]);
 
-  const bindings = useMemo<readonly Binding[]>(
-    () => [
+  const bindings = useMemo<readonly Binding[]>(() => {
+    const filterTo = (filter: Filter): void => {
+      setFilter(filter);
+      setSelectedIndex(-1);
+    };
+    return [
       {
         keys: ['j'],
         label: 'Move down',
@@ -450,157 +528,136 @@ export function RunsPage(): ReactElement {
           searchRef.current?.select();
         },
       },
-      {
-        keys: ['1'],
-        label: 'Filter: running',
-        run: (): void => {
-          setFilter('running');
-          setSelectedIndex(-1);
-        },
-      },
-      {
-        keys: ['2'],
-        label: 'Filter: paused',
-        run: (): void => {
-          setFilter('paused');
-          setSelectedIndex(-1);
-        },
-      },
-      {
-        keys: ['3'],
-        label: 'Filter: failed',
-        run: (): void => {
-          setFilter('failed');
-          setSelectedIndex(-1);
-        },
-      },
-      {
-        keys: ['4'],
-        label: 'Filter: completed',
-        run: (): void => {
-          setFilter('completed');
-          setSelectedIndex(-1);
-        },
-      },
-      {
-        keys: ['5'],
-        label: 'Filter: all',
-        run: (): void => {
-          setFilter('all');
-          setSelectedIndex(-1);
-        },
-      },
-    ],
-    [navigate, runs, selectedIndex, selectedRun]
-  );
+      { keys: ['1'], label: 'Filter: running', run: (): void => filterTo('running') },
+      { keys: ['2'], label: 'Filter: paused', run: (): void => filterTo('paused') },
+      { keys: ['3'], label: 'Filter: failed', run: (): void => filterTo('failed') },
+      { keys: ['4'], label: 'Filter: completed', run: (): void => filterTo('completed') },
+      { keys: ['5'], label: 'Filter: all', run: (): void => filterTo('all') },
+    ];
+  }, [navigate, runs, selectedIndex, selectedRun, setFilter, searchRef]);
   useKeymap({ bindings });
 
+  return selectedRunId;
+}
+
+interface RunsHeaderProps {
+  scope: Scope;
+  project: Project | null | undefined;
+  demoMode: boolean;
+  query: string;
+  onQueryChange: (query: string) => void;
+  searchRef: RefObject<HTMLInputElement | null>;
+}
+
+function RunsHeader({
+  scope,
+  project,
+  demoMode,
+  query,
+  onQueryChange,
+  searchRef,
+}: RunsHeaderProps): ReactElement {
+  const heading = scope === 'all' ? 'All projects' : (project?.name ?? 'Project');
   return (
-    <section className="flex h-full flex-col">
-      <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
-        <div className="flex items-baseline justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-medium text-text-primary">{heading}</h1>
-            <p className="text-xs text-text-tertiary">
-              {scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')}
-              {demoMode ? (
-                <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-warning">
-                  demo mocks on
-                </span>
-              ) : null}
-            </p>
-          </div>
-          <div
-            className="flex h-[38px] w-[300px] max-w-[34vw] shrink-0 items-center gap-2 rounded-[10px] border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
-            // Inline because the console scope's wildcard border-color rule
-            // repaints Tailwind border utilities (see theme.css).
-            style={{ borderColor: 'var(--border)' }}
-          >
-            <span aria-hidden className="font-mono text-[13px] leading-none">
-              ⌕
-            </span>
-            <input
-              ref={searchRef}
-              type="text"
-              value={query}
-              onChange={e => {
-                setQuery(e.target.value);
-              }}
-              onKeyDown={e => {
-                // Esc unfocuses + clears so `/` → type → esc returns control
-                // to the global keymap without trapping the user in the box.
-                if (e.key === 'Escape') {
-                  e.currentTarget.blur();
-                  setQuery('');
-                }
-              }}
-              aria-label="Search runs"
-              placeholder="Search workflow, project, run id…"
-              spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
-            />
-          </div>
+    <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-base font-medium text-text-primary">{heading}</h1>
+          <p className="text-xs text-text-tertiary">
+            {scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')}
+            {demoMode ? (
+              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-warning">
+                demo mocks on
+              </span>
+            ) : null}
+          </p>
         </div>
-
-        {scope === 'all' ? (
-          <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
-            Choose a project to start a run.
-          </div>
-        ) : (
-          <ProjectViewTabs projectId={scope} active="runs" />
-        )}
-      </header>
-
-      {/* Status sub-tabs — their own strip; the active underline overlaps the
-          hairline below (design: .subtabs). */}
-      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
-        <FilterChips value={filter} onChange={setFilter} counts={counts} />
+        <div
+          className="flex h-[38px] w-[300px] max-w-[34vw] shrink-0 items-center gap-2 rounded-[10px] border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
+          // Inline because the console scope's wildcard border-color rule
+          // repaints Tailwind border utilities (see theme.css).
+          style={{ borderColor: 'var(--border)' }}
+        >
+          <span aria-hidden className="font-mono text-[13px] leading-none">
+            ⌕
+          </span>
+          <input
+            ref={searchRef}
+            type="text"
+            value={query}
+            onChange={e => {
+              onQueryChange(e.target.value);
+            }}
+            onKeyDown={e => {
+              // Esc unfocuses + clears so `/` → type → esc returns control
+              // to the global keymap without trapping the user in the box.
+              if (e.key === 'Escape') {
+                e.currentTarget.blur();
+                onQueryChange('');
+              }
+            }}
+            aria-label="Search runs"
+            placeholder="Search workflow, project, run id…"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
+          />
+        </div>
       </div>
 
-      {attentionError !== undefined ? (
-        <p role="alert" className="px-6 py-3 text-error">
-          Could not load runs needing your input: {attentionError.message}
-        </p>
-      ) : null}
-      <PendingInputBanner
-        runs={visiblePending}
-        showProject={scope === 'all'}
-        onDismiss={runId => {
-          setDismissed(prev => {
-            const next = new Set(prev);
-            const run = pendingRuns.find(run => run.id === runId);
-            if (run !== undefined) next.add(attentionKey(run));
-            return next;
-          });
-        }}
-      />
-
-      <div className="flex-1 overflow-y-auto px-[30px] pb-[30px] pt-[22px]">
-        {error !== undefined && !demoMode ? (
-          <EmptyState title="Could not load runs." hint={error.message} />
-        ) : loading && !demoMode ? (
-          <EmptyState title="Loading…" />
-        ) : runs.length === 0 && draftProject === null ? (
-          <EmptyState
-            title={
-              filter === 'running'
-                ? 'Nothing running right now.'
-                : filter === 'all'
-                  ? 'No runs yet.'
-                  : `No ${filter} runs.`
-            }
-            hint={scope === 'all' ? 'Start one from a project.' : undefined}
-          />
-        ) : (
-          <RunsFeed
-            runs={runs}
-            showProject={scope === 'all'}
-            draftProject={draftProject}
-            selectedRunId={selectedRunId}
-            promotedRunIds={promotedRunIds}
-          />
-        )}
-      </div>
-    </section>
+      {scope === 'all' ? (
+        <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
+          Choose a project to start a run.
+        </div>
+      ) : (
+        <ProjectViewTabs projectId={scope} active="runs" />
+      )}
+    </header>
   );
+}
+
+interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject'> {
+  /** The feed's load error; demo mode passes none, since its mocks render regardless. */
+  feedError: Error | undefined;
+  loading: boolean;
+  filter: Filter;
+  scope: Scope;
+}
+
+function RunsFeedBody({
+  feedError,
+  loading,
+  filter,
+  scope,
+  runs,
+  draftProject,
+  selectedRunId,
+  promotedRunIds,
+}: RunsFeedBodyProps): ReactElement {
+  if (feedError !== undefined) {
+    return <EmptyState title="Could not load runs." hint={feedError.message} />;
+  }
+  if (loading) return <EmptyState title="Loading…" />;
+  if (runs.length === 0 && draftProject === null) {
+    return (
+      <EmptyState
+        title={emptyFeedTitle(filter)}
+        hint={scope === 'all' ? 'Start one from a project.' : undefined}
+      />
+    );
+  }
+  return (
+    <RunsFeed
+      runs={runs}
+      showProject={scope === 'all'}
+      draftProject={draftProject}
+      selectedRunId={selectedRunId}
+      promotedRunIds={promotedRunIds}
+    />
+  );
+}
+
+function emptyFeedTitle(filter: Filter): string {
+  if (filter === 'running') return 'Nothing running right now.';
+  if (filter === 'all') return 'No runs yet.';
+  return `No ${filter} runs.`;
 }
