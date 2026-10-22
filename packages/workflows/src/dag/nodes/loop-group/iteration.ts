@@ -1,3 +1,4 @@
+import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -482,22 +483,33 @@ async function checkCompletion(
   iteration: { body: BodyRun; iterationOutput: string; prevIterationOutput: string }
 ): Promise<LoopCompletionCheck[] | LoopGroupBodyResult> {
   const group = run.node.loop_group;
-  const signalDetected =
-    group.until !== undefined && detectCompletionSignal(iteration.iterationOutput, group.until);
-
-  let bashComplete = false;
-  if (group.until_bash && !signalDetected) {
-    const bash = await iterationUntilBash(run, i, group.until_bash, iteration);
-    if (typeof bash !== 'boolean') return bash;
-    bashComplete = bash;
-  }
-
   const completionChecks: LoopCompletionCheck[] = [];
-  if (group.until !== undefined) {
-    completionChecks.push({ channel: 'until', signal: group.until, completed: signalDetected });
-  }
-  if (group.until_bash !== undefined) {
-    completionChecks.push({ channel: 'until_bash', completed: bashComplete });
+  for (const { field } of BASE_COMPLETION_CHANNELS) {
+    switch (field) {
+      case 'until':
+        if (group.until === undefined) break;
+        completionChecks.push({
+          channel: field,
+          signal: group.until,
+          completed: detectCompletionSignal(iteration.iterationOutput, group.until),
+        });
+        break;
+      case 'until_bash': {
+        if (group.until_bash === undefined) break;
+        let completed = false;
+        if (!completionChecks.some(check => check.completed)) {
+          const bash = await iterationUntilBash(run, i, group.until_bash, iteration);
+          if (typeof bash !== 'boolean') return bash;
+          completed = bash;
+        }
+        completionChecks.push({ channel: field, completed });
+        break;
+      }
+      default: {
+        const unhandled: never = field;
+        return unhandled;
+      }
+    }
   }
   return completionChecks;
 }

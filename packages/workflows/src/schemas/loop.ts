@@ -44,21 +44,9 @@ const isNonBlank = (value: string): boolean => value.trim().length > 0;
  * `detectCompletionSignal`, whose final-standalone-line pattern then matches a
  * whitespace-only final line.
  *
- * Adding a channel means adding it to BOTH rules here, and to TWO hand-maintained
- * files in the console builder — @archon/web cannot import this package, so they
- * agree by convention rather than by type. They fail differently, and the second
- * is the dangerous one:
- *  - `builder/validation/structural.ts` mirrors these rules. Miss it and the
- *    builder reports the wrong verdict for a workflow the engine accepts.
- *  - `builder/variants/loop.ts` (`loopFromDag`/`loopToDag`) is a hand-written FIELD
- *    LIST, and the importer's unsupported-key warning only walks TOP-LEVEL wire
- *    keys — anything nested inside `loop: {…}` is invisible to it. Miss it and the
- *    field is SILENTLY DELETED the first time anyone opens the workflow in the
- *    console and saves: no import issue, no warning, the loop just quietly loses a
- *    completion channel. `signal_completes` behaves this way today.
- *
- * Verify agreement by parsing both, never by reading them —
- * `scripts/node-ref-parity.test.ts` does exactly that, in CI.
+ * The console validates channels independently because @archon/web cannot import
+ * this package. `scripts/node-ref-parity.test.ts` derives its channel cases from
+ * the owning tuples to enforce agreement across that boundary.
  */
 export const loopControlSchema = z
   .object({

@@ -1,3 +1,4 @@
+import { LOOP_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -243,65 +244,54 @@ async function checkCompletion(
   const loop = run.node.loop;
   const { reply, structuredText } = iteration;
   const payload = reply.payload;
-  // `until_field` (#2563): the validated payload's declared boolean. Strict
-  // identity — no truthiness, no "true", no 1. The load-time rules guarantee the
-  // property is declared, required and boolean, so a schema-valid payload always
-  // carries a real boolean here and `false` unambiguously means "keep going".
-  const fieldComplete =
-    loop.until_field !== undefined &&
-    payload !== null &&
-    typeof payload === 'object' &&
-    (payload as Record<string, unknown>)[loop.until_field] === true;
-
-  // Check LLM completion signal — the AI decides whether the user approved.
-  // For interactive loops, the AI emits the signal when the user explicitly approves
-  // (e.g., "approved", "looks good"). The prompt instructs the AI on when to emit it.
-  //
-  // `until` is optional (#2563): a loop that declared only `until_bash` has no prose
-  // path at all, so never call detectCompletionSignal with an undefined signal — its
-  // regexes would be built from the empty string and match anything.
-  //
-  // Detection reads the prose AND the serialized payload. With grammar-constrained
-  // decoding the prose is routinely empty, so a loop declaring both `until:` and
-  // `output_format` would otherwise have a signal channel that could never fire —
-  // silently, which is the failure mode this issue exists to remove.
-  //
-  // TWO independent calls, never one concatenated haystack. `detectCompletionSignal`
-  // supports a sentinel on the final standalone line, and that pattern is anchored
-  // with `$` (see executor-shared.ts). Appending the payload moves the end of the
-  // string past the prose, so concatenating would hide a final standalone signal
-  // line for every loop that declares a schema. Checking each haystack separately
-  // preserves each one's own anchor.
-  const signalDetected =
-    loop.until !== undefined &&
-    (detectCompletionSignal(reply.fullOutput, loop.until) ||
-      (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)));
-
-  // Check deterministic bash condition (if configured). Skipped once a cheaper
-  // channel already completed this iteration: completion is an OR, so the outcome
-  // cannot change, and running a side-effecting script an extra time can. This
-  // matches executeLoopGroupNode's identical guard — the two variants disagreed
-  // until #2563; do not "fix" the asymmetry back.
-  let bashComplete = false;
-  if (loop.until_bash && !signalDetected && !fieldComplete) {
-    const bash = await runUntilBash(run, state, i, loop.until_bash, iteration);
-    if (typeof bash !== 'boolean') return bash;
-    bashComplete = bash;
-  }
-
   const completionChecks: LoopCompletionCheck[] = [];
-  if (loop.until_field !== undefined) {
-    completionChecks.push({
-      channel: 'until_field',
-      field: loop.until_field,
-      completed: fieldComplete,
-    });
-  }
-  if (loop.until !== undefined) {
-    completionChecks.push({ channel: 'until', signal: loop.until, completed: signalDetected });
-  }
-  if (loop.until_bash !== undefined) {
-    completionChecks.push({ channel: 'until_bash', completed: bashComplete });
+  // Field checks precede signals for gate attribution; bash runs last so a cheaper
+  // completed channel can suppress its potentially side-effecting subprocess.
+  const channels = [
+    ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field === 'until_field'),
+    ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field !== 'until_field'),
+  ];
+  for (const { field } of channels) {
+    switch (field) {
+      case 'until_field':
+        if (loop.until_field === undefined) break;
+        completionChecks.push({
+          channel: field,
+          field: loop.until_field,
+          completed:
+            payload !== null &&
+            typeof payload === 'object' &&
+            (payload as Record<string, unknown>)[loop.until_field] === true,
+        });
+        break;
+      case 'until':
+        if (loop.until === undefined) break;
+        // Separate haystacks preserve detection of a signal on the final prose
+        // line even when grammar-constrained output also supplies a payload.
+        completionChecks.push({
+          channel: field,
+          signal: loop.until,
+          completed:
+            detectCompletionSignal(reply.fullOutput, loop.until) ||
+            (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)),
+        });
+        break;
+      case 'until_bash': {
+        if (loop.until_bash === undefined) break;
+        let completed = false;
+        if (!completionChecks.some(check => check.completed)) {
+          const bash = await runUntilBash(run, state, i, loop.until_bash, iteration);
+          if (typeof bash !== 'boolean') return bash;
+          completed = bash;
+        }
+        completionChecks.push({ channel: field, completed });
+        break;
+      }
+      default: {
+        const unhandled: never = field;
+        return unhandled;
+      }
+    }
   }
   return completionChecks;
 }

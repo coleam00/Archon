@@ -1,3 +1,4 @@
+import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { resolveBashPath } from '@archon/git';
 import { executeWaitNode } from '../wait/wait';
 import { snapshotBodySessionCursorAncestry } from '../../pause';
@@ -411,21 +412,33 @@ export async function completeEscalatedResume(
   const group = run.node.loop_group;
   const resumedResult = loopGroupIterationOutput(bodyNodes, currentBodyOutputs);
   const rawIterationOutput = resumedResult?.output ?? '';
-  const resumedSignalDetected =
-    group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
-  let resumedBashComplete = false;
-  if (group.until_bash && !resumedSignalDetected) {
-    const previousBodyOutputs = await restorePreviousIteration(run);
-    const bash = await resumedUntilBash(
-      run,
-      group.until_bash,
-      currentBodyOutputs,
-      previousBodyOutputs
-    );
-    if (typeof bash !== 'boolean') return bash;
-    resumedBashComplete = bash;
+  let completed = false;
+  for (const { field } of BASE_COMPLETION_CHANNELS) {
+    switch (field) {
+      case 'until':
+        completed =
+          group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
+        break;
+      case 'until_bash': {
+        if (group.until_bash === undefined || completed) break;
+        const previousBodyOutputs = await restorePreviousIteration(run);
+        const bash = await resumedUntilBash(
+          run,
+          group.until_bash,
+          currentBodyOutputs,
+          previousBodyOutputs
+        );
+        if (typeof bash !== 'boolean') return bash;
+        completed = bash;
+        break;
+      }
+      default: {
+        const unhandled: never = field;
+        return unhandled;
+      }
+    }
   }
-  if (!resumedSignalDetected && !resumedBashComplete) return undefined;
+  if (!completed) return undefined;
   return completeResumedIteration(run, resumedResult, rawIterationOutput);
 }
 

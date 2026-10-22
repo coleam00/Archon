@@ -1,11 +1,9 @@
+import { LOOP_COMPLETION_CHANNELS, type LoopCompletionChannel } from '../schemas/loop';
+import type { LoopNode } from '../schemas';
 import { detectCompletionSignal } from '../executor-shared';
 
 /** The completion channels a simulated loop may declare. */
-export interface LoopChannels {
-  until?: string;
-  until_bash?: string;
-  until_field?: string;
-}
+export type LoopChannels = Pick<LoopNode['loop'], LoopCompletionChannel>;
 
 /** What the dry run can conclude about one simulated iteration. */
 export type SimulatedCompletion =
@@ -42,20 +40,36 @@ export function loopIterationCompletes(
   control: LoopChannels,
   hydrated: { output: string; structuredOutput?: unknown }
 ): SimulatedCompletion {
-  if (control.until_field !== undefined) {
-    const payload = hydrated.structuredOutput;
-    if (
-      payload !== null &&
-      typeof payload === 'object' &&
-      (payload as Record<string, unknown>)[control.until_field] === true
-    ) {
-      return { kind: 'field' };
+  let fieldComplete = false;
+  let signalComplete = false;
+  let assumed = false;
+  for (const { field } of LOOP_COMPLETION_CHANNELS) {
+    switch (field) {
+      case 'until_field': {
+        const payload = hydrated.structuredOutput;
+        fieldComplete =
+          control.until_field !== undefined &&
+          payload !== null &&
+          typeof payload === 'object' &&
+          (payload as Record<string, unknown>)[control.until_field] === true;
+        break;
+      }
+      case 'until':
+        signalComplete =
+          control.until !== undefined && detectCompletionSignal(hydrated.output, control.until);
+        break;
+      case 'until_bash':
+        assumed = control.until_bash !== undefined;
+        break;
+      default: {
+        const unhandled: never = field;
+        return unhandled;
+      }
     }
   }
-  if (control.until !== undefined && detectCompletionSignal(hydrated.output, control.until)) {
-    return { kind: 'signal' };
-  }
-  if (control.until_bash !== undefined) return { kind: 'assumed' };
+  if (fieldComplete) return { kind: 'field' };
+  if (signalComplete) return { kind: 'signal' };
+  if (assumed) return { kind: 'assumed' };
   return { kind: 'incomplete' };
 }
 

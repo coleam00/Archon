@@ -1,3 +1,4 @@
+import { LOOP_COMPLETION_CHANNELS } from '../schemas/loop';
 import { z } from 'zod';
 import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -123,13 +124,28 @@ export function generatedStubFor(node: DagNode): DryRunStubValue {
   }
 
   const value = schemaPlaceholder(node.output_format);
-  if (isLoopNode(node) && node.loop.until_field !== undefined) {
-    if (!isRecord(value)) {
-      throw new Error(
-        `Cannot generate dry-run stub for node '${node.id}': loop.until_field requires an object-typed output_format`
-      );
+  if (isLoopNode(node)) {
+    for (const { field } of LOOP_COMPLETION_CHANNELS) {
+      switch (field) {
+        case 'until_field':
+          if (node.loop.until_field === undefined) break;
+          if (!isRecord(value)) {
+            throw new Error(
+              `Cannot generate dry-run stub for node '${node.id}': loop.until_field requires an object-typed output_format`
+            );
+          }
+          value[node.loop.until_field] = true;
+          break;
+        // Signals use the prose stub above; bash is assumed complete by the simulator.
+        case 'until':
+        case 'until_bash':
+          break;
+        default: {
+          const unhandled: never = field;
+          return unhandled;
+        }
+      }
     }
-    value[node.loop.until_field] = true;
   }
 
   let compileError: string | undefined;
