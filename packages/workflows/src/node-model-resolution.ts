@@ -101,89 +101,137 @@ export function resolveNodeModelScope(
 ): Omit<NodeModelResolution, 'provider'> & { provider: string | undefined } {
   // A preference list collapses to the one ref it selects against this run's config.
   const nodeModel = selectModelRef(node.model, aiProfile);
-  let provider = node.provider ?? scope.provider;
-  let providerOrigin: ResolutionOrigin = node.provider ? 'node' : scope.providerOrigin;
-  let preset: ModelAliasPreset | undefined;
-  let model: string | undefined;
-  let modelOrigin: ResolutionOrigin = 'unset';
-  let providerConflict: NodeModelResolution['providerConflict'];
+  const declared: ProviderChoice = {
+    provider: node.provider ?? scope.provider,
+    providerOrigin: node.provider ? 'node' : scope.providerOrigin,
+  };
+  const fromNode = nodeModel
+    ? nodeModelChoice(node, nodeModel, declared, aiProfile)
+    : { ...declared, model: undefined, modelOrigin: 'unset' as const };
+  const choice =
+    fromNode.model === undefined
+      ? { ...fromNode, ...inheritedModel(fromNode.provider, scope, assistantModels) }
+      : fromNode;
 
-  if (nodeModel) {
-    modelOrigin = 'node';
-    if (aiProfile) {
-      const spec = resolveModelSpec(aiProfile, nodeModel);
-      if (isLiteralSpec(spec)) {
-        model = spec.literal;
-      } else {
-        preset = spec;
-        provider = spec.provider;
-        model = spec.model;
-        modelOrigin = 'model ref';
-        providerOrigin = 'model ref';
-        if (node.provider && node.provider !== provider) {
-          providerConflict = {
-            declared: node.provider,
-            resolved: provider,
-            modelRef: nodeModel,
-          };
-        }
-      }
-    } else {
-      model = nodeModel;
-    }
-  }
-
-  if (model === undefined) {
-    // Exact mirror of the executor's `model ??= provider === workflowProvider ?
-    // workflowModel : providerAssistantConfig?.model`. Note the asymmetry: when the node
-    // resolves to the workflow's own provider there is NO further fallback — the caller
-    // has already folded the assistant default into `scope.model`.
-    if (provider === scope.provider) {
-      model = scope.model;
-      modelOrigin = model !== undefined ? 'workflow' : 'unset';
-    } else {
-      model = provider === undefined ? undefined : assistantModels[provider];
-      modelOrigin = model !== undefined ? 'assistant config' : 'unset';
-    }
-  }
-
-  const effectivePreset =
-    preset ?? (!nodeModel && provider === scope.provider ? scope.preset : undefined);
-
-  // What the author declared, before a preset fills in and before the provider's
-  // capability gate drops it — the executor threads exactly this value into both
-  // `applyPresetOptions` and its capability check, so the two cannot disagree.
-  const declaredEffort = node.effort ?? scope.effort;
-  const effort = declaredEffort ?? effectivePreset?.effort;
-  const effortOrigin: ResolutionOrigin =
-    node.effort !== undefined
-      ? 'node'
-      : scope.effort !== undefined
-        ? 'workflow'
-        : effectivePreset?.effort !== undefined
-          ? 'model ref'
-          : 'unset';
-
-  const tier =
-    nodeModel && isTierName(nodeModel)
-      ? nodeModel
-      : !nodeModel && provider === scope.provider
-        ? scope.tier
-        : undefined;
-
+  // A node that names no model of its own and runs on the workflow's provider inherits
+  // the workflow's preset and tier as well as its model.
+  const inheritsWorkflowModel = !nodeModel && choice.provider === scope.provider;
+  const preset = choice.preset ?? (inheritsWorkflowModel ? scope.preset : undefined);
+  const { effort, declaredEffort, effortOrigin } = resolveEffort(node, scope, preset);
   return {
-    provider,
-    model,
+    provider: choice.provider,
+    model: choice.model,
     effort,
     declaredEffort,
-    tier,
-    preset: effectivePreset,
-    providerOrigin,
-    modelOrigin,
+    tier: resolveTier(nodeModel, inheritsWorkflowModel, scope),
+    preset,
+    providerOrigin: choice.providerOrigin,
+    modelOrigin: choice.modelOrigin,
     effortOrigin,
     authoredIn: readComposedMeta(node)?.origin,
-    ...(providerConflict ? { providerConflict } : {}),
+    ...(choice.providerConflict ? { providerConflict: choice.providerConflict } : {}),
   };
+}
+
+interface ProviderChoice {
+  provider: string | undefined;
+  providerOrigin: ResolutionOrigin;
+}
+
+interface ModelChoice extends ProviderChoice {
+  model: string | undefined;
+  modelOrigin: ResolutionOrigin;
+  preset?: ModelAliasPreset;
+  providerConflict?: NodeModelResolution['providerConflict'];
+}
+
+/** The node's own `model:`: a literal model, or a tier or `@alias` ref resolved to its preset. */
+function nodeModelChoice(
+  node: DagNode,
+  nodeModel: string,
+  declared: ProviderChoice,
+  aiProfile: ResolvedAiProfile | undefined
+): ModelChoice {
+  if (!aiProfile) return { ...declared, model: nodeModel, modelOrigin: 'node' };
+  const spec = resolveModelSpec(aiProfile, nodeModel);
+  if (isLiteralSpec(spec)) return { ...declared, model: spec.literal, modelOrigin: 'node' };
+  return modelRefChoice(node, nodeModel, spec);
+}
+
+/** A tier or `@alias` preset names the provider as well as the model, and wins over `provider:`. */
+function modelRefChoice(node: DagNode, nodeModel: string, preset: ModelAliasPreset): ModelChoice {
+  return {
+    provider: preset.provider,
+    providerOrigin: 'model ref',
+    model: preset.model,
+    modelOrigin: 'model ref',
+    preset,
+    ...(node.provider && node.provider !== preset.provider
+      ? {
+          providerConflict: {
+            declared: node.provider,
+            resolved: preset.provider,
+            modelRef: nodeModel,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * The model a node without one of its own inherits: the workflow's when the node runs on
+ * the workflow's provider, else that provider's assistant config. Note the asymmetry: on
+ * the workflow's own provider there is NO further fallback — the caller has already
+ * folded the assistant default into `scope.model`.
+ */
+function inheritedModel(
+  provider: string | undefined,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>
+): Pick<ModelChoice, 'model' | 'modelOrigin'> {
+  if (provider === scope.provider) {
+    return { model: scope.model, modelOrigin: scope.model !== undefined ? 'workflow' : 'unset' };
+  }
+  const model = provider === undefined ? undefined : assistantModels[provider];
+  return { model, modelOrigin: model !== undefined ? 'assistant config' : 'unset' };
+}
+
+/**
+ * What the author declared (node, then workflow), before a preset fills in and before the
+ * provider's capability gate drops it — the executor threads exactly this value into both
+ * `applyPresetOptions` and its capability check, so the two cannot disagree.
+ */
+function resolveEffort(
+  node: DagNode,
+  scope: WorkflowModelScope,
+  preset: ModelAliasPreset | undefined
+): Pick<NodeModelResolution, 'effort' | 'declaredEffort' | 'effortOrigin'> {
+  const declaredEffort = node.effort ?? scope.effort;
+  return {
+    effort: declaredEffort ?? preset?.effort,
+    declaredEffort,
+    effortOrigin: effortOrigin(node, scope, preset),
+  };
+}
+
+function effortOrigin(
+  node: DagNode,
+  scope: WorkflowModelScope,
+  preset: ModelAliasPreset | undefined
+): ResolutionOrigin {
+  if (node.effort !== undefined) return 'node';
+  if (scope.effort !== undefined) return 'workflow';
+  if (preset?.effort !== undefined) return 'model ref';
+  return 'unset';
+}
+
+function resolveTier(
+  nodeModel: string | undefined,
+  inheritsWorkflowModel: boolean,
+  scope: WorkflowModelScope
+): TierName | undefined {
+  if (nodeModel) return isTierName(nodeModel) ? nodeModel : undefined;
+  return inheritsWorkflowModel ? scope.tier : undefined;
 }
 
 /**

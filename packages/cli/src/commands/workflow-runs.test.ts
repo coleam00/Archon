@@ -481,6 +481,24 @@ describe('workflowRunsCommand', () => {
     });
   });
 
+  it('reports a run-listing failure as the raw error in --json and a prefixed error otherwise', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const listSpy = workflowDb.listDashboardRuns as ReturnType<typeof mock>;
+    listSpy.mockRejectedValueOnce(new Error('db down'));
+    listSpy.mockRejectedValueOnce(new Error('db down'));
+
+    const exitCode = await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+      all: true,
+      json: true,
+    });
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({ ok: false, error: 'db down' });
+
+    await expect(
+      workflowRunsCommand(createTestWorkflowHost(), '/test/path', { all: true })
+    ).rejects.toThrow('Failed to list workflow runs: db down');
+  });
+
   it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {
     const exitCode = await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
       status: 'bogus',
