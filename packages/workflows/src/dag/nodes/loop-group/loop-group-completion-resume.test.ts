@@ -64,6 +64,55 @@ async function answerAndResume(
   await executeDagWorkflow({ ...options, ...resumed, workflowRun: resumed.preCreatedRun });
 }
 
+test('resumed terminal wait completes from the existing until signal without repeating work', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'loop-signal-resume-'));
+  try {
+    let count = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      count++;
+      yield { type: 'agent_message_chunk', text: 'finished\n<promise>DONE</promise>' };
+      yield { type: 'result', sessionId: `session-${count}` };
+    });
+    const store = await createFileWorkflowStore({ root });
+    const created = await store.createWorkflowRun({ workflow_name: 'signal', user_message: '' });
+    const run = await store.claimPendingWorkflowRun(created.id, root);
+    if (!run) throw new Error('Claim failed');
+    const options = dagOptions({
+      deps: createMockDeps(store),
+      cwd: root,
+      workflowRun: run,
+      workflow: {
+        name: 'signal',
+        nodes: [
+          dagNodeSchema.parse({
+            id: 'grp',
+            loop_group: {
+              max_iterations: 2,
+              until: 'DONE',
+              nodes: [
+                { id: 'work', prompt: 'Produce a value and DONE' },
+                { id: 'check', depends_on: ['work'], wait: { attention: 'Continue?' } },
+              ],
+            },
+          }),
+        ],
+      },
+    });
+    await executeDagWorkflow(options);
+    expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+    expect(count).toBe(1);
+    await answerAndResume(store, options);
+    expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
+    expect(count).toBe(1);
+    const completed = (await store.listWorkflowEvents(run.id)).find(
+      event => event.step_name === 'grp' && event.event_type === 'node_completed'
+    );
+    expect(completed?.data.node_output).toBe('finished');
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
 for (const pause of [false, true]) {
   test(`completion keeps preceding iteration after terminal approval: pause=${pause}`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'loop-completion-'));
