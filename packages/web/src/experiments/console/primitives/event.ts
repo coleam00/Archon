@@ -469,6 +469,16 @@ const TRANSITION_FOR_STATE: Partial<
  * `startedAt`.
  */
 export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[]): NodeRun[] {
+  const byNode = groupTransitionsByNode(events);
+  const runs: NodeRun[] = [];
+  for (const node of nodes) {
+    const transitions = byNode.get(node.node_id);
+    if (transitions !== undefined) runs.push(toNodeRun(node, transitions));
+  }
+  return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+}
+
+function groupTransitionsByNode(events: RunEvent[]): Map<string, NodeTransitionEvent[]> {
   const byNode = new Map<string, NodeTransitionEvent[]>();
   for (const e of events) {
     if (e.kind !== 'node_transition' || e.nodeId === null) continue;
@@ -476,50 +486,71 @@ export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[])
     list.push(e);
     byNode.set(e.nodeId, list);
   }
+  return byNode;
+}
 
-  const runs: NodeRun[] = [];
-  for (const node of nodes) {
-    const transitions = byNode.get(node.node_id);
-    if (transitions === undefined) continue;
-    let lastCompleted: NodeTransitionEvent | null = null;
-    let lastSkipped: NodeTransitionEvent | null = null;
-    let ended: NodeTransitionEvent | null = null;
-    let nodeName = '';
-    let startedAt = transitions[0]?.timestamp ?? '';
-    const endingTransition = TRANSITION_FOR_STATE[node.state];
-    for (const t of transitions) {
-      if (new Date(t.timestamp).getTime() < new Date(startedAt).getTime()) startedAt = t.timestamp;
-      if (nodeName === '' && t.nodeName !== '') nodeName = t.nodeName;
-      if (t.transition === 'completed') lastCompleted = t;
-      else if (t.transition === 'skipped') lastSkipped = t;
-      if (t.transition === endingTransition) ended = t;
+/** What one node's transitions say, read in stream order. */
+interface TransitionScan {
+  startedAt: string;
+  nodeName: string;
+  lastCompleted: NodeTransitionEvent | null;
+  lastSkipped: NodeTransitionEvent | null;
+  /** The latest transition matching the node's state; null for a non-terminal state. */
+  ended: NodeTransitionEvent | null;
+}
+
+function scanTransitions(
+  transitions: NodeTransitionEvent[],
+  endingTransition: NodeTransitionEvent['transition'] | undefined
+): TransitionScan {
+  const scan: TransitionScan = {
+    startedAt: transitions[0]?.timestamp ?? '',
+    nodeName: '',
+    lastCompleted: null,
+    lastSkipped: null,
+    ended: null,
+  };
+  for (const t of transitions) {
+    if (new Date(t.timestamp).getTime() < new Date(scan.startedAt).getTime()) {
+      scan.startedAt = t.timestamp;
     }
-    // The attempt behind a `completed` state. A prior-success replay (a `skipped`
-    // transition) restates the latest completion rather than producing one, so that
-    // completion still owns the cost and end. Any other state shows no cost: a node
-    // reset to pending or re-run to failure must not carry an earlier attempt's spend.
-    const completed = node.state === 'completed' ? lastCompleted : null;
-    // A replayed node whose completion is not in view ends at the replay.
-    const end = ended ?? (node.state === 'completed' ? lastSkipped : null);
-    runs.push({
-      nodeId: node.node_id,
-      nodeName: nodeName !== '' ? nodeName : node.node_id,
-      status: node.state,
-      startedAt,
-      endedAt: end?.timestamp ?? null,
-      durationMs: end?.durationMs ?? null,
-      costUsd: completed?.costUsd ?? null,
-      costScope: completed?.costScope ?? null,
-      numTurns: completed?.numTurns ?? null,
-      tokens: completed?.tokens ?? null,
-      stopReason: completed?.stopReason ?? null,
-      // Only a `skipped` state's own transition carries these; a replay's are not shown.
-      skipReason: ended?.skipReason ?? null,
-      skipExpr: ended?.skipExpr ?? null,
-      fanOutOutcome: node.fan_out_outcome,
-    });
+    if (scan.nodeName === '' && t.nodeName !== '') scan.nodeName = t.nodeName;
+    if (t.transition === 'completed') scan.lastCompleted = t;
+    else if (t.transition === 'skipped') scan.lastSkipped = t;
+    if (t.transition === endingTransition) scan.ended = t;
   }
-  return runs.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+  return scan;
+}
+
+function toNodeRun(node: RunNodeState, transitions: NodeTransitionEvent[]): NodeRun {
+  const { startedAt, nodeName, lastCompleted, lastSkipped, ended } = scanTransitions(
+    transitions,
+    TRANSITION_FOR_STATE[node.state]
+  );
+  // The attempt behind a `completed` state. A prior-success replay (a `skipped`
+  // transition) restates the latest completion rather than producing one, so that
+  // completion still owns the cost and end. Any other state shows no cost: a node
+  // reset to pending or re-run to failure must not carry an earlier attempt's spend.
+  const completed = node.state === 'completed' ? lastCompleted : null;
+  // A replayed node whose completion is not in view ends at the replay.
+  const end = ended ?? (node.state === 'completed' ? lastSkipped : null);
+  return {
+    nodeId: node.node_id,
+    nodeName: nodeName !== '' ? nodeName : node.node_id,
+    status: node.state,
+    startedAt,
+    endedAt: end?.timestamp ?? null,
+    durationMs: end?.durationMs ?? null,
+    costUsd: completed?.costUsd ?? null,
+    costScope: completed?.costScope ?? null,
+    numTurns: completed?.numTurns ?? null,
+    tokens: completed?.tokens ?? null,
+    stopReason: completed?.stopReason ?? null,
+    // Only a `skipped` state's own transition carries these; a replay's are not shown.
+    skipReason: ended?.skipReason ?? null,
+    skipExpr: ended?.skipExpr ?? null,
+    fanOutOutcome: node.fan_out_outcome,
+  };
 }
 
 /**

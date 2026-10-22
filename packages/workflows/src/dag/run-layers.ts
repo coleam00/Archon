@@ -16,6 +16,7 @@ import {
   isNodeContextResume,
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
+import type { NodeExecutionResult } from '../node-record-serialization';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
@@ -345,155 +346,198 @@ async function replayPriorSuccess(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
   composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
 ): Promise<LayerNodeResult | undefined> {
-  const formatThisNodesPriorOutput = (): ReturnType<typeof formatPersistedNodeOutput> =>
-    formatPersistedNodeOutput(priorCompletedNodes.get(node.id)?.output ?? '', ctx.artifactsDir);
   if (node.always_run) {
-    getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
-    const alwaysRunStepName = ctx.stepNamePrefix + node.id;
-    // The prior value being reset can be arbitrarily large — getDagResumeSnapshot
-    // prefers the full spilled text over the bounded preview (#2726), so this
-    // audit row must go through the same bounded-preview+spill helper as the
-    // primary node_completed/node_skipped_prior_success writers, not the raw text.
-    const alwaysRunPriorOutput = formatThisNodesPriorOutput();
-    await recordNodeState(
-      { store: ctx.deps.store, logDir: ctx.logDir },
-      {
-        runId: ctx.workflowRun.id,
-        path: alwaysRunStepName,
-        node: describeExecutionNode(node),
-        cache: {
-          action: 'reset',
-          prior: persistedExecutionOutput(alwaysRunPriorOutput),
-        },
-      }
-    );
-    // falls through to re-execute the node
-  } else if (
-    composedBoundaryDecision.decision === 'run' &&
-    // A join cached before failure-cascade skips blocked this rule must
-    // satisfy its current eligibility before that success can be reused.
-    (node.trigger_rule !== 'none_failed_min_one_success' ||
-      checkTriggerRule(node, ctx.nodeOutputs).decision === 'run')
-  ) {
-    // #2402 — a cached prior-success skip is only safe when every
-    // dependency's current value still matches the prior snapshot.
-    // If any dep re-ran during this resume (e.g. an `always_run: true`
-    // upstream forced a re-execution, or any dep produced fresh
-    // output), the cached value reflects the OLD dep output and would
-    // otherwise report success over stale synthesis. Invalidate and
-    // fall through to a fresh execution instead.
-    const staleDeps = getStaleCachedDependencies(
-      node,
-      ctx.nodeOutputs,
-      priorCompletedNodes,
-      ctx.replayedFailures
-    );
-    if (staleDeps.length > 0) {
-      const invalidatedStepName = ctx.stepNamePrefix + node.id;
-      // Same rationale as the always_run reset above: prior.output can now be
-      // the full spilled text, so this audit row needs the same bounding (#2726).
-      const invalidatedPriorOutput = formatThisNodesPriorOutput();
-      getLog().info(
-        { nodeId: node.id, invalidatingDeps: staleDeps },
-        'dag.node_prior_cache_invalidated'
-      );
-      await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        {
-          runId: ctx.workflowRun.id,
-          path: invalidatedStepName,
-          node: describeExecutionNode(node),
-          cache: {
-            action: 'invalidated',
-            invalidatingDeps: staleDeps,
-            prior: {
-              ...persistedExecutionOutput(invalidatedPriorOutput),
-              structured: priorCompletedNodes.get(node.id)?.structuredOutput,
-            },
-          },
-        }
-      );
-      // falls through to re-execute the node with fresh dep output
-    } else {
-      getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-      const skipStepName = ctx.stepNamePrefix + node.id;
-      // Preserve incomplete recovery as a preview with its original provenance.
-      // Re-spilling that preview would falsely certify it as the full result.
-      const prior = priorCompletedNodes.get(node.id);
-      const truncation = prior?.outputTruncation;
-      const priorSkipOutput = truncation
-        ? {
-            nodeOutput: prior?.output ?? '',
-            truncated: true,
-            ...(truncation.originalBytes !== null
-              ? { originalBytes: truncation.originalBytes }
-              : {}),
-            ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
-          }
-        : formatThisNodesPriorOutput();
-      // Return the pre-populated output (already in nodeOutputs)
-      const cachedOutput = ctx.nodeOutputs.get(node.id);
-      if (cachedOutput === undefined) {
-        throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
-      }
-      if (node.kind === 'workflow' && node.fan_out !== undefined) {
-        const aggregate: unknown =
-          'structuredOutput' in cachedOutput && cachedOutput.structuredOutput !== undefined
-            ? cachedOutput.structuredOutput
-            : JSON.parse(cachedOutput.output);
-        if (!Array.isArray(aggregate)) {
-          throw new Error(`Cached fan_out node '${node.id}' aggregate is not a JSON array`);
-        }
-        const children = await findFanOutChildRuns(
-          ctx.deps.store,
-          ctx.workflowRun.id,
-          skipStepName
-        );
-        const started = new Set(
-          children
-            .map(child => readSubrunMetadata(child.metadata).childIndex)
-            .filter(
-              (index): index is number =>
-                index !== undefined && index >= 0 && index < aggregate.length
-            )
-        );
-        const refused = aggregate.length - started.size;
-        if (refused > 0) {
-          await safeSendMessage(
-            ctx.platform,
-            ctx.conversationId,
-            `Skipping fan_out node '${node.id}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
-            { workflowId: ctx.workflowRun.id, nodeName: node.id }
-          );
-        }
-      }
-      await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        {
-          runId: ctx.workflowRun.id,
-          path: skipStepName,
-          node: describeExecutionNode(node),
-          cache: {
-            action: 'replayed',
-            output: {
-              ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
-              structured:
-                'structuredOutput' in cachedOutput ? cachedOutput.structuredOutput : undefined,
-              declaredOutputPaths:
-                'declaredOutputPaths' in cachedOutput
-                  ? cachedOutput.declaredOutputPaths
-                  : undefined,
-            },
-          },
-        }
-      );
-      return {
-        nodeId: node.id,
-        output: cachedOutput,
-      };
-    }
+    await recordAlwaysRunReset(ctx, node, priorCompletedNodes);
+    return undefined;
   }
-  return undefined;
+  if (!priorSuccessIsEligible(ctx, node, composedBoundaryDecision)) return undefined;
+  // #2402 — a cached prior-success skip is only safe when every
+  // dependency's current value still matches the prior snapshot.
+  // If any dep re-ran during this resume (e.g. an `always_run: true`
+  // upstream forced a re-execution, or any dep produced fresh
+  // output), the cached value reflects the OLD dep output and would
+  // otherwise report success over stale synthesis. Invalidate and
+  // fall through to a fresh execution instead.
+  const staleDeps = getStaleCachedDependencies(
+    node,
+    ctx.nodeOutputs,
+    priorCompletedNodes,
+    ctx.replayedFailures
+  );
+  if (staleDeps.length > 0) {
+    await recordPriorCacheInvalidated(ctx, node, priorCompletedNodes, staleDeps);
+    return undefined;
+  }
+  return replayCachedSuccess(ctx, node, priorCompletedNodes);
+}
+
+function formatPriorOutput(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): ReturnType<typeof formatPersistedNodeOutput> {
+  return formatPersistedNodeOutput(
+    priorCompletedNodes.get(node.id)?.output ?? '',
+    ctx.artifactsDir
+  );
+}
+
+async function recordAlwaysRunReset(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): Promise<void> {
+  getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+  // The prior value being reset can be arbitrarily large — getDagResumeSnapshot
+  // prefers the full spilled text over the bounded preview (#2726), so this
+  // audit row must go through the same bounded-preview+spill helper as the
+  // primary node_completed/node_skipped_prior_success writers, not the raw text.
+  const priorOutput = formatPriorOutput(ctx, node, priorCompletedNodes);
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: ctx.stepNamePrefix + node.id,
+      node: describeExecutionNode(node),
+      cache: { action: 'reset', prior: persistedExecutionOutput(priorOutput) },
+    }
+  );
+}
+
+function priorSuccessIsEligible(
+  ctx: RunLayersContext,
+  node: DagNode,
+  composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
+): boolean {
+  if (composedBoundaryDecision.decision !== 'run') return false;
+  // A join cached before failure-cascade skips blocked this rule must
+  // satisfy its current eligibility before that success can be reused.
+  return (
+    node.trigger_rule !== 'none_failed_min_one_success' ||
+    checkTriggerRule(node, ctx.nodeOutputs).decision === 'run'
+  );
+}
+
+async function recordPriorCacheInvalidated(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
+  staleDeps: string[]
+): Promise<void> {
+  // Same rationale as the always_run reset: prior.output can be the full
+  // spilled text, so this audit row needs the same bounding (#2726).
+  const priorOutput = formatPriorOutput(ctx, node, priorCompletedNodes);
+  getLog().info(
+    { nodeId: node.id, invalidatingDeps: staleDeps },
+    'dag.node_prior_cache_invalidated'
+  );
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: ctx.stepNamePrefix + node.id,
+      node: describeExecutionNode(node),
+      cache: {
+        action: 'invalidated',
+        invalidatingDeps: staleDeps,
+        prior: {
+          ...persistedExecutionOutput(priorOutput),
+          structured: priorCompletedNodes.get(node.id)?.structuredOutput,
+        },
+      },
+    }
+  );
+}
+
+async function replayCachedSuccess(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): Promise<LayerNodeResult> {
+  getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
+  const skipStepName = ctx.stepNamePrefix + node.id;
+  const prior = priorCompletedNodes.get(node.id);
+  const priorSkipOutput = replayedOutputPreview(ctx, node, priorCompletedNodes);
+  // Return the pre-populated output (already in nodeOutputs)
+  const cachedOutput = ctx.nodeOutputs.get(node.id);
+  if (cachedOutput === undefined) {
+    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+  }
+  if (node.kind === 'workflow' && node.fan_out !== undefined) {
+    await reportRefusedFanOutChildren(ctx, node.id, skipStepName, cachedOutput);
+  }
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: skipStepName,
+      node: describeExecutionNode(node),
+      cache: {
+        action: 'replayed',
+        output: {
+          ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
+          structured:
+            'structuredOutput' in cachedOutput ? cachedOutput.structuredOutput : undefined,
+          declaredOutputPaths:
+            'declaredOutputPaths' in cachedOutput ? cachedOutput.declaredOutputPaths : undefined,
+        },
+      },
+    }
+  );
+  return { nodeId: node.id, output: cachedOutput };
+}
+
+/**
+ * Preserve incomplete recovery as a preview with its original provenance.
+ * Re-spilling that preview would falsely certify it as the full result.
+ */
+function replayedOutputPreview(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): ReturnType<typeof formatPersistedNodeOutput> {
+  const prior = priorCompletedNodes.get(node.id);
+  const truncation = prior?.outputTruncation;
+  if (!truncation) return formatPriorOutput(ctx, node, priorCompletedNodes);
+  return {
+    nodeOutput: prior?.output ?? '',
+    truncated: true,
+    ...(truncation.originalBytes !== null ? { originalBytes: truncation.originalBytes } : {}),
+    ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
+  };
+}
+
+/** Tell the conversation when a replayed fan_out had refused some of its children. */
+async function reportRefusedFanOutChildren(
+  ctx: RunLayersContext,
+  nodeId: string,
+  stepName: string,
+  cachedOutput: NodeExecutionResult
+): Promise<void> {
+  const aggregate: unknown =
+    'structuredOutput' in cachedOutput && cachedOutput.structuredOutput !== undefined
+      ? cachedOutput.structuredOutput
+      : JSON.parse(cachedOutput.output);
+  if (!Array.isArray(aggregate)) {
+    throw new Error(`Cached fan_out node '${nodeId}' aggregate is not a JSON array`);
+  }
+  const children = await findFanOutChildRuns(ctx.deps.store, ctx.workflowRun.id, stepName);
+  const started = new Set(
+    children
+      .map(child => readSubrunMetadata(child.metadata).childIndex)
+      .filter(
+        (index): index is number => index !== undefined && index >= 0 && index < aggregate.length
+      )
+  );
+  const refused = aggregate.length - started.size;
+  if (refused > 0) {
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Skipping fan_out node '${nodeId}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
+      { workflowId: ctx.workflowRun.id, nodeName: nodeId }
+    );
+  }
 }
 
 /**

@@ -1,23 +1,22 @@
 /**
- * What every bench in this pack shares: the version record and its resolution, the
+ * The review-lens bench's run plumbing: the version record and its resolution, the
  * pack source snapshot, launching and waiting on ordinary runs through the `archon`
  * CLI, reading a finished run, and JSONL lines.
  *
- * A bench is a script that launches ordinary top-level runs; the engine knows nothing
- * about it. It uses the `archon` on `PATH`, so pointing `PATH` at a development build
- * benches that build.
+ * The bench launches ordinary top-level runs; the engine knows nothing about it. It
+ * uses the `archon` on `PATH`, so pointing `PATH` at a development build benches that
+ * build.
  *
  * A version pins what a sample ran: the pack at one commit and the model behind each
- * tier. Its record is `{label, pack_sha, prompt_sha, tiers, workflow, inputs}`; a bench
- * that varies less may pin a narrower record of its own. Either way a label means one
- * record for the life of an output directory: lines of one label are compared as one
- * version, so `relabelRefusal` names a label that already names another.
+ * tier. Its record is `{label, pack_sha, prompt_sha, tiers, workflow, inputs}`. A label
+ * means one record for the life of an output directory: lines of one label are
+ * compared as one version, so `relabelRefusal` names a label that already names another.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { git, gitOrThrow } from './git.ts';
-import { isObject } from './typed.ts';
+import { git, gitOrThrow } from '../../.shared/git.ts';
+import { isObject } from '../../.shared/typed.ts';
 
 export const TIERS = ['small', 'medium', 'large'] as const;
 export type Tier = (typeof TIERS)[number];
@@ -43,8 +42,8 @@ export interface Version {
   readonly inputs: Readonly<Record<string, string>>;
 }
 
-export interface ResolvedVersion<V extends { readonly label: string } = Version> {
-  readonly version: V;
+export interface ResolvedVersion {
+  readonly version: Version;
   /** The extracted `.archon` snapshot a run reads its workflow from (`--workflow-source`). */
   readonly source: string;
   /** The run config layer holding only the tiers the version pins (`--config`). */
@@ -60,7 +59,7 @@ export function isId(value: unknown): value is string {
 
 export const SAMPLES_FILE = 'samples.jsonl';
 
-/** What a bench measures: the workflow a version runs unless it names another, and its prompts. */
+/** What the bench measures: the workflow a version runs unless it names another, and its prompts. */
 export interface BenchSubject {
   readonly workflow: string;
   /** Pack directories, from the repository root, whose `commands/*.md` a version pins. */
@@ -267,7 +266,7 @@ export async function waitRun(runId: string): Promise<TerminalStatus> {
 export async function getReturns(runId: string): Promise<unknown> {
   const run = await archonJson(['workflow', 'get', runId, '--json']);
   const record = run.terminal_record;
-  return returnedValue({ id: runId, returns: isObject(record) && isObject(record.returns) ? record.returns : null });
+  return returnedValue(runId, isObject(record) && isObject(record.returns) ? record.returns : null);
 }
 
 /** A provider's usage fact: a reported value, or the reason it is not one. */
@@ -294,7 +293,7 @@ export interface AttemptSpend {
 }
 
 /**
- * What a bench reads of an agent node's binding. The engine records every field as
+ * What the bench reads of an agent node's binding. The engine records every field as
  * optional (an agent node can run with no provider bound), so each is checked here.
  */
 export interface NodeBinding {
@@ -307,7 +306,6 @@ export interface NodeBinding {
 }
 
 export interface RunNode {
-  readonly structuredOutput?: unknown;
   readonly nodeId: string;
   /** The node's state in the run's terminal record. */
   readonly state: string;
@@ -366,7 +364,7 @@ export function spendOf(attempts: readonly AttemptSpend[]): Spend {
   return { cost_usd: cost, cost_partial: cost !== null && partial, tokens };
 }
 
-/** The part of `archon workflow get --json --verbose --events` a bench reads. */
+/** The part of `archon workflow get --json --verbose --events` the bench reads. */
 export interface RunDetail {
   readonly id: string;
   readonly status: string;
@@ -375,10 +373,6 @@ export interface RunDetail {
   readonly completed_at: string | null;
   readonly base_branch: string;
   readonly aliases: Readonly<Record<string, unknown>>;
-  /** The run's JSONL transcript; null when its storage can no longer be resolved. */
-  readonly transcript_path: string | null;
-  /** The terminal record's `returns`: the value the workflow declared, or why there is none. */
-  readonly returns: Readonly<Record<string, unknown>> | null;
   readonly nodes: readonly RunNode[];
 }
 
@@ -420,14 +414,12 @@ export async function getRun(runId: string): Promise<RunDetail> {
   const completedAt = field('completed_at');
   const states = field('terminal_record.nodes');
   const events = field('events');
-  const transcript = field('transcript_path');
-  const returns = field('terminal_record.returns');
   if (!Array.isArray(states) || !states.every(node => isObject(node) && typeof node.node_id === 'string' && typeof node.state === 'string')) {
     return missing('terminal_record.nodes');
   }
   if (!Array.isArray(events)) return missing('events');
 
-  const executions = new Map<string, { kind?: string; binding?: unknown; structuredOutput?: unknown; readonly attempts: AttemptSpend[] }>();
+  const executions = new Map<string, { kind?: string; binding?: unknown; readonly attempts: AttemptSpend[] }>();
   for (const event of events) {
     if (!isObject(event) || typeof event.step_name !== 'string' || !EXECUTION_ROWS.has(String(event.event_type))) continue;
     // SQLite returns the row's data as JSON text, PostgreSQL as an object.
@@ -437,7 +429,6 @@ export async function getRun(runId: string): Promise<RunDetail> {
     executions.set(event.step_name, execution);
     execution.kind = textOrNone(data.node.kind);
     execution.binding = data.binding;
-    execution.structuredOutput = data.structured_output;
     if (ATTEMPT_ROWS.has(String(event.event_type)) && reportsOwnSpend(data)) {
       const spend = isObject(data.spend) ? data.spend : {};
       execution.attempts.push({ costUsd: spend.costUsd as CostObservation | undefined, tokens: spend.tokens as Observation<TokenUsage> | undefined });
@@ -452,28 +443,26 @@ export async function getRun(runId: string): Promise<RunDetail> {
     completed_at: typeof completedAt === 'string' ? completedAt : null,
     base_branch: text('metadata.dispatch.base_branch'),
     aliases: isObject(aliases) ? aliases : missing('metadata.model_bindings.effective.aliases'),
-    transcript_path: typeof transcript === 'string' ? transcript : null,
-    returns: isObject(returns) ? returns : null,
     nodes: states.map(node => {
       const nodeId = node.node_id as string;
       const execution = executions.get(nodeId);
-      return { structuredOutput: execution?.structuredOutput, nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
+      return { nodeId, state: node.state as string, kind: execution?.kind, binding: execution?.binding, attempts: execution?.attempts ?? [] };
     }),
   };
 }
 
 /**
- * The run's `returns:` value. A value too large for the record was spilled to a file,
- * which is read back; an unavailable one throws with the engine's reason.
+ * The run's `returns:` value, read from its terminal record's `returns`. A value too
+ * large for the record was spilled to a file, which is read back; an unavailable one
+ * throws with the engine's reason.
  */
-export function returnedValue(run: Pick<RunDetail, 'id' | 'returns'>): unknown {
-  const { returns } = run;
-  if (returns === null) throw new Error(`archon workflow get ${run.id}: the field \`terminal_record.returns\` is missing`);
+function returnedValue(runId: string, returns: Readonly<Record<string, unknown>> | null): unknown {
+  if (returns === null) throw new Error(`archon workflow get ${runId}: the field \`terminal_record.returns\` is missing`);
   if (returns.availability === 'available') return returns.value;
   if (returns.availability === 'truncated' && typeof returns.spill_path === 'string') {
     return JSON.parse(readFileSync(returns.spill_path, 'utf8'));
   }
-  throw new Error(`run ${run.id} returned no value: ${JSON.stringify(returns)}`);
+  throw new Error(`run ${runId} returned no value: ${JSON.stringify(returns)}`);
 }
 
 /** The run's artifact directory, as the engine lays it out under the run's output root. */

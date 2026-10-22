@@ -85,6 +85,9 @@ function toolOutputTail(output: string): string | undefined {
     .join('\n');
 }
 
+type ProviderEvent = ProviderEventLine['event'];
+type ProviderEventOf<T extends ProviderEvent['type']> = Extract<ProviderEvent, { type: T }>;
+
 /**
  * One provider event, indented under its node like the node's other activity. Events that
  * only mark progress (a running subtask, a hook that started or succeeded, a connected MCP
@@ -100,55 +103,83 @@ function formatProviderEvent(
       return indentLines(event.text, '  ');
     case 'agent_thought_chunk':
       return `  ${oneLine(`thinking: ${event.text}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'tool_call': {
-      const name = toolCallDisplayName(event);
-      state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
-      // A title is already what the call does, such as the command a Codex shell runs.
-      const brief =
-        !event.title && event.rawInput !== undefined
-          ? formatToolInputBrief(name, event.rawInput)
-          : null;
-      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'tool_call_update': {
-      const key = toolCallKey(line.attemptId, event.toolCallId);
-      const name = state.toolNames.get(key) ?? event.toolCallId;
-      state.toolNames.delete(key);
-      const details = [
-        ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
-        ...(event.outputTruncated ? ['output truncated'] : []),
-      ];
-      const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
-      const tail = event.output ? toolOutputTail(event.output) : undefined;
-      return tail ? `${outcome}\n${tail}` : outcome;
-    }
+    case 'tool_call':
+      return formatToolCall(event, line.attemptId, state);
+    case 'tool_call_update':
+      return formatToolCallUpdate(event, line.attemptId, state);
     case 'warning':
       return `  ${oneLine(`warning: ${event.message} (${event.code})`, TRANSCRIPT_TOOL_LINE_MAX)}`;
     case 'mcp_server_status':
-      if (event.status === 'connected' || event.status === 'pending') return undefined;
-      return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'compaction': {
-      const tokens =
-        event.tokensBefore !== undefined && event.tokensAfter !== undefined
-          ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
-          : '';
-      return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
-    }
-    case 'subtask': {
-      if (event.status === 'running') return undefined;
-      const about =
-        event.status === 'started' ? event.description : (event.summary ?? event.description);
-      return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
+      return formatMcpServerStatus(event);
+    case 'compaction':
+      return formatCompaction(event);
+    case 'subtask':
+      return formatSubtask(event);
     case 'hook':
-      if (event.status === 'started' || event.status === 'succeeded') return undefined;
-      return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
+      return formatHook(event);
     case 'state_update':
       return event.state === 'requires_action' ? '  waiting on the user' : undefined;
     default:
       typeDecided(event);
       return undefined;
   }
+}
+
+function formatToolCall(
+  event: ProviderEventOf<'tool_call'>,
+  attemptId: string,
+  state: TranscriptRenderState
+): string {
+  const name = toolCallDisplayName(event);
+  state.toolNames.set(toolCallKey(attemptId, event.toolCallId), name);
+  // A title is already what the call does, such as the command a Codex shell runs.
+  const brief =
+    !event.title && event.rawInput !== undefined
+      ? formatToolInputBrief(name, event.rawInput)
+      : null;
+  return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatToolCallUpdate(
+  event: ProviderEventOf<'tool_call_update'>,
+  attemptId: string,
+  state: TranscriptRenderState
+): string {
+  const key = toolCallKey(attemptId, event.toolCallId);
+  const name = state.toolNames.get(key) ?? event.toolCallId;
+  state.toolNames.delete(key);
+  const details = [
+    ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
+    ...(event.outputTruncated ? ['output truncated'] : []),
+  ];
+  const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+  const tail = event.output ? toolOutputTail(event.output) : undefined;
+  return tail ? `${outcome}\n${tail}` : outcome;
+}
+
+function formatMcpServerStatus(event: ProviderEventOf<'mcp_server_status'>): string | undefined {
+  if (event.status === 'connected' || event.status === 'pending') return undefined;
+  return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatCompaction(event: ProviderEventOf<'compaction'>): string {
+  const tokens =
+    event.tokensBefore !== undefined && event.tokensAfter !== undefined
+      ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
+      : '';
+  return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
+}
+
+function formatSubtask(event: ProviderEventOf<'subtask'>): string | undefined {
+  if (event.status === 'running') return undefined;
+  const about =
+    event.status === 'started' ? event.description : (event.summary ?? event.description);
+  return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatHook(event: ProviderEventOf<'hook'>): string | undefined {
+  if (event.status === 'started' || event.status === 'succeeded') return undefined;
+  return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
-import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
+import { withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
@@ -543,14 +543,15 @@ describe('the merge queue scripts', () => {
       const at = install();
       const own = { ...newWorkItem(PR, AT), ...CLAIMED, facts: { own_pr: { url: PR_URL, at: AT } } };
       seed(at, own);
+      const attention = { ...ATTENTION, choices: ATTENTION.choices.filter(entry => entry.effect !== 'return') };
       const askAt = (head: string) => {
-        const inputs = recordInputs([decision({ action: 'ask', head, attention: ATTENTION })]);
+        const inputs = recordInputs([decision({ action: 'ask', head, attention })]);
         const recorded = ok(run(at, 'record', {
           ...inputs,
           INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
         }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
-        const choices = recorded.asked.attention.choices;
-        expect(choices.find(entry => entry.id === choice)?.does).toContain('different head');
+        // The queue owns `other`'s text; the sweep writes what its own `park` does.
+        if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
         const ruled = run(at, 'ruling', { INPUTS_ASKED: JSON.stringify(recorded.asked), INPUTS_CHOICE: choice, INPUTS_TEXT: 'repair it' });
         expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
         expect(ruled.bodies).toEqual([]);
@@ -1172,53 +1173,45 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   test.each([
-    { name: 'empty', brief: '', returnOnly: false },
-    { name: 'whitespace-only', brief: ' \n ', returnOnly: true },
-  ])('an ask with an $name brief raises its question without return effects and other parks', ({ brief, returnOnly }) => {
+    { name: 'an empty', brief: '', recommended: 'merge' },
+    { name: 'a whitespace-only', brief: ' \n ', recommended: 'revise-scope' },
+  ])('an ask offering a return with $name brief is refused: it waits, and the record fails after writing the rest', ({ brief, recommended }) => {
+    const refusal = "the sweep's question about pull request 42 offers a return with no brief";
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
     const rework = { id: 'revise-scope', label: 'Rework it', does: 'sends it back', effect: 'return', ruling: '' } as const;
     const attention: MergeAttention = {
       ...ATTENTION,
-      recommendation: { ...ATTENTION.recommendation, choice: returnOnly ? rework.id : 'merge' },
-      choices: [...(returnOnly ? [] : ATTENTION.choices), rework],
+      recommendation: { ...ATTENTION.recommendation, choice: recommended },
+      choices: [...ATTENTION.choices.filter(choice => choice.effect !== 'return'), rework],
     };
-    const output = ok(run(at, 'record', {
+    const refused = run(at, 'record', {
       ...recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief }), decision({ number: 43 })]),
       INPUTS_ITEMS: BOTH_ITEMS,
-    }, { pr: { merged: [43] } })) as {
+    }, { pr: { merged: [43] } });
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(`${refusal}; it waits for the next sweep`);
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain(refusal);
+    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+  }, 60_000);
+
+  test('an ask with a blank brief that offers no return raises its question, and its other parks', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const attention: MergeAttention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
+    const output = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))) as {
       attention: string;
-      options: { id: string; label: string }[];
       asked: { attention: MergeAttention };
     };
-    expect(output).toMatchObject({ merged: [43], class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief } });
-    const prepared = output.asked.attention;
-    expect(prepared.choices.map(choice => choice.effect)).not.toContain('return');
-    expect(prepared.choices.map(choice => choice.id)).toEqual(returnOnly ? ['other'] : ['merge', 'park', 'other']);
-    expect(prepared.choices.find(choice => choice.id === 'other')).toMatchObject({ effect: 'park' });
-    expect(output.options).toEqual(prepared.choices.map(({ id, label }) => ({ id, label })));
-    expect(() => checkAttention(prepared)).not.toThrow();
-    if (returnOnly) {
-      expect(prepared.recommendation.choice).toBe('other');
-      expect(prepared.recommendation).toMatchObject({
-        evidence: 'Return is unavailable because the sweep supplied no build brief.',
-        confidence: 'high',
-        would_change: 'A nonblank build brief would make return available.',
-      });
-      expect(output.attention).toContain(prepared.why);
-      expect(output.attention).toContain('Recommendation: `other`** (high confidence)');
-      expect(output.attention).toContain('Evidence: Return is unavailable because the sweep supplied no build brief.');
-      expect(output.attention).toContain('What would change it: A nonblank build brief would make return available.');
-    } else expect(prepared.recommendation).toEqual(attention.recommendation);
-    for (const part of [attention.what, attention.why, PR_URL, 'no build brief']) {
-      expect(output.attention).toContain(part);
-    }
-    if (returnOnly) expect(output.attention).toContain('Recommendation: `other`');
-    expect(output.attention).not.toContain('`revise-scope` (Rework it)');
+    expect(output).toMatchObject({ class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
+    // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
+    expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
+    expect(output.asked.attention.choices.map(choice => [choice.id, choice.effect])).toEqual([['merge', 'merge'], ['park', 'park'], ['other', 'park']]);
     expect(output.attention).toContain('until the build queue readies the item again');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
-    expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
 
     const calls = join(at.checkout, 'calls.jsonl');
     const words = 'Hold this while I reconsider the scope.';
@@ -1241,29 +1234,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     { recommended: 'return', brief: '', name: 'return with an empty brief' },
     { recommended: 'return', brief: ' \n ', name: 'return with a whitespace-only brief' },
     { recommended: 'return', brief: 'Rework PR 42.', name: 'return with a nonblank brief' },
-  ])("an own pull request's ask recommending $name offers no return and its other parks", ({ recommended, brief }) => {
+  ])("an own pull request's ask offering a return and recommending $name is refused: it waits for the next sweep", ({ recommended, brief }) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
     const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
     const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief })]);
-    const asked = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: own })) as { attention: string; asked: { attention: MergeAttention } };
-    expect(() => checkAttention(asked.asked.attention)).not.toThrow();
-    expect(asked.asked.attention.recommendation.choice).toBe(recommended === 'return' ? 'other' : recommended);
-    if (recommended === 'return') {
-      const prepared = asked.asked.attention;
-      expect(prepared.recommendation).toMatchObject({
-        evidence: 'Return is unavailable because this own-PR work item has no build record of its own.',
-        confidence: 'high',
-        would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
-      });
-      expect(asked.attention).toContain(prepared.why);
-      expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
-      expect(asked.attention).toContain('Evidence: Return is unavailable because this own-PR work item has no build record of its own.');
-      expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
-    } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
-    expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
-    expect(asked.asked.attention.choices.find(choice => choice.id === 'other')?.effect).toBe('park');
+    const refused = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
+    const refusal = "the sweep's question about own pull request 42 offers a return, which no build round can take";
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain(`${refusal}; it waits for the next sweep`);
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain(refusal);
   }, 60_000);
 
   test('an own pull request is never handed to the build queue: a return waits for the next sweep instead', () => {

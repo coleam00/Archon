@@ -20,7 +20,7 @@ import {
   latestLines,
   readLines,
   resolveVersion,
-} from '../../workflows/sdlc/.shared/bench';
+} from '../../workflows/sdlc/review-eval/scripts/runs';
 import {
   cloneSample,
   collectItem,
@@ -290,8 +290,6 @@ describe('hard checks decide whether a sample counts', () => {
       completed_at: '2026-10-01T12:10:00Z',
       base_branch: 'dev',
       aliases: tiers,
-      transcript_path: null,
-      returns: null,
       nodes: [
         agent('review__code', { provider: 'claude', tier: 'large', model: { requested: 'opus', resolved: provider('claude-opus') } }, 1.5),
         agent('simplify__simplify', { provider: 'claude', tier: 'medium', model: { requested: 'sonnet', resolved: provider('claude-sonnet') } }, 0.25),
@@ -417,8 +415,6 @@ describe('collectItem', () => {
       completed_at: null,
       base_branch: 'dev',
       aliases: {},
-      transcript_path: null,
-      returns: null,
       nodes: [],
     };
     const itemDir = join(root, 'item');

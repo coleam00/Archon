@@ -108,158 +108,67 @@ export async function prepareRunAiConfiguration(
   }
 }
 
+type PreflightDeps = Pick<
+  WorkflowDeps,
+  | 'providers'
+  | 'loadConfig'
+  | 'getUserAiPrefs'
+  | 'getAgentProvider'
+  | 'sealRunConfig'
+  | 'unsealRunConfig'
+> & { store: Pick<WorkflowDeps['store'], 'getCodebaseEnvVars'> };
+
+interface EffectiveRunConfig {
+  effectiveRunConfig?: WorkflowRunConfigInput;
+  runConfigMetadata?: WorkflowRunConfigMetadata;
+}
+
 async function prepareAiConfiguration(
-  deps: Pick<
-    WorkflowDeps,
-    | 'providers'
-    | 'loadConfig'
-    | 'getUserAiPrefs'
-    | 'getAgentProvider'
-    | 'sealRunConfig'
-    | 'unsealRunConfig'
-  > & { store: Pick<WorkflowDeps['store'], 'getCodebaseEnvVars'> },
+  deps: PreflightDeps,
   workflow: ResolvedWorkflow,
   cwd: string,
   options: RunAiConfigurationOptions = {}
 ): Promise<PreparedRunAiConfiguration> {
-  const { codebaseId } = options;
   const executionUserId = options.continuationRun
     ? (options.continuationRun.user_id ?? undefined)
     : options.userId;
-  let runConfigMetadata: WorkflowRunConfigMetadata | undefined;
-  let effectiveRunConfig: WorkflowRunConfigInput | undefined;
-  if (options.continuationRun !== undefined) {
-    runConfigMetadata = readWorkflowRunConfigMetadata(options.continuationRun.metadata);
-    if (runConfigMetadata) {
-      if (!deps.unsealRunConfig) {
-        throw new Error('This Archon build cannot restore persisted workflow run config.');
-      }
-      effectiveRunConfig = {
-        layer: deps.unsealRunConfig(runConfigMetadata),
-        source: runConfigMetadata.source,
-      };
-    }
-  } else {
-    effectiveRunConfig = options.runConfig;
-    if (effectiveRunConfig) {
-      if (!deps.sealRunConfig) {
-        throw new Error('This Archon build cannot persist workflow run config.');
-      }
-      runConfigMetadata = deps.sealRunConfig(effectiveRunConfig.layer, effectiveRunConfig.source);
-    }
-  }
+  const { effectiveRunConfig, runConfigMetadata } = resolveEffectiveRunConfig(deps, options);
   const fileConfig = await deps.loadConfig(cwd);
-  const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+  const dbEnvVars = options.codebaseId
+    ? await deps.store.getCodebaseEnvVars(options.codebaseId)
+    : {};
   const config = applyRunEnvironment(fileConfig, dbEnvVars, effectiveRunConfig?.layer);
-  const snapshot =
-    readRunAiConfigurationSnapshot(deps.providers, options.continuationRun?.metadata) ??
-    readRunAiConfigurationSnapshot(deps.providers, options.aiConfigurationRun?.metadata);
-  if (
-    snapshot &&
-    options.aiConfigurationRun &&
-    !options.continuationRun &&
-    !options.inheritAiConfiguration
-  ) {
-    const layer = options.runConfig?.layer;
-    if (
-      options.modelOverrideLayer ||
-      (layer &&
-        ['assistant', 'assistants', 'tiers', 'aliases'].some(key => Object.hasOwn(layer, key)))
-    ) {
-      throw new Error('Cannot override AI configuration inherited from a recorded run.');
-    }
-  }
+  const snapshot = readRecordedAiConfiguration(deps.providers, options);
   if (snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, snapshot);
-  let userAiPrefs: UserAiPrefsLayer = {};
-  if (!snapshot && executionUserId && deps.getUserAiPrefs) {
-    try {
-      userAiPrefs = await deps.getUserAiPrefs(executionUserId);
-    } catch (error) {
-      log.warn(
-        { err: error as Error, userId: executionUserId },
-        'workflow.user_ai_prefs_resolve_failed'
-      );
-    }
-  }
-  let baseAiProfile: ResolvedAiProfile;
-  if (snapshot) {
-    baseAiProfile = snapshot.baseAiProfile;
-  } else
-    try {
-      baseAiProfile = buildAiProfile(
-        effectiveRunConfig?.layer.assistant ?? userAiPrefs.defaultProvider ?? fileConfig.assistant,
-        {
-          repoTiers: fileConfig.tiers,
-          repoAliases: fileConfig.aliases,
-          userTiers: userAiPrefs.tiers,
-          userAliases: userAiPrefs.aliases,
-          runTiers: effectiveRunConfig?.layer.tiers,
-          runAliases: effectiveRunConfig?.layer.aliases,
-        }
-      );
-    } catch (error) {
-      // Corrupt stored preferences degrade to config-only. Invalid file or run
-      // configuration still fails when rebuilt without the stored preferences.
-      log.error(
-        { err: error as Error, userId: executionUserId },
-        'workflow.user_ai_prefs_profile_invalid'
-      );
-      baseAiProfile = buildAiProfile(effectiveRunConfig?.layer.assistant ?? fileConfig.assistant, {
-        repoTiers: fileConfig.tiers,
-        repoAliases: fileConfig.aliases,
-        runTiers: effectiveRunConfig?.layer.tiers,
-        runAliases: effectiveRunConfig?.layer.aliases,
-      });
-    }
-
-  const persistedModelBindings =
-    !snapshot && options.continuationRun
-      ? readRunModelBindingsMetadata(deps.providers, options.continuationRun.metadata)
-      : undefined;
-  const resolvedModelOverrides =
-    snapshot?.modelOverrides ??
-    persistedModelBindings?.overrides ??
-    (options.modelOverrideLayer?.kind === 'resolved'
-      ? options.modelOverrideLayer.overrides
-      : resolveRunModelOverrides(
-          deps.providers,
-          baseAiProfile,
-          options.modelOverrideLayer?.overrides
-        ));
+  const baseAiProfile = snapshot
+    ? snapshot.baseAiProfile
+    : await buildBaseAiProfile(deps, executionUserId, fileConfig, effectiveRunConfig);
+  const resolvedModelOverrides = resolveModelOverrides(
+    deps.providers,
+    options,
+    snapshot,
+    baseAiProfile
+  );
   const aiProfile = applyResolvedRunModelOverrides(baseAiProfile, resolvedModelOverrides);
   const modelBindingsMetadata = createRunModelBindingsMetadata(resolvedModelOverrides, aiProfile);
-  let scope = resolveWorkflowModelScope(
+  const initialScope = resolveWorkflowModelScope(
     workflow,
     config.assistant,
     assistantModelDefaults(config),
     aiProfile
   );
-  if (scope.provider !== undefined) requireProvider(deps.providers, scope.provider);
+  if (initialScope.provider !== undefined) requireProvider(deps.providers, initialScope.provider);
   const unresolved = collectRunCredentialRequirements(deps.providers, workflow, {
     config,
     aiProfile,
-    scope,
+    scope: initialScope,
   }).filter(r => r.model === undefined);
-  for (const provider of new Set((snapshot ? [] : unresolved).map(r => r.provider))) {
-    const runtime = deps.getAgentProvider(provider);
-    if (runtime.resolveCredentialModel) {
-      const model = await runtime.resolveCredentialModel({
-        cwd,
-        assistantConfig: config.assistants[provider],
-      });
-      if (model !== undefined) {
-        config.assistants = {
-          ...config.assistants,
-          [provider]: { ...config.assistants[provider], model },
-        };
-      }
-    }
-  }
+  if (!snapshot) await resolveCredentialModels(deps, cwd, config, unresolved);
   const aiConfigurationSnapshot =
     snapshot ??
     createRunAiConfigurationSnapshot(deps.providers, config, baseAiProfile, resolvedModelOverrides);
   if (!snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, aiConfigurationSnapshot);
-  scope = resolveWorkflowModelScope(
+  const scope = resolveWorkflowModelScope(
     workflow,
     config.assistant,
     assistantModelDefaults(config),
@@ -284,6 +193,166 @@ async function prepareAiConfiguration(
     }),
     connectedVendors: new Set(),
   };
+}
+
+/** A continuation restores the run config it sealed at start; a fresh run seals its own. */
+function resolveEffectiveRunConfig(
+  deps: Pick<WorkflowDeps, 'sealRunConfig' | 'unsealRunConfig'>,
+  options: RunAiConfigurationOptions
+): EffectiveRunConfig {
+  if (options.continuationRun !== undefined) {
+    const runConfigMetadata = readWorkflowRunConfigMetadata(options.continuationRun.metadata);
+    if (!runConfigMetadata) return { runConfigMetadata };
+    if (!deps.unsealRunConfig) {
+      throw new Error('This Archon build cannot restore persisted workflow run config.');
+    }
+    return {
+      runConfigMetadata,
+      effectiveRunConfig: {
+        layer: deps.unsealRunConfig(runConfigMetadata),
+        source: runConfigMetadata.source,
+      },
+    };
+  }
+  const effectiveRunConfig = options.runConfig;
+  if (!effectiveRunConfig) return { effectiveRunConfig };
+  if (!deps.sealRunConfig) {
+    throw new Error('This Archon build cannot persist workflow run config.');
+  }
+  return {
+    effectiveRunConfig,
+    runConfigMetadata: deps.sealRunConfig(effectiveRunConfig.layer, effectiveRunConfig.source),
+  };
+}
+
+/**
+ * The AI configuration recorded on the continued run, else on the run this one inherits
+ * from. An inherited configuration refuses a fresh run's own AI overrides unless the
+ * caller asked to inherit it.
+ */
+function readRecordedAiConfiguration(
+  providers: ProviderRegistry,
+  options: RunAiConfigurationOptions
+): RunAiConfigurationSnapshot | undefined {
+  const snapshot =
+    readRunAiConfigurationSnapshot(providers, options.continuationRun?.metadata) ??
+    readRunAiConfigurationSnapshot(providers, options.aiConfigurationRun?.metadata);
+  if (
+    snapshot &&
+    options.aiConfigurationRun &&
+    !options.continuationRun &&
+    !options.inheritAiConfiguration &&
+    overridesAiConfiguration(options)
+  ) {
+    throw new Error('Cannot override AI configuration inherited from a recorded run.');
+  }
+  return snapshot;
+}
+
+function overridesAiConfiguration(options: RunAiConfigurationOptions): boolean {
+  const layer = options.runConfig?.layer;
+  if (options.modelOverrideLayer) return true;
+  return (
+    layer !== undefined &&
+    ['assistant', 'assistants', 'tiers', 'aliases'].some(key => Object.hasOwn(layer, key))
+  );
+}
+
+/** The run's AI profile from its run config, the user's stored preferences and the file config. */
+async function buildBaseAiProfile(
+  deps: Pick<WorkflowDeps, 'getUserAiPrefs'>,
+  executionUserId: string | undefined,
+  fileConfig: WorkflowConfig,
+  effectiveRunConfig: WorkflowRunConfigInput | undefined
+): Promise<ResolvedAiProfile> {
+  const userAiPrefs = await loadUserAiPrefs(deps, executionUserId);
+  const runLayer = effectiveRunConfig?.layer;
+  try {
+    return buildAiProfile(
+      runLayer?.assistant ?? userAiPrefs.defaultProvider ?? fileConfig.assistant,
+      {
+        repoTiers: fileConfig.tiers,
+        repoAliases: fileConfig.aliases,
+        userTiers: userAiPrefs.tiers,
+        userAliases: userAiPrefs.aliases,
+        runTiers: runLayer?.tiers,
+        runAliases: runLayer?.aliases,
+      }
+    );
+  } catch (error) {
+    // Corrupt stored preferences degrade to config-only. Invalid file or run
+    // configuration still fails when rebuilt without the stored preferences.
+    log.error(
+      { err: error as Error, userId: executionUserId },
+      'workflow.user_ai_prefs_profile_invalid'
+    );
+    return buildAiProfile(runLayer?.assistant ?? fileConfig.assistant, {
+      repoTiers: fileConfig.tiers,
+      repoAliases: fileConfig.aliases,
+      runTiers: runLayer?.tiers,
+      runAliases: runLayer?.aliases,
+    });
+  }
+}
+
+async function loadUserAiPrefs(
+  deps: Pick<WorkflowDeps, 'getUserAiPrefs'>,
+  executionUserId: string | undefined
+): Promise<UserAiPrefsLayer> {
+  if (!executionUserId || !deps.getUserAiPrefs) return {};
+  try {
+    return await deps.getUserAiPrefs(executionUserId);
+  } catch (error) {
+    log.warn(
+      { err: error as Error, userId: executionUserId },
+      'workflow.user_ai_prefs_resolve_failed'
+    );
+    return {};
+  }
+}
+
+/** Recorded overrides win, then a continuation's persisted bindings, then this dispatch's. */
+function resolveModelOverrides(
+  providers: ProviderRegistry,
+  options: RunAiConfigurationOptions,
+  snapshot: RunAiConfigurationSnapshot | undefined,
+  baseAiProfile: ResolvedAiProfile
+): ResolvedRunModelOverrides {
+  const persistedModelBindings =
+    !snapshot && options.continuationRun
+      ? readRunModelBindingsMetadata(providers, options.continuationRun.metadata)
+      : undefined;
+  const layer = options.modelOverrideLayer;
+  return (
+    snapshot?.modelOverrides ??
+    persistedModelBindings?.overrides ??
+    (layer?.kind === 'resolved'
+      ? layer.overrides
+      : resolveRunModelOverrides(providers, baseAiProfile, layer?.overrides))
+  );
+}
+
+/** Pin the model a provider's credential resolves to, for providers no node names a model for. */
+async function resolveCredentialModels(
+  deps: Pick<WorkflowDeps, 'getAgentProvider'>,
+  cwd: string,
+  config: WorkflowConfig,
+  unresolved: readonly RunCredentialRequirement[]
+): Promise<void> {
+  for (const provider of new Set(unresolved.map(r => r.provider))) {
+    const runtime = deps.getAgentProvider(provider);
+    if (!runtime.resolveCredentialModel) continue;
+    const model = await runtime.resolveCredentialModel({
+      cwd,
+      assistantConfig: config.assistants[provider],
+    });
+    if (model !== undefined) {
+      config.assistants = {
+        ...config.assistants,
+        [provider]: { ...config.assistants[provider], model },
+      };
+    }
+  }
 }
 
 export interface PreparedRunAiConfiguration {
@@ -438,15 +507,32 @@ async function checkNativeCredential(
   return status;
 }
 
+type CredentialCheckDeps = Pick<
+  WorkflowDeps,
+  | 'providers'
+  | 'getAgentProvider'
+  | 'isPerUserProviderKeysEnabled'
+  | 'getUserProviderCredential'
+  | 'credentialStore'
+>;
+
+/** Stored credentials and statuses already read for this preflight, by vendor. */
+interface StoredCredentialReads {
+  credentials: Map<string, StoredProviderCredential | undefined>;
+  statuses: Map<string, CredentialStatus>;
+}
+
+/**
+ * What the stored-credential check left for the native check: nothing when a stored
+ * credential is connected, otherwise the kind of a stored credential this provider
+ * cannot consume, which only explains a missing native login.
+ */
+type StoredCredentialOutcome =
+  | { connected: true }
+  | { connected: false; unconsumedKind?: StoredCredentialKind };
+
 export async function assertRunCredentials(
-  deps: Pick<
-    WorkflowDeps,
-    | 'providers'
-    | 'getAgentProvider'
-    | 'isPerUserProviderKeysEnabled'
-    | 'getUserProviderCredential'
-    | 'credentialStore'
-  >,
+  deps: CredentialCheckDeps,
   prepared: PreparedRunAiConfiguration,
   // Where the provider runs, which decides the native login it sees. A host checkout and
   // the worktree cut from it share the host login, so a host run is checked before
@@ -454,80 +540,116 @@ export async function assertRunCredentials(
   // check stored credentials only; executeWorkflow checks it in the container context.
   context: { cwd: string; execContext?: ExecutionContext } | 'pending-container'
 ): Promise<void> {
-  const storedCredentials = new Map<string, StoredProviderCredential | undefined>();
-  const storedStatuses = new Map<string, CredentialStatus>();
+  const reads: StoredCredentialReads = { credentials: new Map(), statuses: new Map() };
   for (const requirement of prepared.requirements) {
-    const { provider, vendor } = requirement;
-    // A stored credential this provider cannot consume is never delivered to it, so the
-    // provider must authenticate natively; the stored kind only explains a missing login.
-    let unconsumedKind: StoredCredentialKind | undefined;
-    if (
-      deps.credentialStore !== 'files' &&
-      prepared.executionUserId &&
-      deps.isPerUserProviderKeysEnabled?.() &&
-      vendor
-    ) {
-      if (!deps.getUserProviderCredential)
-        throw new WorkflowCredentialPreflightError(
-          requirement,
-          'credential adapter has no stored status port'
-        );
-      if (!storedCredentials.has(vendor)) {
-        try {
-          storedCredentials.set(
-            vendor,
-            await deps.getUserProviderCredential(prepared.executionUserId, vendor)
-          );
-        } catch {
-          throw new WorkflowCredentialPreflightError(
-            requirement,
-            'could not verify the stored credential'
-          );
-        }
-      }
-      const stored = storedCredentials.get(vendor);
-      if (
-        stored &&
-        !consumesStoredCredential(
-          requireProvider(deps.providers, provider).credentials,
-          vendor,
-          stored.kind
-        )
-      ) {
-        unconsumedKind = stored.kind;
-      } else {
-        let status = storedStatuses.get(vendor);
-        if (!status) {
-          try {
-            status = (await stored?.getStatus()) ?? { state: 'not_connected', source: 'archon' };
-          } catch {
-            throw new WorkflowCredentialPreflightError(
-              requirement,
-              'could not verify the stored credential'
-            );
-          }
-          storedStatuses.set(vendor, status);
-        }
-        if (status.state === 'not_connected' && prepared.connectedVendors.has(vendor)) {
-          assertCredentialStatus(requirement, status);
-        }
-        if (status.state !== 'not_connected') {
-          assertCredentialStatus(requirement, status);
-          prepared.connectedVendors.add(vendor);
-          continue;
-        }
-      }
-    }
-    if (context === 'pending-container') continue;
-    const status = await checkNativeCredential(deps, prepared, requirement, context);
-    if (unconsumedKind && vendor && status.state === 'not_connected') {
-      throw new WorkflowCredentialPreflightError(
-        requirement,
-        unconsumedStoredCredentialReason(deps.providers, provider, vendor, unconsumedKind)
-      );
-    }
-    assertCredentialStatus(requirement, status);
+    const stored = await checkStoredCredential(deps, prepared, requirement, reads);
+    if (stored.connected || context === 'pending-container') continue;
+    await assertNativeCredential(deps, prepared, requirement, context, stored.unconsumedKind);
   }
+}
+
+async function checkStoredCredential(
+  deps: CredentialCheckDeps,
+  prepared: PreparedRunAiConfiguration,
+  requirement: RunCredentialRequirement,
+  reads: StoredCredentialReads
+): Promise<StoredCredentialOutcome> {
+  const { provider, vendor } = requirement;
+  const userId = prepared.executionUserId;
+  if (
+    deps.credentialStore === 'files' ||
+    !userId ||
+    !deps.isPerUserProviderKeysEnabled?.() ||
+    !vendor
+  ) {
+    return { connected: false };
+  }
+  const stored = await storedCredentialFor(deps, userId, requirement, vendor, reads);
+  // A stored credential this provider cannot consume is never delivered to it, so the
+  // provider must authenticate natively; the stored kind only explains a missing login.
+  if (
+    stored &&
+    !consumesStoredCredential(
+      requireProvider(deps.providers, provider).credentials,
+      vendor,
+      stored.kind
+    )
+  ) {
+    return { connected: false, unconsumedKind: stored.kind };
+  }
+  const status = await storedStatusFor(stored, requirement, vendor, reads);
+  if (status.state === 'not_connected') {
+    if (prepared.connectedVendors.has(vendor)) assertCredentialStatus(requirement, status);
+    return { connected: false };
+  }
+  assertCredentialStatus(requirement, status);
+  prepared.connectedVendors.add(vendor);
+  return { connected: true };
+}
+
+async function storedCredentialFor(
+  deps: Pick<WorkflowDeps, 'getUserProviderCredential'>,
+  userId: string,
+  requirement: RunCredentialRequirement,
+  vendor: string,
+  reads: StoredCredentialReads
+): Promise<StoredProviderCredential | undefined> {
+  if (!deps.getUserProviderCredential)
+    throw new WorkflowCredentialPreflightError(
+      requirement,
+      'credential adapter has no stored status port'
+    );
+  if (reads.credentials.has(vendor)) return reads.credentials.get(vendor);
+  let stored: StoredProviderCredential | undefined;
+  try {
+    stored = await deps.getUserProviderCredential(userId, vendor);
+  } catch {
+    throw new WorkflowCredentialPreflightError(
+      requirement,
+      'could not verify the stored credential'
+    );
+  }
+  reads.credentials.set(vendor, stored);
+  return stored;
+}
+
+async function storedStatusFor(
+  stored: StoredProviderCredential | undefined,
+  requirement: RunCredentialRequirement,
+  vendor: string,
+  reads: StoredCredentialReads
+): Promise<CredentialStatus> {
+  const read = reads.statuses.get(vendor);
+  if (read) return read;
+  let status: CredentialStatus;
+  try {
+    status = (await stored?.getStatus()) ?? { state: 'not_connected', source: 'archon' };
+  } catch {
+    throw new WorkflowCredentialPreflightError(
+      requirement,
+      'could not verify the stored credential'
+    );
+  }
+  reads.statuses.set(vendor, status);
+  return status;
+}
+
+async function assertNativeCredential(
+  deps: CredentialCheckDeps,
+  prepared: PreparedRunAiConfiguration,
+  requirement: RunCredentialRequirement,
+  context: { cwd: string; execContext?: ExecutionContext },
+  unconsumedKind: StoredCredentialKind | undefined
+): Promise<void> {
+  const { provider, vendor } = requirement;
+  const status = await checkNativeCredential(deps, prepared, requirement, context);
+  if (unconsumedKind && vendor && status.state === 'not_connected') {
+    throw new WorkflowCredentialPreflightError(
+      requirement,
+      unconsumedStoredCredentialReason(deps.providers, provider, vendor, unconsumedKind)
+    );
+  }
+  assertCredentialStatus(requirement, status);
 }
 
 export class StoredCredentialDeliveryError extends Error {
