@@ -168,7 +168,7 @@ export function parseRemote(remote: string | null): RepoRef | null {
         true
       );
     }
-    if (url.search !== '' || url.hash !== '') {
+    if (value.includes('?') || value.includes('#')) {
       throw new GitHubError(
         {
           kind: 'invalid_request',
@@ -178,6 +178,7 @@ export function parseRemote(remote: string | null): RepoRef | null {
       );
     }
     const repository =
+      !pathname.startsWith('\\') &&
       repositoryPath(decodeURIComponent(pathname)) &&
       repositoryPath(decodeURIComponent(url.pathname));
     if (!repository) return null;

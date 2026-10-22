@@ -145,6 +145,9 @@ describe('GitHub outbound producer', () => {
     'http://user:secret@ghes.example.test:8080/a/b.git',
     'http://ghes.example.test:8080/a/b.git?query=1',
     'http://ghes.example.test:8080/a/b.git#fragment',
+    ...['http', 'https', 'ssh'].flatMap(protocol =>
+      ['?', '#'].map(marker => `${protocol}://ghes.example.test:8080/a/b.git${marker}`)
+    ),
   ])('rejects credentials, queries and fragments: %s', async remote => {
     expect(
       await handleGithubOperation(
@@ -162,8 +165,10 @@ describe('GitHub outbound producer', () => {
     ...['http', 'https'].flatMap(protocol =>
       invalidHttpRemotePaths.map(path => `${protocol}://ghes.example.test:8080/${path}`)
     ),
-    ...['http', 'https'].map(
-      protocol => `${protocol}://ghes.example.test:8080\\team/extra/repo.git`
+    ...['http', 'https'].flatMap(protocol =>
+      ['team/repo.git', 'team/extra/repo.git'].map(
+        path => `${protocol}://ghes.example.test:8080\\${path}`
+      )
     ),
     'git@ghes.example.test:team/..git',
     'git@ghes.example.test:team/...git',
@@ -878,6 +883,9 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     `http://user:password@${host}/team/repo.git`,
     `http://${host}/team/repo.git?query=1`,
     `http://${host}/team/repo.git#fragment`,
+    ...['http', 'https', 'ssh'].flatMap(protocol =>
+      ['?', '#'].map(marker => `${protocol}://${host}/team/repo.git${marker}`)
+    ),
   ]) {
     const result = await dispatchForge(
       { operationId: 'invalid', op: 'resolve', remote },
@@ -890,7 +898,9 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     ...['http', 'https'].flatMap(protocol =>
       invalidHttpRemotePaths.map(path => `${protocol}://${host}/${path}`)
     ),
-    ...['http', 'https'].map(protocol => `${protocol}://${host}\\team/extra/repo.git`),
+    ...['http', 'https'].flatMap(protocol =>
+      ['team/repo.git', 'team/extra/repo.git'].map(path => `${protocol}://${host}\\${path}`)
+    ),
   ]) {
     const result = await dispatchForge(
       { operationId: 'invalid-path', op: 'resolve', remote },
