@@ -6,7 +6,7 @@ import {
   readExecutionOwner,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { ReleasedWorktree } from '../../services/cleanup-service';
+import type { ReleasedWorktree } from '../../services/cleanup/run-worktree';
 import {
   DetachedRunOwnerUnavailableError,
   type DetachedRunStopTarget,

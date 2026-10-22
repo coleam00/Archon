@@ -4,7 +4,7 @@
  * created, with force, and keeps its branch. Runs in its own `bun test`
  * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
-import { setPlatformPolicies } from '../platforms/registry';
+import { setPlatformPolicies } from '../../platforms/registry';
 import * as gitModule from '@archon/git';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import {
@@ -37,27 +37,24 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { setLogLevel } from '@archon/paths';
 
 setLogLevel('silent');
-const { SqliteAdapter, sqliteDialect } = await import('../db/adapters/sqlite');
+const { SqliteAdapter, sqliteDialect } = await import('../../db/adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
-mock.module('../db/connection', () => ({
+mock.module('../../db/connection', () => ({
   pool: db,
   getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const isolationDb = await import('../db/isolation-environments');
-const { claimPendingWorkflowRun } = await import('../db/workflows');
-const {
-  assessCompletedRunWorktree,
-  cleanupStaleWorktrees,
-  cleanupMergedWorktrees,
-  onConversationClosed,
-  reclaimRunWorktree,
-  releaseCompletedRunWorktree,
-  removeEnvironment,
-  runScheduledCleanup,
-} = await import('./cleanup-service');
-const codebaseDb = await import('../db/codebases');
+const isolationDb = await import('../../db/isolation-environments');
+const { claimPendingWorkflowRun } = await import('../../db/workflows');
+const { cleanupStaleWorktrees, onConversationClosed, runScheduledCleanup } = await import(
+  '../cleanup-service'
+);
+const { cleanupMergedWorktrees } = await import('./merged-sweep');
+const { removeEnvironment } = await import('./remove-environment');
+const { assessCompletedRunWorktree, reclaimRunWorktree, releaseCompletedRunWorktree } =
+  await import('./run-worktree');
+const codebaseDb = await import('../../db/codebases');
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const proc = Bun.spawn(['git', '-C', path, ...args], {
@@ -288,7 +285,7 @@ for (const persistence of ['sql', 'file'] as const) {
         ? store
         : (
             await (
-              await import('../workflows/file-host')
+              await import('../../workflows/file-host')
             ).createFileWorkflowHost(join(root, 'store'))
           ).records.isolation;
     if (persistence === 'file') {
@@ -369,7 +366,7 @@ describe('owned worktree release', () => {
           ? store
           : (
               await (
-                await import('../workflows/file-host')
+                await import('../../workflows/file-host')
               ).createFileWorkflowHost(join(root, 'store'))
             ).records.isolation;
       if (persistence === 'file') {
@@ -615,7 +612,7 @@ describe('completed run worktree release', () => {
           ? store
           : (
               await (
-                await import('../workflows/file-host')
+                await import('../../workflows/file-host')
               ).createFileWorkflowHost(join(root, 'store'))
             ).records.isolation;
       if (persistence === 'file') {
@@ -1109,7 +1106,7 @@ test('listing retains a replacement directory without a Git entry', async () => 
   await git(repo, 'worktree', 'remove', env.working_path);
   await mkdir(env.working_path);
   await writeFile(join(env.working_path, 'operator-file'), 'keep me');
-  const { listEnvironments } = await import('../operations/isolation-operations');
+  const { listEnvironments } = await import('../../operations/isolation-operations');
   const result = await listEnvironments();
   expect(result.codebases.flatMap(codebase => codebase.environments).map(env => env.id)).toContain(
     env.id
@@ -1236,7 +1233,7 @@ describe('cleanup retires only the registration it observed', () => {
 
   test('listing reconciles only the observed missing registration', async () => {
     await git(repo, 'worktree', 'remove', '--force', env.working_path);
-    const { listEnvironments } = await import('../operations/isolation-operations');
+    const { listEnvironments } = await import('../../operations/isolation-operations');
     const mark = isolationDb.markWorktreeDestroyed;
     const update = isolationDb.updateStatus;
     let replacement: IsolationEnvironmentRow | undefined;

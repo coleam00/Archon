@@ -20,7 +20,7 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
    claude + bash/script nodes all run INSIDE via `docker exec`
    env = the Archon-managed bag + auth only (never the host process.env)
         │
-   … approval gate?  →  docker stop (0 RAM while paused)  →  approve/resume → docker start
+   … approval gate?  →  docker stop (0 RAM while stopped)  →  approve/resume → docker start
         │
    nodes done → WRITE-BACK GATE: overlay diff summarized, run pauses
         │
@@ -29,6 +29,8 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
         │
    teardown → container + volume removed
 ```
+
+The diagram shows a normal gate pause. Failed resume setup or suspension can leave the container running; see [Pause economics](#pause-economics).
 
 The overlay's upper layer **is** the diff by overlayfs construction, so computing what changed is a directory walk, not a tree comparison. Claude nodes run via the SDK's `spawnClaudeCodeProcess` hook into `docker exec`; `bash:`/`script:` nodes exec in the same container rather than silently falling back to host execution.
 
@@ -76,7 +78,9 @@ An **empty diff** skips the gate and completes silently. Set `container.write_ba
 
 ## Pause economics
 
-Any pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, **`docker stop`s the container**. A multi-day wait costs ~0 CPU/RAM. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+On a normal pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, Archon **`docker stop`s the container**. Once stopped, a multi-day wait costs ~0 CPU/RAM. Failed resume setup or suspension can leave the container running, as described below. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+
+The CLI acquires the run's authoritative resume claim before restarting its container, including write-back-only continuations. A stale or competing attempt that loses admission cannot restart or suspend the container. If restart or container credential setup fails before execution, the engine marks the admitted run failed and surfaces the setup error. The overlay and write-back decision remain available for ordinary failed-run resume; the prior pause reason is cleared and failed nodes replay on retry. During setup, SIGINT and SIGTERM wait for the in-flight operation to settle, then fail the admitted run before exiting with an error. Setup can fail or be interrupted after restart succeeds; in that case the container may remain running, and its overlay is preserved.
 
 Unreadable-source suspension uses a one-second Docker stop grace and a two-second timeout per Docker call (ownership restoration, stop, and failure inspection), keeping Docker work under the file store's ten-second lock wait. Other pauses retain Docker's default stop grace.
 
@@ -88,7 +92,7 @@ Container pauses are only resumable **from the CLI**, where the Docker backend i
 
 Precedence: `--container` flag > workflow `container.enabled` > config `container.enabled` > off. See [configuration](/reference/configuration/#container-isolation-folder-projects) for the `container:` config block (image, network, memory, pids) and the `container.write_back` workflow policy.
 
-`archon isolation list` shows active container environments (a paused run's container appears here with its age and is **never** auto-pruned). `archon isolation cleanup` reaps containers and volumes older than the threshold only when no claimable run owns the environment and platform policy permits removal. The displayed run status or `no run (orphan)` label does not establish eligibility: cleanup checks run metadata, conversation links, and same-codebase checkout paths. If that ownership lookup fails, cleanup reports the error and skips removal.
+`archon isolation list` shows active container environments with their age. `archon isolation cleanup` reaps containers and volumes older than the threshold only when no claimable run owns the environment and platform policy permits removal. It preserves containers for pending, running, paused, and resumable failed runs, including failed resume setup. The displayed run status or `no run (orphan)` label does not establish eligibility: cleanup checks run metadata, conversation links, and same-codebase checkout paths. If that ownership lookup fails, cleanup reports the error and skips removal. To discard a failed run and its retry overlay, use `archon workflow abandon <run-id>`.
 
 ## Provider support
 

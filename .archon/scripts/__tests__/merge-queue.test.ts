@@ -25,7 +25,7 @@ import { checkAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhCommentRow, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
+import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -350,15 +350,15 @@ const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommen
 
 function run(
   at: Install,
-  script: 'facts' | 'gate' | 'record' | 'ruling',
+  script: 'facts' | 'gate' | 'record' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
-  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string } = {}
+  options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string; issues?: readonly GhIssue[] } = {}
 ): ScriptRun {
   return runPackScript(`merge-queue/scripts/${script}`, {
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
     preload: forgePreload(options.pr ?? {}) + (options.preload ?? ''),
-    gh: { issue: { number: 7, author: 'Maintainer', body: 'The contract.' }, comments: options.comments ?? [REVIEWED] },
+    gh: { issue: { number: 7, author: 'Maintainer', body: 'The contract.' }, comments: options.comments ?? [REVIEWED], issues: options.issues },
     args: options.args,
     artifacts: options.artifacts,
     inputs: {
@@ -1303,8 +1303,51 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
+  test('an issue its merged pull request left open goes back to intake; a closed issue, an own pull request and an unmerged one do not, and one failure stops nothing', () => {
+    const at = install();
+    const issue = (number: number) => ({ repo: PR.repo, number });
+    const listed = (number: number, pr: number) => ({ item: issue(number), pr: issue(pr), url: PR_URL.replace(/42$/, String(pr)), facts: FACTS, record: null });
+    const inputs = {
+      // Issue 9 cannot be read, issue 8 the merge closed, PR 45 is an own pull request, and PR 46 did not merge.
+      INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), { ...listed(45, 45), own_pr: true }, listed(10, 46)]),
+      // Issue 7's pull request was found merged before the sweep.
+      INPUTS_SETTLED: JSON.stringify([{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before this sweep' }]),
+      INPUTS_MERGED: JSON.stringify([44, 43, 45]),
+    };
+    const issues: GhIssue[] = [
+      { number: 8, title: 'Done', body: 'Closes it.', state: 'CLOSED' },
+      { number: 10, title: 'Open', body: 'Not merged yet.', state: 'OPEN' },
+    ];
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const sent = run(at, 'retriage', { ...inputs, INPUTS_RETRIAGE_AS: 'maintainer', ARCHON_CALL_LOG: calls }, { issues });
+    expect(sent.code).toBe(0);
+    const output = JSON.parse(sent.stdout) as { retriaged: number[]; summary: string };
+    expect(output.retriaged).toEqual([7]);
+    expect(output.summary).toStartWith('Sent 1 of 3 merged issue(s) back to intake.');
+    expect(output.summary).toContain('issue 9: not re-triaged');
+    expect(output.summary).not.toContain('issue 45');
+    expect(output.summary).toContain('issue 8: closed after PR 43 merged');
+    expect(sent.stderr).toContain('merge-queue retriage: issue 9: not re-triaged');
+    expect(sent.gh.filter(line => line.startsWith('issue edit'))).toEqual([
+      `issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`,
+    ]);
+    const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toEqual(expect.arrayContaining([
+      'archon-intake', `repo_host=${PR.repo.host}`, `repo_path=${PR.repo.path}`, 'number=7',
+      'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach',
+    ]));
+
+    // Without retriage_as nothing is read, labelled or launched.
+    const unset = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const quiet = run(at, 'retriage', { ...inputs, INPUTS_RETRIAGE_AS: '', ARCHON_CALL_LOG: unset }, { issues });
+    expect(ok(quiet)).toMatchObject({ retriaged: [] });
+    expect(quiet.gh).toEqual([]);
+    expect(existsSync(unset)).toBe(false);
+  }, 60_000);
+
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge' };
+  const SELECTED = { INPUTS_ORDER: '["created asc"]', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
   const launchOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
 
@@ -1318,7 +1361,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(mergeWaits(doc)).toBe(true);
     // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
     expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', '--config-from-run', 'run-1', '--detach'])
+      expect.arrayContaining(['archon-merge-queue', 'order=["created asc"]', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
     );
   }, 60_000);
 

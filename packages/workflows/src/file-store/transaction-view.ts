@@ -1,9 +1,9 @@
+import { resumeRun } from './run-resume';
 import { holdsWorkflowPath } from '../workflow-path-lock';
 import {
   TERMINAL_RUN_EVENT_TYPE,
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   CAPACITY_WAIT_METADATA_KEY,
-  SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
   isContainerRun,
   readCapacityWait,
@@ -25,7 +25,6 @@ import {
   answeredAttentionWait,
   attentionLabeledEvent,
   waitContinuedEvent,
-  workflowUnpausedEvent,
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
@@ -40,7 +39,6 @@ import {
   readWorkflowWaitContext,
   isScheduledWorkflowResume,
   pendingWorkflowWaitDeadline,
-  pausedUsageLimitWait,
   workflowWaitDue,
   isAttentionQueueRow,
   workflowWaitStepName,
@@ -432,47 +430,7 @@ export function createTransactionView(
     clearCapacityWait: id => {
       Reflect.deleteProperty(row(id).metadata, CAPACITY_WAIT_METADATA_KEY);
     },
-    resumeWorkflowRun: async (id, cursor) => {
-      const run = resumableRun(id, cursor);
-      const scheduled = run.metadata.scheduled_resume;
-      const error =
-        typeof run.metadata.error === 'string' && run.metadata.error !== ''
-          ? run.metadata.error
-          : null;
-      if (run.status === 'failed' || error !== null)
-        record({
-          workflow_run_id: id,
-          event_type: 'workflow_resumed',
-          data: error === null ? {} : { error },
-        });
-      if (run.status === 'paused') record(workflowUnpausedEvent(id));
-      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-      if (pausedUsageLimitWait(run)) delete run.metadata.wait;
-      if (
-        run.status === 'failed' &&
-        isScheduledWorkflowResume(scheduled) &&
-        scheduled.triggeredAt === undefined
-      ) {
-        run.metadata.scheduled_resume = { ...scheduled, triggeredAt: new Date().toISOString() };
-        record({
-          workflow_run_id: id,
-          event_type: 'quota_resume_triggered',
-          data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-        });
-      }
-      delete run.metadata.error;
-      delete run.metadata.stop_reason;
-      Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
-      delete run.metadata.continuation_retry_at;
-      Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
-      Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
-      run.status = 'running';
-      run.completed_at = null;
-      run.started_at = new Date();
-      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
-      run.last_activity_at = new Date();
-      return structuredClone(run);
-    },
+    resumeWorkflowRun: async (id, cursor) => resumeRun(resumableRun(id, cursor), record),
     setToolCallAttention: async (id, streamId, calls) => {
       const snapshot = toolCallAttentionArraySchema.parse(calls);
       if (snapshot.some(call => call.streamId !== streamId))

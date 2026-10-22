@@ -6,6 +6,7 @@
 facts:
   path: sweep
   base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  base_error: ""
   items:
     - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
       pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
@@ -27,8 +28,11 @@ record:
   options: []
   class: ""
   asked: null
+retriage:
+  retriaged: []
+  summary: "stub: Sent 0 of 0 merged issue(s) back to intake."
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, sweep, record]
+  reached: [facts, sweep, record, retriage]
 exec-code: true

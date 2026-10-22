@@ -546,7 +546,7 @@ async function refuseMissingCwdOverride(
       // because `/worktree remove` hard-returns "This conversation is not using
       // a worktree." when `isolation_env_id` is null (command-handler.ts:428).
       // That state is reachable, not hypothetical: the `stale_cleaned` branch in
-      // validateAndResolveIsolation (orchestrator.ts:204) clears
+      // validateAndResolveIsolation (dispatch/isolation-resolver.ts) clears
       // `isolation_env_id` and leaves `cwd` set, so a workflow run can strand a
       // conversation exactly here and the next chat turn would be told to run a
       // command that dead-ends. `/setproject` clears the cwd override and works

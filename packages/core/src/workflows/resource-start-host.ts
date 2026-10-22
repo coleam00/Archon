@@ -65,7 +65,7 @@ import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-st
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
-import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
+import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';

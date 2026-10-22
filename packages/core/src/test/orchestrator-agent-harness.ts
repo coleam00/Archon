@@ -28,7 +28,8 @@ import type * as WorkflowRunResume from '@archon/workflows/run-resume';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowAdoption from '../operations/workflow-adoption';
-import type * as Orchestrator from '../orchestrator/orchestrator';
+import type * as IsolationResolver from '../orchestrator/dispatch/isolation-resolver';
+import type * as BackgroundDispatch from '../orchestrator/dispatch/background';
 import type * as MessageDb from '../db/messages';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as TitleGenerator from '../services/title-generator';
@@ -617,14 +618,17 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
-export const mockDispatchBackgroundWorkflow = mock<typeof Orchestrator.dispatchBackgroundWorkflow>(
-  () => Promise.resolve()
-);
+export const mockDispatchBackgroundWorkflow = mock<
+  typeof BackgroundDispatch.dispatchBackgroundWorkflow
+>(() => Promise.resolve());
 export const mockValidateAndResolveIsolation = mock<
-  typeof Orchestrator.validateAndResolveIsolation
+  typeof IsolationResolver.validateAndResolveIsolation
 >(() => Promise.resolve({ cwd: '/test/cwd', status: 'none', env: null }));
-mock.module('../orchestrator/orchestrator', () => ({
+mock.module('../orchestrator/dispatch/isolation-resolver', () => ({
+  ensureIsolationConfigured: mock(() => undefined),
   validateAndResolveIsolation: mockValidateAndResolveIsolation,
+}));
+mock.module('../orchestrator/dispatch/background', () => ({
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
 }));
 
@@ -934,7 +938,7 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 type AgentIsolationEnvironment = Extract<
-  Awaited<ReturnType<typeof Orchestrator.validateAndResolveIsolation>>,
+  Awaited<ReturnType<typeof IsolationResolver.validateAndResolveIsolation>>,
   { status: 'new' }
 >['env'];
 

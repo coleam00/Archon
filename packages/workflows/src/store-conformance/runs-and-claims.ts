@@ -14,6 +14,7 @@ import {
   rejection,
 } from './fixtures';
 import { assertWorkflowClaimRace } from './races';
+import { describeResumeTransitionConformance } from './resume-transition';
 
 export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStoreHarness): void {
   describe('runs and claims', () => {
@@ -61,52 +62,7 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
     test('pending claim has exactly one winner and stamps the checkout', async () => {
       await assertWorkflowClaimRace(store);
     });
-    test.each([
-      { status: 'failed', error: 'original error' },
-      { status: 'failed', error: '' },
-      { status: 'failed', error: null },
-      { status: 'failed', error: undefined },
-      { status: 'failed', error: 42 },
-      { status: 'paused', error: undefined },
-    ] as const)(
-      'resume from %j has one winner and preserves cleared failure evidence',
-      async ({ status, error }) => {
-        const run = await running(store, { metadata: { keep: true } });
-        if (status === 'failed')
-          await store.failWorkflowRun(run.id, typeof error === 'string' ? error : '', {
-            exitReason: 'node_error',
-          });
-        else await store.pauseWorkflowRun(run.id, approval);
-        await store.updateWorkflowRun(run.id, { metadata: { error } });
-        const before = await types(store, run.id);
-        const results = await Promise.allSettled(
-          Array.from({ length: 8 }, () => store.resumeWorkflowRun(run.id))
-        );
-        expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
-        for (const result of results)
-          if (result.status === 'rejected')
-            expect(result.reason).toBeInstanceOf(WorkflowNotResumableError);
-        expect(await store.getWorkflowRun(run.id)).toMatchObject({
-          status: 'running',
-          completed_at: null,
-          metadata: { keep: true },
-        });
-        const metadata = (await store.getWorkflowRun(run.id))?.metadata;
-        expect(metadata).not.toHaveProperty('error');
-        expect(metadata).not.toHaveProperty('stop_reason');
-        // Only the winning resume writes, and a resumed pause is in the feed.
-        expect(await types(store, run.id)).toEqual([
-          ...before,
-          ...(status === 'failed' ? ['workflow_resumed'] : ['workflow_unpaused']),
-        ]);
-        if (status === 'failed') {
-          const resumed = (await store.listWorkflowEvents(run.id)).find(
-            event => event.event_type === 'workflow_resumed'
-          );
-          expect(resumed?.data).toEqual(typeof error === 'string' && error !== '' ? { error } : {});
-        }
-      }
-    );
+    describeResumeTransitionConformance(getHarness);
     test('resume audits a legacy metadata-only error and ignores empty errors', async () => {
       for (const error of ['legacy failure', '', null]) {
         const run = await running(store, { metadata: { error } });

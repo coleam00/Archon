@@ -20,7 +20,7 @@ export async function insertTerminalWorkflowEvent(
   const eventResult = await query<TerminalRecordEvent>(
     `SELECT event_type, step_name, data FROM remote_agent_workflow_events
      WHERE workflow_run_id = $1
-     ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+     ORDER BY COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
     [event.workflow_run_id]
   );
   const terminalRecord = await buildTerminalRecord({

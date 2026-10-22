@@ -9,7 +9,7 @@ import { toError } from '../../utils/error';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { createRunWorktreeSetupExecutor } from '../../workflows/worktree-setup';
 import { getLog } from '../agent-log';
-import { validateAndResolveIsolation } from '../orchestrator';
+import { validateAndResolveIsolation } from './isolation-resolver';
 import type {
   AdoptedEnvironment,
   AdoptionLane,
@@ -70,7 +70,7 @@ export async function resolveForegroundIsolation(
 /**
  * Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
  * instead of cutting a fresh one (same shape as the background dispatch in
- * orchestrator.ts). Linking the env keeps isolation hygiene pointed at this
+ * ./background.ts). Linking the env keeps isolation hygiene pointed at this
  * checkout.
  */
 async function runInAdoptedWorktree(

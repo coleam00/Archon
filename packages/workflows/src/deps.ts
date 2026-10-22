@@ -59,7 +59,7 @@ export type {
 export type WorkflowTokenUsage = TokenUsage;
 
 // ---------------------------------------------------------------------------
-// Platform-specific types (NOT mirrors — unique to workflow engine)
+// Platform message metadata
 // ---------------------------------------------------------------------------
 
 export interface WorkflowMessageMetadata {

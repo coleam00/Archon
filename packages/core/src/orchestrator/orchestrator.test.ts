@@ -34,7 +34,9 @@ import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import type * as WorkflowRouter from '@archon/workflows/router';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
-import type * as Orchestrator from './orchestrator';
+import type * as IsolationResolver from './dispatch/isolation-resolver';
+import type * as BackgroundDispatch from './dispatch/background';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import type * as PromptBuilder from './prompt-builder';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as WorkflowDb from '../db/workflows';
@@ -377,39 +379,53 @@ mock.module('../utils/workflow-source-root', () => ({
 }));
 
 // Orchestrator (isolation & dispatch) mocks
-const mockValidateAndResolveIsolation = mock<typeof Orchestrator.validateAndResolveIsolation>(() =>
-  Promise.resolve({
-    status: 'existing',
-    cwd: '/workspace/project',
-    env: {
-      id: 'env-1',
-      codebase_id: 'codebase-789',
-      workflow_type: 'task',
-      workflow_id: 'task-1',
-      provider: 'worktree',
-      working_path: '/workspace/project',
-      branch_name: 'task-1',
-      status: 'active',
-      created_at: new Date(),
-      created_by_platform: 'test',
-      created_by_user_id: null,
-      metadata: {},
-    },
-  })
+const mockValidateAndResolveIsolation = mock<typeof IsolationResolver.validateAndResolveIsolation>(
+  () =>
+    Promise.resolve({
+      status: 'existing',
+      cwd: '/workspace/project',
+      env: {
+        id: 'env-1',
+        codebase_id: 'codebase-789',
+        workflow_type: 'task',
+        workflow_id: 'task-1',
+        provider: 'worktree',
+        working_path: '/workspace/project',
+        branch_name: 'task-1',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'test',
+        created_by_user_id: null,
+        metadata: {},
+      },
+    })
 );
-const mockDispatchBackgroundWorkflow = mock<typeof Orchestrator.dispatchBackgroundWorkflow>(() =>
-  Promise.resolve()
+const mockDispatchBackgroundWorkflow = mock<typeof BackgroundDispatch.dispatchBackgroundWorkflow>(
+  () => Promise.resolve()
 );
 
-mock.module('./orchestrator', () => ({
+mock.module('./dispatch/isolation-resolver', () => ({
+  ensureIsolationConfigured: mock(() => undefined),
   validateAndResolveIsolation: mockValidateAndResolveIsolation,
+}));
+mock.module('./dispatch/background', () => ({
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = 'IsolationBlockedError';
-    }
-  },
+}));
+
+// The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
+// here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
+const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+  close: () => Promise.resolve(),
+  isStopRequested: () => false,
+  registerTerminationPreparation: () => () => undefined,
+};
+const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
+mock.module('../services/run-live-owner', () => ({
+  ...realRunLiveOwner,
+  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
+    async (_runId, _options, body) => body(mockRunLiveOwner)
+  ),
 }));
 
 // Prompt builder mock
@@ -514,7 +530,7 @@ mock.module('@archon/workflows/run-source', () => ({
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mockFindWorkflow,
-  // Statically imported by the background dispatch path (see orchestrator.ts).
+  // Statically imported by the background dispatch path (see dispatch/background.ts).
   resolveWorkflowName: mock((name: string, workflows: { name: string }[]) =>
     workflows.find(w => w.name === name)
   ),

@@ -510,7 +510,7 @@ export async function prepareFolderExecution(input: {
  * run metadata at first-run creation. resumeEnv fails LOUD if the volume
  * is gone (un-applied work lost) rather than restarting from empty.
  *
- * Ordering (L3): the container is restarted FIRST (here) even on a
+ * Resume admission precedes this restart, including on a
  * write-back-only resume where no DAG node will re-execute — kept uniform
  * with the mid-DAG-approval resume, which DOES need a live container. The
  * subsequent write-back apply runs in an INDEPENDENT `docker run` helper

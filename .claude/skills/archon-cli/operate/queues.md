@@ -66,8 +66,9 @@ Optional inputs, with their defaults in each workflow's YAML:
   re-triages blocked items that no longer look blocked) and `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
   converge.
-- `archon-merge-queue`: `limit` (default `10` items claimed) and `merge_method`
-  (`squash` or `merge`).
+- `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
+  (`squash` or `merge`) and `retriage_as` (a maintainer login; set, an issue still
+  open after its pull request merged goes back to intake).
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
@@ -170,8 +171,8 @@ most one attention item: the red default branch first, otherwise the first pull
 request the sweep asked about. A later sweep decides the rest again.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
-the answer starts, on the answered run's `order`, `limit` and `merge_method`, merges
-it once the gate passes. The approval carries to a later head only when the sweep
+the answer starts, on the answered run's `order`, `limit`, `merge_method` and
+`retriage_as`, merges it once the gate passes. The approval carries to a later head only when the sweep
 judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item
 back to the build queue, whose next round starts at once on the build queue's own
