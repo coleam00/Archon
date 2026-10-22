@@ -1,4 +1,3 @@
-import { LOOP_COMPLETION_CHANNELS } from '../schemas/loop';
 import { z } from 'zod';
 import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -14,7 +13,6 @@ import {
   isWaitNode,
   isWorkflowNode,
   type DagNode,
-  type LoopNode,
   type NodeOutput,
   type ResolvedWorkflow,
 } from '../schemas';
@@ -114,30 +112,6 @@ function schemaPlaceholder(schema: unknown): unknown {
   }
 }
 
-function completeStructuredLoopStub(node: LoopNode, value: unknown): void {
-  for (const { field } of LOOP_COMPLETION_CHANNELS) {
-    switch (field) {
-      case 'until_field':
-        if (node.loop.until_field === undefined) break;
-        if (!isRecord(value)) {
-          throw new Error(
-            `Cannot generate dry-run stub for node '${node.id}': loop.until_field requires an object-typed output_format`
-          );
-        }
-        value[node.loop.until_field] = true;
-        break;
-      // Signals use prose stubs; bash is assumed complete by the simulator.
-      case 'until':
-      case 'until_bash':
-        break;
-      default: {
-        const unhandled: never = field;
-        return unhandled;
-      }
-    }
-  }
-}
-
 export function generatedStubFor(node: DagNode): DryRunStubValue {
   if (node.output_format === undefined) {
     return isLoopNode(node) && node.loop.until !== undefined ? node.loop.until : 'TODO';
@@ -149,7 +123,14 @@ export function generatedStubFor(node: DagNode): DryRunStubValue {
   }
 
   const value = schemaPlaceholder(node.output_format);
-  if (isLoopNode(node)) completeStructuredLoopStub(node, value);
+  if (isLoopNode(node) && node.loop.until_field !== undefined) {
+    if (!isRecord(value)) {
+      throw new Error(
+        `Cannot generate dry-run stub for node '${node.id}': loop.until_field requires an object-typed output_format`
+      );
+    }
+    value[node.loop.until_field] = true;
+  }
 
   let compileError: string | undefined;
   const validation = validateStructuredOutput(value, node.output_format, message => {
