@@ -108,27 +108,35 @@
       "../utils/stdout",
       "@archon/core/workflows/continuation-resume"
     ],
-    "packages/cli/src/test-support/workflow-command-harness.ts": [
+    "packages/cli/src/test-support/workflow-harness-checkout.ts": [
+      "@archon/git",
+      "@archon/isolation"
+    ],
+    "packages/cli/src/test-support/workflow-harness-core.ts": [
       "@archon/core",
       "@archon/core/config/config-loader",
       "@archon/core/config/run-config",
       "@archon/core/credentials/config",
+      "@archon/core/db/env-vars",
+      "@archon/core/handlers/clone",
+      "@archon/core/operations/workflow-adoption",
+      "@archon/core/services/provider-admission"
+    ],
+    "packages/cli/src/test-support/workflow-harness-db.ts": [
       "@archon/core/db/codebases",
       "@archon/core/db/conversations",
-      "@archon/core/db/env-vars",
       "@archon/core/db/isolation-environments",
       "@archon/core/db/messages",
       "@archon/core/db/users",
       "@archon/core/db/workflow-events",
-      "@archon/core/db/workflows",
-      "@archon/core/handlers/clone",
-      "@archon/core/operations/workflow-adoption",
-      "@archon/core/services/provider-admission",
-      "@archon/core/services/run-live-owner",
-      "@archon/core/workflows/sql-host",
-      "@archon/git",
-      "@archon/isolation",
-      "@archon/paths",
+      "@archon/core/db/workflows"
+    ],
+    "packages/cli/src/test-support/workflow-harness-home.ts": ["@archon/paths"],
+    "packages/cli/src/test-support/workflow-harness-host.ts": ["@archon/core/workflows/sql-host"],
+    "packages/cli/src/test-support/workflow-harness-run-owner.ts": [
+      "@archon/core/services/run-live-owner"
+    ],
+    "packages/cli/src/test-support/workflow-harness-workflows.ts": [
       "@archon/workflows/dry-run",
       "@archon/workflows/event-emitter",
       "@archon/workflows/fixture-runner",
