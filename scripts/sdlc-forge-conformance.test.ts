@@ -47,6 +47,7 @@ import {
   ghTokenNames,
   REQUIRED_FORGE_OPERATIONS,
 } from '../.archon/workflows/sdlc/.shared/forge-check';
+import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
 
 const { runPackScript } = packScriptRunner();
@@ -153,10 +154,12 @@ test('the pack projections of the merge and review operations carry typed eviden
   ).toBe('landed');
 });
 
+// Delivery and the merge queue each preflight their own operations; merge-queue.test.ts
+// proves the merge queue's list against the operations it calls.
 test('preflight capabilities cover the forge operations the pack calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
-    .filter(file => file !== '.shared/forge-check.ts')
+    .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
     .map(file => readFileSync(join(root, file), 'utf8'));
   const used = forgeRequestSchema.options
     .map(schema => schema.shape.op.value)
@@ -166,7 +169,8 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
       )
     );
   expect(used).toContain('checks.state');
-  expect(used.sort()).toEqual([...REQUIRED_FORGE_OPERATIONS].sort());
+  const preflighted = new Set([...REQUIRED_FORGE_OPERATIONS, ...MERGE_QUEUE_FORGE_OPERATIONS]);
+  expect(used.sort()).toEqual([...preflighted].sort());
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {
