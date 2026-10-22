@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import type { ForgeError } from '@archon/forge/operations';
-import type { RepoRef } from '@archon/forge';
+import { parseRemoteUrl, type RepoRef } from '@archon/forge';
 import { parseGitHubHost, resolveGitHubHost, type GitHubHost } from '@archon/git';
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -24,12 +24,11 @@ export class GitHubError extends Error {
 
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
-  if (parts.length !== 2 || parts.some(part => part === '' || part === '.' || part === '..')) {
-    return null;
-  }
+  if (parts.length !== 2) return null;
   const owner = parts[0];
   const repo = parts[1].endsWith('.git') ? parts[1].slice(0, -4) : parts[1];
-  return owner && repo ? { owner, repo } : null;
+  if ([owner, repo].some(part => part === '' || part === '.' || part === '..')) return null;
+  return { owner, repo };
 }
 
 function githubHost(host: string): GitHubHost {
@@ -151,9 +150,9 @@ export function parseRemote(remote: string | null): RepoRef | null {
   const value = remote.trim();
 
   if (value.includes('://')) {
-    let url: URL;
+    let parsed: ReturnType<typeof parseRemoteUrl>;
     try {
-      url = new URL(value);
+      parsed = parseRemoteUrl(value);
     } catch (cause) {
       throw new GitHubError(
         { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
@@ -161,6 +160,7 @@ export function parseRemote(remote: string | null): RepoRef | null {
         { cause }
       );
     }
+    const { url, host, pathname } = parsed;
     if (!['http:', 'https:', 'ssh:'].includes(url.protocol)) return null;
     if (url.password !== '' || (url.protocol !== 'ssh:' && url.username !== '')) {
       throw new GitHubError(
@@ -177,9 +177,9 @@ export function parseRemote(remote: string | null): RepoRef | null {
         true
       );
     }
-    const repository = repositoryPath(decodeURIComponent(url.pathname));
+    const repository = repositoryPath(decodeURIComponent(pathname));
     if (!repository) return null;
-    return { host: url.host.toLowerCase(), path: `${repository.owner}/${repository.repo}` };
+    return { host, path: `${repository.owner}/${repository.repo}` };
   }
 
   // Git's SCP-like SSH form has no URL scheme. Its optional user is transport identity,

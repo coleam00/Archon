@@ -2,8 +2,21 @@ import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
 import { dispatchForge } from '@archon/forge/dispatch';
-import type { ForgeRequest } from '@archon/forge/operations';
+import { forgeRequestSchema, type ForgeRequest } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
+
+const invalidRemotePaths = [
+  'team',
+  'team/repo/extra',
+  'team/.git',
+  'team/%2E%2E',
+  'team/../owner/repo.git',
+  'team/%2E%2E/owner/repo.git',
+  'team/..git',
+  'team/...git',
+  'team/%2E.git',
+  'team/%2E%2E.git',
+];
 
 const checksRequest = {
   operationId: 'operation-1',
@@ -62,6 +75,18 @@ describe('GitHub outbound producer', () => {
       'ghes.example.test:8080',
       'Archon/Repo',
     ],
+    ...[
+      ['http', '80'],
+      ['https', '443'],
+      ['http', '443'],
+      ['https', '80'],
+      ['https', '8080'],
+    ].map(([protocol, port]) => [
+      `${protocol} port ${port}`,
+      `${protocol}://GHES.example.test:${port}/Archon/Repo.git`,
+      `ghes.example.test:${port}`,
+      'Archon/Repo',
+    ]),
     ['https URL', 'https://github.com/Archon/Repo.git', 'github.com', 'Archon/Repo'],
     [
       'SSH URL',
@@ -104,10 +129,11 @@ describe('GitHub outbound producer', () => {
 
   test.each([
     '/workspace/local-repository',
-    'http://ghes.example.test:8080/owner',
-    'http://ghes.example.test:8080/owner/repo/extra',
-    'http://ghes.example.test:8080/owner/.git',
-    'http://ghes.example.test:8080/owner/%2E%2E',
+    ...['http', 'https', 'ssh'].flatMap(protocol =>
+      invalidRemotePaths.map(path => `${protocol}://ghes.example.test:8080/${path}`)
+    ),
+    'git@ghes.example.test:team/..git',
+    'git@ghes.example.test:team/...git',
   ])('treats invalid repository paths as none: %s', async remote => {
     expect(
       await handleGithubOperation(
@@ -595,23 +621,119 @@ describe('GitHub forge origins', () => {
     }
   });
 
-  test('invalid repository paths fail before REST or GraphQL dispatch', async () => {
-    let calls = 0;
-    const fetch = async () => {
-      calls++;
-      return Response.json({});
-    };
-    const repo = { host: 'ghes.example.test:8080', path: 'owner/../repo' };
-    for (const request of [
-      { operationId: 'labels', op: 'repo.labels.list', repo },
-      { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
-    ] satisfies ForgeRequest[]) {
-      expect(
-        await handleGithubOperation(request, { token: 'selected-token', fetch })
-      ).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  test.each(['owner/../repo', 'owner/.git', 'owner/..git', 'owner/...git'])(
+    'invalid repository path %s fails before any repository operation fetches',
+    async path => {
+      let calls = 0;
+      const fetch = async () => {
+        calls++;
+        throw new Error('Invalid repository must not fetch');
+      };
+      const repo = { host: 'ghes.example.test:8080', path };
+      const ref = { repo, number: 1 };
+      const subject = { kind: 'issue', ref } as const;
+      const operationId = 'invalid-path';
+      const revision = 'a'.repeat(40);
+      const requests = [
+        ...(
+          [
+            'checks.state',
+            'pr.reviews',
+            'pr.threads',
+            'pr.ready',
+            'pr.draft',
+            'workitem.view',
+          ] as const
+        ).map(op => ({ operationId, op, ref })),
+        { operationId, op: 'repo.labels.list', repo },
+        { operationId, op: 'workitem.list', repo, label: 'queued' },
+        {
+          operationId,
+          op: 'workitem.create',
+          repo,
+          title: 'title',
+          marker: 'marker',
+          body: 'marker',
+        },
+        { operationId, op: 'workitem.labels.set', ref, labels: [] },
+        { operationId, op: 'workitem.close', ref, reason: 'completed' },
+        ...(['workitem.label.add', 'workitem.label.remove'] as const).map(op => ({
+          operationId,
+          op,
+          subject,
+          name: 'queued',
+        })),
+        {
+          operationId,
+          op: 'workitem.comment.upsert',
+          subject,
+          marker: 'marker',
+          body: 'marker\nbody',
+        },
+        {
+          operationId,
+          op: 'repo.label.ensure',
+          repo,
+          name: 'queued',
+          color: 'abcdef',
+          description: '',
+        },
+        { operationId, op: 'comment.upsert', ref, marker: 'marker', body: 'marker\nbody' },
+        ...(['pr.edit-body', 'workitem.edit-body'] as const).map(op => ({
+          operationId,
+          op,
+          ref,
+          body: 'body',
+        })),
+        { operationId, op: 'pr.merge', ref, method: 'squash', conditions: { head: revision } },
+        {
+          operationId,
+          op: 'checks.rerun',
+          ref,
+          revision,
+          units: [
+            { unit: { kind: 'check', id: '1', name: 'test' }, rerun: { id: '2', attempt: 1 } },
+          ],
+        },
+        { operationId, op: 'pr.thread.reply', ref, thread: 'thread', body: 'body' },
+        { operationId, op: 'pr.thread.resolve', ref, thread: 'thread' },
+        { operationId, op: 'pr.view', selector: { kind: 'number', ref } },
+        ...[repo, { ...repo, path: 'valid/repo' }].flatMap(
+          base =>
+            [
+              {
+                operationId,
+                op: 'pr.view',
+                selector: { kind: 'head', repo: base, headRepo: repo, head: 'feature' },
+              },
+              {
+                operationId,
+                op: 'pr.create',
+                repo: base,
+                headRepo: repo,
+                head: 'feature',
+                headRevision: revision,
+                base: 'dev',
+                title: 'title',
+                body: '',
+                draft: false,
+              },
+            ] satisfies ForgeRequest[]
+        ),
+      ] satisfies ForgeRequest[];
+      for (const request of requests) {
+        const response = await handleGithubOperation(forgeRequestSchema.parse(request), {
+          token: 'selected-token',
+          fetch,
+        });
+        expect(response).toMatchObject({
+          ok: false,
+          error: { kind: 'invalid_request', message: expect.stringContaining('repository path') },
+        });
+      }
+      expect(calls).toBe(0);
     }
-    expect(calls).toBe(0);
-  });
+  );
 });
 
 test('invalid configured GitHub origins fail before sending a credential', async () => {
@@ -661,16 +783,26 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
           args: [resolve(import.meta.dir, 'plugin.ts')],
         },
       ],
-      hosts: { [host]: 'github' },
+      hosts: {
+        [host]: 'github',
+        'ghes.example.test:80': 'github',
+        'ghes.example.test:443': 'github',
+      },
       scanPath: false,
     },
     env: {},
   });
-  for (const remote of [
-    `http://GHES.example.test:8080/team/repo.git`,
-    `https://${host}/team/repo.git`,
-    `ssh://git@${host}/team/repo.git`,
-    'git@github.com:team/repo.git',
+  for (const [remote, expectedHost] of [
+    [`http://GHES.example.test:8080/team/repo.git`, host],
+    [`https://${host}/team/repo.git`, host],
+    [`ssh://git@${host}/team/repo.git`, host],
+    ['git@github.com:team/repo.git', 'github.com'],
+    ...['http', 'https'].flatMap(protocol =>
+      ['80', '443', '8080'].map(port => [
+        `${protocol}://ghes.example.test:${port}/team/repo.git`,
+        `ghes.example.test:${port}`,
+      ])
+    ),
   ]) {
     const result = await dispatchForge(
       { operationId: 'resolve-dispatch', op: 'resolve', remote },
@@ -683,25 +815,27 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
         value: {
           kind: 'resolved',
           forge: 'github',
-          repo: { host: remote.startsWith('git@') ? 'github.com' : host, path: 'team/repo' },
+          repo: { host: expectedHost, path: 'team/repo' },
         },
       },
     });
     expect(result.plugin).toEqual({ name: 'github', version: '1' });
   }
-  const unclaimed = await dispatchForge(
-    {
-      operationId: 'unclaimed',
-      op: 'resolve',
-      remote: 'http://unclaimed.example.test:8080/team/repo.git',
-    },
-    { discovery, env: {} }
-  );
-  expect(unclaimed.plugin).toBeNull();
-  expect(unclaimed.response).toMatchObject({
-    ok: true,
-    result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
-  });
+  for (const remote of [
+    'http://unclaimed.example.test:8080/team/repo.git',
+    'http://ghes.example.test/team/repo.git',
+    'http://ghes.example.test:9090/team/repo.git',
+  ]) {
+    const unclaimed = await dispatchForge(
+      { operationId: 'unclaimed', op: 'resolve', remote },
+      { discovery, env: {} }
+    );
+    expect(unclaimed.plugin).toBeNull();
+    expect(unclaimed.response).toMatchObject({
+      ok: true,
+      result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+    });
+  }
   for (const remote of [
     `http://user@${host}/team/repo.git`,
     `http://:password@${host}/team/repo.git`,
@@ -715,7 +849,7 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     );
     expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
   }
-  for (const path of ['team', 'team/repo/extra', 'team/.git', 'team/%2E%2E']) {
+  for (const path of invalidRemotePaths) {
     const result = await dispatchForge(
       { operationId: 'invalid-path', op: 'resolve', remote: `http://${host}/${path}` },
       { discovery, env: {} }

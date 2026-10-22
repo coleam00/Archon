@@ -22,6 +22,7 @@ import { normalizeHost, type ForgePluginConfig } from './plugin-config';
 import { runPluginProcess } from './plugin-process';
 import { selectCredential } from './credentials';
 import { GH_DOTCOM_TOKEN_KEYS } from '@archon/paths/github-token-env';
+import { parseRemoteUrl } from './remote-url';
 
 export type ForgeOperationAudit = z.infer<typeof forgeOperationAuditSchema>;
 export interface ForgeDispatchResult {
@@ -137,9 +138,9 @@ function remoteHost(remote: string | null): string | undefined {
   try {
     const scp = /^(?:[^@\s]+@)?([^:/\s]+):.+$/.exec(remote);
     if (scp && !remote.includes('://')) return normalizeHost(scp[1]);
-    const url = new URL(remote);
+    const { url, host } = parseRemoteUrl(remote.trim());
     if (!['http:', 'https:', 'ssh:', 'git:'].includes(url.protocol)) return undefined;
-    return normalizeHost(url.host);
+    return normalizeHost(host);
   } catch {
     return undefined;
   }
