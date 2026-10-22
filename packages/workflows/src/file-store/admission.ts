@@ -17,7 +17,6 @@ import {
   type Binding,
 } from './admission-documents';
 import { holdsWorkflowPath } from '../workflow-path-lock';
-import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
@@ -60,19 +59,9 @@ import {
   recoverBeforeRead,
 } from './commit';
 import { createTransactionView } from './transaction-view';
+import { documentPaths, listReceiptDocuments } from './admission-read';
 
 const log = createLogger('file-store.admission');
-
-async function documentPaths(root: string, kind: string): Promise<string[]> {
-  let names: string[];
-  try {
-    names = await readdir(join(root, 'resource', kind));
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
-    throw error;
-  }
-  return names.filter(name => name.endsWith('.json')).map(name => `resource/${kind}/${name}`);
-}
 
 function disposition(row: Request): ResourceStartDisposition {
   if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
@@ -495,12 +484,6 @@ export function createFileAdmissionStore(
     await recoverBeforeRead(root);
     return call(createAdmissionTransaction(root, listReusableCheckouts));
   }
-  async function list<S extends z.ZodType>(kind: string, schema: S): Promise<z.output<S>[]> {
-    const rows: z.output<S>[] = [];
-    for (const path of await documentPaths(root, kind))
-      rows.push(schema.parse(await readJson(join(root, path))));
-    return rows;
-  }
   async function queueCandidate<S extends z.ZodType>(
     path: string,
     schema: S
@@ -676,7 +659,7 @@ export function createFileAdmissionStore(
       }),
     listStartReceipts: limit =>
       query(async () =>
-        (await list('receipts', receiptSchema))
+        (await listReceiptDocuments(root))
           .sort(compareStartReceipts)
           .slice(0, validateStartReceiptLimit(limit))
           .map(({ id, sourceInstanceId, deliveryId, outcome, reason, receivedAt }) => ({
@@ -690,7 +673,7 @@ export function createFileAdmissionStore(
       ),
     listPendingStartBindings: options =>
       query(async tx => {
-        const rows = (await list('receipts', receiptSchema)).flatMap(receipt =>
+        const rows = (await listReceiptDocuments(root)).flatMap(receipt =>
           receipt.bindings.map(binding => ({ binding, createdAt: receipt.createdAt }))
         );
         return Promise.all(

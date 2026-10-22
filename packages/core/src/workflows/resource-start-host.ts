@@ -341,16 +341,23 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     }
   };
 
-  for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
+  let bindings: Awaited<ReturnType<typeof host.deps.store.listPendingStartBindings>> = [];
+  try {
+    bindings = await host.deps.store.listPendingStartBindings({ hostId: host.hostId });
+  } catch (error) {
+    // Queued requests already contain their prepared launch; admission need not reread receipts.
+    failures.push({ error });
+  }
+  for (const binding of bindings) {
     if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
       bindingId: binding.bindingId,
       ownerId: randomUUID(),
     };
-    if (!(await host.deps.store.claimStartBindingPreparation(identity))) continue;
     let disposition: ResourceStartDisposition;
     try {
+      if (!(await host.deps.store.claimStartBindingPreparation(identity))) continue;
       disposition = await prepareClaimedBinding(host, binding.intent, identity);
     } catch (error) {
       failures.push({ receiptId: binding.receiptId, error });
