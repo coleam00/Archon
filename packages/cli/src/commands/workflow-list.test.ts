@@ -7,6 +7,7 @@ import {
 } from '../test-support/workflow-command-harness';
 import { providerRegistry } from '@archon/providers';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { RunFixturesOptions } from '@archon/workflows/fixture-runner';
 import { workflowListCommand, workflowTestCommand } from './workflow-query';
 
 describe('workflowListCommand', () => {
@@ -765,6 +766,30 @@ describe('workflowTestCommand', () => {
     });
   });
 
+  it('reports no fixtures without consulting an unavailable environment store', async () => {
+    const codebases = await import('@archon/core/db/codebases');
+    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockRejectedValue(
+      new Error('store unavailable')
+    );
+    try {
+      const fixtureRunner = await import('@archon/workflows/fixture-runner');
+      (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValueOnce({
+        results: [],
+        passed: 0,
+        failed: 0,
+      });
+      expect(await workflowTestCommand('/test/path', undefined, { json: true })).toBe(0);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        results: [],
+        passed: 0,
+        failed: 0,
+      });
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
   it('passes registered environment and redaction provenance to executable fixtures', async () => {
     const codebases = await import('@archon/core/db/codebases');
     const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
@@ -793,19 +818,22 @@ describe('workflowTestCommand', () => {
         envVars: { ARCHON_DB_DIAGNOSTIC: 'file-value', FILE_ONLY: 'kept' },
       });
       const fixtureRunner = await import('@archon/workflows/fixture-runner');
-      (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
-        results: [],
-        passed: 0,
-        failed: 0,
-      });
+      let resolvedConfig:
+        | Awaited<ReturnType<NonNullable<RunFixturesOptions['resolveExecConfig']>>>
+        | undefined;
+      (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockImplementationOnce(
+        async (options: RunFixturesOptions) => {
+          expect(env).not.toHaveBeenCalled();
+          resolvedConfig = await options.resolveExecConfig?.();
+          return { results: [], passed: 0, failed: 0 };
+        }
+      );
       await workflowTestCommand('/test/path', undefined);
       expect(env).toHaveBeenCalledWith('cb-env');
-      expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
+      expect(resolvedConfig).toEqual(
         expect.objectContaining({
-          config: expect.objectContaining({
-            envVars: { ARCHON_DB_DIAGNOSTIC: 'db-value', FILE_ONLY: 'kept' },
-            protectedCredentialValues: ['db-value'],
-          }),
+          envVars: { ARCHON_DB_DIAGNOSTIC: 'db-value', FILE_ONLY: 'kept' },
+          protectedCredentialValues: ['db-value'],
         })
       );
     } finally {

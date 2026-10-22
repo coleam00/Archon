@@ -97,8 +97,6 @@ export async function workflowTestCommand(
       `Cannot read the workflow source configuration in ${cwd}: ${(error as Error).message}`
     );
   });
-  const host = await createCliWorkflowHost();
-  const fixtureConfig = await resolveDryRunEnvironment(host, invokingCwd, config);
   let report: Awaited<ReturnType<typeof runFixtures>>;
   try {
     report = await runFixtures({
@@ -106,7 +104,9 @@ export async function workflowTestCommand(
       cwd,
       targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
-      config: fixtureConfig,
+      config,
+      resolveExecConfig: async () =>
+        resolveDryRunEnvironment(await createCliWorkflowHost(), invokingCwd, config),
       ...(target !== undefined ? { target } : {}),
     });
   } catch (error) {

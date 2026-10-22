@@ -17,7 +17,11 @@ import {
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { isInlineScript, formatSubprocessFailure } from '../../../executor-shared';
+import {
+  isInlineScript,
+  formatHostSpawnFailure,
+  formatSubprocessFailure,
+} from '../../../executor-shared';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { assertNodeSourceReadable, RunSourceUnreadableError } from '../../node-source';
@@ -283,7 +287,12 @@ export async function executeScriptNode(
     // user-facing branch we end up in — the timeout message also contains the
     // full `Command failed: bun -e <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
-    const spawnFailure = hostSpawnFailure(execContext, err);
+    const spawnMessage = formatHostSpawnFailure(
+      hostSpawnFailure(execContext, err),
+      node.runtime,
+      cmd,
+      label
+    );
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
@@ -293,10 +302,8 @@ export async function executeScriptNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (spawnFailure === 'ENOENT') {
-      errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (spawnFailure === 'EACCES') {
-      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
+    } else if (spawnMessage !== undefined) {
+      errorMsg = spawnMessage;
     } else {
       errorMsg = formatted.userMessage;
     }

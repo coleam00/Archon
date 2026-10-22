@@ -192,6 +192,40 @@ describe('parseFixtureFile', () => {
 describe('runFixtures', () => {
   const passingBody = ['fixture:', '  expect: completed', 'node-a: "stub output"', ''].join('\n');
 
+  it('contains environment lookup failures in executable fixtures and continues stub fixtures', async () => {
+    const { cwd } = writeTempProject({
+      fixtureName: 'a-executable',
+      body: 'fixture:\n  expect: failed\n  fail-node: node-a\nexec-code: true\n',
+    });
+    writeTempProject({ cwd, fixtureName: 'b-stub', body: passingBody });
+    const resolveExecConfig = mock(async () => {
+      throw new Error('environment store unavailable');
+    });
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+      resolveExecConfig,
+    });
+    expect(resolveExecConfig).toHaveBeenCalledTimes(1);
+    expect(report.passed).toBe(1);
+    expect(report.failed).toBe(1);
+    expect(report.results[0]).toMatchObject({
+      pass: false,
+      failureReason: 'environment store unavailable',
+    });
+    expect(report.results[1]).toMatchObject({ pass: true, outcome: 'completed' });
+  });
+
+  it('does not resolve executable environment when no fixtures exist', async () => {
+    const cwd = makeTempProject();
+    const resolveExecConfig = mock(async () => {
+      throw new Error('environment store unavailable');
+    });
+    const report = await runFixtures({ workflows: [], cwd, resolveExecConfig });
+    expect(report.results).toEqual([]);
+    expect(resolveExecConfig).not.toHaveBeenCalled();
+  });
+
   it('passes a fixture whose declared outcome matches the dry-run outcome', async () => {
     const { cwd } = writeTempProject({ body: passingBody });
     const report = await runFixtures({
@@ -1450,15 +1484,16 @@ describe('runFixtures exec-code isolation (#2851)', () => {
         const report = await runFixtures({
           workflows: workflowsOnDisk(cwd, ['test-wf']),
           cwd,
-          config: applyRunEnvironment(
-            {
-              assistant: undefined,
-              assistants: { claude: {}, codex: {} },
-              commands: {},
-              protectedCredentialValues: [explicitValue],
-            },
-            { ARCHON_FIXTURE_ACCOUNT: secret }
-          ),
+          resolveExecConfig: async () =>
+            applyRunEnvironment(
+              {
+                assistant: undefined,
+                assistants: { claude: {}, codex: {} },
+                commands: {},
+                protectedCredentialValues: [explicitValue],
+              },
+              { ARCHON_FIXTURE_ACCOUNT: secret }
+            ),
         });
         expect(report.results[0].pass).toBe(true);
         expect(report.results[0].nodeFailures?.[0].reason).toContain('[exit 7]');

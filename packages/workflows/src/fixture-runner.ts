@@ -318,6 +318,8 @@ export interface RunFixturesOptions {
    */
   sourceConfig: WorkflowSourceConfig;
   config?: WorkflowConfig;
+  /** Resolve managed environment only for executable fixtures; failures belong to that result. */
+  resolveExecConfig?: () => Promise<WorkflowConfig>;
   aiProfile?: ResolvedAiProfile;
   /**
    * Restrict to a workflow name, a pack or workflow-folder name, or a path (relative
@@ -603,6 +605,8 @@ async function checkFixture(
   try {
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
+    const config =
+      execCode && options.resolveExecConfig ? await options.resolveExecConfig() : options.config;
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
@@ -613,7 +617,7 @@ async function checkFixture(
         execCode,
         execWorkspace: workspace,
         sourceRoots: captured,
-        ...(options.config ? { config: options.config } : {}),
+        ...(config ? { config } : {}),
         ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
       });
     const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);

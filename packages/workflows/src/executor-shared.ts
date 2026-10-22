@@ -3,11 +3,11 @@
  * shared by the executors.
  */
 import { escapeRegExp } from '@archon/paths/regexp';
-import type { DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
+import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
-import type { RawSubprocessRejection } from './subprocess';
+import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -240,6 +240,24 @@ export function retainStreamTail(text: string | undefined): string | undefined {
   return `…[truncated to last ${String(SUBPROCESS_ERROR_MAX_CHARS)} chars]\n${trimmed.slice(
     -SUBPROCESS_ERROR_MAX_CHARS
   )}`;
+}
+
+export function formatHostSpawnFailure(
+  failure: ReturnType<typeof hostSpawnFailure>,
+  runtime: ExecNode['runtime'],
+  command: string,
+  label: string
+): string | undefined {
+  if (runtime === 'sh' && (failure === 'ENOENT' || failure === 'ENOTDIR')) {
+    return (
+      `${label} failed: bash executable not found at '${command}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  }
+  if (failure === 'ENOENT') return `${label} failed: '${command}' executable not found in PATH`;
+  if (failure === 'EACCES') return `${label} failed: permission denied (check cwd permissions)`;
+  return undefined;
 }
 
 /**
