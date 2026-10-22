@@ -1,5 +1,5 @@
 import { providerRegistry } from '@archon/providers';
-import type { InMemoryStoreEvent } from '../test-utils';
+import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { settlingProvider } from '../test-settling-provider';
 /**
@@ -336,21 +336,7 @@ export class InMemoryStore implements IWorkflowStore {
     throw new Error('Not used by this test');
   };
   listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
-    this.events.flatMap((event, i) =>
-      event.workflow_run_id === runId
-        ? [
-            {
-              id: `event-${String(i)}`,
-              workflow_run_id: event.workflow_run_id,
-              event_type: event.event_type,
-              step_index: null,
-              step_name: event.step_name ?? null,
-              data: event.data ?? {},
-              created_at: new Date(0).toISOString(),
-            },
-          ]
-        : []
-    );
+    inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (runIds, eventTypes) => {
     const byRun = new Map<string, WorkflowEventRow[]>();
     for (const runId of runIds) {
