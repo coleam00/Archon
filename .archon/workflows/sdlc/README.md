@@ -642,9 +642,12 @@ then the project's file, whose lines win where the two conflict.
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
-  else can post a verdict. The install's authenticated `gh` login posts the pack's
-  review comments and must be listed in that file on the default branch for those
-  verdicts to count. A failed PR read waits once; a second consecutive failure
+  else can post a verdict. The login that authors the pack's published review comment
+  must be listed in that file on the default branch for its verdict to count.
+  With the default `gh` source, this is the identity `gh` acts as; with the opt-in
+  `forge` source, it is the forge plugin's credential identity, which may differ.
+  Check the published comment's author when choosing which login to list.
+  A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
   read resets that sequence even if later work fails. An unreadable own-PR park stays

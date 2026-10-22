@@ -46,7 +46,7 @@ Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branc
 Each entry is a GitHub login, or an object naming one. With no file, every author is outside. The list decides three things:
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
-- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. The pack posts its reviews as the `gh` account, so **that account must be on the list**, or nothing ever merges.
+- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. With the default `gh` source, this is the identity `gh` acts as; with the opt-in `forge` source, it is the forge plugin's credential identity, which may differ. Check the published comment's author when choosing which login to list.
 - **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue.
 
 ## 3. Adjust policy and models (optional)
