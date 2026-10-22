@@ -6,7 +6,7 @@ import {
   readDeferredNodeUsageEvent,
 } from './node-record-reader';
 import { describe, expect, it } from 'bun:test';
-import { execNodeSchema } from './schemas/dag-node';
+import { execNodeSchema } from './schemas/exec-node';
 import {
   nodeCostScope,
   serializeNodeEmitter,

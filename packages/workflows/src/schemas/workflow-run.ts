@@ -9,14 +9,14 @@ import {
 import { z } from 'zod';
 import {
   APPROVAL_ATTENTION_OPTIONS,
-  approvalDecisionConfigSchema,
   attentionFormSchema,
   attentionLabelsSchema,
   attentionOptionSchema,
   type AttentionForm,
   type AttentionLabels,
   type AttentionOption,
-} from './dag-node';
+} from './wait-node';
+import { approvalDecisionConfigSchema } from './gate-node';
 import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
 import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';

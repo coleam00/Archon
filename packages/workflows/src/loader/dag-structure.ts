@@ -21,7 +21,7 @@ import {
   isNodeContextResume,
 } from '../schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from '../fan-out-identity';
-import { isBindingDirective } from '../schemas/dag-node';
+import { isBindingDirective } from '../schemas/node-bindings';
 import { WHEN_INPUTS_SCOPE } from '../when-atom';
 import {
   EXECUTION_CHECKOUT_REF_SOURCE,

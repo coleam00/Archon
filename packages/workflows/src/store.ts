@@ -20,7 +20,7 @@ import {
   type AttentionAnswer,
   type ExpectedApprovalGate,
 } from './schemas/workflow-run';
-import type { AttentionLabels } from './schemas/dag-node';
+import type { AttentionLabels } from './schemas/wait-node';
 import type { RecordSurface } from './schemas/record-surface';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
