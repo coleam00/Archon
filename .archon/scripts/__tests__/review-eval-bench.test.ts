@@ -3,12 +3,12 @@
  * corrupt its numbers: a sample that can read the answer or differs by machine, a
  * mislabelled version, a failed, empty or misbound run counted as a sample, spend that
  * reads as more complete than it was, a paid run left unrecorded, a live run's checkout
- * reused, a stale line, a judge crediting a lens, defect or finding the sample does not
- * have, and an operator's mark overwritten.
+ * reused, a stale line, and a judge crediting a lens, defect or finding the sample does not
+ * have.
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -16,7 +16,6 @@ import {
   type ResolvedVersion,
   type RunDetail,
   type RunNode,
-  type FindingMark,
   appendLine,
   latestLines,
   readLines,
@@ -28,10 +27,11 @@ import {
   ensureOrigin,
   hardChecks,
   loadSet,
-  mergeMarks,
   prepareCase,
   type ReviewItem,
   runCost,
+  type BatchSample,
+  unaccounted,
   validateJudgement,
   writeBatch,
   readSamples,
@@ -522,7 +522,18 @@ describe('latestLines', () => {
 
 const testJudge = { spec: 'opus', prompt_sha: 'rubric' };
 
-describe('the batch page and marks', () => {
+describe('the batch page', () => {
+  it('leaves a finding a known defect accounts for out of the clean sample’s false-positive candidates', () => {
+    const finding = (id: string, claim: string): Finding => ({ id, severity: 'note', sources: ['code'], claim, status: 'open', round: 1 });
+    const sample: BatchSample = {
+      line: { case: 'counting', variant: 'clean', sample: 1, run_id: 'run-1', label: 'v', passed: true, item: 'items/run-1', cost_usd: null, cost_partial: false, duration_ms: null, problems: [] },
+      item: { defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } },
+      findings: [finding('R1', 'Never stops.'), finding('R2', 'Unlinked problem.')],
+      judgement: { valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', evidence: 'States the mechanism.' }], shape_unmatched: 0 },
+    };
+    expect(unaccounted(sample).map(entry => entry.id)).toEqual(['R2']);
+  });
+
   it('shows a cost that is only a floor as at least that much', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-page-')));
     const sample = { case: 'counting', variant: 'v1', run_id: 'run-1', version: { label: 'v' }, passed: false };
@@ -530,28 +541,6 @@ describe('the batch page and marks', () => {
     appendLine(join(out, 'samples.jsonl'), { ...sample, sample: 2, run_id: 'run-2', cost_usd: 2, cost_partial: false });
     expect(() => writeBatch(out, 'counting', testJudge)).toThrow('failed hard checks');
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Cost | at least $1.50 | $2.00 |');
-  });
-
-  it('excludes a known defect’s accounted finding from clean false-positive candidates', () => {
-    const out = track(mkdtempSync(join(tmpdir(), 'archon-clean-page-')));
-    const dir = join(out, 'items', 'run-1');
-    mkdirSync(dir, { recursive: true });
-    writeItem(dir, { defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } });
-    write(dir, 'review/findings.json', JSON.stringify([
-      { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'Never stops.', status: 'open', round: 1 },
-      { id: 'R2', severity: 'note', sources: ['code'], claim: 'Unlinked problem.', status: 'open', round: 1 },
-    ]));
-    appendLine(join(out, 'samples.jsonl'), { case: 'counting', variant: 'clean', sample: 1, run_id: 'run-1', version: { label: 'v' }, passed: true, item: join('items', 'run-1') });
-    appendLine(join(out, 'judgements.jsonl'), { run_id: 'run-1', judge: testJudge, valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', evidence: 'States the mechanism.' }], shape_unmatched: 0 });
-    writeBatch(out, 'counting', testJudge);
-    const batch = join(out, 'batches', 'counting');
-    const page = readFileSync(join(batch, 'page.md'), 'utf8');
-    expect(page).toContain('### Known `K1`');
-    const candidates = page.split('### Findings no defect accounts for')[1];
-    expect(candidates).toContain('R2 (code, open): Unlinked problem.');
-    expect(candidates).not.toContain('R1');
-    const marks = Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8')) as Record<string, unknown>[];
-    expect(marks.map(entry => entry.defect ?? entry.finding)).toEqual(['K1', 'R2']);
   });
 
   for (const changed of [{ spec: 'opus', prompt_sha: 'old' }, { spec: 'sonnet', prompt_sha: 'new' }]) {
@@ -580,112 +569,6 @@ describe('the batch page and marks', () => {
     expect(() => writeBatch(out, 'healthy', testJudge)).toThrow('failed hard checks');
     expect(readFileSync(join(out, 'batches/healthy/page.md'), 'utf8')).toContain('good');
     expect(() => readSamples(out)).toThrow('samples.jsonl:1');
-  });
-
-  it('preserves marks separately for each model and rubric, including legacy marks', () => {
-    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-judge-marks-'))), 'marks.yaml');
-    const entry = { run_id: 'run-1', version: 'v', variant: 'clean', sample: 1, finding: 'R1', sources: ['code'], claim: 'Wrong.', mark: null, note: null };
-    const old = { ...entry, judged_by: { spec: 'opus', prompt_sha: 'old' }, mark: 'false_positive' };
-    const legacy = { ...entry, mark: 'real', note: 'Unattributed legacy mark.' };
-    writeFileSync(file, Bun.YAML.stringify([old, legacy], null, 2));
-    for (const judged_by of [{ spec: 'sonnet', prompt_sha: 'old' }, { spec: 'opus', prompt_sha: 'new' }]) {
-      const fresh = { ...entry, judged_by };
-      expect(mergeMarks(file, [fresh])).toEqual([fresh, old, legacy]);
-    }
-  });
-
-  it.each([
-    { previous: ['code'], current: ['code'] },
-    { previous: ['code', 'seams'], current: ['seams', 'code'] },
-    { previous: ['code', 'seams', 'code'], current: ['seams', 'code'] },
-  ])('preserves an operator mark for equivalent catching lenses: %j', ({ previous, current }) => {
-    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-same-verdict-'))), 'marks.yaml');
-    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: [...current], finding: 'R1' }, mark: null, note: null };
-    const marked = { ...fresh, judge: { finding: 'R1', caught_by: previous }, mark: 'right', note: 'Confirmed.' };
-    writeFileSync(file, Bun.YAML.stringify([marked], null, 2));
-    expect(mergeMarks(file, [fresh])).toEqual([marked]);
-    expect(fresh.judge.caught_by).toEqual([...current]);
-  });
-
-  it('leaves changed catching-lens membership unmarked with the same cited finding', () => {
-    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-changed-lenses-'))), 'marks.yaml');
-    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: ['code', 'seams'], finding: 'R1' }, mark: null, note: null };
-    const marked = { ...fresh, judge: { caught_by: ['code'], finding: 'R1' }, mark: 'right', note: 'Confirmed code only.' };
-    writeFileSync(file, Bun.YAML.stringify([marked], null, 2));
-    expect(mergeMarks(file, [fresh])).toEqual([fresh, marked]);
-  });
-
-  it.each([
-    { mark: 'right', note: null },
-    { mark: null, note: 'Check this verdict.' },
-    { mark: null, note: null, caught_by: ['seams'] },
-  ])('retains all annotated historical rows with equivalent verdicts: %j', annotation => {
-    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-equivalent-history-'))), 'marks.yaml');
-    const fresh = { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: testJudge, defect: 'D1', judge: { caught_by: ['code', 'seams'], finding: 'R1' }, mark: null, note: null };
-    for (const lenses of [['seams', 'code'], ['code', 'seams', 'code']]) {
-      const history = [
-        { ...fresh, mark: 'wrong', note: 'Original decision.' },
-        { ...fresh, judge: { ...fresh.judge, caught_by: lenses }, ...annotation },
-      ];
-      for (const generated of [[fresh], []]) {
-        writeFileSync(file, Bun.YAML.stringify(history, null, 2));
-        for (let regeneration = 0; regeneration < 2; regeneration++) {
-          const merged = mergeMarks(file, generated);
-          expect(merged).toEqual(history);
-          writeFileSync(file, Bun.YAML.stringify(merged, null, 2));
-        }
-      }
-    }
-  });
-
-  it('keeps equivalent annotated history through repeated batch writes', () => {
-    const out = track(mkdtempSync(join(tmpdir(), 'archon-history-write-')));
-    const batch = join(out, 'batches', 'counting');
-    const marks = join(batch, 'marks.yaml');
-    const entry = { run_id: 'run-1', judged_by: testJudge, defect: 'D1', mark: 'right', note: 'First decision.' };
-    const history = [
-      { ...entry, judge: { caught_by: ['code', 'seams'], finding: 'R1' } },
-      { ...entry, judge: { caught_by: ['seams', 'code'], finding: 'R1' }, mark: 'wrong', note: 'Second decision.' },
-    ];
-    write(batch, 'marks.yaml', Bun.YAML.stringify(history, null, 2));
-    for (let regeneration = 0; regeneration < 2; regeneration++) {
-      writeBatch(out, 'counting', testJudge);
-      expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual(history);
-    }
-  });
-
-  it('leaves both batch outputs unchanged when saved marks are malformed', () => {
-    const out = track(mkdtempSync(join(tmpdir(), 'archon-marks-refusal-')));
-    const batch = join(out, 'batches', 'counting');
-    write(batch, 'page.md', 'Previous page.');
-    write(batch, 'marks.yaml', 'not_a_list: true');
-    expect(() => writeBatch(out, 'counting', testJudge)).toThrow('is not a list of marks');
-    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toBe('Previous page.');
-    expect(readFileSync(join(batch, 'marks.yaml'), 'utf8')).toBe('not_a_list: true');
-  });
-
-  it('replaces marks without truncating the previous file', () => {
-    const out = track(mkdtempSync(join(tmpdir(), 'archon-atomic-marks-')));
-    const batch = join(out, 'batches', 'counting');
-    const marks = join(batch, 'marks.yaml');
-    const original = '- run_id: prior\n  mark: right\n  note: Operator evidence.\n';
-    write(batch, 'marks.yaml', original);
-    linkSync(marks, join(batch, 'previous.yaml'));
-    writeBatch(out, 'counting', testJudge);
-    expect(readFileSync(join(batch, 'previous.yaml'), 'utf8')).toBe(original);
-    expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual(Bun.YAML.parse(original));
-  });
-
-  it('keeps a marked or annotated entry a re-judge no longer calls for, and drops an unmarked one', () => {
-    const file = join(track(mkdtempSync(join(tmpdir(), 'archon-bench-marks-'))), 'marks.yaml');
-    const at = { run_id: 'run-1', version: 'v', variant: 'clean', sample: 1, judged_by: testJudge };
-    const finding = (id: string, mark: FindingMark | null, note: string | null) => ({ ...at, finding: id, sources: ['code'], claim: 'Unrelated.', mark, note });
-    const marked = finding('R1', 'false_positive', null);
-    const annotated = finding('R2', null, 'Look again.');
-    const corrected = { ...at, defect: 'K1', judge: { caught_by: [], finding: null }, mark: null, note: null, caught_by: ['code'] };
-    writeFileSync(file, Bun.YAML.stringify([marked, annotated, corrected, finding('R3', null, null)], null, 2));
-    const regenerated = finding('R4', null, null);
-    expect(mergeMarks(file, [regenerated])).toEqual([regenerated, marked, annotated, corrected]);
   });
 });
 
@@ -968,7 +851,7 @@ describe('bench run', () => {
     expect(existsSync(join(out, 'samples.jsonl'))).toBe(false);
     expect(existsSync(join(out, 'checkouts', 'eval-v', 'counting.run'))).toBe(false);
   });
-  it('judges a passed sample from this checkout, and writes its page and unmarked marks', () => {
+  it('judges a passed sample from this checkout, and writes its page', () => {
     const { repo, out, run, argv, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
     const caught = { id: 'D1', caught_by: ['code'], finding: null, evidence: 'The code lens states it.' };
     judgeReturns('run-2', { defects: [caught], shape_unmatched: 1 });
@@ -1007,9 +890,6 @@ describe('bench run', () => {
     expect(page).toContain('| Caught by | code |');
     expect(page).toContain('| Evidence | The code lens states it. |');
     expect(page).toContain('| Cost | $1.75 |');
-    expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toEqual([
-      { run_id: 'run-1', version: 'v', variant: 'v1', sample: 1, judged_by: judgement.judge, defect: 'D1', judge: { caught_by: ['code'], finding: null }, mark: null, note: null },
-    ]);
   });
 
   it('judges a spilled return and records an unavailable return as invalid', () => {
@@ -1032,12 +912,10 @@ describe('bench run', () => {
     judgeReturns('run-2', value);
     expect(run('--variant', 'v1').status).toBe(0);
     writeFileSync(join(out, 'judgements.jsonl'), '');
-    write(out, 'batches/counting/marks.yaml', '[]');
     judgeReturns('run-3', value);
     writeFileSync(join(cli, 'wait.json'), JSON.stringify({ attention: { kind: 'terminal', status } }));
     expect(judge('--batch', 'counting').status).toBe(1);
     expect(readLines(join(out, 'judgements.jsonl'))).toMatchObject([{ judge_run: 'run-3', valid: false, reason: `the judge run run-3 is ${status}` }]);
-    expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
   });
 
   it('refuses rendering an absent batch', () => {
@@ -1064,73 +942,6 @@ describe('bench run', () => {
     expect(result.status).toBe(1);
     const page = readFileSync(join(out, 'batches/counting/page.md'), 'utf8');
     expect(page).toContain(failure === 'hard check' ? 'FAILED' : failure === 'missing judgement' ? 'not judged' : 'invalid: bad return');
-    if (failure !== 'hard check') expect(Bun.YAML.parse(readFileSync(join(out, 'batches/counting/marks.yaml'), 'utf8'))).toEqual([]);
-    expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
-  });
-
-  it('retains a marked old verdict as history and leaves a reversed verdict unmarked', () => {
-    const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['code'], finding: 'R1', evidence: 'Stated.' }], shape_unmatched: 0 });
-    expect(run('--variant', 'v1').status).toBe(0);
-    // The same run detail answers for the clean sample, which has nothing planted to judge.
-    judgeReturns('run-4', { defects: [], shape_unmatched: 0 });
-    expect(run('--variant', 'clean').status).toBe(0);
-
-    const marks = join(out, 'batches', 'counting', 'marks.yaml');
-    const [defect, finding] = Bun.YAML.parse(readFileSync(marks, 'utf8')) as Record<string, unknown>[];
-    expect(finding).toEqual({ judged_by: readLines(join(out, 'judgements.jsonl'))[0].judge, run_id: 'run-3', version: 'v', variant: 'clean', sample: 1, finding: 'R1', sources: ['code'], claim: 'Unrelated.', mark: null, note: null });
-    const marked = { ...defect, mark: 'wrong', caught_by: [], note: 'R1 is about another line.' };
-    writeFileSync(marks, Bun.YAML.stringify([marked, finding], null, 2));
-
-    judgeReturns('run-5', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Not stated.' }], shape_unmatched: 0 });
-    judgeReturns('run-6', { defects: [], shape_unmatched: 0 });
-    expect(judge('--batch', 'counting').status).toBe(0);
-    const judged = readLines(join(out, 'judgements.jsonl')).map(line => `${String(line.run_id)} by ${String(line.judge_run)}`);
-    expect(judged.sort()).toEqual(['run-1 by run-2', 'run-1 by run-5', 'run-3 by run-4', 'run-3 by run-6']);
-    expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([{ ...defect, judge: { caught_by: [], finding: null } }, finding, marked]);
-    expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
-  });
-
-  it('leaves a changed cited finding unmarked and retains the marked previous verdict', () => {
-    const { out, run, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, root => {
-      const detail = passing(root);
-      const file = join(runArtifacts(root, 'run-1'), 'review/findings.json');
-      const [first] = JSON.parse(readFileSync(file, 'utf8')) as Finding[];
-      writeFileSync(file, JSON.stringify([first, { ...first, id: 'R2', claim: 'Wrong count.' }]));
-      return detail;
-    });
-    const verdict = { id: 'D1', caught_by: ['code'], finding: 'R1', evidence: 'Stated.' };
-    judgeReturns('run-2', { defects: [verdict], shape_unmatched: 0 });
-    expect(run('--variant', 'v1').status).toBe(0);
-    const marks = join(out, 'batches/counting/marks.yaml');
-    const [entry] = Bun.YAML.parse(readFileSync(marks, 'utf8')) as Record<string, unknown>[];
-    const marked = { ...entry, mark: 'right', note: 'Confirmed R1.' };
-    writeFileSync(marks, Bun.YAML.stringify([marked], null, 2));
-
-    judgeReturns('run-3', { defects: [{ ...verdict, finding: 'R2' }], shape_unmatched: 0 });
-    expect(judge('--batch', 'counting').status).toBe(0);
-    expect(Bun.YAML.parse(readFileSync(marks, 'utf8'))).toEqual([
-      { ...entry, judge: { caught_by: ['code'], finding: 'R2' } },
-      marked,
-    ]);
-    expect(readFileSync(join(out, 'batches/counting/page.md'), 'utf8')).toContain('R2');
-  });
-
-  it('renders saved judgements after marks repair without launching a judge', () => {
-    const { out, cli, run, render, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
-    judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: [], finding: null, evidence: 'Not stated.' }], shape_unmatched: 0 });
-    expect(run('--variant', 'v1').status).toBe(0);
-    const batch = join(out, 'batches', 'counting');
-    const judgements = readFileSync(join(out, 'judgements.jsonl'), 'utf8');
-    write(batch, 'marks.yaml', 'not_a_list: true');
-    write(batch, 'page.md', 'Previous page.');
-    expect(render('--batch', 'counting').status).toBe(1);
-    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toBe('Previous page.');
-    write(batch, 'marks.yaml', '[]');
-    expect(render('--batch', 'counting').status).toBe(0);
-    expect(readFileSync(join(batch, 'page.md'), 'utf8')).toContain('| Evidence | Not stated. |');
-    expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toHaveLength(1);
-    expect(readFileSync(join(out, 'judgements.jsonl'), 'utf8')).toBe(judgements);
     expect(existsSync(join(cli, 'argv-3.json'))).toBe(false);
   });
 
@@ -1171,7 +982,6 @@ describe('bench run', () => {
     }
     expect(judge().status).toBe(1);
     expect(readFileSync(join(out, 'batches/failed/page.md'), 'utf8')).toContain('FAILED');
-    expect(Bun.YAML.parse(readFileSync(join(out, 'batches/failed/marks.yaml'), 'utf8'))).toEqual([]);
     if (withHealthy) {
       expect(readFileSync(join(out, 'batches/healthy/page.md'), 'utf8')).toContain('| Judgement | valid |');
       expect(readLines(join(out, 'judgements.jsonl'))).toMatchObject([{ run_id: 'good', valid: true }]);
@@ -1193,7 +1003,6 @@ describe('bench run', () => {
     expect(result.status).toBe(0);
     expect(readLines(join(out, 'judgements.jsonl'))).toMatchObject([{ run_id: 'good', valid: true }]);
     expect(readFileSync(join(out, 'batches/healthy/page.md'), 'utf8')).toContain('| Judgement | valid |');
-    expect(existsSync(join(out, 'batches/healthy/marks.yaml'))).toBe(true);
     expect(existsSync(join(out, 'batches/damaged'))).toBe(false);
   });
 
@@ -1209,27 +1018,6 @@ describe('bench run', () => {
     expect(existsSync(join(out, 'batches'))).toBe(false);
   });
 
-  it('refreshes independent batches even when saved marks in one batch are malformed', () => {
-    const { out, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
-    for (const caseId of ['damaged', 'healthy']) {
-      const dir = join(out, 'items', caseId);
-      mkdirSync(dir, { recursive: true });
-      writeItem(dir, { defects: [], known_defects: [], lenses: {} });
-      write(dir, 'review/findings.json', '[]');
-      appendLine(join(out, 'samples.jsonl'), { case: caseId, variant: 'clean', sample: 1, run_id: caseId, version: { label: 'v' }, passed: true, item: join('items', caseId) });
-    }
-    write(out, 'batches/damaged/page.md', 'Previous page.');
-    write(out, 'batches/damaged/marks.yaml', 'not_a_list: true');
-    judgeReturns('run-1', { defects: [], shape_unmatched: 0 });
-    judgeReturns('run-2', { defects: [], shape_unmatched: 0 });
-    const result = judge();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('batch damaged');
-    expect(readFileSync(join(out, 'batches/damaged/page.md'), 'utf8')).toBe('Previous page.');
-    expect(readFileSync(join(out, 'batches/healthy/page.md'), 'utf8')).toContain('| Judgement | valid |');
-    expect(existsSync(join(out, 'batches/healthy/marks.yaml'))).toBe(true);
-  });
-
   it('renders a damaged saved item as invalid and refreshes the other batches', () => {
     const { out, judge, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } });
     for (const [caseId, runId] of [['damaged', 'bad-run'], ['healthy', 'good-run']]) {
@@ -1243,9 +1031,7 @@ describe('bench run', () => {
     expect(result.status).toBe(1);
     expect(readLines(join(out, 'judgements.jsonl'))).toContainEqual(expect.objectContaining({ run_id: 'bad-run', valid: false }));
     expect(readFileSync(join(out, 'batches', 'damaged', 'page.md'), 'utf8')).toContain('| Judgement | invalid:');
-    expect(Bun.YAML.parse(readFileSync(join(out, 'batches', 'damaged', 'marks.yaml'), 'utf8'))).toEqual([]);
     expect(readFileSync(join(out, 'batches', 'healthy', 'page.md'), 'utf8')).toContain('| Judgement | valid |');
-    expect(existsSync(join(out, 'batches', 'healthy', 'marks.yaml'))).toBe(true);
   });
 
   it('heads the page FAILED and judges nothing when a sample fails a hard check', () => {
@@ -1263,10 +1049,9 @@ describe('bench run', () => {
     expect(page.startsWith('FAILED: 1 sample(s) failed a hard check')).toBe(true);
     expect(page).toContain('`v #1` v1 (run run-1): output: review/findings.json does not read:');
     expect(page).toContain('| Judgement | not judged: hard checks failed |');
-    expect(Bun.YAML.parse(readFileSync(join(batch, 'marks.yaml'), 'utf8'))).toEqual([]);
   });
 
-  it('records a judgement that credits a lens with no output as invalid, and leaves nothing to mark', () => {
+  it('records a judgement that credits a lens with no output as invalid', () => {
     const { out, run, judgeReturns } = benchCase({ attention: { kind: 'terminal', status: 'completed' } }, passing);
     judgeReturns('run-2', { defects: [{ id: 'D1', caught_by: ['docs'], finding: null, evidence: 'Docs.' }], shape_unmatched: 0 });
     const { status, stderr } = run('--variant', 'v1');
@@ -1274,6 +1059,5 @@ describe('bench run', () => {
     expect(stderr).toContain('judgement invalid: defect D1: lens docs left no output in this sample');
     expect(readLines(join(out, 'judgements.jsonl'))).toMatchObject([{ run_id: 'run-1', valid: false, reason: 'defect D1: lens docs left no output in this sample' }]);
     expect(readFileSync(join(out, 'batches', 'counting', 'page.md'), 'utf8')).toContain('| Judgement | invalid: defect D1: lens docs left no output in this sample |');
-    expect(Bun.YAML.parse(readFileSync(join(out, 'batches', 'counting', 'marks.yaml'), 'utf8'))).toEqual([]);
   });
 });
