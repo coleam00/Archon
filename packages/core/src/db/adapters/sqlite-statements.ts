@@ -1,14 +1,15 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 
 /** bun:sqlite's get() returns null (not undefined) when the query has no row. */
-export type Maybe<T> = T | null;
+type Maybe<T> = T | null;
 
 /*
  * bun:sqlite does not finalize statements automatically when the connection
  * closes: one unfinalized statement keeps the database file pinned until GC
  * (delete-after-close fails with EBUSY on Windows). So every prepare() against
- * the adapter's connection must funnel through these wrappers, which finalize
- * the statement within the operation's scope (#2875).
+ * the adapter's connection must funnel through a wrapper that finalizes the
+ * statement within the operation's scope: these two, or the adapter's
+ * prepareRun (#2875).
  */
 
 export function prepareAll<T>(db: Database, sql: string, params: SQLQueryBindings[] = []): T[] {
