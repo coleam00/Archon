@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { foldDagResumeSnapshot, type DagResumeEvent } from './dag-resume-snapshot';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
 
 const valid: DagResumeEvent = {
   step_name: 'valid',
@@ -117,5 +119,46 @@ describe('historical token accounting', () => {
       cacheWrite: 0,
       cachePartial: true,
     });
+  });
+});
+
+describe('historical cost floor', () => {
+  const attempt = (path: string, costUsd?: number): DagResumeEvent[] => {
+    const start = startNodeExecution({
+      runId: 'run',
+      path,
+      node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    return [
+      serializeNodeStateRecord(start),
+      serializeNodeStateRecord(
+        finishNodeExecution(start, { status: 'completed' }, { output: { text: path }, costUsd })
+      ),
+    ];
+  };
+
+  it.each([
+    ['absent', { tokens: { input: 1, output: 1 } }],
+    ['a string', { cost_usd: 'NaN' }],
+    ['non-finite', { cost_usd: Infinity }],
+  ])(
+    'a metadata-free contribution with %s cost keeps later priced work as the floor',
+    async (_, data) => {
+      const snapshot = await foldDagResumeSnapshot(
+        [
+          { step_name: 'old', event_type: 'node_completed', data: { node_output: 'o', ...data } },
+          ...attempt('later', 0.2),
+        ],
+        'run'
+      );
+      expect(snapshot.costUsd).toBeCloseTo(0.2);
+    }
+  );
+
+  it('keeps reported zero distinct from absence', async () => {
+    expect((await foldDagResumeSnapshot(attempt('a', 0), 'run')).costUsd).toBe(0);
+    expect((await foldDagResumeSnapshot(attempt('a'), 'run')).costUsd).toBeUndefined();
   });
 });
