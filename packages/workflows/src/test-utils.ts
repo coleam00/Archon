@@ -142,5 +142,6 @@ export function inMemoryEventRows(events: readonly InMemoryStoreEvent[]): Workfl
     step_name: event.step_name ?? null,
     data: event.data ?? {},
     created_at: new Date(0).toISOString(),
+    event_order: index,
   }));
 }

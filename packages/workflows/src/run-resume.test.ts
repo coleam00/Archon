@@ -19,6 +19,7 @@ type ResumeStore = ResumeStoreDeps['store'];
 
 function makeStore(overrides: Partial<ResumeStore> = {}): ResumeStore {
   return {
+    listEventsForRuns: mock<ResumeStore['listEventsForRuns']>(async () => new Map()),
     getDagResumeSnapshot: mock<ResumeStore['getDagResumeSnapshot']>(() => {
       throw new Error('Unexpected getDagResumeSnapshot');
     }),
@@ -289,6 +290,48 @@ describe('hydrateResumableRun', () => {
     const result = await hydrateResumableRun(deps, candidate);
     expect(result).toBeNull();
     // Must not transition the run — there is nothing to resume.
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { events: [], resumable: false },
+    { events: ['source_released'], resumable: true },
+    { events: ['node_started', 'source_released'], resumable: true },
+    { events: ['source_released', 'node_started'], resumable: false },
+  ])('inspects failed zero-node source recovery: %j', async ({ events, resumable }) => {
+    const candidate = makeRun({ status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
+        costUsd: 0,
+      })),
+      listEventsForRuns: mock(
+        async () =>
+          new Map([
+            [
+              candidate.id,
+              events.map((event_type, index) => ({
+                id: String(index),
+                workflow_run_id: candidate.id,
+                event_type,
+                step_index: null,
+                step_name: 'first',
+                data: {},
+                created_at: '2026-10-22T10:00:00Z',
+              })),
+            ],
+          ])
+      ),
+    });
+    expect((await inspectResumableRun(makeDeps(store), candidate)) !== null).toBe(resumable);
+    expect(store.listEventsForRuns).toHaveBeenCalledWith(
+      [candidate.id],
+      ['source_released', 'node_started']
+    );
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 

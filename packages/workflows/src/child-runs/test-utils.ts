@@ -1,5 +1,6 @@
 import { providerRegistry } from '@archon/providers';
 import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
+import { readEventsForRuns } from './test-events';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { settlingProvider } from '../test-settling-provider';
 /**
@@ -189,7 +190,6 @@ registerBuiltinProviders();
 
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from '../deps';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
@@ -337,16 +337,8 @@ export class InMemoryStore implements IWorkflowStore {
   };
   listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
     inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
-  listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (runIds, eventTypes) => {
-    const byRun = new Map<string, WorkflowEventRow[]>();
-    for (const runId of runIds) {
-      const rows = (await this.listWorkflowEvents(runId)).filter(event =>
-        eventTypes.some(type => type === event.event_type)
-      );
-      if (rows.length > 0) byRun.set(runId, rows);
-    }
-    return byRun;
-  };
+  listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
+    readEventsForRuns(this.events, ids, types);
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');

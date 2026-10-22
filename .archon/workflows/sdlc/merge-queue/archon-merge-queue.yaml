@@ -35,6 +35,12 @@ inputs:
   merge_method:
     default: "squash"
     description: How the gate merges, squash or merge.
+  retriage_as:
+    default: ""
+    description: >-
+      The maintainer login a merged item's re-triage is requested as. Set, an issue
+      still open after its pull request merged gets archon-triage and an intake run
+      with that label event. Empty re-triages nothing.
 
 returns: record
 
@@ -193,6 +199,23 @@ nodes:
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
       required: [merged, summary, attention, options, class, asked]
+
+  # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
+  # judge of whether the work is delivered. Writes nothing on the work item.
+  - id: retriage
+    script: retriage
+    runtime: bun
+    depends_on: [facts, record]
+    with:
+      items: { from: "$facts.output.items" }
+      settled: { from: "$facts.output.settled" }
+      merged: { from: "$record.output.merged" }
+    output_format:
+      type: object
+      properties:
+        retriaged: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [retriaged, summary]
 
   # A paused run gives its resource slot back, so the next scheduled sweep can merge
   # other pull requests while this one waits.

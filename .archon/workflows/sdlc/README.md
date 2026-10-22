@@ -538,12 +538,19 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   --input number=<n>` on the run config and the `order`, `retriage_as` and
   `round_limit` this run started with; if that launch fails, the item waits for the
   next queue run.
-  A round for an item with an open pull request in its repository passes it to
+  Facts reports the open pull request in the item's repository as the candidate, and
+  the `route` agent declares whether the round continues it: unless a dated scope
+  section or a recorded answer supersedes it. A continued pull request goes to
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
-  takes, pushing onto its head so the same pull request updates. A round that failed
-  after publishing still records its pull request. Otherwise the round opens its
+  takes, pushing onto its head so the same pull request updates. A superseded one is
+  never checked out or pushed to: ship gets `none`, so its triage cannot route the
+  round back onto it. The round starts fresh, refusing a checkout that is not on the
+  default branch, and its brief asks for the old
+  pull request to be closed as superseded once the replacement opens. A round that failed
+  after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
-  merged pull request, or one from a fork, is asked about.
+  merged pull request, or one from a fork, is asked about; a round launched anyway
+  never continues it, since ship gets `none` for it too.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
@@ -712,6 +719,17 @@ then the project's file, whose lines win where the two conflict.
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.
+- **Merged issues.** A pull request that links its issue with `Refs #N` merges
+  without closing it, and the issue keeps its intake stage, so the build queue could
+  claim it again. When `retriage_as` names a maintainer login, `retriage` reads the
+  issue of each build item whose pull request merged, by the gate this run or before
+  it. One still open gets `archon-triage` and an `archon-intake` run started detached
+  with that label event, recorded as added by `retriage_as`. Intake stays the judge:
+  it re-triages only when that login is on the maintainer list, and closes the issue
+  as delivered or keeps it with what is still open. A closed issue and an own pull
+  request, which has no issue, are left alone. A failed read, label write or launch
+  is named in the node's summary and stops nothing else. Empty `retriage_as`
+  re-triages nothing.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
   one choice holds merges until it is green, or else the first pull request the sweep
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
@@ -728,7 +746,7 @@ then the project's file, whose lines win where the two conflict.
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config and its `order`,
-  `limit` and `merge_method`) merges it once the
+  `limit`, `merge_method` and `retriage_as`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue, whose next round starts at once on the build queue's own

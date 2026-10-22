@@ -38,7 +38,7 @@ export async function reportRunTerminal(runId: string): Promise<void> {
       `SELECT event_type, step_name, data, created_at FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
          AND event_type IN (${RUN_TELEMETRY_EVENT_TYPES.map((_, i) => `$${String(i + 2)}`).join(', ')})
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+       ORDER BY COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
       [runId, ...RUN_TELEMETRY_EVENT_TYPES]
     );
     const usage = await getDagResumeSnapshot(runId);

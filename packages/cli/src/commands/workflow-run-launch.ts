@@ -42,6 +42,7 @@ import {
   assertInheritedWorkflowExecutionCwd,
   assertNoWorktreeOptionsForFolder,
   assertWorkflowNotWorktreePinnedForFolder,
+  folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
   warnBaseOverrideOnReuse,
@@ -512,11 +513,12 @@ function assertLaunchTargetsFolderRules(
 /** Provision the workspace the run executes in: folder seam, worktree, or the checkout itself. */
 export async function provisionWorkspace(
   launch: ForegroundLaunch,
-  lease: OwnedRunLease
+  lease: OwnedRunLease,
+  resumable = launch.resumable
 ): Promise<void> {
   const { request, admission, codebase, workspace } = launch;
   if (launch.isFolderCodebase && codebase) {
-    await provisionFolder(launch, codebase);
+    await provisionFolder(launch, codebase, resumable);
   } else if (admission.wantsIsolation && codebase) {
     await provisionWorktree(launch, codebase, lease);
   } else if (request.options.noWorktree) {
@@ -534,7 +536,7 @@ export async function provisionWorkspace(
     {
       backend: workspace.container?.backend,
       envId: workspace.container?.envId,
-      resumable: launch.resumable,
+      resumable,
     }
   );
 
@@ -551,14 +553,31 @@ export async function provisionWorkspace(
   }
 }
 
-async function provisionFolder(launch: ForegroundLaunch, codebase: Codebase): Promise<void> {
+export function defersContainerResume(launch: ForegroundLaunch): boolean {
+  return (
+    launch.isFolderCodebase &&
+    launch.request.options.resume === true &&
+    folderRunsInContainer(
+      launch.request.options,
+      launch.admission.workflow,
+      undefined,
+      launch.resumable
+    )
+  );
+}
+
+async function provisionFolder(
+  launch: ForegroundLaunch,
+  codebase: Codebase,
+  resumable: WorkflowRun | null
+): Promise<void> {
   const { request, admission, workspace } = launch;
   const folder = await prepareFolderExecution({
     host: request.host,
     codebase,
     options: request.options,
     workflow: admission.workflow,
-    resumable: launch.resumable,
+    resumable,
     preparedSource: admission.preparedSource,
     owner: request.owner,
     workingCwd: workspace.workingCwd,
