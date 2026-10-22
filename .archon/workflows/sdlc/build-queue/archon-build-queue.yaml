@@ -177,7 +177,14 @@ nodes:
       type: object
       properties:
         head: { type: [string, 'null'] }
-      required: [head]
+        # What ship continues: the number, `none` when route declined the candidate,
+        # or null when facts offered none and ship's triage decides.
+        pull_request:
+          anyOf:
+            - { type: integer, minimum: 1 }
+            - { type: string, enum: [none] }
+            - { type: 'null' }
+      required: [head, pull_request]
 
   - id: ship
     include: archon-ship-block
@@ -185,7 +192,7 @@ nodes:
     when: "$route.output.decision == 'launch'"
     with:
       target: "$route.output.brief"
-      pull_request: "$route.output.continues"
+      pull_request: "$checkout.output.pull_request"
       branch: "$facts.output.branch"
 
   - id: answer

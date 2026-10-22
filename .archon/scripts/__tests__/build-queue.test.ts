@@ -918,19 +918,20 @@ describe('the build queue checkout', () => {
       { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
       { pr: { headRefOid: head } }
     );
-    expect(ok(result)).toEqual({ head });
+    expect(ok(result)).toEqual({ head, pull_request: 42 });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
   }, 60_000);
 
-  test('a round route declares fresh stays on the base, and route cannot name a pull request facts did not offer', () => {
+  test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {
     const at = install();
     git(at.checkout, 'push', '-q', 'upstream', 'feature');
     git(at.checkout, 'checkout', '-q', 'dev');
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
-    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null });
+    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
+    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
     expect(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 });

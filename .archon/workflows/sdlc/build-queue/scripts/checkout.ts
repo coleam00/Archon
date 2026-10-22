@@ -13,6 +13,12 @@
  * INPUTS_CANDIDATE, the number facts found continuable, else empty or `null`;
  * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`.
  * Route may decline the candidate, never name another pull request.
+ *
+ * It emits the pull request the round's `archon-ship` continues: the number, `none`
+ * when route declined the candidate, so ship's triage cannot route the round back onto
+ * the superseded pull request, or null when facts offered none, which leaves it to
+ * ship's triage as before. A declared null reaches ship as empty, so the declined case
+ * needs its own value.
  */
 
 import type { PrRecord } from '../../.shared/forge.ts';
@@ -24,11 +30,11 @@ import { remoteFor } from '../../.shared/remote.ts';
 
 function main(): void {
   const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
+  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
   if (continues === null) {
-    emit({ head: null });
+    emit({ head: null, pull_request: candidate === null ? null : 'none' });
     return;
   }
-  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
   if (continues !== candidate)
     throw new Error(`route continues pull request ${String(continues)}, but only ${String(candidate ?? 'none')} can be continued`);
   const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
@@ -47,7 +53,7 @@ function main(): void {
     throw new Error(`${pr.url} reports head ${pr.head_revision}, but its branch is at ${head}`);
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
-  emit({ head });
+  emit({ head, pull_request: continues });
 }
 
 try {

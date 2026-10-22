@@ -24,7 +24,7 @@ route:
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
   attention: null
-checkout: { head: fixturehead }
+checkout: { head: fixturehead, pull_request: 1 }
 ship__forge: { source: forge }
 ship__deliver__forge: { source: forge }
 ship__triage__triage:

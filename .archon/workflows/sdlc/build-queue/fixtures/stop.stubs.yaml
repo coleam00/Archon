@@ -27,7 +27,7 @@ route:
   brief: "stub: continue PR 8"
   reason: "stub: the body is a contract"
   attention: null
-checkout: { head: null }
+checkout: { head: null, pull_request: null }
 ship__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: title", body: "stub: body" } }
