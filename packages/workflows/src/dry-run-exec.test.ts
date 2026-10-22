@@ -4,6 +4,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
+import { inputEnvKey } from './schemas/dag-node';
 
 const { temporaryDirectory } = useDryRunFiles();
 
@@ -131,6 +132,30 @@ describe('dry-run code execution', () => {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }
+  });
+
+  test('exec-code delivers generated bindings and lists them in the filter manifest', async () => {
+    const key = inputEnvKey('project-setting');
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'binding-env',
+        nodes: [
+          {
+            id: 'code',
+            runtime: 'bun',
+            script: `console.log(JSON.stringify({ value: process.env.${key}, keys: JSON.parse(process.env.ARCHON_INPUT_ENV_KEYS) }));`,
+            with: { 'project-setting': 'bound value' },
+          },
+        ],
+      }),
+      execCode: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(JSON.parse(result.trace[0]?.output ?? 'null')).toEqual({
+      value: 'bound value',
+      keys: [key],
+    });
   });
 
   test('exec-code receives the fixed engine-owned environment', async () => {
