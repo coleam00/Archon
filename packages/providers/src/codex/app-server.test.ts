@@ -371,6 +371,30 @@ describe('AppServerConnection', () => {
     ]);
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain(sentinel);
   });
+
+  test.each(['null', '42', '["private-user-text-ø"]', '"private-user-text-ø"', 'true'])(
+    'a non-object JSON line %s is logged by length and later frames still work',
+    async line => {
+      log.warn.mockClear();
+      const fake = rawChild();
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+      const response = connection.request('thread/start', {});
+      const notifications = connection.notifications();
+      fake.stdout.write(
+        `${line}\n{"id":1,"result":"ok"}\n{"method":"thread/archived","params":{"threadId":"t"}}\n`
+      );
+
+      expect(await response).toBe('ok');
+      expect(await notifications.next()).toEqual({
+        done: false,
+        value: { method: 'thread/archived', params: { threadId: 't' } },
+      });
+      expect(log.warn.mock.calls).toEqual([
+        [{ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line'],
+      ]);
+      await notifications.return(undefined);
+    }
+  );
 });
 
 describe('Codex native credential check', () => {
