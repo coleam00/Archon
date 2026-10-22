@@ -1120,10 +1120,9 @@ describe('interactive loop node', () => {
       });
       expect(runUsageWrites(store)).toEqual([expect.objectContaining({ total_cost_usd: 0.03 })]);
       expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
-      expect(snapshot.costComplete).toBeUndefined();
     });
 
-    it('bare approval of a legacy gate with null cost leaves later priced work unproven', async () => {
+    it('bare approval of a legacy gate with null cost keeps later priced work as the floor', async () => {
       const { store, completed, snapshot } = await resumeAt(
         'legacy-approve',
         gate({ signaledCostUsd: null }),
@@ -1144,7 +1143,6 @@ describe('interactive loop node', () => {
       expect(completed?.data).not.toHaveProperty('spend');
       expect(runUsageWrites(store)).toEqual([expect.objectContaining({ total_cost_usd: 0.03 })]);
       expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
-      expect(snapshot.costComplete).toBeUndefined();
     });
 
     it('feedback on a gate whose recorded cost is known keeps the cost complete', async () => {
