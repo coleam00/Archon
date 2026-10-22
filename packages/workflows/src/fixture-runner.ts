@@ -39,6 +39,7 @@ import {
   dryRunStubsSchema,
   dryRunWorkflow,
   type DryRunResult,
+  type DryRunTraceEntry,
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
@@ -276,6 +277,10 @@ export interface FixtureCheckResult {
   readonly authoredOutcome?: DryRunResult['authoredOutcome'];
   readonly pass: boolean;
   readonly failureReason?: string;
+  readonly nodeFailures?: readonly Pick<
+    Extract<DryRunTraceEntry, { state: 'failed' }>,
+    'nodeId' | 'reason'
+  >[];
   readonly missingStubs: readonly string[];
   /**
    * The subset of `missingStubs` a `trigger_rule: all_done` join tolerated (#2869).
@@ -692,6 +697,9 @@ async function checkFixture(
       ...base,
       outcome: result.outcome,
       authoredOutcome: result.authoredOutcome,
+      nodeFailures: result.trace
+        .filter(entry => entry.state === 'failed')
+        .map(({ nodeId, reason }) => ({ nodeId, reason })),
       pass: failureReason === undefined,
       ...(failureReason !== undefined ? { failureReason } : {}),
       missingStubs: result.missingStubs,
@@ -721,6 +729,7 @@ export function formatFixtureReport(report: FixtureReport): string {
       lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
+    lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));
     if (r.unusedStubs.length > 0) {
       lines.push(`    warning: unused stubs — ${r.unusedStubs.join(', ')}`);
     }

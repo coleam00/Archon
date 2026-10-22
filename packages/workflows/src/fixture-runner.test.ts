@@ -1257,6 +1257,41 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     expect(exit).toBe(1);
   });
 
+  it.each(['completed', 'failed'] as const)(
+    'reports executable node diagnostics when the fixture expects %s',
+    async expected => {
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: failing code diagnostic',
+          'nodes:',
+          '  - id: code',
+          '    bash: |',
+          '      # inline-body-marker',
+          '      printf stdout-tail',
+          '      printf stderr-tail >&2',
+          '      exit 7',
+        ].join('\n'),
+        body: [
+          'fixture:',
+          `  expect: ${expected}`,
+          ...(expected === 'failed' ? ['  fail-node: code'] : []),
+          'exec-code: true',
+        ].join('\n'),
+      });
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+      expect(report.results[0].outcome).toBe('failed');
+      expect(report.results[0].pass).toBe(expected === 'failed');
+      const rendered = formatFixtureReport(report);
+      expect(rendered).toContain("Bash node 'code' failed [exit 7]");
+      expect(rendered).toContain('stdout-tail');
+      expect(rendered).toContain('stderr-tail');
+      expect(rendered).not.toContain('inline-body-marker');
+      expect(rendered).not.toContain('Command failed:');
+    }
+  );
+
   it('keeps executed writes out of the caller checkout (#2851)', async () => {
     const { cwd } = writeTempProject({
       workflowName: 'writer-wf',

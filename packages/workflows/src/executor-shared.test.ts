@@ -160,12 +160,12 @@ describe('stripCompletionTags', () => {
 });
 
 describe('formatSubprocessFailure', () => {
-  it('strips the "Command failed: <cmd>" prefix line so the script body does not appear', () => {
+  it('uses stderr diagnostics without exposing the command message', () => {
     const err = {
       message:
         'Command failed: bun --no-env-file -e import { writeFileSync } from "node:fs"; const x = `hello`;\n' +
         'error: Expected ")" but found "x"\n    at [eval]:1:50',
-      stderr: '',
+      stderr: 'error: Expected ")" but found "x"\n    at [eval]:1:50',
       code: 1,
     };
     const { userMessage } = formatSubprocessFailure(err, "Script node 'n1'");
@@ -174,6 +174,19 @@ describe('formatSubprocessFailure', () => {
     expect(userMessage).toContain('Expected ")"');
     expect(userMessage).toContain('[eval]:1:50');
     expect(userMessage).toContain('[exit 1]');
+  });
+
+  it.each(['', ' \n '])('discards multiline command text when streams are blank (%j)', stream => {
+    const { userMessage } = formatSubprocessFailure(
+      {
+        message: 'Command failed: bun -e // inline-body-marker\nprocess.exit(7);',
+        stdout: stream,
+        stderr: stream,
+        code: 7,
+      },
+      "Script node 'n1'"
+    );
+    expect(userMessage).toBe("Script node 'n1' failed [exit 7]: no diagnostic output");
   });
 
   it('prefers stderr over message body when both are present', () => {

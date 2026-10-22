@@ -87,6 +87,26 @@ process.exit(9);`,
     expect(reason?.length).toBeLessThan(2100);
   });
 
+  test.each([
+    ['silent Bun', 'bun', '// inline-body-marker\nprocess.exit(7);'],
+    ['whitespace Bun', 'bun', '// inline-body-marker\nconsole.log(" "); process.exit(7);'],
+    ['silent Python', 'uv', '# inline-body-marker\nimport sys\nsys.exit(7)'],
+    ['whitespace Python', 'uv', '# inline-body-marker\nimport sys\nprint(" "); sys.exit(7)'],
+  ] as const)('reports no diagnostic output for %s', async (_name, runtime, script) => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'silent-script',
+        nodes: [{ id: 'code', runtime, script }],
+      }),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({
+      state: 'failed',
+      reason: "Script node 'code' failed [exit 7]: no diagnostic output",
+    });
+  });
+
   test('reports a timeout even when the subprocess wrote diagnostics', async () => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({

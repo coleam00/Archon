@@ -261,13 +261,9 @@ export function formatSubprocessFailure(
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
 
-  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
-  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
-  // body. Strip it so user-facing output never re-leaks the body.
+  // Node embeds multiline argv in this message, so none of it is safe as a
+  // fallback diagnostic. Actual process output belongs to stdout and stderr.
   const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
-  const bodyAfterPrefix = hasCommandFailedPrefix
-    ? rawMessage.split('\n').slice(1).join('\n').trim()
-    : rawMessage;
 
   // Well-behaved scripts print failure context to stdout, so both streams share
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
@@ -289,13 +285,10 @@ export function formatSubprocessFailure(
     diagnostic = `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
   } else if (stderrTail || stdoutTail) {
     diagnostic = (stderrTail ?? '') + (stdoutTail ?? '');
-  } else if (bodyAfterPrefix) {
-    diagnostic = bodyAfterPrefix;
   } else if (hasCommandFailedPrefix) {
-    // Prefix was the entire message — exit code in the suffix is the only signal.
     diagnostic = 'no diagnostic output';
   } else {
-    diagnostic = 'unknown error';
+    diagnostic = rawMessage || 'unknown error';
   }
 
   const truncated =
