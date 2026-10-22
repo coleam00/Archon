@@ -55,6 +55,100 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     await removeTempTree(testDir);
   });
 
+  for (const scope of ['layer', 'loop-group', 'compose'] as const) {
+    for (const terminal of ['node_completed', 'node_failed'] as const) {
+      it.each(['a', 'b'])(
+        `keeps unresolved cost across ${scope} ${terminal} rejections (unresolved=%s)`,
+        async unresolved => {
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'Done.' };
+            yield {
+              type: 'result',
+              sessionId: 's',
+              cost: 0.2,
+              ...(terminal === 'node_failed'
+                ? { isError: true, failure: { class: 'auth' as const, evidence: 'failed' } }
+                : {}),
+            };
+          });
+          const store = createMockStore();
+          const events: Array<Parameters<typeof foldDagResumeSnapshot>[0][number]> = [];
+          const cause = new Error('terminal storage unavailable');
+          store.persistWorkflowEvent.mockImplementation(async event => {
+            const member = event.step_name?.endsWith('a') ? 'a' : 'b';
+            if (event.event_type === terminal && event.data?.type === 'agent') {
+              if (member !== unresolved) events.push(event);
+              throw cause;
+            }
+            if (event.event_type === 'node_deferred_usage' && member === unresolved)
+              throw new Error('usage storage unavailable');
+            events.push(event);
+          });
+          store.getDagResumeSnapshot.mockImplementation(async id =>
+            foldDagResumeSnapshot(events, id)
+          );
+          const body: DagNode[] = ['a', 'b'].map(id => ({
+            id,
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Work.' },
+            retry: { max_attempts: 1, delay_ms: 0 },
+          }));
+          if (scope === 'compose') {
+            await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+            await writeFile(
+              join(testDir, '.archon', 'workflows', 'usage-body.yaml'),
+              'name: usage-body\ndescription: Usage body\nnodes:\n  - id: a\n    prompt: Work.\n    retry: { max_attempts: 1 }\n  - id: b\n    prompt: Work.\n    retry: { max_attempts: 1 }\n'
+            );
+          }
+          const nodes: DagNode[] =
+            scope === 'layer'
+              ? body
+              : scope === 'loop-group'
+                ? [
+                    {
+                      id: 'group',
+                      kind: 'loop_group',
+                      loop_group: {
+                        nodes: body,
+                        max_iterations: 1,
+                        until: 'DONE',
+                        fresh_context: false,
+                      },
+                    },
+                  ]
+                : [
+                    {
+                      id: 'fan',
+                      kind: 'compose_fan_out',
+                      include: 'usage-body',
+                      fan_out: {
+                        items: '["one","two"]',
+                        as: 'item',
+                        max_parallel: 2,
+                        join: 'all_done',
+                      },
+                    },
+                  ];
+          await expect(
+            executeDagWorkflow(
+              dagOptions({
+                deps: createMockDeps(store),
+                cwd: testDir,
+                workflowRun: makeWorkflowRun('parallel-usage'),
+                workflow: { name: 'parallel-usage', nodes },
+              })
+            )
+          ).rejects.toMatchObject({ name: 'NodeEventWriteError', cause });
+          expect(runUsageWrites(store).at(-1)?.total_cost_incomplete).toBe(true);
+          expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBeCloseTo(
+            scope === 'compose' ? 0.4 : 0.2
+          );
+          expect(events.some(event => event.event_type === 'node_deferred_usage')).toBe(false);
+        }
+      );
+    }
+  }
+
   it('seeds a resumed run with prior usage and accumulates the resumed pass', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

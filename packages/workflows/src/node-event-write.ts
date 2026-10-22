@@ -1,8 +1,6 @@
 import type { NodeStateRecord } from './schemas/node-execution';
 import {
   serializeNodeStateRecord,
-  serializeDeferredNodeUsage,
-  type SerializedDeferredNodeUsageEvent,
   serializeNodeTranscript,
   serializeNodeEmitter,
   serializeNodeOutput,
@@ -25,20 +23,13 @@ import {
 
 /** Storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
-  constructor(
-    event: DurableNodeEventInput,
-    cause: unknown,
-    readonly unresolvedUsage?: { event: SerializedDeferredNodeUsageEvent; cause: unknown }
-  ) {
+  constructor(event: DurableNodeEventInput, cause: unknown) {
     const originalFailure = event.event_type === 'node_failed' ? event.data?.error : undefined;
     super(
       `Could not persist ${event.event_type} for ${event.step_name ?? 'unknown node'}: ${cause instanceof Error ? cause.message : String(cause)}${typeof originalFailure === 'string' ? `; original node failure: ${originalFailure}` : ''}`,
       { cause }
     );
     this.name = 'NodeEventWriteError';
-    if (unresolvedUsage) {
-      this.message += `; unresolved measured usage ${JSON.stringify(unresolvedUsage.event.data.spend)}: ${unresolvedUsage.cause instanceof Error ? unresolvedUsage.cause.message : String(unresolvedUsage.cause)}`;
-    }
   }
 }
 
@@ -271,33 +262,7 @@ export async function recordNodeState(
   record: NodeStateRecord,
   continuation: { resumed?: boolean } = {}
 ): Promise<NodeExecutionResult> {
-  try {
-    await persistNodeEvent(sinks.store, serializeNodeStateRecord(record));
-  } catch (error) {
-    if (
-      error instanceof NodeEventWriteError &&
-      !('cache' in record) &&
-      record.node.kind === 'agent' &&
-      record.accounting === 'node' &&
-      (record.lifecycle.status === 'completed' || record.lifecycle.status === 'failed') &&
-      !(
-        record.spend.costUsd.source === 'unavailable' &&
-        record.spend.costUsd.reason === 'not_applicable'
-      )
-    ) {
-      const usage = serializeDeferredNodeUsage(record);
-      // A rejected write may have committed. The fold deduplicates these facts by attempt.
-      try {
-        await sinks.store.persistWorkflowEvent(usage);
-      } catch (usageError) {
-        throw new NodeEventWriteError(serializeNodeStateRecord(record), error.cause, {
-          event: usage,
-          cause: usageError,
-        });
-      }
-    }
-    throw error;
-  }
+  await persistNodeEvent(sinks.store, serializeNodeStateRecord(record));
   await recordDerivedExecution(sinks, record);
   if (!('cache' in record)) return serializeNodeOutput(record, continuation);
   if (record.cache.action !== 'replayed') return { state: 'pending', output: '' };

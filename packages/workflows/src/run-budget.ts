@@ -57,9 +57,7 @@ export type AttemptSpend =
   | { kind: 'unavailable'; reason: CostUnavailableReason };
 
 /** The single spend rule for an `agent` attempt, used live and by the resume fold. */
-export function attemptSpend(
-  execution: Pick<NodeExecutionMetadata, 'spend'> | undefined
-): AttemptSpend {
+export function attemptSpend(execution: NodeExecutionMetadata | undefined): AttemptSpend {
   if (execution === undefined) return { kind: 'unavailable', reason: 'unknown' };
   const cost = execution.spend.costUsd;
   if (cost.source === 'unavailable') {
@@ -80,7 +78,7 @@ export function attemptSpend(
 export function addAttemptSpend(
   usage: RunBudgetUsage,
   path: string,
-  execution: Pick<NodeExecutionMetadata, 'spend'> | undefined
+  execution: NodeExecutionMetadata | undefined
 ): AttemptSpend {
   const spend = attemptSpend(execution);
   if (spend.kind === 'known') usage.spendUsd += spend.usd;

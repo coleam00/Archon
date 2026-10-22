@@ -649,6 +649,8 @@ async function aggregateLayerResults(
             : undefined;
       }
       if (output.state === 'failed') layerHadFailure = true;
+    } else {
+      ctx.totalCostIncomplete = true;
     }
   }
   return layerHadFailure;

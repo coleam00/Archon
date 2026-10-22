@@ -333,38 +333,3 @@ it.each([
   expect(snapshot.tokensUnknown).toBe(false);
   expect(snapshot.tokens).toEqual({ input: 7, output: 3 });
 });
-
-for (const status of ['completed', 'failed'] as const) {
-  it.each([false, true])(
-    `counts ${status} agent usage once when deferred usage comes first: %s`,
-    async deferredFirst => {
-      const started = startNodeExecution({
-        runId: 'run',
-        path: 'work',
-        node: { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
-        invocation: newNodeInvocation([]),
-      });
-      const finished = finishNodeExecution(
-        started,
-        status === 'completed' ? { status } : { status, error: 'interrupted' },
-        { costUsd: 0.2, tokens: { input: 10, output: 2 }, output: { text: 'kept' } }
-      );
-      const terminal = serializeNodeStateRecord(finished);
-      const deferred = serializeDeferredNodeUsage(finished);
-      const rows = [
-        serializeNodeStateRecord(started),
-        ...(deferredFirst ? [deferred, terminal] : [terminal, deferred]),
-      ];
-      const snapshot = await foldDagResumeSnapshot(rows, 'run');
-      expect(snapshot.costUsd).toBe(0.2);
-      expect(snapshot.tokens).toEqual({ input: 10, output: 2 });
-      expect(snapshot.costIncomplete).not.toBe(true);
-      expect(snapshot.budget).toEqual({ workUnits: 0, spendUsd: 0.2 });
-      expect(snapshot.completedNodeOutputs.get('work')?.output).toBe(
-        status === 'completed' ? 'kept' : undefined
-      );
-      expect(snapshot.failedNodes.has('work')).toBe(status === 'failed');
-      expect(snapshot.unresolvedNodeStarts.size).toBe(0);
-    }
-  );
-}
