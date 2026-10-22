@@ -15,6 +15,7 @@ import {
   stopDetachedTestOwner,
   waitForDetachedTestOwnerExit,
 } from '../test-support/detached-owner';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 
 mock.module('@archon/core/services/title-generator', () => ({
   generateAndSetTitle: async (): Promise<void> => undefined,
@@ -50,6 +51,7 @@ interface Fixture {
   home: string;
   priorId: string;
   entry: string;
+  ownerPidFile: string;
 }
 
 interface RunRow {
@@ -135,11 +137,12 @@ async function makeFixture(): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), 'archon-adopt-source-'));
   roots.push(root);
   const entry = join(root, 'entry.ts');
+  const ownerPidFile = join(root, 'owner.pid');
   writeFileSync(
     entry,
     `
 import { writeFileSync } from 'node:fs';
-if (process.env.ARCHON_DETACHED_RUN_OWNER === '1') writeFileSync(${JSON.stringify(join(root, 'owner.pid'))}, String(process.pid));
+if (process.env[${JSON.stringify(DETACHED_RUN_OWNER_ENV)}] === '1') writeFileSync(${JSON.stringify(ownerPidFile)}, String(process.pid));
 await import(${JSON.stringify(CLI_ENTRY)});
 `
   );
@@ -170,6 +173,7 @@ await import(${JSON.stringify(CLI_ENTRY)});
   const fixture: Fixture = {
     root,
     entry,
+    ownerPidFile,
     repo: await canonicalizeProjectPath(repo),
     target: await canonicalizeProjectPath(target),
     source: await canonicalizeProjectPath(source),
@@ -248,12 +252,12 @@ async function adopt(fixture: Fixture, detached: boolean, explicit: boolean): Pr
     expect(result.status).toBe(0);
     const ack = JSON.parse(result.output) as { runId: string };
     id = ack.runId;
-    activeRuns.set(id, { home: fixture.home, pidFile: join(fixture.root, 'owner.pid') });
+    activeRuns.set(id, { home: fixture.home, pidFile: fixture.ownerPidFile });
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       const row = readRun(fixture, id);
       if (['completed', 'failed'].includes(row.status)) {
-        await waitForDetachedTestOwnerExit(join(fixture.root, 'owner.pid'));
+        await waitForDetachedTestOwnerExit(fixture.ownerPidFile);
         activeRuns.delete(id);
         break;
       }

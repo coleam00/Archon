@@ -13,11 +13,11 @@ import { stopDetachedTestOwner } from './detached-owner';
 
 const trackRoot = trackTempRoots();
 interface TestOwner {
-  root: string;
   runId: string;
   child: ChildProcess;
   exited: Promise<void>;
   pidFile: string;
+  closedFile: string;
 }
 
 async function withOwner(mode: string, check: (owner: TestOwner) => Promise<void>): Promise<void> {
@@ -25,19 +25,29 @@ async function withOwner(mode: string, check: (owner: TestOwner) => Promise<void
   const savedHome = process.env.ARCHON_HOME;
   process.env.ARCHON_HOME = join(root, 'home');
   const runId = crypto.randomUUID();
+  const pidFile = join(root, 'owner.pid');
+  const readyFile = join(root, 'ready');
+  const closedFile = join(root, 'closed');
   const child = spawn(
     process.execPath,
-    [join(import.meta.dir, 'fixtures/detached-owner.ts'), runId, root, mode],
+    [
+      join(import.meta.dir, 'fixtures/detached-owner.ts'),
+      runId,
+      mode,
+      pidFile,
+      readyFile,
+      closedFile,
+    ],
     { detached: true, stdio: 'ignore', env: { ...process.env, DATABASE_URL: '' } }
   );
   const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
   try {
     const deadline = Date.now() + 5000;
-    while (!existsSync(join(root, 'ready'))) {
+    while (!existsSync(readyFile)) {
       if (Date.now() >= deadline || child.exitCode !== null) throw new Error('Owner did not start');
       await Bun.sleep(10);
     }
-    await check({ root, runId, child, exited, pidFile: join(root, 'owner.pid') });
+    await check({ runId, child, exited, pidFile, closedFile });
   } finally {
     child.kill('SIGKILL');
     await exited;
@@ -51,14 +61,14 @@ for (const mode of ['exit', 'live', 'gone'] as const) {
   test.skipIf(process.platform === 'win32' && mode === 'live')(
     `detached cleanup accepts ${mode}`,
     async () => {
-      await withOwner(mode, async ({ root, runId, child, exited, pidFile }) => {
+      await withOwner(mode, async ({ runId, child, exited, pidFile, closedFile }) => {
         if (mode === 'gone') {
           child.kill('SIGKILL');
           await exited;
         }
         await stopDetachedTestOwner(runId, pidFile);
         await exited;
-        if (mode === 'exit') expect(existsSync(join(root, 'closed'))).toBe(true);
+        if (mode === 'exit') expect(existsSync(closedFile)).toBe(true);
       });
     }
   );
