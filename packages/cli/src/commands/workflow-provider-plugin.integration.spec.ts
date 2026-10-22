@@ -18,8 +18,10 @@ import { loadProviderPlugins } from '@archon/core/providers/load-provider-plugin
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { codexDescriptor } from '@archon/providers';
 import { parseProviderRunModel } from '@archon/provider-contract';
-import { checkAssistantLogin } from './doctor';
-import { pluginCommand, replacePlugin, type PluginEnvironment } from './plugin';
+import { checkAssistantLogin } from './doctor-assistant-login';
+import { pluginCommand } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
+import { replacePlugin } from './plugin-install';
 
 const tempRoot = trackTempRoots();
 const ID = 'owner/repo';

@@ -10,7 +10,9 @@ import {
   type PluginReceipt,
 } from '@archon/plugin-manifest';
 import { receiptPath, scanReceipts } from '@archon/plugin-manifest/store';
-import { installBinaryPlugin, parsePluginRef, type PluginEnvironment } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
+import { installBinaryPlugin } from './plugin-binary';
+import { parsePluginRef } from './plugin-source';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 
 export const IMAGE_SLACK_PLUGIN = SLACK_PLUGIN.installSource;

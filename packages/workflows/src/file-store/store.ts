@@ -1,4 +1,5 @@
-import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
+import { createFileAdmissionStore } from './admission';
+import { createAdmissionTransaction } from './admission-transaction';
 import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,

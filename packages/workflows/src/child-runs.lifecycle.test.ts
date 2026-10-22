@@ -3,11 +3,11 @@ import {
   mockLogger,
   telemetryResumeFlags,
   holdSourceRemoval,
-  InMemoryStore,
   makeDeps,
   makePlatform,
   realArchonPaths,
 } from './child-runs/test-utils';
+import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { ParentStatusReadError } from './parent-status-read';
