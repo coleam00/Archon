@@ -39,9 +39,13 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
   });
 }
 
-/** A pull request's identity across repositories: the same number in two repositories is two pull requests. */
+/**
+ * A pull request's identity across repositories: the same number in two repositories is
+ * two pull requests. Host and path compare case-insensitively, as `sameRepo` compares them,
+ * so a recorded URL and a listed one that differ only in case name one pull request.
+ */
 function prKey(pr: QualifiedPr): string {
-  return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`;
+  return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`.toLowerCase();
 }
 
 /**
