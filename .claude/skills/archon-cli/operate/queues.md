@@ -155,8 +155,8 @@ same item.
 
 A verdict counts only at the head it reviewed: after a push, the pull request goes
 back to the build queue for a new round. A maintainer's own pull request
-(`merge_queue: "own-prs"`) has no build round to return to, so where another would go
-back, the sweep asks instead and offers no `return`.
+(`merge_queue: "own-prs"`) is an own-PR work item with no build record to return to,
+so where another would go back, the sweep asks instead and offers no `return`.
 
 A pull request whose read fails twice in a row is parked with the read error until
 the build queue readies the item again. A maintainer's own pull request has no build

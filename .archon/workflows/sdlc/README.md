@@ -641,8 +641,8 @@ then the project's file, whose lines win where the two conflict.
   a build round recorded is named by its build item and never enrolls. A build round
   records its pull request once the round ends, so one listed while the round is still
   running can enroll; that short window is an accepted gap, and enrollment after the
-  round finds the pull request recorded. No build
-  round owns an own-PR pull request, so where another would go back to the build queue
+  round finds the pull request recorded. An own-PR
+  item has no build record of its own, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and
   its question offers no `return`. The record never hands one to the build queue.
