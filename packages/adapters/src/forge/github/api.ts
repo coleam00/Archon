@@ -146,7 +146,7 @@ export async function githubPages<T>(
 }
 
 export function parseRemote(remote: string | null): RepoRef | null {
-  if (remote === null || remote.trim() === '') return null;
+  if (!remote?.trim()) return null;
   const value = remote.trim();
 
   if (value.includes('://')) {
@@ -177,7 +177,9 @@ export function parseRemote(remote: string | null): RepoRef | null {
         true
       );
     }
-    const repository = repositoryPath(decodeURIComponent(pathname));
+    const repository =
+      repositoryPath(decodeURIComponent(pathname)) &&
+      repositoryPath(decodeURIComponent(url.pathname));
     if (!repository) return null;
     return { host, path: `${repository.owner}/${repository.repo}` };
   }

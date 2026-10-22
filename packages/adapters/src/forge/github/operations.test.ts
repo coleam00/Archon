@@ -16,7 +16,14 @@ const invalidRemotePaths = [
   'team/...git',
   'team/%2E.git',
   'team/%2E%2E.git',
+  'team\\../owner/repo.git',
+  'team/..\\owner/repo.git',
 ];
+
+const normalizedRemotePaths = [
+  ...['\t', '\n', '\r'].flatMap(control => [`te${control}am/repo.git`, `team/re${control}po.git`]),
+];
+const invalidHttpRemotePaths = ['team\\extra/repo.git', 'team/repo\\extra.git'];
 
 const checksRequest = {
   operationId: 'operation-1',
@@ -94,6 +101,26 @@ describe('GitHub outbound producer', () => {
       'github.example.test',
       'Archon/Repo',
     ],
+    ...['http', 'https', 'ssh'].flatMap(protocol =>
+      normalizedRemotePaths.map(path => [
+        `${protocol} normalized path ${JSON.stringify(path)}`,
+        `${protocol}://ghes.example.test:8080/${path}`,
+        'ghes.example.test:8080',
+        'team/repo',
+      ])
+    ),
+    [
+      'SSH backslash owner',
+      'ssh://ghes.example.test:8080/team\\extra/repo.git',
+      'ghes.example.test:8080',
+      'team\\extra/repo',
+    ],
+    [
+      'SSH backslash repository',
+      'ssh://ghes.example.test:8080/team/repo\\extra.git',
+      'ghes.example.test:8080',
+      'team/repo\\extra',
+    ],
     ['SCP-like SSH', 'git@github.com:Archon/Repo.git', 'github.com', 'Archon/Repo'],
   ])('resolves an explicit %s remote', async (_label, remote, host, path) => {
     const response = await handleGithubOperation(
@@ -131,6 +158,12 @@ describe('GitHub outbound producer', () => {
     '/workspace/local-repository',
     ...['http', 'https', 'ssh'].flatMap(protocol =>
       invalidRemotePaths.map(path => `${protocol}://ghes.example.test:8080/${path}`)
+    ),
+    ...['http', 'https'].flatMap(protocol =>
+      invalidHttpRemotePaths.map(path => `${protocol}://ghes.example.test:8080/${path}`)
+    ),
+    ...['http', 'https'].map(
+      protocol => `${protocol}://ghes.example.test:8080\\team/extra/repo.git`
     ),
     'git@ghes.example.test:team/..git',
     'git@ghes.example.test:team/...git',
@@ -797,6 +830,9 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     [`https://${host}/team/repo.git`, host],
     [`ssh://git@${host}/team/repo.git`, host],
     ['git@github.com:team/repo.git', 'github.com'],
+    ...['http', 'https', 'ssh'].flatMap(protocol =>
+      normalizedRemotePaths.map(path => [`${protocol}://${host}/${path}`, host])
+    ),
     ...['http', 'https'].flatMap(protocol =>
       ['80', '443', '8080'].map(port => [
         `${protocol}://ghes.example.test:${port}/team/repo.git`,
@@ -849,9 +885,15 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     );
     expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
   }
-  for (const path of invalidRemotePaths) {
+  for (const remote of [
+    ...invalidRemotePaths.map(path => `http://${host}/${path}`),
+    ...['http', 'https'].flatMap(protocol =>
+      invalidHttpRemotePaths.map(path => `${protocol}://${host}/${path}`)
+    ),
+    ...['http', 'https'].map(protocol => `${protocol}://${host}\\team/extra/repo.git`),
+  ]) {
     const result = await dispatchForge(
-      { operationId: 'invalid-path', op: 'resolve', remote: `http://${host}/${path}` },
+      { operationId: 'invalid-path', op: 'resolve', remote },
       { discovery, env: {} }
     );
     expect(result.response).toMatchObject({
