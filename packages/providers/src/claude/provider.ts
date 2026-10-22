@@ -52,7 +52,7 @@ import { checkClaudeNativeAuth } from './native-auth';
 import { resolveClaudeBinaryPath, resolveClaudeBinaryWithSource } from './binary-resolver';
 import { ClassifiedProviderError } from '../shared/failure';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
-import { readSessionSpendBaseline } from './session-spend-reader';
+import { claudeSessionTranscriptMissing, readSessionSpendBaseline } from './session-spend-reader';
 import { createLogger } from '@archon/paths';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
@@ -570,6 +570,33 @@ function trackSubtask(
   else openSubtaskIds.delete(chunk.taskId);
 }
 
+/**
+ * Claude rejects a resume of a missing session with an untyped `error_during_execution`,
+ * the same subtype as a mid-turn crash. Only a host lookup that finds no transcript tells
+ * them apart without reading the vendor's error text; a container run is never marked.
+ */
+async function markStaleResume(
+  chunk: MessageChunk,
+  resumeSessionId: string | undefined,
+  lookup: { cwd: string; env: NodeJS.ProcessEnv; signal: AbortSignal; isContainerRun: boolean }
+): Promise<MessageChunk> {
+  if (
+    chunk.type !== 'result' ||
+    resumeSessionId === undefined ||
+    lookup.isContainerRun ||
+    chunk.failure?.class !== 'unknown' ||
+    chunk.errorSubtype !== 'error_during_execution' ||
+    (await claudeSessionTranscriptMissing(resumeSessionId, lookup)) !== true
+  ) {
+    return chunk;
+  }
+  getLog().warn(
+    { sessionIdPreview: sessionPreview(resumeSessionId) },
+    'claude.resume_session_not_found'
+  );
+  return { ...chunk, sessionNotFound: true };
+}
+
 function createQueryInput(
   prompt: string,
   resumeSessionId: string | undefined,
@@ -742,7 +769,7 @@ export class ClaudeProvider implements IAgentProvider {
       // Claude resumes-or-errors: an invalid resume id fails the turn, so reaching
       // the result stream means the prior session was restored. Hence `true`
       // whenever a resume was requested.
-      for await (const chunk of withResumedOutcome(
+      for await (const streamed of withResumedOutcome(
         closeOpenToolCalls(
           streamClaudeMessages(events, toolResultQueue, spendBaseline, closeInput),
           // A result can arrive while background agents still run their tools.
@@ -750,6 +777,12 @@ export class ClaudeProvider implements IAgentProvider {
         ),
         resumedOutcome(resumeSessionId, true)
       )) {
+        const chunk = await markStaleResume(streamed, resumeSessionId, {
+          cwd,
+          env,
+          signal: controller.signal,
+          isContainerRun,
+        });
         if (chunk.type === 'result') resultReported = true;
         else if (chunk.type === 'subtask') trackSubtask(openSubtaskIds, chunk);
         yield chunk;
