@@ -1,20 +1,48 @@
 import { describe, expect, test } from 'bun:test';
-import { providerCapabilitiesSchema } from '../packages/provider-contract/src/capabilities';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { CODEX_CAPABILITIES } from '../packages/providers/src/codex/capabilities';
 import { assertTotalCoverage, renderCell } from './generate-capability-matrix';
+
+const track = trackTempRoots();
 
 describe('capability matrix totality', () => {
   test('covers every current schema field with an axis or explicit skip', () => {
     expect(() => assertTotalCoverage()).not.toThrow();
   });
 
-  test('rejects optional schema fields that no provider declares', () => {
-    const extended = providerCapabilitiesSchema.extend({
-      unsetOptionalCapability: providerCapabilitiesSchema.shape.sessionFork,
-      anotherUnsetOptionalCapability: providerCapabilitiesSchema.shape.tokenReporting,
-    });
+  test.each(['check', 'generate'])('%s rejects optional fields no provider declares', mode => {
+    const root = track(mkdtempSync(join(tmpdir(), 'capability-matrix-')));
+    const preload = join(root, 'extend-schema.ts');
+    const schemaPath = resolve(
+      import.meta.dir,
+      '../packages/provider-contract/src/capabilities.ts'
+    );
+    writeFileSync(
+      preload,
+      `import { providerCapabilitiesSchema } from ${JSON.stringify(schemaPath)};
+Object.assign(providerCapabilitiesSchema.shape, {
+  unsetOptionalCapability: providerCapabilitiesSchema.shape.sessionFork,
+  anotherUnsetOptionalCapability: providerCapabilitiesSchema.shape.tokenReporting,
+});
+`
+    );
 
-    expect(() => assertTotalCoverage(extended.shape)).toThrow(
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        '--preload',
+        preload,
+        resolve(import.meta.dir, 'generate-capability-matrix.ts'),
+        ...(mode === 'check' ? ['--check'] : []),
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain(
       'ProviderCapabilities field(s) not represented in the capability matrix: unsetOptionalCapability, anotherUnsetOptionalCapability.'
     );
   });
