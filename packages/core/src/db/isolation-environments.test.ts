@@ -366,13 +366,13 @@ describe('isolation-environments', () => {
       );
     });
 
-    test('updates status to active', async () => {
+    test('updates status to active without observation only for non-worktrees', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
       await updateStatus('env-123', 'active');
 
       expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2',
+        "UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2 AND provider <> 'worktree'",
         ['active', 'env-123']
       );
     });

@@ -210,6 +210,39 @@ for (const kind of ['sql', 'files'] as const) {
     );
   }
 
+  test.each(['active', 'destroyed'] as const)(
+    `${kind}: unobserved status writer refuses activation of %s worktrees`,
+    async status => {
+      const { env } = await fixture();
+      if (status === 'destroyed') await isolation.markWorktreeDestroyed(env);
+      const before = await isolation.getById(env.id);
+      await expect(isolation.updateStatus(env.id, 'active')).rejects.toThrow('observation');
+      expect(await isolation.getById(env.id)).toEqual(before);
+    }
+  );
+
+  test.each(['pending', 'failed'] as const)(
+    `${kind}: unobserved status writer cannot reactivate a released %s checkout`,
+    async status => {
+      const { env, create } = await fixture();
+      const run = await create({ working_path: env.working_path });
+      if (status === 'failed') await store.failWorkflowRun(run.id, 'preserved');
+      await isolation.withWorktreeRegistration(env, async mark => mark(), { runOwnership: false });
+      const registration = await isolation.getById(env.id);
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      await expect(isolation.updateStatus(env.id, 'active')).rejects.toThrow('observation');
+      expect(await isolation.getById(env.id)).toEqual(registration);
+      if (status === 'pending') expect(await store.claimPendingWorkflowRun(run.id)).toBeNull();
+      else
+        await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow(
+          `Checkout '${env.working_path}' was released; start a fresh run.`
+        );
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+    }
+  );
+
   test(`${kind}: status writer preserves container retirement and reactivation`, async () => {
     const { env } = await fixture();
     const container = await isolation.create({

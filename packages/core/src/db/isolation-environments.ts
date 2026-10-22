@@ -244,7 +244,7 @@ export async function updateStatus(
   const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
   const result = await pool.query(
     `UPDATE remote_agent_isolation_environments SET status = $1 WHERE id = $2${
-      status === 'destroyed' ? " AND provider <> 'worktree'" : ''
+      status === 'destroyed' || !observed ? " AND provider <> 'worktree'" : ''
     }${
       predicate
         ? ` AND status = 'destroyed'${predicate.sql}
@@ -273,7 +273,7 @@ export async function updateStatus(
     }
     if (observed) throw new WorktreeRegistrationChangedError(id);
     throw new Error(
-      `Failed to update isolation environment status: no environment found with id '${id}'`
+      `Cannot activate isolation environment '${id}' by status: it is missing or is a worktree; worktree activation requires an observation`
     );
   }
   getLog().debug({ envId: id, status }, 'db.isolation_env_status_update_completed');

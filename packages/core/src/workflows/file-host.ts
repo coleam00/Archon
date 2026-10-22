@@ -316,6 +316,9 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           if (row.provider === 'worktree' && status === 'destroyed') {
             throw new Error(`Worktree '${id}' retirement requires markWorktreeDestroyed`);
           }
+          if (row.provider === 'worktree' && !observed) {
+            throw new Error(`Worktree '${id}' activation requires an observation`);
+          }
           if (
             observed &&
             (row.status !== 'destroyed' ||

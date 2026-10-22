@@ -41,7 +41,7 @@ export interface IIsolationStore {
   ): Promise<void>;
   /**
    * Worktree retirement requires markWorktreeDestroyed or withWorktreeRegistration.
-   * With an observation, restore only that retired worktree without replacing an active workflow.
+   * Worktree activation requires an observation; restore only that retired worktree without replacing an active workflow.
    */
   updateStatus(
     id: string,
