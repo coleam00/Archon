@@ -3,6 +3,8 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { resolveDryRunEnvironment } from './workflow-dry-run';
+import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
@@ -102,6 +104,9 @@ export async function workflowTestCommand(
       cwd,
       targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
+      config,
+      resolveExecConfig: async () =>
+        resolveDryRunEnvironment(await createCliWorkflowHost(), invokingCwd, config),
       ...(target !== undefined ? { target } : {}),
     });
   } catch (error) {

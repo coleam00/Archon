@@ -83,6 +83,92 @@ describe('workflowRunCommand — dry-run', () => {
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 
+  it('merges registered environment before run overrides and protects only effective DB values', async () => {
+    const host = createTestWorkflowHost();
+    const lookup = spyOn(host.records.codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const env = spyOn(host.deps.store, 'getCodebaseEnvVars').mockResolvedValue({
+      ARCHON_DB_DIAGNOSTIC: 'db-value',
+      BENCH_MODE: 'db-mode',
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'archon-cli-dry-run-env-'));
+    const configPath = join(dir, 'config.yaml');
+    appendFileSync(configPath, 'env:\n  BENCH_MODE: run-mode\n');
+    try {
+      expect(process.env.ARCHON_DB_DIAGNOSTIC).toBeUndefined();
+      const core = await import('@archon/core');
+      (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        assistant: 'claude',
+        assistants: {},
+        commands: {},
+        envVars: { ARCHON_DB_DIAGNOSTIC: 'file-value', FILE_ONLY: 'kept' },
+      });
+      const dryRun = await import('@archon/workflows/dry-run');
+      await workflowRunCommand(host, '/test/path', 'plan', '', {
+        dryRun: true,
+        execCode: true,
+        json: true,
+        configPath,
+      });
+      expect(env).toHaveBeenCalledWith('cb-env');
+      expect(dryRun.dryRunWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            envVars: {
+              ARCHON_DB_DIAGNOSTIC: 'db-value',
+              BENCH_MODE: 'run-mode',
+              FILE_ONLY: 'kept',
+            },
+            protectedCredentialValues: ['db-value'],
+          }),
+        })
+      );
+    } finally {
+      lookup.mockRestore();
+      env.mockRestore();
+      await removeTempTree(dir);
+    }
+  });
+
+  it('simulates stub-only runs without reading the registered environment', async () => {
+    const host = createTestWorkflowHost();
+    const lookup = spyOn(host.records.codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const env = spyOn(host.deps.store, 'getCodebaseEnvVars').mockRejectedValue(
+      new Error('store unavailable')
+    );
+    try {
+      const dryRun = await import('@archon/workflows/dry-run');
+      await workflowRunCommand(host, '/test/path', 'plan', '', { dryRun: true, json: true });
+      expect(env).not.toHaveBeenCalled();
+      expect(dryRun.dryRunWorkflow).toHaveBeenCalled();
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ outcome: 'completed' });
+    } finally {
+      lookup.mockRestore();
+      env.mockRestore();
+    }
+  });
+
   it('emits authored outcome in JSON without using it as the exit verdict', async () => {
     const dryRun = await import('@archon/workflows/dry-run');
     (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({

@@ -2,6 +2,7 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect } from 'bun:test';
 
+import { redactSubprocessError, runSubprocess, type RawSubprocessRejection } from './subprocess';
 import type { NodeOutput } from './schemas';
 import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
@@ -160,12 +161,12 @@ describe('stripCompletionTags', () => {
 });
 
 describe('formatSubprocessFailure', () => {
-  it('strips the "Command failed: <cmd>" prefix line so the script body does not appear', () => {
+  it('uses stderr diagnostics without exposing the command message', () => {
     const err = {
       message:
         'Command failed: bun --no-env-file -e import { writeFileSync } from "node:fs"; const x = `hello`;\n' +
         'error: Expected ")" but found "x"\n    at [eval]:1:50',
-      stderr: '',
+      stderr: 'error: Expected ")" but found "x"\n    at [eval]:1:50',
       code: 1,
     };
     const { userMessage } = formatSubprocessFailure(err, "Script node 'n1'");
@@ -175,6 +176,72 @@ describe('formatSubprocessFailure', () => {
     expect(userMessage).toContain('[eval]:1:50');
     expect(userMessage).toContain('[exit 1]');
   });
+
+  it.each(['', ' \n '])('discards multiline command text when streams are blank (%j)', stream => {
+    const { userMessage } = formatSubprocessFailure(
+      {
+        message: 'Command failed: bun -e // inline-body-marker\nprocess.exit(7);',
+        stdout: stream,
+        stderr: stream,
+        code: 7,
+      },
+      "Script node 'n1'"
+    );
+    expect(userMessage).toBe("Script node 'n1' failed [exit 7]: no diagnostic output");
+  });
+
+  it.each(['', ' \n '])('keeps command provenance through credential redaction (%j)', stream => {
+    const err = redactSubprocessError(
+      Object.assign(new Error('Command failed: bun -e // private-body\nprocess.exit(7);'), {
+        stdout: stream,
+        stderr: stream,
+        code: 7,
+      }),
+      ['failed']
+    );
+    expect(formatSubprocessFailure(err, 'Script').userMessage).toBe(
+      'Script failed [exit 7]: no diagnostic output'
+    );
+  });
+
+  it('retains useful spawn diagnostics without presenting errno as an exit', () => {
+    const err = redactSubprocessError(
+      Object.assign(new Error('spawn bun ENOENT'), { code: 'ENOENT' }),
+      ['failed']
+    );
+    const formatted = formatSubprocessFailure(err, 'Script');
+    expect(formatted.userMessage).toBe('Script failed [error ENOENT]: spawn bun ENOENT');
+    expect(formatted.logFields.exitCode).toBeUndefined();
+  });
+
+  it.each(['stdout', 'stderr'] as const)(
+    'preserves the cause of a real %s overflow with nonempty output',
+    async stream => {
+      const error = await runSubprocess(
+        { kind: 'host' },
+        process.execPath,
+        [
+          '--no-env-file',
+          '-e',
+          `// private-body-marker\nprocess.${stream}.write('x'.repeat(2 * 1024 * 1024));`,
+        ],
+        { cwd: import.meta.dir, env: {}, timeout: 5000, retention: { standalone: true } }
+      ).then(
+        () => undefined,
+        (error: unknown) => error as RawSubprocessRejection
+      );
+      expect(error?.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      expect(error?.[stream]?.length).toBeGreaterThan(0);
+      const { userMessage, logFields } = formatSubprocessFailure(error ?? {}, 'Script');
+      expect(userMessage).toContain('[error ERR_CHILD_PROCESS_STDIO_MAXBUFFER]');
+      expect(logFields.errorCode).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      expect(logFields.exitCode).toBeUndefined();
+      expect(userMessage).toContain('xxx');
+      expect(userMessage).not.toContain('private-body-marker');
+      expect(userMessage).not.toContain('Command failed:');
+      expect(userMessage.length).toBeLessThan(2100);
+    }
+  );
 
   it('prefers stderr over message body when both are present', () => {
     const err = {

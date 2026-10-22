@@ -39,6 +39,7 @@ import {
   dryRunStubsSchema,
   dryRunWorkflow,
   type DryRunResult,
+  type DryRunTraceEntry,
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
@@ -276,6 +277,10 @@ export interface FixtureCheckResult {
   readonly authoredOutcome?: DryRunResult['authoredOutcome'];
   readonly pass: boolean;
   readonly failureReason?: string;
+  readonly nodeFailures?: readonly Pick<
+    Extract<DryRunTraceEntry, { state: 'failed' }>,
+    'nodeId' | 'reason'
+  >[];
   readonly missingStubs: readonly string[];
   /**
    * The subset of `missingStubs` a `trigger_rule: all_done` join tolerated (#2869).
@@ -313,6 +318,8 @@ export interface RunFixturesOptions {
    */
   sourceConfig: WorkflowSourceConfig;
   config?: WorkflowConfig;
+  /** Resolve managed environment only for executable fixtures; failures belong to that result. */
+  resolveExecConfig?: () => Promise<WorkflowConfig>;
   aiProfile?: ResolvedAiProfile;
   /**
    * Restrict to a workflow name, a pack or workflow-folder name, or a path (relative
@@ -582,6 +589,13 @@ async function runOneFixture(
   return out;
 }
 
+async function resolveFixtureConfig(
+  options: RunFixturesOptions,
+  execCode: boolean
+): Promise<WorkflowConfig | undefined> {
+  return execCode && options.resolveExecConfig ? options.resolveExecConfig() : options.config;
+}
+
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -598,6 +612,7 @@ async function checkFixture(
   try {
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
+    const config = await resolveFixtureConfig(options, execCode);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
@@ -608,7 +623,7 @@ async function checkFixture(
         execCode,
         execWorkspace: workspace,
         sourceRoots: captured,
-        ...(options.config ? { config: options.config } : {}),
+        ...(config ? { config } : {}),
         ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
       });
     const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);
@@ -692,6 +707,9 @@ async function checkFixture(
       ...base,
       outcome: result.outcome,
       authoredOutcome: result.authoredOutcome,
+      nodeFailures: result.trace
+        .filter(entry => entry.state === 'failed')
+        .map(({ nodeId, reason }) => ({ nodeId, reason })),
       pass: failureReason === undefined,
       ...(failureReason !== undefined ? { failureReason } : {}),
       missingStubs: result.missingStubs,
@@ -721,6 +739,7 @@ export function formatFixtureReport(report: FixtureReport): string {
       lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
+    lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));
     if (r.unusedStubs.length > 0) {
       lines.push(`    warning: unused stubs — ${r.unusedStubs.join(', ')}`);
     }
