@@ -419,7 +419,7 @@ function readLoopResume(
       gate !== undefined
         ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
         : undefined,
-    // A legacy gate has no saved execution, so its carried-in cost is never proven.
+    // A legacy gate has no saved execution, so its carried-in cost is never known complete.
     priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
     tokens:
       gate !== undefined

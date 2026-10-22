@@ -1169,6 +1169,33 @@ describe('interactive loop node', () => {
       expect(completed?.data).toMatchObject({ spend: { costUsd: { source: 'provider' } } });
       expect(completed?.data).not.toHaveProperty('spend.costUsd.partial');
     });
+
+    it('bare approval of a gate whose recorded cost is a floor keeps the finalized cost partial', async () => {
+      const start = startNodeExecution({
+        runId: 'floor-approve',
+        path: 'refine',
+        node: refine,
+        invocation: newNodeInvocation(),
+        provider: 'claude',
+      });
+      const execution = executionMetadata(
+        finishNodeExecution(
+          start,
+          { status: 'suspended', point: 'interactive_loop' },
+          { costUsd: 0.02, costPartial: true }
+        )
+      );
+      const { completed } = await resumeAt(
+        'floor-approve',
+        gate({ execution, signaledCostUsd: 0.02 }),
+        false
+      );
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(completed?.data?.cost_usd).toBeCloseTo(0.02, 5);
+      expect(completed?.data).toMatchObject({
+        spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+      });
+    });
   });
 
   it('iterates at resume on a non-signaled gate even without feedback (#2074 C)', async () => {
