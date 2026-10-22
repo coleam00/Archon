@@ -52,7 +52,7 @@ import {
   resolveVersion,
   spendOf,
   waitRun,
-} from '../../.shared/bench.ts';
+} from './runs.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import {
   FINDINGS_FILE,
