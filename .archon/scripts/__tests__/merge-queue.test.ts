@@ -947,6 +947,25 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
 
+  test('record completes after a remote advance while another fetch holds the tracking ref lock', () => {
+    const at = install();
+    git(at.checkout, 'remote', 'rename', 'upstream', 'origin');
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-merge-writer-')));
+    const remote = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    git(writer, 'clone', '-q', remote, '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    git(writer, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const lock = join(at.checkout, '.git/refs/remotes/origin/dev.lock');
+    writeFileSync(lock, 'held by another fetch\n');
+
+    seed(at, item(BUILT, undefined, CLAIMED));
+    expect(ok(run(at, 'record', recordInputs([decision({})]), { pr: { state: 'MERGED' } }))).toMatchObject({ merged: [42] });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ head: HEAD }] } } });
+    expect(readFileSync(lock, 'utf8')).toBe('held by another fetch\n');
+  }, 60_000);
+
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;

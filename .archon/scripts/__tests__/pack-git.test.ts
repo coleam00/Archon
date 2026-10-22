@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -37,6 +37,36 @@ describe('remote identity', () => {
     }
     expect(urlRepo('/srv/git/repo.git')).toBeUndefined();
     expect(urlRepo('C:\\repos\\repo')).toBeUndefined();
+  });
+});
+
+describe('the default branch snapshot', () => {
+  it('fetches fresh objects without changing tracking refs or FETCH_HEAD', () => {
+    const cwd = gitCheckout({}, track);
+    const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
+    git(cwd, 'fetch', '-q', 'upstream', 'dev');
+    const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-default-writer-')));
+    git(writer, 'clone', '-q', git(cwd, 'remote', 'get-url', 'upstream'), '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    mkdirSync(join(writer, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(writer, '.archon/sdlc/policy/maintainers.json'), '["NewMaintainer"]');
+    git(writer, 'add', '.archon/sdlc/policy/maintainers.json');
+    git(writer, 'commit', '-q', '-m', 'new maintainer');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const fresh = git(writer, 'rev-parse', 'HEAD');
+
+    const run = spawnSync(process.execPath, ['-e', `
+      import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
+      import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
+      const repo = ${JSON.stringify(PR.repo)};
+      console.log(JSON.stringify({ base: fetchDefaultBranch(repo), maintainers: [...readMaintainers(repo)] }));
+    `], { cwd, encoding: 'utf8' });
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(JSON.parse(run.stdout)).toEqual({ base: { branch: 'dev', sha: fresh }, maintainers: ['newmaintainer'] });
+    expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);
+    expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
   });
 });
 

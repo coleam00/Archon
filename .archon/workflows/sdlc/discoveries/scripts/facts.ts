@@ -22,7 +22,6 @@ import {
   RUNS_PREFIX,
   runName,
 } from '../../.shared/discoveries.ts';
-import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { fetchDefaultBranch } from '../../.shared/remote.ts';
@@ -124,7 +123,7 @@ function main(): void {
   if (self === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const base = fetchDefaultBranch(repo);
-  const sha = gitOrThrow('rev-parse', base.ref);
+  const { sha } = base;
   const documents = readRunDocuments();
   const at = new Date().toISOString();
 

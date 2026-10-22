@@ -62,9 +62,9 @@ export function parseMaintainers(text: string): Set<string> {
  * file means nobody: every author is outside.
  */
 export function readMaintainerList(repo: QualifiedPr['repo']): MaintainerList {
-  const { ref } = fetchDefaultBranch(repo);
-  if (git('cat-file', '-e', `${ref}:${MAINTAINERS_PATH}`).code !== 0) return { logins: new Set(), ownPrs: new Set() };
-  return parseMaintainerList(gitOrThrow('show', `${ref}:${MAINTAINERS_PATH}`));
+  const { sha } = fetchDefaultBranch(repo);
+  if (git('cat-file', '-e', `${sha}:${MAINTAINERS_PATH}`).code !== 0) return { logins: new Set(), ownPrs: new Set() };
+  return parseMaintainerList(gitOrThrow('show', `${sha}:${MAINTAINERS_PATH}`));
 }
 
 export function readMaintainers(repo: QualifiedPr['repo']): Set<string> {
