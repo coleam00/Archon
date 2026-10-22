@@ -179,7 +179,7 @@ function readRunCost(
 ): Pick<Run, 'costUsd' | 'costIncomplete'> {
   const raw = meta?.total_cost_usd;
   return {
-    costUsd: typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null,
+    costUsd: typeof raw === 'number' && Number.isFinite(raw) ? raw : null,
     ...(meta?.total_cost_incomplete === true ? { costIncomplete: true } : {}),
   };
 }

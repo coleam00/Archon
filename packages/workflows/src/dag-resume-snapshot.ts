@@ -463,7 +463,16 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   fold.completedNodeOutputs.delete(row.step_name);
   fold.failedNodes.delete(row.step_name);
   const rawData = parseRowData(fold, row);
-  if (rawData === undefined) return;
+  if (rawData === undefined) {
+    if (
+      row.event_type === 'node_completed' ||
+      row.event_type === 'node_failed' ||
+      row.event_type === 'node_suspended'
+    ) {
+      addUsage(fold, row.step_name, { costIncomplete: true });
+    }
+    return;
+  }
   const record = readRecord(fold, row, rawData);
   if (!record) return;
   foldAgentAttempt(fold, record);

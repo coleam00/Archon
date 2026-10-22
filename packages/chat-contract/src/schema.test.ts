@@ -65,3 +65,19 @@ test('generated schema and runtime agree on actor and action constraints', () =>
     }
   }
 });
+
+test.each(['ChatRunEvent', 'ChatAttentionNotice'] as const)(
+  '%s accepts finite signed terminal cost in runtime and published schemas',
+  name => {
+    const value = {
+      type: 'terminal',
+      runId: 'r',
+      workflowName: 'nightly',
+      status: 'completed',
+      totalCostUsd: -0.2,
+      totalCostIncomplete: true,
+    };
+    expect(chatWireSchemas[name].safeParse(value).success).toBe(true);
+    expect(published(name).safeParse(value).success).toBe(true);
+  }
+);

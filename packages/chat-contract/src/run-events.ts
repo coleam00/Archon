@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const chatTerminalCostShape = {
-  totalCostUsd: z.number().nonnegative().optional(),
+  totalCostUsd: z.number().optional(),
   totalCostIncomplete: z.literal(true).optional(),
 };
 

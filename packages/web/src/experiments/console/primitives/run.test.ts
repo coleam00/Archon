@@ -230,11 +230,24 @@ describe('toRun — cost', () => {
     expect(zero.costUsd).toBe(0);
   });
 
+  test('preserves a signed incomplete total', () => {
+    const run = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'plan',
+        status: 'completed',
+        metadata: { total_cost_usd: -0.2, total_cost_incomplete: true },
+      })
+    );
+    expect(run.costUsd).toBe(-0.2);
+    expect(run.costIncomplete).toBe(true);
+  });
+
   test('cost is null when metadata is absent', () => {
     expect(toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' })).costUsd).toBeNull();
   });
 
-  test.each([undefined, 'free', null, -1, Number.NaN, Infinity, -Infinity])(
+  test.each([undefined, 'free', null, Number.NaN, Infinity, -Infinity])(
     'cost is null for missing or invalid total_cost_usd %s',
     totalCost => {
       expect(

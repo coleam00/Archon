@@ -25,9 +25,7 @@ export function runCost(
 ): Pick<Extract<ChatRunEvent, { type: 'terminal' }>, 'totalCostUsd' | 'totalCostIncomplete'> {
   const cost = run.metadata.total_cost_usd;
   return {
-    ...(typeof cost === 'number' && Number.isFinite(cost) && cost >= 0
-      ? { totalCostUsd: cost }
-      : {}),
+    ...(typeof cost === 'number' && Number.isFinite(cost) ? { totalCostUsd: cost } : {}),
     ...(hasIncompleteCostTotal(run.metadata) ? { totalCostIncomplete: true } : {}),
   };
 }

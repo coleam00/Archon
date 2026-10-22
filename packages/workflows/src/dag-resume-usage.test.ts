@@ -282,3 +282,38 @@ it('replaces cumulative child snapshots within an invocation while counting dist
   expect(snapshot.costIncomplete).toBe(true);
   expect(snapshot.childWorkflowUsage?.size).toBe(2);
 });
+
+it.each(['node_completed', 'node_failed', 'node_suspended'])(
+  '%s unreadable cost evidence obeys authoritative instance scope',
+  async eventType => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        { step_name: 'fan__item__leaf', event_type: eventType, data: '{' },
+        {
+          step_name: 'fan__item',
+          event_type: 'node_completed',
+          data: { type: 'compose_fan_out_instance', aggregate: true, cost_usd: 0.1 },
+        },
+        valid,
+      ],
+      'run'
+    );
+    expect(snapshot.costUsd).toBeCloseTo(0.3);
+    expect(snapshot.costIncomplete).toBe(false);
+  }
+);
+
+it.each([
+  'node_started',
+  'node_skipped',
+  'node_skipped_prior_success',
+  'node_always_run_reset',
+  'node_prior_cache_invalidated',
+  'fan_out_instances',
+])('unreadable %s has no new accounting evidence', async eventType => {
+  const snapshot = await foldDagResumeSnapshot(
+    [{ step_name: 'old', event_type: eventType, data: '{' }, valid],
+    'run'
+  );
+  expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: false });
+});

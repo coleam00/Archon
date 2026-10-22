@@ -111,6 +111,68 @@ for (const fanOut of [false, true]) {
   }
 }
 
+for (const fanOut of [false, true]) {
+  it.each(['node_completed', 'node_failed', 'node_suspended'])(
+    `retains unreadable historical child cost (${fanOut ? 'fan-out' : 'single'}, %s)`,
+    async eventType => {
+      const store = createMockStore();
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('old-child', {
+          status: 'completed',
+          metadata: { parent_node_id: 'sub', child_index: 0, summary: 'done' },
+        }),
+      ]);
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(
+          [
+            { step_name: 'unreadable', event_type: eventType, data: '{' },
+            {
+              step_name: 'priced',
+              event_type: 'node_completed',
+              data: { type: 'agent', cost_usd: 0.2 },
+            },
+          ],
+          id
+        )
+      );
+      await executeDagWorkflow(
+        dagOptions({
+          cwd,
+          deps: createMockDeps(store),
+          workflowRun: makeWorkflowRun(),
+          runChildWorkflow: async () => {
+            throw new Error('Must re-enter');
+          },
+          workflow: {
+            name: 'parent',
+            nodes: [
+              {
+                id: 'sub',
+                kind: 'workflow',
+                workflow: 'child',
+                ...(fanOut
+                  ? {
+                      fan_out: {
+                        items: '[1]',
+                        as: 'item',
+                        max_parallel: 1,
+                        join: 'all_done',
+                      } as const,
+                    }
+                  : {}),
+              },
+            ],
+          },
+        })
+      );
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.2,
+        total_cost_incomplete: true,
+      });
+    }
+  );
+}
+
 it.each([
   { mode: 'single', refused: false },
   { mode: 'single', refused: true },

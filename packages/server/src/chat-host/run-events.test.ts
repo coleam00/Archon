@@ -31,7 +31,7 @@ afterEach(async () => {
   await removeTempTree(root);
 });
 
-async function createRun(platform: string, background = false) {
+async function createRun(platform: string, background = false, cost = 0.25) {
   const conversationId = crypto.randomUUID();
   await getDatabase().query(
     `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, $2, $3)`,
@@ -51,15 +51,20 @@ async function createRun(platform: string, background = false) {
       ? { conversationId: workerId, parentConversationId: conversationId }
       : { conversationId },
     metadata: {
-      total_cost_usd: 0.25,
+      total_cost_usd: cost,
       ...(platform === 'fixture-chat' ? { total_cost_incomplete: true } : {}),
     },
   });
 }
 
-test.each([false, true])(
-  'owning-plugin routing and presentation with background=%s',
-  async background => {
+test.each([
+  { background: false, cost: 0.25 },
+  { background: true, cost: 0.25 },
+  { background: false, cost: -0.2 },
+  { background: true, cost: -0.2 },
+])(
+  'owning-plugin routing and presentation with background=$background, cost=$cost',
+  async ({ background, cost }) => {
     const first: ChatRunEvent[] = [];
     const second: ChatRunEvent[] = [];
     const make = (id: string, events: ChatRunEvent[]) => {
@@ -92,7 +97,7 @@ test.each([false, true])(
     const unsubscribe = subscribeChatRunEvents(plugins, new Map());
     try {
       const runs = await Promise.all(
-        ['fixture-chat', 'other-chat', 'web'].map(platform => createRun(platform, background))
+        ['fixture-chat', 'other-chat', 'web'].map(platform => createRun(platform, background, cost))
       );
       const emitter = getWorkflowEventEmitter();
       for (const [index, run] of runs.entries()) {
@@ -135,9 +140,10 @@ test.each([false, true])(
       expect(first[3]).toMatchObject({
         type: 'terminal',
         authoredOutcome: 'succeeded',
-        totalCostUsd: 0.25,
+        totalCostUsd: cost,
         totalCostIncomplete: true,
       });
+      expect(chatRunEventSchema.safeParse(first[3]).success).toBe(true);
       expect(second[3]).not.toHaveProperty('totalCostIncomplete');
       expect(JSON.stringify(first)).not.toContain('/private/path');
       expect(

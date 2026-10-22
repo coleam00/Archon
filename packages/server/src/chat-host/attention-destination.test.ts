@@ -168,3 +168,14 @@ test.each([undefined, true] as const)(
     else expect(result).not.toHaveProperty('totalCostIncomplete');
   }
 );
+
+test('terminal notices retain signed incomplete totals through the wire schema', () => {
+  const result = chatAttentionNotice(
+    notice('terminal', 'completed', {
+      total_cost_usd: -0.2,
+      total_cost_incomplete: true,
+    })
+  );
+  expect(result).toMatchObject({ totalCostUsd: -0.2, totalCostIncomplete: true });
+  expect(chatAttentionNoticeSchema.safeParse(result).success).toBe(true);
+});
