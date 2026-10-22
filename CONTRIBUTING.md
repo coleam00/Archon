@@ -7,7 +7,7 @@ Thank you for your interest in contributing to Archon!
 1. Fork the repository
 2. Clone your fork
 3. Install dependencies: `bun install`
-4. Copy `.env.example` to `.env` and configure
+4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
 5. Start development: `bun run dev`
 
 ## Development Workflow
