@@ -408,9 +408,9 @@ export function checkRatchet(
     const grown = lineGrowth(path, base, head, ceilings.lines);
     if (grown !== null) report(grown, path);
   }
-  for (const entry of mockBaselineGrowth(mergeBase, touched, repo)) {
-    report(`${BASELINE_PATH}: gains ${entry}`, BASELINE_PATH);
-  }
+  mockBaselineGrowth(mergeBase, touched, repo).forEach(entry =>
+    report(`${BASELINE_PATH}: gains ${entry}`, BASELINE_PATH)
+  );
   return result;
 }
 

@@ -85,7 +85,7 @@ function isMockModuleCall(node: ts.Node): node is ts.CallExpression {
 }
 
 class ProgramReader {
-  readonly checker: ts.TypeChecker;
+  private readonly checker: ts.TypeChecker;
 
   constructor(
     private readonly root: string,
@@ -227,23 +227,21 @@ export function collectSites(root: string, files: readonly string[]): Collected 
     const config = owningConfig(root, file);
     groups.set(config, [...(groups.get(config) ?? []), file]);
   }
-  const collected: Collected = { sites: [], errors: [] };
-  for (const [config, group] of groups) {
+  const results = [...groups].flatMap(([config, group]) => {
     const { options, ambient } = compilerOptions(config);
     const roots = new Set([...group, ...ambient, ...mockedModules(group, options)]);
     const program = ts.createProgram([...roots], options);
     const reader = new ProgramReader(root, program, options);
-    for (const file of group) {
+    return group.flatMap(file => {
       const source = program.getSourceFile(file);
       if (source === undefined) throw new Error(`Cannot read ${file}`);
-      for (const call of mockCalls(source)) {
-        const site = readSite(reader, root, file, call);
-        if (typeof site === 'string') collected.errors.push(site);
-        else collected.sites.push(site);
-      }
-    }
-  }
-  return collected;
+      return mockCalls(source).map(call => readSite(reader, root, file, call));
+    });
+  });
+  return {
+    sites: results.filter((result): result is MockSite => typeof result !== 'string'),
+    errors: results.filter((result): result is string => typeof result === 'string'),
+  };
 }
 
 const sorted = (values: Iterable<string>): string[] => [...new Set(values)].sort();
