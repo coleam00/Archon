@@ -20,6 +20,7 @@ import {
   getWorkflowRunStatus,
   WorkflowStatusReadError,
   getActiveWorkflowRun,
+  getPausedWorkflowRun,
   getActiveWorkflowRunByPath,
   findChildRuns,
   getRunAncestry,
@@ -118,6 +119,36 @@ describe('workflow run reads', () => {
       const result = await getActiveWorkflowRun('conv-456');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('getPausedWorkflowRun', () => {
+    test.each([undefined, 'project-b'])(
+      'binds optional project scope %s before limiting',
+      async project => {
+        mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
+        expect(await getPausedWorkflowRun('chat', project)).toEqual(mockWorkflowRun);
+        const [query, params] = mockQuery.mock.calls[0]!;
+        expect(query).toContain(
+          "(conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'"
+        );
+        if (project) {
+          expect(query).toMatch(/AND codebase_id = \$3\s+ORDER BY started_at DESC LIMIT 1/);
+          expect(params).toEqual(['chat', 'chat', project]);
+        } else {
+          expect(query).not.toContain('codebase_id =');
+          expect(params).toEqual(['chat', 'chat']);
+        }
+      }
+    );
+
+    test('returns null when no paused run matches', async () => {
+      expect(await getPausedWorkflowRun('chat', 'project-b')).toBeNull();
+    });
+
+    test('retains the non-throwing database failure contract', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
+      expect(await getPausedWorkflowRun('chat', 'project-b')).toBeNull();
     });
   });
 
