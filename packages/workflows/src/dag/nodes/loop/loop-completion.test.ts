@@ -483,6 +483,44 @@ describe('loop node completion channels', () => {
     expect(JSON.parse(result)).toMatchObject({ done: true, note: 'pass 3' });
   });
 
+  it('skips until_bash when the validated until_field is true', async () => {
+    const marker = join(testDir, 'field-untilbash-ran');
+    const markerRef = `"${marker.replace(/\\/g, '/')}"`;
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'result', sessionId: `s-${calls}`, structuredOutput: { done: true } };
+    });
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('loop-field-shortcircuit'),
+        workflow: {
+          name: 'field-shortcircuit',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'my-loop',
+              output_format: untilFieldSchema,
+              loop: {
+                prompt: 'Work until done.',
+                max_iterations: 3,
+                until_field: 'done',
+                until_bash: `touch ${markerRef}`,
+              },
+            }),
+          ],
+        },
+      })
+    );
+
+    expect(calls).toBe(1);
+    if (typeof result !== 'string') throw new Error('Expected the loop output');
+    expect(JSON.parse(result)).toEqual({ done: true });
+    expect(await Bun.file(marker).exists()).toBe(false);
+  });
+
   it('requests output_format from the provider for a loop node', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'result', sessionId: 's1', structuredOutput: { done: true } };

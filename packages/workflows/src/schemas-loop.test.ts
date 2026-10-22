@@ -238,7 +238,11 @@ describe('dagNodeSchema — loop_group', () => {
         loop_group: { max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
       })
     );
-    expect(error.issues.some(i => i.message.includes('completion channel'))).toBe(true);
+    const issue = error.issues.find(i => i.message.includes('completion channel'));
+    expect(issue?.message).toBe(
+      "loop node requires a completion channel: set 'loop.until' (completion signal string) or 'loop.until_bash' (deterministic check, exit 0 = complete)"
+    );
+    expect(issue?.path).toEqual(['loop_group', 'until']);
   });
 
   test('loop_group accepts until_bash alone (no prose signal) — #2563', () => {
@@ -335,9 +339,9 @@ describe('dagNodeSchema — loop completion channel (#2563)', () => {
     );
     const issue = error.issues.find(i => i.message.includes('completion channel'));
     expect(issue).toBeDefined();
-    expect(issue?.message).toContain('loop.until');
-    expect(issue?.message).toContain('loop.until_bash');
-    expect(issue?.message).toContain('loop.until_field');
+    expect(issue?.message).toBe(
+      "loop node requires a completion channel: set 'loop.until' (completion signal string) or 'loop.until_bash' (deterministic check, exit 0 = complete) or 'loop.until_field' (a declared boolean in output_format)"
+    );
     expect(issue?.path).toEqual(['loop', 'until']);
   });
 
