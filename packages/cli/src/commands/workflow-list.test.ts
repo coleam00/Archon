@@ -768,10 +768,23 @@ describe('workflowTestCommand', () => {
 
   it('reports no fixtures without consulting an unavailable environment store', async () => {
     const codebases = await import('@archon/core/db/codebases');
-    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockRejectedValue(
+    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const envVars = await import('@archon/core/db/env-vars');
+    const env = spyOn(envVars, 'getCodebaseEnvVars').mockRejectedValue(
       new Error('store unavailable')
     );
-    lookup.mockClear();
+    env.mockClear();
     try {
       const fixtureRunner = await import('@archon/workflows/fixture-runner');
       (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -780,7 +793,7 @@ describe('workflowTestCommand', () => {
         failed: 0,
       });
       expect(await workflowTestCommand('/test/path', undefined, { json: true })).toBe(0);
-      expect(lookup).not.toHaveBeenCalled();
+      expect(env).not.toHaveBeenCalled();
       expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
         results: [],
         passed: 0,
@@ -788,6 +801,7 @@ describe('workflowTestCommand', () => {
       });
     } finally {
       lookup.mockRestore();
+      env.mockRestore();
     }
   });
 
