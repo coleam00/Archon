@@ -107,7 +107,9 @@ describe('telemetry exit transport', () => {
     });
     try {
       const telemetryPath = join(import.meta.dir, '../../paths/src/telemetry.ts');
-      const source = `import { captureArchonStarted, shutdownTelemetry } from ${JSON.stringify(telemetryPath)};
+      const transportPath = join(import.meta.dir, '../../paths/src/telemetry-transport.ts');
+      const source = `import { captureArchonStarted } from ${JSON.stringify(telemetryPath)};
+        import { shutdownTelemetry } from ${JSON.stringify(transportPath)};
         captureArchonStarted({ surface: 'cli' });
         const started = performance.now();
         await shutdownTelemetry();
