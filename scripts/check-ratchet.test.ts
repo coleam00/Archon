@@ -202,6 +202,20 @@ describe('checkRatchet', () => {
     expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([]);
   });
 
+  test('refuses a grandfathered factory the mock-module baseline gains', () => {
+    const repo = repoOnBranch();
+    const baseline = (factories: Record<string, string[]>): string =>
+      JSON.stringify({ factories, exports: { 'src/db.ts': ['a'] } });
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'] }));
+    commitAll(repo, 'baseline');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'], b: ['./db'] }));
+    commitAll(repo, 'grow');
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
+      "scripts/mock-module-baseline.json: gains factory b './db'",
+    ]);
+  });
+
   test('ignores a trailer the base already contains', () => {
     const repo = repoOnBranch();
     git(repo, 'checkout', '-q', 'main');
