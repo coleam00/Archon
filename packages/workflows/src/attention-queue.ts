@@ -21,7 +21,7 @@ import {
   attentionLabelsSchema,
   attentionOptionSchema,
   type AttentionLabels,
-} from './schemas/dag-node';
+} from './schemas/wait-node';
 import {
   attentionLabels,
   attentionRevision,

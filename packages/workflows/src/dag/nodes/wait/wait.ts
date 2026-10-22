@@ -17,7 +17,7 @@ import {
   attentionOptions,
   type WorkflowAttentionWaitContext,
 } from '../../../schemas/workflow-run';
-import { waitOutputFormat } from '../../../schemas/dag-node';
+import { waitOutputFormat } from '../../../schemas/wait-node';
 import type { WaitNode, WorkflowWaitContext } from '../../../schemas';
 import { type BodySessionCursorAncestry, type SessionCursor } from '../../../schemas';
 import { readWorkflowWaitContext, waitUntilTimestampSchema, waitCondition } from '../../../schemas';

@@ -1,4 +1,4 @@
-import type { AttentionLabels } from '../schemas/dag-node';
+import type { AttentionLabels } from '../schemas/wait-node';
 import type { RecordSurface } from '../schemas/record-surface';
 import {
   attentionLabels,

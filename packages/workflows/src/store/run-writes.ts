@@ -9,7 +9,7 @@ import {
   type SourceRelease,
   type WorkflowWaitContext,
 } from '../schemas/workflow-run';
-import type { WorkflowWaitResult } from '../schemas/dag-node';
+import type { WorkflowWaitResult } from '../schemas/wait-node';
 import type { NodeStateEventInput, ObservabilityEventInput } from './event-types';
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */

@@ -203,7 +203,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     conformanceTest: CONFORMANCE,
   },
   {
-    file: 'packages/workflows/src/schemas/dag-node.ts',
+    file: 'packages/workflows/src/schemas/agent-node.ts',
     name: 'PromptSource',
     kind: 'independent',
     reason: 'Archon prompt file/text union, not an OpenCode message source.',
@@ -219,7 +219,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     conformanceTest: CONFORMANCE,
   },
   {
-    file: 'packages/workflows/src/schemas/workflow-run.ts',
+    file: 'packages/workflows/src/schemas/run-status.ts',
     name: 'WorkflowRunStatus',
     kind: 'independent',
     reason: 'Persisted Archon run-state schema, not Copilot workflow status.',

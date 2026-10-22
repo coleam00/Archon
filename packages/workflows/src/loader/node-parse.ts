@@ -1,7 +1,8 @@
 import type { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
 import { isComposeFanOutNode, isIncludeDirective } from '../schemas';
-import { dagNodeSchema, ignoredFieldsForNode } from '../schemas/dag-node';
+import { dagNodeSchema } from '../schemas/dag-node';
+import { ignoredFieldsForNode } from '../schemas/node-ignored-fields';
 import { getLog } from './log';
 import {
   collectLoopUntilDeprecationWarnings,
