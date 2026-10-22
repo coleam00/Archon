@@ -13,7 +13,7 @@ import {
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
@@ -109,6 +109,11 @@ async function admit(
 
 type SettledOutcome = { runId: string; deferError?: string } & (
   | { kind: 'accepted'; status: 'paused' | 'completed' | 'failed'; error?: string }
+  | {
+      kind: 'accepted';
+      status: 'handed_off';
+      observedStatus: Exclude<WorkflowRunStatus, 'failed' | 'cancelled'> | null;
+    }
   | Exclude<ContinuationAdmission, { kind: 'accepted' }>
   | { kind: 'failed'; error: string }
 );
@@ -120,6 +125,10 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     try {
       const result = await outcome.settled;
       if ('paused' in result) return { runId, kind: outcome.kind, status: 'paused', ...deferral };
+      if ('handedOff' in result && result.success) {
+        const { observedStatus } = result;
+        return { runId, kind: outcome.kind, status: 'handed_off', observedStatus, ...deferral };
+      }
       return result.success
         ? { runId, kind: outcome.kind, status: 'completed', ...deferral }
         : { runId, kind: outcome.kind, status: 'failed', error: result.error, ...deferral };
@@ -154,6 +163,12 @@ function successful(outcome: SettledOutcome): boolean {
   );
 }
 
+function describeOutcome(outcome: SettledOutcome): string {
+  const observed =
+    'observedStatus' in outcome ? `, observed ${outcome.observedStatus ?? 'run removed'}` : '';
+  return `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status}${observed})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`;
+}
+
 async function report(
   action: string,
   outcomes: SettledOutcome[],
@@ -179,11 +194,7 @@ async function report(
     console.log(
       `${action}: ${String(accepted)} continuation(s) accepted${ok ? '' : '; errors reported'}`
     );
-    for (const outcome of outcomes) {
-      console.log(
-        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
-      );
-    }
+    for (const outcome of outcomes) console.log(describeOutcome(outcome));
     if (signaled && !ok)
       console.error(
         'Signal retained. Retry archon workflow wake after resolving the refusal or failure.'
