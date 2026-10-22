@@ -3,7 +3,9 @@ import { describe, expect, mock, test } from 'bun:test';
 import type { MessageChunk } from '@archon/provider-contract';
 
 const mockWarn = mock((_data: unknown, _message?: string): void => {});
+const realPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...realPaths,
   createLogger: mock(() => ({ warn: mockWarn })),
 }));
 
