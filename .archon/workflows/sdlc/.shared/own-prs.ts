@@ -10,7 +10,7 @@
  */
 
 import { isBuildBranch } from './build.ts';
-import { record, type QualifiedPr } from './forge.ts';
+import { record, samePr, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
 import { prFromUrl, itemPr } from './merge.ts';
 import { stateDocuments, stateGet, statePut } from './state.ts';
@@ -40,25 +40,16 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
 }
 
 /**
- * A pull request's identity across repositories: the same number in two repositories is
- * two pull requests. Host and path compare case-insensitively, as `sameRepo` compares them,
- * so a recorded URL and a listed one that differ only in case name one pull request.
- */
-function prKey(pr: QualifiedPr): string {
-  return `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}`.toLowerCase();
-}
-
-/**
  * The pull requests some work item already names, and the work items themselves. A
  * malformed item is noted and skipped, as the pickup skips it.
  */
-function namedPrs(): Set<string> {
-  const named = new Set<string>();
+function namedPrs(): QualifiedPr[] {
+  const named: QualifiedPr[] = [];
   for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
-    named.add(prKey(doc.subject));
+    named.push(doc.subject);
     try {
       const pr = itemPr(doc);
-      if (pr !== null) named.add(prKey(pr));
+      if (pr !== null) named.push(pr);
     } catch (error) {
       note(`own-PR enrollment skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -80,7 +71,7 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
     const listed = openPrsBy(repo, author).filter(pr => !pr.isDraft && !isBuildBranch(pr.headRefName));
     for (const pr of listed) {
       const subject = prFromUrl(pr.url);
-      if (named.has(prKey(subject))) continue;
+      if (named.some(claimed => samePr(claimed, subject))) continue;
       const name = workItemName(subject.number);
       const stored = stateGet(name);
       if (stored.value !== null) continue;
