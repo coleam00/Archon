@@ -1253,13 +1253,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (recommended === 'return') {
       const prepared = asked.asked.attention;
       expect(prepared.recommendation).toMatchObject({
-        evidence: 'Return is unavailable because no build round owns this pull request.',
+        evidence: 'Return is unavailable because this own-PR work item has no build record of its own.',
         confidence: 'high',
         would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
       });
       expect(asked.attention).toContain(prepared.why);
       expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
-      expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
+      expect(asked.attention).toContain('Evidence: Return is unavailable because this own-PR work item has no build record of its own.');
       expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
     } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
@@ -1273,10 +1273,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const inputs = recordInputs([decision({ action: 'return', brief: 'fix the red test', reason: 'CI red in its own test' })]);
     const held = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
     expect(held.code).not.toBe(0);
-    expect(held.stderr).toContain('the sweep returned own pull request 42, which no build round owns; it waits for the next sweep');
+    expect(held.stderr).toContain('the sweep returned own pull request 42, whose work item has no build record of its own; it waits for the next sweep');
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
-    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, which no build round owns');
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, whose work item has no build record of its own');
     expect(buildWaits(doc)).toBe(false);
   }, 60_000);
 

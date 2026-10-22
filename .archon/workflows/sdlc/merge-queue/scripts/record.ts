@@ -55,7 +55,7 @@ function withQueueOther(attention: MergeAttention, item: Item, brief: string): M
   const ownPr = item.own_pr === true;
   if (!ownPr && brief.trim() !== '') return withOther(attention, 'return');
   const unavailable = ownPr
-    ? 'Return is unavailable because no build round owns this pull request.'
+    ? 'Return is unavailable because this own-PR work item has no build record of its own.'
     : 'Return is unavailable because the sweep supplied no build brief.';
   const choices = attention.choices
     .filter(choice => choice.effect !== 'return')
@@ -89,7 +89,7 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts | null;
   readonly record: MergeRecord | null;
-  /** An enrolled maintainer's own pull request: no build round owns it. */
+  /** An enrolled maintainer's own pull request: its work item has no build record of its own. */
   readonly own_pr?: boolean;
 }
 
@@ -126,7 +126,7 @@ function message(error: unknown): string {
  */
 function invalidDecision(decision: Decision, item: Item): string | null {
   const pr = `pull request ${String(decision.number)}`;
-  if (decision.action === 'return' && item.own_pr === true) return `the sweep returned own ${pr}, which no build round owns`;
+  if (decision.action === 'return' && item.own_pr === true) return `the sweep returned own ${pr}, whose work item has no build record of its own`;
   if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
   if (decision.action !== 'ask') return null;
   if (decision.attention === null) return `the sweep asked about ${pr} with no question`;
