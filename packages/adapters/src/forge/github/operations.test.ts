@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
+import { discoverPlugins } from '@archon/forge/discovery';
+import { dispatchForge } from '@archon/forge/dispatch';
 import type { ForgeRequest } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
 
@@ -54,6 +56,12 @@ describe('GitHub outbound producer', () => {
   });
 
   test.each([
+    [
+      'HTTP URL',
+      'http://GHES.example.test:8080/Archon/Repo.git',
+      'ghes.example.test:8080',
+      'Archon/Repo',
+    ],
     ['https URL', 'https://github.com/Archon/Repo.git', 'github.com', 'Archon/Repo'],
     [
       'SSH URL',
@@ -65,7 +73,12 @@ describe('GitHub outbound producer', () => {
   ])('resolves an explicit %s remote', async (_label, remote, host, path) => {
     const response = await handleGithubOperation(
       { operationId: 'resolve-1', op: 'resolve', remote },
-      { token: undefined }
+      {
+        token: undefined,
+        fetch: async () => {
+          throw new Error('Resolution must not fetch');
+        },
+      }
     );
     expect(response).toMatchObject({
       ok: true,
@@ -73,20 +86,36 @@ describe('GitHub outbound producer', () => {
     });
   });
 
-  test('rejects credential-bearing HTTP remotes and treats unsupported remotes as none', async () => {
+  test.each([
+    'https://secret@github.com/a/b.git',
+    'http://secret@ghes.example.test:8080/a/b.git',
+    'http://:secret@ghes.example.test:8080/a/b.git',
+    'http://user:secret@ghes.example.test:8080/a/b.git',
+    'http://ghes.example.test:8080/a/b.git?query=1',
+    'http://ghes.example.test:8080/a/b.git#fragment',
+  ])('rejects credentials, queries and fragments: %s', async remote => {
     expect(
       await handleGithubOperation(
-        { operationId: 'resolve-1', op: 'resolve', remote: 'https://secret@github.com/a/b.git' },
+        { operationId: 'resolve-invalid', op: 'resolve', remote },
         { token: undefined }
       )
     ).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  });
+
+  test.each([
+    '/workspace/local-repository',
+    'http://ghes.example.test:8080/owner',
+    'http://ghes.example.test:8080/owner/repo/extra',
+    'http://ghes.example.test:8080/owner/.git',
+    'http://ghes.example.test:8080/owner/%2E%2E',
+  ])('treats invalid repository paths as none: %s', async remote => {
     expect(
       await handleGithubOperation(
-        { operationId: 'resolve-2', op: 'resolve', remote: '/workspace/local-repository' },
+        { operationId: 'resolve-invalid', op: 'resolve', remote },
         { token: undefined }
       )
     ).toEqual({
-      operationId: 'resolve-2',
+      operationId: 'resolve-invalid',
       ok: true,
       result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
     });
@@ -618,5 +647,82 @@ test('invalid configured GitHub origins fail before sending a credential', async
   } finally {
     if (previous === undefined) delete process.env.GITHUB_URL;
     else process.env.GITHUB_URL = previous;
+  }
+});
+
+test('dispatch resolves only claimed GitHub remotes and preserves parser validation', async () => {
+  const host = 'ghes.example.test:8080';
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [
+        {
+          plugin: 'github',
+          command: process.execPath,
+          args: [resolve(import.meta.dir, 'plugin.ts')],
+        },
+      ],
+      hosts: { [host]: 'github' },
+      scanPath: false,
+    },
+    env: {},
+  });
+  for (const remote of [
+    `http://GHES.example.test:8080/team/repo.git`,
+    `https://${host}/team/repo.git`,
+    `ssh://git@${host}/team/repo.git`,
+    'git@github.com:team/repo.git',
+  ]) {
+    const result = await dispatchForge(
+      { operationId: 'resolve-dispatch', op: 'resolve', remote },
+      { discovery, env: {} }
+    );
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'resolve',
+        value: {
+          kind: 'resolved',
+          forge: 'github',
+          repo: { host: remote.startsWith('git@') ? 'github.com' : host, path: 'team/repo' },
+        },
+      },
+    });
+    expect(result.plugin).toEqual({ name: 'github', version: '1' });
+  }
+  const unclaimed = await dispatchForge(
+    {
+      operationId: 'unclaimed',
+      op: 'resolve',
+      remote: 'http://unclaimed.example.test:8080/team/repo.git',
+    },
+    { discovery, env: {} }
+  );
+  expect(unclaimed.plugin).toBeNull();
+  expect(unclaimed.response).toMatchObject({
+    ok: true,
+    result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+  });
+  for (const remote of [
+    `http://user@${host}/team/repo.git`,
+    `http://:password@${host}/team/repo.git`,
+    `http://user:password@${host}/team/repo.git`,
+    `http://${host}/team/repo.git?query=1`,
+    `http://${host}/team/repo.git#fragment`,
+  ]) {
+    const result = await dispatchForge(
+      { operationId: 'invalid', op: 'resolve', remote },
+      { discovery, env: {} }
+    );
+    expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  }
+  for (const path of ['team', 'team/repo/extra', 'team/.git', 'team/%2E%2E']) {
+    const result = await dispatchForge(
+      { operationId: 'invalid-path', op: 'resolve', remote: `http://${host}/${path}` },
+      { discovery, env: {} }
+    );
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+    });
   }
 });

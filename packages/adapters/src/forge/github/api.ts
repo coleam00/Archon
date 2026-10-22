@@ -161,8 +161,8 @@ export function parseRemote(remote: string | null): RepoRef | null {
         { cause }
       );
     }
-    if (!['https:', 'ssh:'].includes(url.protocol)) return null;
-    if (url.password !== '' || (url.protocol === 'https:' && url.username !== '')) {
+    if (!['http:', 'https:', 'ssh:'].includes(url.protocol)) return null;
+    if (url.password !== '' || (url.protocol !== 'ssh:' && url.username !== '')) {
       throw new GitHubError(
         { kind: 'invalid_request', message: 'GitHub remote must not contain credentials' },
         true
