@@ -1176,6 +1176,32 @@ for (const overlap of ['queue', 'skip'] as const) {
   );
 }
 
+test.each(['pending', 'failed'])(
+  'an incomplete %s binding with a missing linked request cannot prepare again',
+  async status => {
+    const context = await fixture('host');
+    const queued = await queuedReceiptRequest(context);
+    await damageQueuedMembership(context, queued, status);
+    await fs.unlink(queued.requestPath);
+    const receiptBytes = await fs.readFile(queued.path, 'utf8');
+    const head = await fs.readFile(join(context.root, 'head.json'), 'utf8');
+
+    for (let pass = 0; pass < 2; pass++) {
+      await expect(
+        context.store.claimStartBindingPreparation({
+          receiptId: queued.receiptId,
+          bindingId: 'binding',
+          ownerId: 'must-not-prepare',
+        })
+      ).rejects.toThrow('has requests on an incomplete binding');
+      expect(await fs.readFile(queued.path, 'utf8')).toBe(receiptBytes);
+      expect(JSON.parse(await fs.readFile(queued.path, 'utf8')).bindings[0].status).toBe(status);
+      expect(await fs.readFile(join(context.root, 'head.json'), 'utf8')).toBe(head);
+      expect(await context.store.getResourceStartRequest(queued.broken.run.id)).toBeNull();
+    }
+  }
+);
+
 for (const origin of ['named', 'legacy'] as const) {
   test.each(['pending', 'failed'])(
     `a ${origin} inconsistent %s binding does not stop independent preparation`,
