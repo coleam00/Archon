@@ -25,9 +25,10 @@ reference covers launching and tending the queues by hand.
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. An entry can be an object,
   `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
-  maintainer's own open pull requests through the merge queue. Without the file every
-  author is an outsider: intake labels their issues `archon-needs-maintainer` and runs
-  no agent.
+  maintainer's own open pull requests through the merge queue, except one a work item
+  already names, such as a pull request the build queue delivered. Without the file
+  every author is an outsider: intake labels their issues `archon-needs-maintainer`
+  and runs no agent.
 - The forge account the pack's review runs post as must also be on
   `maintainers.json`. The merge queue counts only a review comment a listed
   maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
@@ -154,8 +155,8 @@ same item.
 
 A verdict counts only at the head it reviewed: after a push, the pull request goes
 back to the build queue for a new round. A maintainer's own pull request
-(`merge_queue: "own-prs"`) has no build round to return to, so where another would go
-back, the sweep asks instead and offers no `return`.
+(`merge_queue: "own-prs"`) is an own-PR work item with no build record to return to,
+so where another would go back, the sweep asks instead and offers no `return`.
 
 A pull request whose read fails twice in a row is parked with the read error until
 the build queue readies the item again. A maintainer's own pull request has no build

@@ -1,12 +1,12 @@
 // @archon-test-isolated
 import {
-  InMemoryStore,
   makeDeps,
   makePlatform,
   makeFanResolver,
   fanChildEcho,
   fanChildCond,
 } from './child-runs/test-utils';
+import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import type { InMemoryStoreEvent } from './test-utils';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';

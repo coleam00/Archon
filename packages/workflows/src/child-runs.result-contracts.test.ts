@@ -1,5 +1,6 @@
 // @archon-test-isolated
-import { InMemoryStore, makeDeps, makePlatform, realArchonPaths } from './child-runs/test-utils';
+import { makeDeps, makePlatform, realArchonPaths } from './child-runs/test-utils';
+import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';

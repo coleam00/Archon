@@ -17,7 +17,8 @@ import {
 } from '@archon/paths';
 import { setInstallDefault } from './ai';
 import { DEFAULT_CHAT_MODEL_OPTIONS } from './setup-model-options';
-import { checkProviderDiagnostics, type CheckResult } from './doctor';
+import type { CheckResult } from './doctor-check';
+import { checkProviderDiagnostics } from './doctor-providers';
 import { providerCommand } from './provider';
 import {
   cancelSetup,

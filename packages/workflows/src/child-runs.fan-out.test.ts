@@ -1,7 +1,5 @@
 // @archon-test-isolated
 import {
-  holdsPathLock,
-  InMemoryStore,
   makeProvider,
   makeDeps,
   makePlatform,
@@ -9,6 +7,7 @@ import {
   fanChildEcho,
   fanChildCond,
 } from './child-runs/test-utils';
+import { holdsPathLock, InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import {
   isTerminalRunStatus,

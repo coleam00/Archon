@@ -391,8 +391,9 @@ request, never the state.
   The file is a JSON array whose entries are forge logins, or objects naming one with
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue (see Pickup there). No file means an empty
-  list, so every author is outside. Any other shape refuses the run.
+  open pull requests in the merge queue, except one a work item already names (see
+  Pickup there). No file means an empty list, so every author is outside. Any other
+  shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
 - **Promotion.** A listed maintainer promotes an outside item by adding
@@ -636,11 +637,15 @@ then the project's file, whose lines win where the two conflict.
   queue's last round delivered. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). No build round
-  owns such a pull request, so where another would go back to the build queue (no
-  verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
-  sweep asks instead, naming what is wrong and the command a maintainer can launch,
-  and its question offers no `return`. The record never hands one to the build queue.
+  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
+  a build round recorded is named by its build item and never enrolls. A build round
+  records its pull request once the round ends, so one listed while the round is still
+  running can enroll; that short window is an accepted gap, and enrollment after the
+  round finds the pull request recorded. An own-PR
+  item has no build record of its own, so where another would go back to the build queue
+  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
+  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
+  its question offers no `return`. The record never hands one to the build queue.
   The queue never starts that run itself. An own-PR item answered `park` or `other`
   waits again only when its current head differs from its latest merge decision's
   head. At the same head it stays parked. Merged own-PR items and other kinds of

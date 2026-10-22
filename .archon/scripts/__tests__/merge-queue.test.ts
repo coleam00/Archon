@@ -279,7 +279,7 @@ interface FakePr {
   readonly merged?: readonly number[];
   readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -303,7 +303,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[1] === 'pr' && argv[2] === 'list') {
     answered();
     if (forgePr.ownPrsFail) return out(1, '', 'HTTP 502');
-    return out(0, JSON.stringify(forgePr.ownPrs ?? []));
+    // Each row carries only the fields \`--json\` selected, as gh reports them.
+    const selected = String(argv[argv.indexOf('--json') + 1]).split(',');
+    const rows = (forgePr.ownPrs ?? []).map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
+    return out(0, JSON.stringify(rows));
   }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
     answered();
@@ -465,7 +468,8 @@ describe('the merge queue scripts', () => {
     seed(at, item());
     const ownPrs = [
       { number: 42, url: PR_URL, isDraft: false },
-      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
+      // Hand-opened on a branch shaped like a build branch; no work item records it.
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
@@ -474,6 +478,64 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
     expect(stored(at, 51).value).toBeNull();
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
+  }, 60_000);
+
+  test('an own pull request listed without its draft flag is not enrolled', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52') }] } });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('own-PR enrollment stopped');
+    expect(stored(at, 52).value).toBeNull();
+  }, 60_000);
+
+  test('a pull request a build round recorded is not enrolled', () => {
+    const recorded = { ...BUILT.rounds[0]!, pr_url: PR_URL.replace(/42$/, '50') };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, status: 'next', rounds: [recorded] }));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
+    expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
+    expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
+  test('a pull request an earlier build round recorded is not enrolled, though a later round moved on', () => {
+    const earlier = { ...BUILT.rounds[0]!, run_id: 'ship-0', pr_url: PR_URL.replace(/42$/, '50') };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, status: 'next', rounds: [earlier, BUILT.rounds[0]!] }));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
+    expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
+    expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
+  test('a recorded pull request URL that differs from the listed one only in case is the same pull request', () => {
+    const recorded = { ...BUILT.rounds[0]!, pr_url: 'https://GHE.example.com/Example/Repo/pull/50' };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, status: 'next', rounds: [recorded] }));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
+    expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
+    expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
+  test('enrollment compares the repository as well as the number', () => {
+    const other = { host: PR.repo.host, path: 'someone/else' };
+    const otherRound = { ...BUILT.rounds[0]!, pr_url: `https://${other.host}/${other.path}/pull/50` };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, { ...item({ ...BUILT, status: 'next', rounds: [otherRound] }), subject: { repo: other, number: 8 } });
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[50, true]]);
+  }, 60_000);
+
+  test('a malformed work item is noted and skipped, and own pull requests still enroll', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    inProcess(at, () => expect(statePut('work/9', { version: 0 }, stateGet('work/9').revision)).toBe('ok'));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const picked = run(at, 'facts', {}, { pr: { ownPrs } });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).not.toContain('own-PR enrollment stopped');
+    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(ownPrs[0]!.url);
   }, 60_000);
 
   for (const choice of ['park', 'other']) {
@@ -1191,13 +1253,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (recommended === 'return') {
       const prepared = asked.asked.attention;
       expect(prepared.recommendation).toMatchObject({
-        evidence: 'Return is unavailable because no build round owns this pull request.',
+        evidence: 'Return is unavailable because this own-PR work item has no build record of its own.',
         confidence: 'high',
         would_change: 'A build round owning this pull request and a nonblank build brief would make return available.',
       });
       expect(asked.attention).toContain(prepared.why);
       expect(asked.attention).toContain('Recommendation: `other`** (high confidence)');
-      expect(asked.attention).toContain('Evidence: Return is unavailable because no build round owns this pull request.');
+      expect(asked.attention).toContain('Evidence: Return is unavailable because this own-PR work item has no build record of its own.');
       expect(asked.attention).toContain('What would change it: A build round owning this pull request and a nonblank build brief would make return available.');
     } else expect(asked.asked.attention.recommendation).toEqual(attention.recommendation);
     expect(asked.asked.attention.choices.map(choice => choice.effect)).not.toContain('return');
@@ -1211,10 +1273,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const inputs = recordInputs([decision({ action: 'return', brief: 'fix the red test', reason: 'CI red in its own test' })]);
     const held = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
     expect(held.code).not.toBe(0);
-    expect(held.stderr).toContain('the sweep returned own pull request 42, which no build round owns; it waits for the next sweep');
+    expect(held.stderr).toContain('the sweep returned own pull request 42, whose work item has no build record of its own; it waits for the next sweep');
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
-    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, which no build round owns');
+    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, whose work item has no build record of its own');
     expect(buildWaits(doc)).toBe(false);
   }, 60_000);
 
