@@ -362,6 +362,20 @@ test.skipIf(process.platform === 'win32')(
   }
 );
 
+posixOnly('an owned group that overflows its output buffer is ended and rejected', async () => {
+  const started = Date.now();
+  const failure = (await runSubprocess(
+    { kind: 'host' },
+    '/bin/bash',
+    ['-c', 'head -c 2097152 /dev/zero; /bin/sleep 30'],
+    { cwd: import.meta.dir, env: {}, ownProcessGroup: true, retention: { standalone: true } }
+  ).catch((error: unknown) => error)) as RawSubprocessRejection;
+
+  expect(failure.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+  expect(failure.stdout).toHaveLength(1024 * 1024);
+  expect(Date.now() - started).toBeLessThan(10_000);
+});
+
 posixOnly('evidence keeps no GitHub App token a command obtained after it started', async () => {
   // Stands in for the App-mode gh shim: the token is minted inside the child, so it is
   // not among the credential values runSubprocess collected before spawning.
