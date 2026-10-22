@@ -1293,6 +1293,54 @@ describe('runFixtures exec-code isolation (#2851)', () => {
   );
 
   it.each(['bash', 'script'] as const)(
+    'reports host-absent configured env in executable %s fixture diagnostics',
+    async kind => {
+      expect(process.env.ARCHON_FIXTURE_DIAGNOSTIC).toBeUndefined();
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: configured environment diagnostic',
+          'nodes:',
+          '  - id: code',
+          ...(kind === 'bash'
+            ? [
+                '    bash: |',
+                '      printf "stdout: %s" "$ARCHON_FIXTURE_DIAGNOSTIC"',
+                '      printf "stderr: %s" "$ARCHON_FIXTURE_DIAGNOSTIC" >&2',
+                '      exit 7',
+              ]
+            : [
+                '    runtime: bun',
+                '    script: |',
+                '      console.log("stdout:", process.env.ARCHON_FIXTURE_DIAGNOSTIC);',
+                '      console.error("stderr:", process.env.ARCHON_FIXTURE_DIAGNOSTIC);',
+                '      process.exit(7);',
+              ]),
+        ].join('\n'),
+        body: 'fixture:\n  expect: failed\n  fail-node: code\nexec-code: true',
+      });
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({
+        workflows: workflowsOnDisk(cwd, ['test-wf']),
+        cwd,
+        config: {
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          envVars: { ARCHON_FIXTURE_DIAGNOSTIC: 'configured-value' },
+        },
+      });
+      expect(report.results[0].outcome).toBe('failed');
+      expect(report.results[0].pass).toBe(true);
+      for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(output).toContain('[exit 7]');
+        expect(output).toContain('stdout: configured-value');
+        expect(output).toContain('stderr: configured-value');
+      }
+    }
+  );
+
+  it.each(['bash', 'script'] as const)(
     'redacts inherited credentials from executable %s fixture diagnostics',
     async kind => {
       const secret = 'synthetic-fixture-credential-4353';
@@ -1344,7 +1392,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       const secret = 'synthetic-protected-fixture-4353';
       const explicitValue = 'synthetic-explicit-fixture-4353';
       const previous = process.env.ARCHON_FIXTURE_ACCOUNT;
-      process.env.ARCHON_FIXTURE_ACCOUNT = secret;
+      delete process.env.ARCHON_FIXTURE_ACCOUNT;
       try {
         const { cwd } = writeTempProject({
           workflowYaml: [
@@ -1380,6 +1428,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
             assistant: undefined,
             assistants: { claude: {}, codex: {} },
             commands: {},
+            envVars: { ARCHON_FIXTURE_ACCOUNT: secret },
             protectedEnvKeys: ['ARCHON_FIXTURE_ACCOUNT'],
             protectedCredentialValues: [explicitValue],
           },

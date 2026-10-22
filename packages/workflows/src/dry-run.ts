@@ -132,7 +132,7 @@ export async function dryRunWorkflow(options: {
    * The install's resolved config and AI profile. Supplying them is what makes the
    * per-node provider/model report match what a real run would do; without them the
    * report falls back to the bare default assistant with no tier or alias resolution.
-   * Config also supplies protected credential provenance for executable diagnostics.
+   * Config also supplies project environment values and protected credential provenance.
    */
   config?: WorkflowConfig;
   aiProfile?: ResolvedAiProfile;
@@ -145,6 +145,7 @@ export async function dryRunWorkflow(options: {
     declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   const ctx: DryRunContext = {
+    envVars: options.config?.envVars,
     protectedEnvKeys: options.config?.protectedEnvKeys,
     protectedCredentialValues: options.config?.protectedCredentialValues,
     workflow: options.workflow,

@@ -172,6 +172,60 @@ process.exit(9);`,
     expect(result.summary).toBe(value + value);
   });
 
+  test.each(['bash', 'script'] as const)(
+    'delivers configured env with input and engine precedence to failed %s nodes',
+    async kind => {
+      expect(process.env.ARCHON_CONFIGURED_DIAGNOSTIC).toBeUndefined();
+      const previous = process.env.ARCHON_ENV_PRECEDENCE;
+      process.env.ARCHON_ENV_PRECEDENCE = 'host-value';
+      try {
+        const result = await dryRunWorkflow({
+          workflow: makeTestWorkflow({
+            name: 'configured-env',
+            inputs: { value: { required: true } },
+            nodes: [
+              {
+                id: 'code',
+                ...(kind === 'bash'
+                  ? {
+                      bash: 'printf "stdout: %s %s %s %s" "$ARCHON_CONFIGURED_DIAGNOSTIC" "$ARCHON_ENV_PRECEDENCE" "$INPUTS_VALUE" "$WORKFLOW_ID"; printf "stderr: %s" "$ARCHON_CONFIGURED_DIAGNOSTIC" >&2; exit 7',
+                    }
+                  : {
+                      runtime: 'bun',
+                      script:
+                        'console.log("stdout:", process.env.ARCHON_CONFIGURED_DIAGNOSTIC, process.env.ARCHON_ENV_PRECEDENCE, process.env.INPUTS_VALUE, process.env.WORKFLOW_ID); console.error("stderr:", process.env.ARCHON_CONFIGURED_DIAGNOSTIC); process.exit(7);',
+                    }),
+              },
+            ],
+          }),
+          inputs: { value: 'input-value' },
+          config: {
+            assistant: undefined,
+            assistants: { claude: {}, codex: {} },
+            commands: {},
+            envVars: {
+              ARCHON_CONFIGURED_DIAGNOSTIC: 'configured-value',
+              ARCHON_ENV_PRECEDENCE: 'project-value',
+              INPUTS_VALUE: 'shadowed-input',
+              WORKFLOW_ID: 'shadowed-engine',
+            },
+          },
+          execCode: true,
+        });
+        expect(result.outcome).toBe('failed');
+        expect(result.trace[0]).toMatchObject({ state: 'failed' });
+        expect(result.trace[0]?.reason).toContain('[exit 7]');
+        expect(result.trace[0]?.reason).toContain(
+          'stdout: configured-value project-value input-value dry-run'
+        );
+        expect(result.trace[0]?.reason).toContain('stderr: configured-value');
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_ENV_PRECEDENCE;
+        else process.env.ARCHON_ENV_PRECEDENCE = previous;
+      }
+    }
+  );
+
   test('redacts declared token inputs from failed subprocess diagnostics', async () => {
     const secret = 'synthetic-input-credential-4353';
     const result = await dryRunWorkflow({
@@ -196,7 +250,7 @@ process.exit(9);`,
       const protectedValue = 'synthetic-protected-env-4353';
       const explicitValue = 'synthetic-explicit-value-4353';
       const previous = process.env.ARCHON_DIAGNOSTIC_ACCOUNT;
-      process.env.ARCHON_DIAGNOSTIC_ACCOUNT = protectedValue;
+      delete process.env.ARCHON_DIAGNOSTIC_ACCOUNT;
       try {
         const result = await dryRunWorkflow({
           workflow: makeTestWorkflow({
@@ -222,6 +276,7 @@ process.exit(9);`,
             assistant: undefined,
             assistants: { claude: {}, codex: {} },
             commands: {},
+            envVars: { ARCHON_DIAGNOSTIC_ACCOUNT: protectedValue },
             protectedEnvKeys: ['ARCHON_DIAGNOSTIC_ACCOUNT'],
             protectedCredentialValues: [explicitValue],
           },

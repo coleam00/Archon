@@ -53,7 +53,7 @@ export function nodeType(node: DagNode): DryRunNodeType {
 }
 
 export interface DryRunContext
-  extends Pick<WorkflowConfig, 'protectedEnvKeys' | 'protectedCredentialValues'> {
+  extends Pick<WorkflowConfig, 'envVars' | 'protectedEnvKeys' | 'protectedCredentialValues'> {
   workflow: ResolvedWorkflow;
   userMessage: string;
   cwd: string;

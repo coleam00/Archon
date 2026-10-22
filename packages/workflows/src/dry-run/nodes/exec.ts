@@ -33,6 +33,7 @@ export async function executeCodeNode(
     await mkdir(ctx.stateDir, { recursive: true });
     const env = {
       ...process.env,
+      ...ctx.envVars,
       PYTHONDONTWRITEBYTECODE: '1',
       PWD: ctx.execWorkspace,
       OLDPWD: ctx.execWorkspace,
