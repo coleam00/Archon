@@ -59,7 +59,7 @@ import {
   recoverBeforeRead,
 } from './commit';
 import { createTransactionView } from './transaction-view';
-import { documentPaths, listReceiptDocuments } from './admission-read';
+import { documentPaths, listReceiptDocuments, readReceiptDocument } from './admission-read';
 
 const log = createLogger('file-store.admission');
 
@@ -111,7 +111,7 @@ export function createAdmissionTransaction(
   const request = (id: string): Promise<Request | null> =>
     read(pathFor('requests', id), requestSchema);
   async function receipt(id: string): Promise<Receipt | null> {
-    const row = receipts.get(id) ?? (await read(pathFor('receipts', id), receiptSchema));
+    const row = receipts.get(id) ?? (await readReceiptDocument(root, pathFor('receipts', id)));
     if (row) receipts.set(id, row);
     return row;
   }
@@ -524,15 +524,25 @@ export function createFileAdmissionStore(
       const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
       return { inspection: await inspect(row), position: row.position };
     } catch (error) {
+      let inspectionError = error;
+      let receiptId: string | undefined;
+      try {
+        receiptId = await receiptIdForRequest(id);
+      } catch (attributionError) {
+        inspectionError = new AggregateError(
+          [error, attributionError],
+          'Queued request inspection and receipt attribution failed'
+        );
+      }
       return {
         inspection: {
           id,
-          receiptId: await receiptIdForRequest(id),
+          receiptId,
           resource:
             typeof resource === 'string' && pathFor('slots', resource) === slotPath
               ? resource
               : undefined,
-          error: new Error(`Invalid queued request document '${path}'`, { cause: error }),
+          error: new Error(`Invalid queued request document '${path}'`, { cause: inspectionError }),
         },
         position,
       };

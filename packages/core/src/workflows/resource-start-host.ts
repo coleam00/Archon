@@ -366,7 +366,12 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     if (disposition.status === 'admitted') await start(disposition.requestId, binding.receiptId);
   }
 
-  const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
+  let queued: QueuedResourceStartInspection[] = [];
+  try {
+    queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
+  } catch (error) {
+    failures.push({ error });
+  }
   const drain = async (resource: string): Promise<void> => {
     let decisions: ResourceStartDisposition[];
     try {
