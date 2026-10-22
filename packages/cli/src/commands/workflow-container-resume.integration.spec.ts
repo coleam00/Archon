@@ -10,6 +10,7 @@ import { clearRegistry } from '@archon/providers';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { ContainerBackend } from '@archon/isolation';
+import * as git from '@archon/git';
 import * as credentials from '@archon/workflows/run-preflight';
 import * as subprocess from '@archon/workflows/subprocess';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -85,6 +86,9 @@ async function prepare(root: string) {
     }
   );
   const discard = watch(spyOn(ContainerBackend.prototype, 'discardChanges')).mockResolvedValue();
+  // The node-start checkout probe runs `docker exec` through execFileAsync; answer it as a
+  // missing container would instead of spawning a real docker for the made-up container id.
+  watch(spyOn(git, 'execFileAsync')).mockRejectedValue(new Error('No such container'));
   const auth = watch(spyOn(credentials, 'assertRunCredentials')).mockResolvedValue();
   const execute = watch(spyOn(subprocess, 'runSubprocess')).mockImplementation(async context => {
     expect(context).toEqual({ kind: 'container', containerId: 'restarted' });
