@@ -149,6 +149,14 @@ function pathKey(env: Record<string, string>): string {
   return Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
 }
 
+function parseObjectFrame(line: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(line);
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Expected a JSON object frame');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export class AppServerConnection {
   private readonly toolCalls = new Set<Promise<void>>();
   private toolCallHandler: ((params: unknown) => Promise<DynamicToolCallResponse>) | undefined;
@@ -313,11 +321,7 @@ export class AppServerConnection {
     if (this.endedWith) return;
     let message: Record<string, unknown>;
     try {
-      const parsed: unknown = JSON.parse(line);
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('Expected a JSON object frame');
-      }
-      message = parsed as Record<string, unknown>;
+      message = parseObjectFrame(line);
     } catch {
       // The line can carry model or user text, so only its length is logged.
       getLog().warn({ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line');
