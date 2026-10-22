@@ -136,6 +136,13 @@ by its `runId` and `occurrence` exactly as above. Labels are the user's routing 
 `--label ci=other` selects one class, and `attention label` writes a classification
 without answering. Archon never routes by them.
 
+An item of kind `usage_limit` asks nothing. Its run hit a provider usage limit that
+reported a reset time, and waits until then. A node that failed only downstream of the
+limited one, such as an `all_done` node reading its output, does not turn the wait into a
+failure. At the reset, a continuation host (`archon serve`, `archon workflow wake`, or
+the CLI process that started the run) runs the failed nodes again. Cancel or abandon the
+run to stop it.
+
 A workflow can ask several independent questions at once by fanning out one child run
 per question. Each child is its own item, with its own `runId` and `occurrence`, and
 its `fanOut.parentRunId` names the parent. `attention <parent-run-id>` returns only the
@@ -198,17 +205,21 @@ Choose deliberately after reading what the gate produced — not by reflex.
   cancelling server executes itself, and a `workflow:` sub-run with no owner of
   its own (it runs inside its root), is marked `cancelled` and stops at its
   executor's next status check. Otherwise it refuses and changes nothing when no
-  owner answers. Use this to kill real work. When a process outside the run's
-  process group still holds a node's output, cancel still ends the run and prints
-  a warning (`cleanupWarnings` in `--json`). Archon does not signal or name that
-  process: find it with `lsof` on the run's checkout before you reuse or remove
-  the checkout.
+  owner answers. Use this to kill real work. Cancel still ends the run, and prints a
+  warning (`cleanupWarnings` in `--json`), when a process outside the run's process
+  group still holds a node's output, and on macOS and Linux when a host `bash:` or
+  `script:` command started or completed, because it may have left background work
+  running. The warning confirms neither a survivor nor cleanup, and Archon does not
+  signal or name such a process. Find it with `lsof` on the run's checkout, check whose
+  it is, and stop it before you reuse or remove the checkout.
 - `abandon` is for paused or failed runs, or a "running" row whose owner is gone
   (crashed host). If an owner still answers on this host, it stops it first, like
   `cancel`. If none answers, it records `cancelled` and prints the host and pid the
   run recorded; when that host is another machine, check there before abandoning.
   It also removes the worktree the run created, uncommitted files included, and keeps
-  the branch. Commit or copy anything you need from the worktree first.
+  the branch. Commit or copy anything you need from the worktree first. When stopping
+  the owner produced one of cancel's warnings, abandon keeps the checkout for you to
+  inspect instead.
 
 ## A stalled turn: end-turn, cancel or resume
 
@@ -256,6 +267,13 @@ the normalized top-level outcome. It does not expose the authored field name
 (`green`, `ready`, or `rooted`) as another top-level property. Locate the report
 through `leave_behind.artifactFiles`, then read the artifact before reporting to
 the user.
+
+A completed `workflow:` fan-out node is not completed child work: under the default
+`join: all_done` it completes once every child is terminal, whatever each child's
+result. `workflow get <run-id>` prints a `Fan-out work:` line with the tally and the
+unfinished slots for such a node. The full per-slot record (`completed`, `failed`,
+`not_started`, or a `cancelled_*` outcome naming who cancelled it) is
+`terminal_record.nodes[].fan_out_outcome` with `--json`.
 
 Report outcomes with their evidence: "completed, review verdict ready:false —
 2 findings remain, report at <path>" beats "done".
