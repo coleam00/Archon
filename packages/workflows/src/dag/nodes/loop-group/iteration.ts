@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -76,7 +77,7 @@ export async function runLoopGroupIteration(
   // executeLoopNode's between-iteration tolerance — but a terminal/cancelled state
   // means the loop must stop now, skipping snapshot/completion handling for this
   // iteration. Re-check before proceeding.
-  const postBodyStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const postBodyStatus = await readParentStatus(run);
   // null (run row gone / deleted) is a stop condition too — treat it as 'deleted'.
   if (!shouldContinueStreamingForStatus(postBodyStatus)) {
     const effectiveStatus = postBodyStatus ?? 'deleted';
@@ -155,13 +156,21 @@ export async function runLoopGroupIteration(
   return undefined;
 }
 
+async function readParentStatus({ ctx, node }: LoopGroupRun) {
+  try {
+    return await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  } catch (cause) {
+    throw new ParentStatusReadError(ctx.workflowRun.id, node.id, cause);
+  }
+}
+
 /** Between-iteration status check (paused tolerated — mirrors executeLoopNode). */
 async function stopBeforeIteration(
   run: LoopGroupRun,
   i: number
 ): Promise<LoopGroupBodyResult | undefined> {
   const { ctx, node } = run;
-  const runStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const runStatus = await readParentStatus(run);
   if (shouldContinueStreamingForStatus(runStatus)) return undefined;
   const effectiveStatus = runStatus ?? 'deleted';
   getLog().info(

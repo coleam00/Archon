@@ -179,7 +179,8 @@ nodes:
   async function recoverInterruptedChildren(
     store: InMemoryStore,
     deps: ReturnType<typeof makeDeps>,
-    fanOut: boolean
+    fanOut: boolean,
+    priorPaidAttempts = 0
   ): Promise<void> {
     for (const run of store.runs.values()) {
       if (run.workflow_name !== 'target') continue;
@@ -216,15 +217,17 @@ nodes:
     );
     expect((await store.getWorkflowRun(outer.id))?.status).toBe('completed');
     expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
-      total_cost_usd: fanOut ? 0.03 : 0.02,
-      total_tokens_in: fanOut ? 21 : 14,
-      total_tokens_out: fanOut ? 9 : 6,
+      total_cost_usd: (fanOut ? 0.03 : 0.02) + priorPaidAttempts * 0.01,
+      total_tokens_in: (fanOut ? 21 : 14) + priorPaidAttempts * 7,
+      total_tokens_out: (fanOut ? 9 : 6) + priorPaidAttempts * 3,
+      total_cache_read_tokens: (fanOut ? 15 : 10) + priorPaidAttempts * 5,
+      total_cache_write_tokens: 0,
     });
     expect(
       store.events.filter(
         event => event.event_type === 'node_completed' && event.data?.type === 'agent'
       )
-    ).toHaveLength(fanOut ? 3 : 2);
+    ).toHaveLength((fanOut ? 3 : 2) + priorPaidAttempts);
   }
 
   type InterruptionCaller = 'child' | 'child fan-out' | 'engine resume' | 'automatic resume';
@@ -384,10 +387,13 @@ nodes:
       await writeWorkflow(
         'target',
         `name: target
-description: fails before paid work on its first pass
+description: fails after paid work on its first pass
 nodes:
+  - id: paid
+    prompt: first attempt
   - id: attempt
     bash: test -f retry-marker
+    depends_on: [paid]
   - id: fan
     include: block
     depends_on: [attempt]
@@ -448,13 +454,15 @@ ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parall
         throw new Error('Expected lifecycle interruption');
       expect(error.cause).toBe(cause);
       expect((await store.getWorkflowRun(outer.id))?.metadata).toMatchObject({
-        total_cost_usd: fanOut ? 0.03 : 0.02,
-        total_tokens_in: fanOut ? 21 : 14,
-        total_tokens_out: fanOut ? 9 : 6,
+        total_cost_usd: fanOut ? 0.05 : 0.03,
+        total_tokens_in: fanOut ? 35 : 21,
+        total_tokens_out: fanOut ? 15 : 9,
+        total_cache_read_tokens: fanOut ? 25 : 15,
+        total_cache_write_tokens: 0,
       });
       expect((await store.getWorkflowRun(outer.id))?.status).toBe('running');
       store.getWorkflowRunStatus = readStatus;
-      await recoverInterruptedChildren(store, deps, fanOut);
+      await recoverInterruptedChildren(store, deps, fanOut, fanOut ? 2 : 1);
     }
   );
 
@@ -538,6 +546,71 @@ ${nodes}
       expect(fail).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
       expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
+    }
+  );
+
+  it.each(['before iteration', 'after body'] as const)(
+    'propagates a rejected loop-group status read %s',
+    async phase => {
+      await writeWorkflow(
+        'group-status',
+        `name: group-status
+description: loop lifecycle
+nodes:
+  - id: group
+    loop_group:
+      until: DONE
+      max_iterations: 1
+      nodes:
+        - id: work
+          prompt: work
+`
+      );
+      const store = new InMemoryStore();
+      const readStatus = store.getWorkflowRunStatus;
+      const cause = Object.assign(new Error('Unsupported workflow status'), {
+        name: 'WorkflowStatusReadError',
+      });
+      let rejected = false;
+      let bodyStatusReads = 0;
+      store.getWorkflowRunStatus = async id => {
+        const atBoundary =
+          phase === 'before iteration'
+            ? store.events.some(
+                event => event.step_name === 'group' && event.event_type === 'node_started'
+              )
+            : store.events.some(
+                event => event.step_name === 'group.work' && event.event_type === 'node_completed'
+              );
+        if (phase === 'after body' && atBoundary) bodyStatusReads++;
+        if (!rejected && atBoundary && (phase === 'before iteration' || bodyStatusReads === 2)) {
+          rejected = true;
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const complete = spyOn(store, 'completeWorkflowRun');
+      const error: unknown = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('group-status'),
+        'goal'
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(rejected).toBe(true);
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      expect([...store.runs.values()][0]?.status).toBe('running');
+      if (phase === 'before iteration')
+        expect(store.events.some(event => event.step_name === 'group.work')).toBe(false);
+      else expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
     }
   );
 
@@ -1302,59 +1375,96 @@ nodes:
     expect(child?.conversation_id).toBe('conv-db');
   });
 
-  it('propagates a child terminal write failure through a workflow node', async () => {
-    await writeWorkflow(
-      'child-terminal-write',
-      `
+  it.each([false, true])(
+    'retains paid child usage through terminal write failure (unknown tokens=%p)',
+    async unknownTokens => {
+      await writeWorkflow(
+        'child-terminal-write',
+        `
 name: child-terminal-write
 description: child whose completion write fails
 nodes:
   - id: work
     prompt: "work"
 `
-    );
-    await writeWorkflow(
-      'parent-terminal-write',
-      `
+      );
+      await writeWorkflow(
+        'parent-terminal-write',
+        `
 name: parent-terminal-write
 description: parent that invokes the child
 nodes:
   - id: sub
     workflow: child-terminal-write
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const completeWorkflowRun = store.completeWorkflowRun.bind(store);
-    const failWorkflowRun = store.failWorkflowRun.bind(store);
-    const parentFailureWrites: string[] = [];
-    store.completeWorkflowRun = (runId, completion, metadata) => {
-      if (store.runs.get(runId)?.workflow_name === 'child-terminal-write') {
-        return Promise.reject(new Error('child terminal write failed'));
-      }
-      return completeWorkflowRun(runId, completion, metadata);
-    };
-    store.failWorkflowRun = (runId, error) => {
-      if (store.runs.get(runId)?.workflow_name === 'parent-terminal-write') {
-        parentFailureWrites.push(error);
-      }
-      return failWorkflowRun(runId, error);
-    };
+      const store = new InMemoryStore();
+      const completeWorkflowRun = store.completeWorkflowRun.bind(store);
+      const failWorkflowRun = store.failWorkflowRun.bind(store);
+      const parentFailureWrites: string[] = [];
+      store.completeWorkflowRun = async (runId, completion, metadata) => {
+        if (store.runs.get(runId)?.workflow_name === 'child-terminal-write') {
+          if (unknownTokens) {
+            await store.updateWorkflowRun(runId, { metadata: { total_tokens_unknown: true } });
+            const parent = [...store.runs.values()].find(
+              run => run.workflow_name === 'parent-terminal-write'
+            )!;
+            await store.updateWorkflowRun(parent.id, {
+              metadata: {
+                total_tokens_in: 999,
+                total_tokens_out: 999,
+                total_cache_read_tokens: 999,
+                total_cache_write_tokens: 999,
+              },
+            });
+          }
+          throw new Error('child terminal write failed');
+        }
+        return completeWorkflowRun(runId, completion, metadata);
+      };
+      store.failWorkflowRun = (runId, error) => {
+        if (store.runs.get(runId)?.workflow_name === 'parent-terminal-write') {
+          parentFailureWrites.push(error);
+        }
+        return failWorkflowRun(runId, error);
+      };
 
-    await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        await discover('parent-terminal-write'),
-        'goal',
-        { conversationId: 'conv-db' }
-      )
-    ).rejects.toThrow('child terminal write failed');
+      await expect(
+        executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          await discover('parent-terminal-write'),
+          'goal',
+          { conversationId: 'conv-db' }
+        )
+      ).rejects.toThrow('child terminal write failed');
 
-    expect(parentFailureWrites).toEqual([]);
-  });
+      expect(parentFailureWrites).toEqual([]);
+      const parent = [...store.runs.values()].find(
+        run => run.workflow_name === 'parent-terminal-write'
+      )!;
+      expect(parent.metadata).toMatchObject({ total_cost_usd: 0.01 });
+      expect(parent.metadata).toMatchObject(
+        unknownTokens
+          ? {
+              total_tokens_unknown: true,
+              total_tokens_in: null,
+              total_tokens_out: null,
+              total_cache_read_tokens: null,
+              total_cache_write_tokens: null,
+            }
+          : {
+              total_tokens_in: 7,
+              total_tokens_out: 3,
+              total_cache_read_tokens: 5,
+              total_cache_write_tokens: 0,
+            }
+      );
+    }
+  );
 
   it('propagates a child terminal write failure through a fan-out node', async () => {
     await writeWorkflow(
@@ -1402,6 +1512,16 @@ nodes:
         { conversationId: 'conv-db' }
       )
     ).rejects.toThrow('fan-out child terminal write failed');
+    const parent = [...store.runs.values()].find(
+      run => run.workflow_name === 'fan-parent-terminal-write'
+    )!;
+    expect(parent.metadata).toMatchObject({
+      total_cost_usd: 0.01,
+      total_tokens_in: 7,
+      total_tokens_out: 3,
+      total_cache_read_tokens: 5,
+      total_cache_write_tokens: 0,
+    });
   });
 
   it('propagates sparse model bindings into a child run and its effective profile', async () => {

@@ -1,3 +1,4 @@
+import { unreportedChildUsage } from '../../child-usage';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
@@ -243,6 +244,14 @@ export async function executeWorkflowNode(
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    outcome = {
+      ...outcome,
+      ...unreportedChildUsage(
+        outcome,
+        await deps.store.getDagResumeSnapshot(parentRun.id),
+        executionNodeId
+      ),
+    };
     switch (outcome.status) {
       case 'completed':
         return await asCompleted(outcome);

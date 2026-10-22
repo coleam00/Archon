@@ -9,7 +9,7 @@
  */
 
 import { readInterruptedRunUsage } from './dag/interrupted-usage';
-import { ParentStatusReadError } from './parent-status-read';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -471,7 +471,7 @@ export async function executeDagWorkflow(
     if (
       error instanceof RunBudgetRefusedError ||
       error instanceof RunSourceUnreadableError ||
-      error instanceof ParentStatusReadError
+      isWorkflowExecutionInterruption(error)
     ) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
       // the in-memory totals miss it. Rebuild from node events and child run telemetry.

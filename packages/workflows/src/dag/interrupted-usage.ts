@@ -1,4 +1,5 @@
-import { ParentStatusReadError } from '../parent-status-read';
+import { isWorkflowExecutionInterruption } from '../execution-interruption';
+import { unreportedChildUsage } from './child-usage';
 import { readSubrunMetadata } from '../schemas';
 import type { IWorkflowStore } from '../store';
 import { childRunUsage } from './child-run';
@@ -10,7 +11,7 @@ export async function readInterruptedRunUsage(
   error: unknown
 ): Promise<RunUsageFigures> {
   const durable = await store.getDagResumeSnapshot(runId);
-  if (!(error instanceof ParentStatusReadError)) return durable;
+  if (!isWorkflowExecutionInterruption(error)) return durable;
   const unresolvedChildren = new Set(
     [...(durable.unfinishedInvocations?.values() ?? [])]
       .filter(
@@ -22,15 +23,29 @@ export async function readInterruptedRunUsage(
   );
   if (unresolvedChildren.size === 0) return durable;
   const contributions: RunUsageFigures[] = [durable];
+  const childrenByPath = new Map<string, RunUsageFigures[]>();
   for (const child of await store.findChildRuns(runId)) {
     const { parentNodeId } = readSubrunMetadata(child.metadata);
     if (parentNodeId !== undefined && unresolvedChildren.has(parentNodeId)) {
-      contributions.push(childRunUsage(child));
+      const children = childrenByPath.get(parentNodeId) ?? [];
+      children.push(childRunUsage(child));
+      childrenByPath.set(parentNodeId, children);
     }
   }
-  // Unresolved child spend has no parent node event yet. Include it in this
-  // run's telemetry only; recovery seeds from events and later charges the
-  // child's full outcome once, rather than replaying this temporary roll-up.
+  for (const [path, children] of childrenByPath) {
+    contributions.push(
+      unreportedChildUsage(
+        {
+          costUsd: sumReportedCost(children),
+          tokens: sumFanOutTokens(children),
+          tokensUnknown: children.some(child => child.tokensUnknown),
+        },
+        durable,
+        path
+      )
+    );
+  }
+  // This roll-up is telemetry only. Recovery still seeds from durable node events.
   return {
     costUsd: sumReportedCost(contributions),
     tokens: sumFanOutTokens(contributions),

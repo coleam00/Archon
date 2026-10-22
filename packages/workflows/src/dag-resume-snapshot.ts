@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/provider-contract';
-import { sumReportedCost } from './dag/usage';
+import { sumFanOutTokens, sumReportedCost } from './dag/usage';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 import {
   nodeInvocationKey,
@@ -134,6 +134,7 @@ interface ResumeFold {
   /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
   readonly usageContributions: UsageContribution[];
+  readonly workflowPaths: Set<string>;
   readonly authoritativeInstanceScopes: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
@@ -461,6 +462,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
       await readCompletedOutput(fold, row.step_name, data, data.node_output)
     );
   }
+  if (data.type === 'workflow') fold.workflowPaths.add(row.step_name);
   foldNodeUsage(fold, row, record);
 }
 
@@ -565,6 +567,7 @@ export async function foldDagResumeSnapshot(
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
     usageContributions: [],
+    workflowPaths: new Set(),
     authoritativeInstanceScopes: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
@@ -577,6 +580,21 @@ export async function foldDagResumeSnapshot(
     fold.budget.costUnavailable ??= { path, reason: 'interrupted' };
   }
   return {
+    workflowUsage: new Map(
+      [...fold.workflowPaths].map(path => {
+        const usage = fold.usageContributions.filter(
+          contribution => contribution.stepName === path
+        );
+        return [
+          path,
+          {
+            costUsd: sumReportedCost(usage),
+            tokens: sumFanOutTokens(usage),
+            tokensUnknown: usage.some(value => value.tokensUnknown),
+          },
+        ];
+      })
+    ),
     unfinishedInvocations: fold.unfinishedInvocations,
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,

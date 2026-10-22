@@ -1,3 +1,4 @@
+import { unreportedChildUsage } from '../../child-usage';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -503,9 +504,18 @@ export async function executeFanOutWorkflowNode(
     return outcome;
   });
 
-  const totalCostUsd = sumReportedCost(outcomes);
-  const totalTokens = sumFanOutTokens(outcomes);
-  tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+  const usage = unreportedChildUsage(
+    {
+      costUsd: sumReportedCost(outcomes),
+      tokens: sumFanOutTokens(outcomes),
+      tokensUnknown: outcomes.some(outcome => outcome.tokensUnknown === true),
+    },
+    await deps.store.getDagResumeSnapshot(parentRun.id),
+    stepName
+  );
+  const totalCostUsd = usage.costUsd;
+  const totalTokens = usage.tokens;
+  tokensUnknown = usage.tokensUnknown === true;
 
   // 7. Join.
   const joined = await joinFanOutOutcomes(
