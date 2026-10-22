@@ -8,18 +8,12 @@ import { WorkflowNotResumableError } from '@archon/workflows/store';
 import { isResumeSuperseded, pendingDurableWait } from './workflow-wait-continuation';
 
 describe('isResumeSuperseded', () => {
-  it('recognizes a lease collision before engine admission', () => {
-    expect(isResumeSuperseded(new RunLiveOwnerAlreadyOwnedError('/run.sock'))).toBe(true);
-  });
-
-  it('propagates a lease collision wrapped by engine resume failure', () => {
-    expect(
-      isResumeSuperseded(
-        new Error('Cannot resume workflow', {
-          cause: new RunLiveOwnerAlreadyOwnedError('/run.sock'),
-        })
-      )
-    ).toBe(false);
+  it('recognizes a lease collision, directly or as a cause', () => {
+    const collision = new RunLiveOwnerAlreadyOwnedError('/run.sock');
+    expect(isResumeSuperseded(collision)).toBe(true);
+    expect(isResumeSuperseded(new Error('Cannot resume workflow', { cause: collision }))).toBe(
+      true
+    );
   });
 
   it.each(['running', 'cancelled', 'failed', 'completed'] as const)(

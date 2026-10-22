@@ -108,6 +108,9 @@ export async function executeOwnedRun(
     // Progress lines render from the run's committed rows, its sub-runs' included.
     // Subscribed before submit or resume so the run's first row cannot be missed.
     if (!options.quiet) execution.progress = await subscribeProgress(launch, ownedRunId);
+    // Leased before resume admission: an attempt racing a live owner stops here,
+    // before the engine claims the run or the container restarts.
+    await lease.start(ownedRunId);
     preparationTermination?.signal.throwIfAborted();
     const prepareExecution = preparationTermination
       ? async (run: WorkflowRun) => {
@@ -116,14 +119,11 @@ export async function executeOwnedRun(
           preparationTermination.signal.throwIfAborted();
           await recordConversationLaunch(launch);
           preparationTermination.signal.throwIfAborted();
-          await lease.start(ownedRunId);
-          preparationTermination.signal.throwIfAborted();
           registerTermination();
           preparationTermination.dispose();
           return { cwd: workspace.workingCwd, options: commonRunOptions(launch) };
         }
       : undefined;
-    if (!prepareExecution) await lease.start(ownedRunId);
     execution.result = await driveRun(launch, lease, prepareExecution);
   } finally {
     try {
@@ -300,6 +300,15 @@ async function resumeRun(
 ): Promise<RunResult> {
   const { request, admission } = launch;
   const { workflowName } = request;
+  // The engine calls preparation only after it admits the run, and fails the run
+  // when preparation throws.
+  let admitted = false;
+  const prepareAdmitted =
+    prepareExecution &&
+    ((run: WorkflowRun) => {
+      admitted = true;
+      return prepareExecution(run);
+    });
   let resumeAdmission: Awaited<ReturnType<IWorkflowEngine['resume']>>;
   try {
     resumeAdmission = await request.host.engine.resume({
@@ -310,8 +319,8 @@ async function resumeRun(
       userMessage: request.userMessage,
       run: resumable,
       cursor: request.options.continuationCursor,
-      options: prepareExecution ? undefined : commonRunOptions(launch),
-      ...(prepareExecution ? { prepareExecution } : {}),
+      options: prepareAdmitted ? undefined : commonRunOptions(launch),
+      ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
     // The run is intact; only its resource is busy, so say that and nothing else.
@@ -320,6 +329,17 @@ async function resumeRun(
         cause: error,
       });
     const err = error as Error;
+    if (admitted) {
+      getLog().error(
+        { err, workflowName, runId: resumable.id },
+        'cli.workflow_resume_preparation_failed'
+      );
+      throw new Error(
+        `Workflow '${workflowName}' failed while preparing its resumed run — ${err.message}\n` +
+          `The run is marked failed; resume it with: archon workflow resume ${resumable.id}`,
+        { cause: err }
+      );
+    }
     getLog().error(
       { err, workflowName, runId: resumable.id },
       'cli.workflow_hydrate_resume_failed'

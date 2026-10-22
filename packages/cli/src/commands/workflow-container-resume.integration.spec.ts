@@ -176,9 +176,9 @@ test('two commands with the same candidate restart only the admitted container',
     try {
       await entered.promise;
       expect(process.listenerCount('SIGTERM')).toBe(listeners + 1);
-      expect(isRunOwnedByThisProcess(candidate.id)).toBe(false);
+      expect(isRunOwnedByThisProcess(candidate.id)).toBe(true);
       const loser = f.command(candidate);
-      // A second restart is allowed through to expose pre-admission provisioning.
+      // A second restart is allowed through to expose any restart before admission.
       await loser.catch(() => {});
       expect(f.resume).toHaveBeenCalledTimes(1);
       expect(f.destroy).not.toHaveBeenCalled();
@@ -212,20 +212,18 @@ test('a stale candidate never restarts or tears down another execution', async (
   });
 });
 
-test('an admitted live-owner collision reports failure and permits ordinary retry', async () => {
+test('a live-owner collision stops untouched and permits ordinary retry', async () => {
   await fixture(async f => {
     const candidate = await f.paused();
     const owner = await startRunLiveOwner(candidate.id);
     try {
       const result = await captureCommand({}, () => f.command(candidate));
-      expect(result.status).toBe(1);
-      expect(result.output).toContain('Run live-owner endpoint is already owned:');
-      expect(result.output).not.toContain('already continuing in another process');
-      expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
-      expect((await f.store.listWorkflowEvents(candidate.id)).at(-1)?.event_type).toBe(
-        'workflow_failed'
-      );
-      expect(f.resume).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe(0);
+      expect(result.output).toContain('already continuing in another process');
+      const untouched = await f.store.getWorkflowRun(candidate.id);
+      expect(untouched?.status).toBe('paused');
+      expect(untouched?.metadata).toEqual(candidate.metadata);
+      expect(f.resume).not.toHaveBeenCalled();
       expect(f.execute).not.toHaveBeenCalled();
       expect(f.accepted).not.toHaveBeenCalled();
       expect(f.destroy).not.toHaveBeenCalled();
@@ -234,9 +232,7 @@ test('an admitted live-owner collision reports failure and permits ordinary retr
     } finally {
       await owner.close();
     }
-    const failed = await f.store.getWorkflowRun(candidate.id);
-    if (!failed) throw new Error('Missing failed run');
-    await f.command(failed);
+    await f.command(candidate);
     expect(f.execute).toHaveBeenCalledTimes(1);
     expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('completed');
   });
@@ -288,9 +284,11 @@ test.each(['restart', 'credentials'] as const)(
           return;
         });
       }
-      await expect(f.command(candidate)).rejects.toThrow(
-        `${failure === 'restart' ? 'restart' : 'credentials'} refused`
-      );
+      const error = await f.command(candidate).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(`${failure} refused`);
+      expect((error as Error).message).toContain('The run is marked failed');
+      expect((error as Error).message).not.toContain('failed to load prior run state');
       const failed = await f.store.getWorkflowRun(candidate.id);
       expect(failed?.status).toBe('failed');
       expect(failed?.metadata).not.toHaveProperty('pause_cause');
@@ -401,7 +399,7 @@ test.each(['restart', 'credentials'] as const)(
   }
 );
 
-for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lease'] as const) {
+for (const stage of ['admission', 'restart', 'credentials', 'conversation'] as const) {
   test.each(['SIGINT', 'SIGTERM'] as const)(
     `resume interruption during ${stage} fails the admitted run on %s`,
     async signal => {
@@ -431,9 +429,7 @@ for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lea
             if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
               await block();
           });
-        } else if (stage === 'conversation') {
-          watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
-        } else watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(block);
+        } else watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
         const pending = f.command(candidate).catch(error => error);
         try {
           await entered.promise;
@@ -468,6 +464,48 @@ for (const stage of ['admission', 'restart', 'credentials', 'conversation', 'lea
     }
   );
 }
+
+test.each(['SIGINT', 'SIGTERM'] as const)(
+  'resume interruption while taking the lease leaves the run paused on %s',
+  async signal => {
+    await fixture(async f => {
+      const candidate = await f.paused('approved');
+      const baseline = process.listeners(signal);
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const start = OwnedRunLease.prototype.start;
+      watch(spyOn(OwnedRunLease.prototype, 'start')).mockImplementationOnce(async function (
+        this: OwnedRunLease,
+        runId
+      ) {
+        entered.resolve();
+        await finish.promise;
+        return start.call(this, runId);
+      });
+      const pending = f.command(candidate).catch(error => error);
+      try {
+        await entered.promise;
+        const handlers = process.listeners(signal).filter(handler => !baseline.includes(handler));
+        expect(handlers).toHaveLength(1);
+        handlers[0]?.(signal);
+      } finally {
+        finish.resolve();
+      }
+      expect(await pending).toMatchObject({
+        message: `Resume preparation interrupted (${signal})`,
+      });
+      const untouched = await f.store.getWorkflowRun(candidate.id);
+      expect(untouched?.status).toBe('paused');
+      expect(untouched?.metadata).toEqual(candidate.metadata);
+      expect(f.resume).not.toHaveBeenCalled();
+      expect(f.execute).not.toHaveBeenCalled();
+      expect(f.destroy).not.toHaveBeenCalled();
+      expect(process.listeners(signal)).toEqual(baseline);
+      await f.command(candidate);
+      expect(f.apply).toHaveBeenCalledTimes(1);
+    });
+  }
+);
 
 test('prepared context rejection retains the resumed overlay for retry', async () => {
   await fixture(async f => {

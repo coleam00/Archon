@@ -138,15 +138,19 @@ export async function buildWaitResumeAttempt(
 /**
  * True when a resume attempt lost the run to another owner rather than failing.
  *
- * Pre-admission lease collisions propagate directly. A collision during admitted
- * preparation is wrapped by resumeRun after the engine fails the run, so it must
- * remain an error even though its cause names another endpoint owner.
+ * Both signals mean another process is executing the run — it won the claim (the
+ * compare-and-swap left the row `running`) or still holds its endpoint — so this
+ * process should say so and stop instead of reporting a failure. A claim lost to a
+ * cancel, failure or completion is not that: nothing continues the run, so it stays
+ * an error.
  */
 export function isResumeSuperseded(error: unknown): boolean {
-  if (error instanceof RunLiveOwnerAlreadyOwnedError) return true;
   const MAX_CAUSE_DEPTH = 5;
   for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
-    if (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') {
+    if (
+      (current instanceof WorkflowNotResumableError && current.currentStatus === 'running') ||
+      current instanceof RunLiveOwnerAlreadyOwnedError
+    ) {
       return true;
     }
     if (depth >= MAX_CAUSE_DEPTH) return false;
