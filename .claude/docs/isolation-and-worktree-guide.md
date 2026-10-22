@@ -112,7 +112,7 @@ Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If
 
 ## Worktree Cleanup Flow
 
-### `removeEnvironment()` (`packages/core/src/services/cleanup-service.ts:134`)
+### `removeEnvironment()` (`packages/core/src/services/cleanup/remove-environment.ts`)
 
 1. Fetch DB row. If `status === 'destroyed'` → return (idempotent)
 2. Get `canonicalRepoPath` from codebase record
@@ -173,7 +173,7 @@ Same worktree always gets the same port (deterministic hash).
 
 ## Stale Environment Detection
 
-`isEnvironmentStale(env, staleDays)` in cleanup-service:
+`isEnvironmentStale(env, staleDays)` in `services/cleanup/scheduled-sweep.ts`:
 1. Check `getLastCommitDate()` (`git log -1 --format=%ci`)
 2. If recent commit exists and within threshold → not stale
 3. Otherwise check `env.created_at` against threshold
@@ -206,7 +206,7 @@ If merged cleanup frees space → proceed with creation. If not → block with f
 
 ### How cleanup decides a branch is merged
 
-`judgeBranchForRemoval()` in cleanup-service is the one decision for the scheduled sweep, `makeRoom()` and `--merged`. Merged against the configured base ref means either:
+`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the one decision for the scheduled sweep, `makeRoom()` and `--merged`. Merged against the configured base ref means either:
 - **git:** the branch ref exists and is merged by ancestry (`git branch --merged`) or patch equivalence (`git cherry`), and the worktree's HEAD also passes `git cherry <base> HEAD`; or
 - **PR:** `getPrState()` reports MERGED (or CLOSED with `--include-closed`), and the worktree's HEAD and the branch ref, where each exists, are at or behind the PR head commit (`isRevCoveredBy`, which fetches a PR head missing locally).
 
@@ -230,5 +230,5 @@ Anything past the proving commit is unmerged work: run branch names get reused, 
 | `WorktreeProvider` | `packages/isolation/src/providers/worktree.ts` |
 | File copy utilities | `packages/isolation/src/worktree-copy.ts` |
 | Error classification | `packages/isolation/src/errors.ts` |
-| Cleanup service | `packages/core/src/services/cleanup-service.ts` |
+| Cleanup service | `packages/core/src/services/cleanup-service.ts` (entry), `packages/core/src/services/cleanup/` (one module per job) |
 | Port allocation | `packages/core/src/utils/port-allocation.ts` |

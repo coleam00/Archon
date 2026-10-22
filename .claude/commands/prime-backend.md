@@ -21,8 +21,9 @@ Read `packages/core/src/orchestrator/orchestrator-agent.ts` — the single entry
 platform messages. Maps messages to slash commands (via command-handler) or AI execution. Note
 the lazy logger pattern and MAX_BATCH constants.
 
-Read `packages/core/src/orchestrator/orchestrator.ts` first 60 lines — `validateAndResolveIsolation`
-and `dispatchBackgroundWorkflow` utilities called by orchestrator-agent.
+Read `packages/core/src/orchestrator/dispatch/isolation-resolver.ts` — `validateAndResolveIsolation` —
+and the top of `packages/core/src/orchestrator/dispatch/background.ts` — `dispatchBackgroundWorkflow`.
+Both are re-exported from `orchestrator/orchestrator.ts` for orchestrator-agent.
 
 Read `packages/core/src/orchestrator/prompt-builder.ts` first 40 lines — how system prompts
 are assembled with codebase context.

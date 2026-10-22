@@ -251,7 +251,7 @@ archon isolation list → isolationListCommand()
 
 **Code:** `packages/cli/src/commands/isolation.ts` (`isolationListCommand`),
 `packages/core/src/operations/isolation-operations.ts`
-(`listEnvironments`), `packages/core/src/services/cleanup-service.ts`
+(`listEnvironments`), `packages/core/src/services/cleanup/containers.ts`
 (`listContainerEnvironments`), `packages/core/src/db/workflow-run-reads.ts`
 (`getRunByIsolationEnvId`).
 
@@ -360,7 +360,7 @@ fetched by SHA from the branch's remote first; if that fetch fails, the check fa
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
-**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getCleanupRunLock()`
+**Code:** `packages/core/src/services/cleanup/` — `judgeBranchForRemoval()` in `merge-verdict.ts`, `cleanupMergedWorktrees()` in `merged-sweep.ts`, `getCleanupRunLock()` in `run-lock.ts`; `runScheduledCleanup()` in `packages/core/src/services/cleanup-service.ts`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
 **Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
 
