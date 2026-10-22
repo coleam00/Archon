@@ -6,8 +6,11 @@ import {
   type WorkflowDeps,
   type WorkflowEnvironment,
 } from './deps';
+import type { RunDispatch } from './run-dispatch';
 import {
   assertCredentialStatus,
+  assertRunCredentials,
+  effectiveDbCredentialValues,
   StoredCredentialDeliveryError,
   type RunCredentialRequirement,
 } from './run-preflight';
@@ -273,4 +276,59 @@ export async function resolveUserProviderEnvForWorkflow(
     getLog().debug({ userId, keys: envKeys }, 'workflow.user_provider_env_injected');
   }
   return { env, protectedValues };
+}
+
+/**
+ * Layer the run's GitHub and per-user AI-provider credentials onto its prepared config.
+ * The environment stays fixed for this execution; resumed segments resolve again through
+ * the provider's refresh cache. Runs inside the run's failure boundary, after the
+ * artifacts directory exists, because file-based deliveries (Pi's `auth.json`) live under
+ * it. Files from an earlier invocation are cleared first, including the Codex `auth.json`
+ * older builds wrote: a disconnected credential or failed refresh must not leave stale
+ * secrets readable on resume.
+ *
+ * Provider env is merged LAST into `config.envVars`, so the originating user's keys win
+ * over file/db/bot-github env; the no-key path leaves the config byte-for-byte unchanged.
+ */
+export async function layerRunCredentials(
+  deps: WorkflowDeps,
+  dispatch: Pick<RunDispatch, 'prepared' | 'executionUserId' | 'execution'>,
+  run: { cwd: string; codebaseId: string | undefined; artifactsDir: string },
+  withArtifactWrites: <T>(operation: () => T) => T
+): Promise<void> {
+  const { prepared, executionUserId } = dispatch;
+  const { config, dbEnvVars } = prepared;
+  Object.assign(
+    config,
+    await resolveWorkflowGithubEnvironment(deps, run.codebaseId, executionUserId, config)
+  );
+  const protectedEnvKeys = new Set(config.protectedEnvKeys);
+
+  const { env: userProviderEnv, protectedValues } = await withArtifactWrites(async () => {
+    await clearManagedProviderCredentialFiles(run.artifactsDir);
+    await assertRunCredentials(deps, prepared, {
+      cwd: run.cwd,
+      execContext: dispatch.execution.execContext,
+    });
+    return resolveUserProviderEnvForWorkflow(
+      deps,
+      executionUserId,
+      run.artifactsDir,
+      prepared.requirements,
+      prepared.connectedVendors
+    );
+  });
+  config.envVars = { ...config.envVars, ...userProviderEnv };
+  config.userCredentialEnvKeys = Object.keys(userProviderEnv);
+  for (const key of Object.keys(userProviderEnv)) {
+    protectedEnvKeys.add(key);
+  }
+  if (protectedEnvKeys.size > 0) {
+    config.protectedEnvKeys = [...protectedEnvKeys];
+  }
+  // Recomputed rather than appended to preflight's list: GitHub and provider credentials
+  // layered above may have replaced a database value, which is then no longer delivered.
+  config.protectedCredentialValues = [
+    ...new Set([...effectiveDbCredentialValues(dbEnvVars, config.envVars), ...protectedValues]),
+  ];
 }
