@@ -289,6 +289,13 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
   'pr.reviews': byRef,
   'pr.threads': byRef,
   'checks.state': byRef,
+  'checks.commit': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    (request.at.kind === 'revision'
+      ? value.revision === request.at.revision && value.branch === null
+      : value.branch !== null),
+  'pr.merge-state': byRef,
+  'workitem.comments': (request, value) => sameSubject(value.workitem, request.subject),
   'workitem.view': byRef,
   'pr.view': matchesPrView,
   'repo.labels.list': (request, value) => sameRepo(value.repo, request.repo),

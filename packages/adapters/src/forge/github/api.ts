@@ -31,6 +31,18 @@ export function repositoryPath(path: string): { owner: string; repo: string } | 
   return { owner, repo };
 }
 
+/** The owner and name GraphQL addresses a repository by; an unparseable path is refused. */
+export function githubRepository(repo: RepoRef): { owner: string; repo: string } {
+  const parsed = repositoryPath(repo.path);
+  if (!parsed) {
+    throw new GitHubError(
+      { kind: 'invalid_request', message: `Invalid GitHub repository path: ${repo.path}` },
+      true
+    );
+  }
+  return parsed;
+}
+
 function githubHost(host: string): GitHubHost {
   const github = parseGitHubHost(`https://${host}`);
   if (!github) {
@@ -47,13 +59,7 @@ function githubHost(host: string): GitHubHost {
 
 /** The REST and GraphQL roots and encoded `owner/repo` segment for one qualified repository. */
 export function location(repo: RepoRef): { root: string; graphql: string; path: string } {
-  const parsed = repositoryPath(repo.path);
-  if (!parsed) {
-    throw new GitHubError(
-      { kind: 'invalid_request', message: `Invalid GitHub repository path: ${repo.path}` },
-      true
-    );
-  }
+  const parsed = githubRepository(repo);
   const github = githubHost(repo.host);
   return {
     root: github.apiBaseUrl,
@@ -143,6 +149,48 @@ export async function githubPages<T>(
     values.push(...rows);
     if (rows.length < 100) return values;
   }
+}
+
+/**
+ * One GraphQL call. GitHub answers 200 with an `errors` document for a query or
+ * mutation it rejects, so the errors are read here rather than trusted away by
+ * the status, and a write is acknowledged only once the document carries none.
+ */
+export async function githubGraphql(
+  fetchImpl: Fetch,
+  token: string,
+  repo: RepoRef,
+  query: string,
+  variables: Record<string, unknown>,
+  acknowledge?: () => void
+): Promise<unknown> {
+  const { graphql } = location(repo);
+  const raw = await githubRequest(fetchImpl, token, graphql, {
+    method: 'POST',
+    body: JSON.stringify({ query, variables }),
+  });
+  const parsed = z
+    .object({
+      data: z.unknown().optional(),
+      errors: z.array(z.object({ message: z.string(), type: z.string().optional() })).optional(),
+    })
+    .parse(raw);
+  if (parsed.errors && parsed.errors.length > 0) {
+    const types = new Set(parsed.errors.map(error => error.type));
+    throw new GitHubError(
+      {
+        kind: types.has('NOT_FOUND')
+          ? 'not_found'
+          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
+            ? 'authorization'
+            : 'forge_error',
+        message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
+      },
+      true
+    );
+  }
+  acknowledge?.();
+  return parsed.data;
 }
 
 function parseUrlRemote(value: string): RepoRef | null {

@@ -4,6 +4,7 @@ import type { HelpGroup } from './types';
 const forgeOperationDescriptions = {
   resolve: 'Resolve an explicit remote through optional forge plugins',
   'checks.state': 'Observe checks for an explicit qualified pull request',
+  'checks.commit': 'Observe checks on a commit or on the default branch head',
   'workitem.view': 'Read a qualified work item',
   'workitem.create': 'Create an issue or recover its canonical marker',
   'workitem.labels.set': 'Set and verify the complete issue label set',
@@ -13,6 +14,7 @@ const forgeOperationDescriptions = {
   'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
   'workitem.close': 'Close an issue with a reason and verify the result',
   'workitem.edit-body': 'Replace an issue body and verify the result',
+  'workitem.comments': 'Read every comment on an issue or pull request with its author',
   'repo.labels.list': 'List repository label names',
   'repo.label.ensure': 'Explicitly ensure one repository label exists',
   'pr.view': 'Read a pull request by number or by qualified head',
@@ -24,6 +26,8 @@ const forgeOperationDescriptions = {
   'checks.rerun': 'Rerun selected failed checks at a revision',
   'pr.reviews': 'Read submitted reviews and root review comments',
   'pr.threads': 'Read every review thread with its comments and resolution',
+  'pr.merge-state':
+    'Read how far a pull request is behind the default branch and whether it merges',
   'pr.thread.reply': 'Reply on one review thread and verify the reply',
   'pr.thread.resolve': 'Resolve one review thread and verify the result',
   'comment.upsert': 'Write the one marked comment on a pull request',

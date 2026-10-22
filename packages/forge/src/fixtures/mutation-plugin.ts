@@ -37,6 +37,9 @@ const OPS = [
   'pr.thread.reply',
   'pr.thread.resolve',
   'workitem.edit-body',
+  'workitem.comments',
+  'checks.commit',
+  'pr.merge-state',
 ];
 
 if (command === 'metadata') {
@@ -82,6 +85,7 @@ else {
     method?: 'merge' | 'squash';
     conditions?: { head?: string };
     revision?: string;
+    at?: { kind: 'revision'; revision: string } | { kind: 'default_branch' };
     units?: {
       unit: { kind: string; id: string; name: string };
       rerun: { id: string; attempt: number } | null;
@@ -136,8 +140,37 @@ else {
     result: { op: input.op, value: { repo, label: input.label, items } },
   });
 
+  const read = (value: object): unknown => ({
+    operationId: input.operationId,
+    ok: true,
+    result: { op: input.op, value },
+  });
+  const mergeState = (number: number): unknown =>
+    read({
+      ref: { ...ref, number },
+      head_revision: 'headsha',
+      default_branch: 'dev',
+      default_revision: 'devsha',
+      behind: 2,
+      mergeable: 'clean',
+      merge_commit: null,
+    });
+  const commitChecks = (revision: string): unknown =>
+    read({
+      repo,
+      branch: input.at?.kind === 'default_branch' ? 'dev' : null,
+      revision,
+      units: [],
+      summary: {
+        state: 'none',
+        counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 },
+      },
+    });
+
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
+    if (input.op === 'pr.merge-state') return mergeState(ref.number + 1);
+    if (input.op === 'checks.commit') return commitChecks('another-revision');
     if (input.op === 'workitem.label.add') return answer(ref, { workitem: subject, labels: [] });
     if (input.op === 'workitem.label.remove')
       return answer(ref, { workitem: subject, labels: [input.name] });
@@ -267,6 +300,21 @@ else {
     if (input.op === 'workitem.comment.upsert') return answer(ref, { workitem: subject, comment });
     if (input.op === 'workitem.close')
       return answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason });
+    if (input.op === 'pr.merge-state') return mergeState(ref.number);
+    if (input.op === 'checks.commit')
+      return commitChecks(input.at?.kind === 'revision' ? input.at.revision : 'devsha');
+    if (input.op === 'workitem.comments')
+      return read({
+        workitem: subject,
+        comments: [
+          {
+            id: '7',
+            author: { host: 'forge.example', id: '1', login: 'maintainer' },
+            url: `${subject.url}#issuecomment-7`,
+            body: 'private conversation comment',
+          },
+        ],
+      });
     if (input.op === 'pr.threads')
       return {
         operationId: input.operationId,

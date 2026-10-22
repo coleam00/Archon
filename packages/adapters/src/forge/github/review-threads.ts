@@ -13,7 +13,7 @@ import {
   type reviewThreadSchema,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
-import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
+import { GitHubError, githubGraphql, repositoryPath, type Fetch } from './api';
 import { applied, failure, refused, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
@@ -39,48 +39,6 @@ const threadNodeSchema = z.object({
   comments: commentConnectionSchema,
 });
 const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} body url}`;
-
-/**
- * One GraphQL call. GitHub answers 200 with an `errors` document for a query or
- * mutation it rejects, so the errors are read here rather than trusted away by
- * the status, and a write is acknowledged only once the document carries none.
- */
-async function githubGraphql(
-  fetchImpl: Fetch,
-  token: string,
-  repo: RepoRef,
-  query: string,
-  variables: Record<string, unknown>,
-  acknowledge?: () => void
-): Promise<unknown> {
-  const { graphql } = location(repo);
-  const raw = await githubRequest(fetchImpl, token, graphql, {
-    method: 'POST',
-    body: JSON.stringify({ query, variables }),
-  });
-  const parsed = z
-    .object({
-      data: z.unknown().optional(),
-      errors: z.array(z.object({ message: z.string(), type: z.string().optional() })).optional(),
-    })
-    .parse(raw);
-  if (parsed.errors && parsed.errors.length > 0) {
-    const types = new Set(parsed.errors.map(error => error.type));
-    throw new GitHubError(
-      {
-        kind: types.has('NOT_FOUND')
-          ? 'not_found'
-          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
-            ? 'authorization'
-            : 'forge_error',
-        message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
-      },
-      true
-    );
-  }
-  acknowledge?.();
-  return parsed.data;
-}
 
 function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
   return author
