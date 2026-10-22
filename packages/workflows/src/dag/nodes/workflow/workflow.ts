@@ -1,4 +1,3 @@
-import { readParentUsageSnapshot } from '../../../parent-snapshot-read';
 import { unreportedChildUsage } from '../../child-usage';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { pauseGateRespectingExternalTransition } from '../../pause';
@@ -247,11 +246,7 @@ export async function executeWorkflowNode(
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
     outcome = {
       ...outcome,
-      ...unreportedChildUsage(
-        outcome,
-        await readParentUsageSnapshot(deps.store, parentRun.id, executionNodeId),
-        executionNodeId
-      ),
+      ...unreportedChildUsage(outcome, ctx.workflowUsage, executionNodeId),
     };
     switch (outcome.status) {
       case 'completed':

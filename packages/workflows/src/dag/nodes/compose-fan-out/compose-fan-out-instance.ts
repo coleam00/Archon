@@ -170,6 +170,7 @@ function instanceRunContext(
   return {
     toolAttention: ctx.toolAttention,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
+    workflowUsage: resumeSnapshot.workflowUsage,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,

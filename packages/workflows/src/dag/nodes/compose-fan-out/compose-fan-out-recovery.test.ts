@@ -54,6 +54,66 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     await removeTempTree(testDir);
   });
 
+  it.each([false, true])(
+    'subtracts prior child spend inside a composed instance (child fan-out=%p)',
+    async fanOut => {
+      await writeBlock(
+        `name: compose-blk
+description: child block
+mutates_checkout: false
+nodes:
+  - id: child
+    workflow: child-workflow
+${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_success\n" : ''}`
+      );
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    bash: echo child',
+        'child-workflow'
+      );
+      const [instance] = buildInstanceSnapshots(['a']);
+      const path = composeInnerStep(instance.identity, 'child');
+      const store = createMockStore();
+      const snapshot = await store.getDagResumeSnapshot('parent');
+      (
+        store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+      ).mockResolvedValue({
+        ...snapshot,
+        workflowUsage: new Map([[path, { costUsd: 0.01, tokens: { input: 7, output: 3 } }]]),
+      });
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        childRunId: 'child',
+        status: 'completed',
+        output: 'done',
+        costUsd: 0.03,
+        tokens: { input: 21, output: 9 },
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('parent'),
+          runChildWorkflow,
+          workflow: {
+            name: 'parent',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+              },
+            ],
+          },
+        })
+      );
+      const completed = eventsOf(store).find(
+        event => event.step_name === path && event.event_type === 'node_completed'
+      );
+      expect(completed?.data.cost_usd).toBeCloseTo(0.02);
+      expect(completed?.data.tokens).toMatchObject({ input: 14, output: 6 });
+    }
+  );
+
   it('persists the instance snapshot before scheduling any body work', async () => {
     await writeBlock(
       'name: compose-blk\ndescription: test block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo spent"'

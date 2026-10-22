@@ -40,7 +40,7 @@ export async function readInterruptedRunUsage(
           tokens: sumFanOutTokens(children),
           tokensUnknown: children.some(child => child.tokensUnknown),
         },
-        durable,
+        durable.workflowUsage,
         path
       )
     );

@@ -224,6 +224,7 @@ export async function executeDagWorkflow(
   const runCtx: RunLayersContext = {
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    workflowUsage: resumeSnapshot?.workflowUsage,
     runBudget,
     deps,
     platform,

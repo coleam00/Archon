@@ -1,4 +1,3 @@
-import { readParentUsageSnapshot } from '../../../parent-snapshot-read';
 import { unreportedChildUsage } from '../../child-usage';
 import { pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
@@ -511,7 +510,7 @@ export async function executeFanOutWorkflowNode(
       tokens: sumFanOutTokens(outcomes),
       tokensUnknown: outcomes.some(outcome => outcome.tokensUnknown === true),
     },
-    await readParentUsageSnapshot(deps.store, parentRun.id, stepName),
+    ctx.workflowUsage,
     stepName
   );
   const totalCostUsd = usage.costUsd;
