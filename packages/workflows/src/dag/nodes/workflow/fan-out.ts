@@ -585,7 +585,7 @@ async function joinSettledChildren(
     await writers.notify(
       `⚠️ **Fan-out completed with unfinished children** (node \`${node.id}\`): ` +
         `${describeUnfinishedFanOut(tally)}. ` +
-        `See \`${spellWorkflowCommand(ctx.platform, `get ${parentRunId}`)}\`.`
+        `Each slot's outcome is in the console run view and \`archon workflow get ${parentRunId}\`.`
     );
   }
   return completed;

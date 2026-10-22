@@ -1048,7 +1048,7 @@ nodes:
     });
     expect(sentMessages(platform)).toContain(
       '**Fan-out completed with unfinished children** (node `work`): ' +
-        `1 of 2 children did not complete (1 failed). See \`/workflow get ${String(parentRun?.id)}\`.`
+        `1 of 2 children did not complete (1 failed). Each slot's outcome is in the console run view and \`archon workflow get ${String(parentRun?.id)}\`.`
     );
   });
 
