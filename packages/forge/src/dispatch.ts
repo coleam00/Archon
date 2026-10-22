@@ -161,7 +161,7 @@ function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
 }
 
 function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
-  if (request.op !== 'resolve') return requestRepo(request).hostClaim?.host.toLowerCase() ?? host;
+  if (request.op !== 'resolve') return requestRepo(request).hostClaim ? host.slice(0, -4) : host;
   if (!discovery.byHost.has(host)) return httpsDefaultPortHost(request) ?? host;
   return host;
 }
@@ -186,7 +186,7 @@ function retainHostClaim(response: ForgeResponse, host: string, claim: string): 
         repo: {
           ...value.repo,
           host: normalizeHost(value.repo.host) === host ? value.repo.host : host,
-          hostClaim: host === claim ? undefined : { host: claim, transport: 'https' },
+          hostClaim: host === claim ? undefined : true,
         },
       },
     },

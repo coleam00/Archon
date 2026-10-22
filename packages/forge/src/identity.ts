@@ -7,20 +7,19 @@ export const repoRefSchema = z
     host: nonEmpty,
     path: nonEmpty,
     // Preserve the authorizing claim when HTTPS's explicit default port differs from it.
-    hostClaim: z.object({ host: nonEmpty, transport: z.literal('https') }).optional(),
+    hostClaim: z.literal(true).optional(),
   })
   .refine(repo => {
     if (!repo.hostClaim) return true;
-    const claim = repo.hostClaim.host.toLowerCase();
+    const host = repo.host.toLowerCase();
+    const claim = host.slice(0, -4);
     try {
       const url = new URL(`https://${claim}`);
-      return (
-        url.host === claim && url.hostname === claim && repo.host.toLowerCase() === `${claim}:443`
-      );
+      return url.host === claim && url.hostname === claim && host === `${claim}:443`;
     } catch {
       return false;
     }
-  }, 'A host claim must name the bare host of an HTTPS :443 repository');
+  }, 'A host claim marker requires a bare host with an explicit :443 port');
 export type RepoRef = z.infer<typeof repoRefSchema>;
 
 export const prRefSchema = z.object({

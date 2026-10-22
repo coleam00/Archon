@@ -15,7 +15,7 @@ const ref = { repo, number: 7 };
 const ROOT = 'https://api.github.com/repos/archon/test';
 
 test('pull request head repositories retain the authorizing HTTPS host claim', () => {
-  const hostClaim = { host: 'ghes.example.test', transport: 'https' } as const;
+  const hostClaim = true;
   const record = prRecord({ host: 'ghes.example.test:443', path: repo.path, hostClaim }, pull());
   expect(record.head_repo).toEqual({ host: 'ghes.example.test:443', path: repo.path, hostClaim });
 });

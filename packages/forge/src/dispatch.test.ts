@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { discoverPlugins } from './discovery';
 import { dispatchForge, matchesForgeOperationResponse } from './dispatch';
-import { repoRefSchema } from './identity';
+import { repoRefSchema, type RepoRef } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
 
@@ -73,12 +73,10 @@ test.each(['github.com', 'ghes.example.test'])(
         { operationId: 'compat', op: 'resolve', remote: `https://${host}:443/team/repo.git` },
         { discovery: selected, env: {} }
       );
-      const repo = {
+      const repo: RepoRef = {
         host: `${host}:443`,
         path: 'team/repo',
-        ...(claims.includes(`${host}:443`)
-          ? {}
-          : { hostClaim: { host, transport: 'https' as const } }),
+        ...(claims.includes(`${host}:443`) ? {} : { hostClaim: true }),
       };
       expect(result.response).toMatchObject({
         ok: true,
@@ -127,7 +125,7 @@ test('qualified operations use the retained HTTPS claim and its credential confi
       JSON.stringify({
         host: 'forge.example:443',
         path: 'team/repo',
-        hostClaim: { host: 'forge.example', transport: 'https' },
+        hostClaim: true,
       })
     )
   );
@@ -148,18 +146,25 @@ test('qualified operations use the retained HTTPS claim and its credential confi
 });
 
 test.each([
-  ['other.example:443', 'forge.example', 'https'],
-  ['forge.example:8443', 'forge.example', 'https'],
-  ['forge.example:443', 'forge.example', 'http'],
-  ['forge.example:443', 'forge.example', 'ssh'],
-  ['forge.example:443', 'forge.example:443', 'https'],
-  ['forge.example:443', 'user@forge.example', 'https'],
-])('rejects invalid host claim %s / %s / %s', (host, claim, transport) => {
-  expect(
-    repoRefSchema.safeParse({ host, path: 'team/repo', hostClaim: { host: claim, transport } })
-      .success
-  ).toBe(false);
+  'forge.example',
+  'forge.example:8443',
+  'forge.example:443:443',
+  'user@forge.example:443',
+  'forge.example/path:443',
+  'forge.example?query:443',
+  'forge.example#fragment:443',
+])('rejects a host claim marker on invalid authority %s', host => {
+  expect(repoRefSchema.safeParse({ host, path: 'team/repo', hostClaim: true }).success).toBe(false);
 });
+
+test.each([false, 'true', { host: 'forge.example', transport: 'https' }])(
+  'rejects a non-marker host claim %j',
+  hostClaim => {
+    expect(
+      repoRefSchema.safeParse({ host: 'forge.example:443', path: 'team/repo', hostClaim }).success
+    ).toBe(false);
+  }
+);
 function config(mode = 'ok') {
   return {
     plugins: [{ plugin: 'test', command: process.execPath, args: [fixture, '--mode', mode] }],

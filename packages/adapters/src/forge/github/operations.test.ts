@@ -798,7 +798,7 @@ test('dispatch resolves HTTPS default ports through exact or bare host claims', 
     )
       throw new Error('Expected resolved repository');
     expect(result.response.result.value.repo.hostClaim).toEqual(
-      byHost.has(`${host}:443`) ? undefined : { host, transport: 'https' }
+      byHost.has(`${host}:443`) ? undefined : true
     );
     const qualified = await dispatchForge(
       {
