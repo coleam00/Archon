@@ -998,7 +998,12 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.01, total_tokens_in: 20, total_tokens_out: 2 },
+      {
+        total_cost_usd: 0.01,
+        total_cost_incomplete: true,
+        total_tokens_in: 20,
+        total_tokens_out: 2,
+      },
     ]);
     expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
     // Both durable backstops run only after the write that killed layer aggregation.
