@@ -287,11 +287,13 @@ describe('server resource-start host', () => {
     if (!blocker) throw new Error('Missing blocker');
     const conversation = await getOrCreateConversation('cli', 'legacy-thread');
     const id = randomUUID();
+    const { [RESOURCE_START_METADATA_KEY]: _receipt, ...metadata } = blocker.launch.run.metadata;
     const launch = {
       ...blocker.launch,
       run: {
         ...blocker.launch.run,
         id,
+        metadata,
         origin: { conversationId: conversation.id, userId: USER_ID },
       },
     };
