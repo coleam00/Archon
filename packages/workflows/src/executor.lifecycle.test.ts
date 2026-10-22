@@ -22,11 +22,20 @@ import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archo
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { ParentStatusReadError } from './parent-status-read';
 import { NodeEventWriteError } from './node-event-write';
+import * as resume from './run-resume';
+import * as source from './run-source';
+import { liveSourceRoots } from './workflow-source';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
+import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
-import { EXECUTION_OWNER_METADATA_KEY, TERMINAL_WORKFLOW_STATUSES } from './schemas/workflow-run';
+import {
+  workflowRunStatusSchema,
+  EXECUTION_OWNER_METADATA_KEY,
+  TERMINAL_WORKFLOW_STATUSES,
+} from './schemas/workflow-run';
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -167,7 +176,8 @@ it.each(['This is the workflow summary', undefined])(
   async summary => {
     mockExecuteDagWorkflow.mockResolvedValueOnce(summary);
     const result = await startWorkflow();
-    if (!result.success || 'paused' in result) throw new Error('Expected completed result');
+    if (!result.success || 'paused' in result || 'handedOff' in result)
+      throw new Error('Expected completed result');
     expect(result.summary).toBe(summary);
   }
 );
@@ -176,6 +186,118 @@ describe('paused exit', () => {
   const pausedAt = (approval: Record<string, unknown>) =>
     makeRun({ status: 'paused', metadata: { approval } });
   const run = (store: IWorkflowStore) => startWorkflow({ store });
+
+  const receipt: ContainerPauseReceipt = {
+    kind: 'container_pause',
+    pause: {
+      kind: 'gate',
+      context: { type: 'approval', nodeId: 'review', message: '', pauseId: 'old-pause' },
+    },
+  };
+
+  it.each([...workflowRunStatusSchema.options, null])(
+    'does not finalize a successor that is %s after a container pause',
+    async status => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const store = makeStore({
+        getWorkflowRun: mock(async () =>
+          status === null
+            ? null
+            : makeRun({
+                status,
+                metadata: {
+                  approval: {
+                    type: 'approval',
+                    nodeId: 'review',
+                    message: '',
+                    pauseId: 'successor-pause',
+                  },
+                },
+              })
+        ),
+        getWorkflowRunStatus: mock(async () => status),
+        releasePausedRunSlot,
+      });
+      const result = await run(store);
+      expect(result).toMatchObject({
+        success: status !== 'failed' && status !== 'cancelled',
+        handedOff: true,
+        observedStatus: status,
+      });
+      expect(result).not.toHaveProperty('paused');
+      expect(result).not.toHaveProperty('waitCursor');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not release the same wait occurrence under a successor claim', async () => {
+    const context = {
+      kind: 'time' as const,
+      owner: 'node' as const,
+      nodeId: 'delay',
+      pauseId: 'same-wait',
+      waitingSince: '2026-01-01T00:00:00.000Z',
+      resumeAt: '2099-01-02T00:00:00.000Z',
+    };
+    mockExecuteDagWorkflow.mockResolvedValueOnce({
+      kind: 'container_pause',
+      pause: { kind: 'wait', context },
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () =>
+        makeRun({ status: 'paused', metadata: { wait: context, execution_claim: 'successor' } })
+      ),
+    });
+    const result = await run(store);
+    expect(result).toMatchObject({ success: true, handedOff: true, observedStatus: 'paused' });
+    expect(result).not.toHaveProperty('waitCursor');
+    expect(store.releasePausedRunSlot).not.toHaveBeenCalled();
+  });
+
+  it('finalizes only the same container pause occurrence', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+    const store = makeStore({ getWorkflowRun: mock(async () => pausedAt(receipt.pause.context)) });
+    expect(await run(store)).toMatchObject({ success: true, paused: true });
+    expect(store.releasePausedRunSlot).toHaveBeenCalledWith('run-123', {
+      kind: 'pause',
+      nodeId: 'review',
+      pauseId: 'old-pause',
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it.each(['read', 'post-publication'] as const)(
+    'surfaces a %s error after publication without failing the successor',
+    async kind => {
+      const error = new Error('required write/read failed');
+      if (kind === 'post-publication') {
+        mockExecuteDagWorkflow.mockRejectedValueOnce(
+          new WorkflowExecutionHandoffError('run-123', error)
+        );
+      } else {
+        mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      }
+      const store = makeStore({
+        getWorkflowRun: mock(async () => {
+          throw error;
+        }),
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+      });
+      await expect(run(store)).rejects.toMatchObject({
+        name: WorkflowExecutionHandoffError.name,
+        workflowRunId: 'run-123',
+        cause: error,
+      });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
 
   for (const kind of ['approval', 'deadline'] as const) {
     it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {
@@ -420,6 +542,67 @@ describe('finally backstop', () => {
     (failSpy.mock.calls as unknown[][]).filter(
       c => typeof c[1] === 'string' && c[1].includes('exited without finalizing')
     );
+
+  it('leaves finalization to the continued fan-out execution after its pause is resumed', async () => {
+    const parent = makeRun({
+      status: 'paused',
+      working_path: '/project',
+      metadata: {
+        approval: {
+          type: 'fan_out',
+          nodeId: 'children',
+          message: '',
+          childRunIds: ['child'],
+        },
+      },
+    });
+    const resolve = spyOn(source, 'resolveContinuationWorkflow').mockResolvedValue({
+      workflow: makeWorkflow(),
+      roots: liveSourceRoots('/project'),
+      workflows: [],
+      errors: [],
+    });
+    const hydrate = spyOn(resume, 'hydrateResumableRun').mockResolvedValue({
+      ...resumeOf(makeRun()),
+      resumeCause: 'continue_after_wait',
+      priorFailedNodes: new Map(),
+      priorUsage: {},
+      priorNodeSessions: [],
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => parent),
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      findChildRuns: mock(async () => [makeRun({ id: 'child', status: 'completed' })]),
+    });
+    mockExecuteDagWorkflow.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+      parent.metadata = {
+        execution_claim: 'successor',
+        approval: { type: 'approval', nodeId: 'review', message: '', pauseId: 'next' },
+      };
+      return {
+        kind: 'container_pause',
+        pause: {
+          kind: 'gate',
+          context: {
+            type: 'approval',
+            nodeId: 'review',
+            message: '',
+            pauseId: 'next',
+          },
+        },
+      };
+    });
+    try {
+      const result = await startWorkflow({ store });
+      expect(result).toMatchObject({ success: true, handedOff: true });
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(2);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    } finally {
+      hydrate.mockRestore();
+      resolve.mockRestore();
+    }
+  });
 
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });

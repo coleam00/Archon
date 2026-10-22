@@ -4,6 +4,7 @@ import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import {
+  runOrStagePause,
   pauseGateRespectingExternalTransition,
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
@@ -14,7 +15,7 @@ import { recordDerivedExecution } from '../../../node-event-write';
 import { spellWorkflowCommand } from '../../../deps';
 import { gateOccurrence } from '../../../schemas/workflow-run';
 import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../schemas';
-import { canSuspend, isGateNode, isWorkflowWaitContext } from '../../../schemas';
+import { canSuspend, isGateNode } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
@@ -35,6 +36,8 @@ import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
+  ownsStagedGate,
+  ownsTerminalWait,
   logGroupIterationEventError,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
@@ -246,6 +249,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   const iterCtx: RunLayersContext = {
     toolAttention: ctx.toolAttention,
+    containerPause: ctx.containerPause,
     bodyGateOwner:
       terminalSuspendNode && isGateNode(terminalSuspendNode)
         ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
@@ -396,13 +400,20 @@ async function suspendedBody(
   body: BodyRun,
   postBodyStatus: string | null
 ): Promise<LoopGroupBodyResult | undefined> {
-  if (postBodyStatus !== 'paused') return undefined;
+  const staged =
+    run.ctx.containerPause?.publish !== undefined &&
+    run.ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause';
   const running: LoopGroupBodyResult = {
     state: 'running',
     output: state.lastOutput,
     ...run.progress.usage,
     loopIterations: i,
   };
+  if (staged) {
+    const suspensionPoint = await stagedSuspensionPoint(run, i, body.terminalSuspendNode);
+    return { ...running, ...(suspensionPoint !== undefined ? { suspensionPoint } : {}) };
+  }
+  if (postBodyStatus !== 'paused') return undefined;
   const { terminalSuspendNode, scopedNodeOutputs } = body;
   if (terminalSuspendNode) {
     const suspendOutput = scopedNodeOutputs.get(terminalSuspendNode.id);
@@ -425,6 +436,17 @@ async function suspendedBody(
   return undefined;
 }
 
+/** The suspension this group owns when its terminal gate or wait is the staged container pause. */
+async function stagedSuspensionPoint(
+  run: LoopGroupRun,
+  i: number,
+  terminal: GateNode | WaitNode | undefined
+): Promise<'approval' | 'wait' | undefined> {
+  if (terminal === undefined) return undefined;
+  if (isGateNode(terminal)) return ownsStagedGate(run, i, terminal.id) ? 'approval' : undefined;
+  return (await ownsTerminalWait(run, i, terminal.id)) ? 'wait' : undefined;
+}
+
 async function ownedSuspensionPoint(
   run: LoopGroupRun,
   i: number,
@@ -434,15 +456,7 @@ async function ownedSuspensionPoint(
   if (isGateNode(terminalSuspendNode)) {
     return suspendOutput?.execution?.lifecycle.status === 'suspended' ? 'approval' : undefined;
   }
-  const freshRun = await run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id);
-  const freshWait = freshRun?.metadata?.wait;
-  return isWorkflowWaitContext(freshWait) &&
-    freshWait.owner === 'loop_group' &&
-    freshWait.nodeId === run.node.id &&
-    freshWait.bodyWaitId === terminalSuspendNode.id &&
-    freshWait.iteration === i
-    ? 'wait'
-    : undefined;
+  return (await ownsTerminalWait(run, i, terminalSuspendNode.id)) ? 'wait' : undefined;
 }
 
 /**
@@ -702,45 +716,51 @@ async function pauseAtGroupGate(
     // the pause, so the group's bare-approve finalize deliberately writes no `tokens`.
     // Only the plain `loop` gate carries it.
   };
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused)
-    return {
-      state: 'running',
-      output: state.lastOutput,
-      ...run.progress.usage,
-      loopIterations: i,
-    };
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  const gateMsg =
-    `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-    `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    run.stepName,
-    gateMsg
-  );
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: run.stepName,
-      data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-    })
-    .catch((err: Error) => {
-      logGroupIterationEventError(node.id, err, i);
-    });
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused)
+        return {
+          state: 'running',
+          output: state.lastOutput,
+          ...run.progress.usage,
+          loopIterations: i,
+        };
+      await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+      const gateMsg =
+        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        gateOccurrence(paused),
+        run.stepName,
+        gateMsg
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: run.stepName,
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
+        })
+        .catch((err: Error) => {
+          logGroupIterationEventError(node.id, err, i);
+        });
 
-  return { ...serializeNodeOutput(suspended), loopIterations: i };
+      return { ...serializeNodeOutput(suspended), loopIterations: i };
+    },
+    () => ({ state: 'running', output: state.lastOutput, ...run.progress.usage, loopIterations: i })
+  );
 }

@@ -1,6 +1,6 @@
 import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
-import { pauseGateRespectingExternalTransition } from '../../pause';
+import { runOrStagePause, pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
   serializeNodeStateRecord,
@@ -244,21 +244,32 @@ export async function executeWorkflowNode(
       { status: 'suspended', point: 'child_workflow' },
       { output: { text: '' }, diagnostics: { childRunId } }
     );
-    const paused = await pauseGateRespectingExternalTransition(
-      deps,
-      parentRun.id,
-      { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
-      { event: serializeNodeStateRecord(suspended) }
+    return runOrStagePause(
+      ctx,
+      async () => {
+        const paused = await pauseGateRespectingExternalTransition(
+          deps,
+          parentRun.id,
+          {
+            message: blocked.trimEnd(),
+            nodeId: executionNodeId,
+            type: 'child_workflow',
+            childRunId,
+          },
+          { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+        );
+        if (!paused) return serializeNodeOutput(execution);
+        await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+          msgContext
+        );
+        return serializeNodeOutput(suspended);
+      },
+      () => serializeNodeOutput(execution)
     );
-    if (!paused) return serializeNodeOutput(execution);
-    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
-      msgContext
-    );
-    return serializeNodeOutput(suspended);
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {

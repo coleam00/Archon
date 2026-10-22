@@ -1,3 +1,4 @@
+import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
@@ -112,6 +113,7 @@ export interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 export interface RunDerived {
+  containerPause?: ContainerPauseBoundary;
   toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**
    * The roots nodes READ executable source from — command files and named scripts.

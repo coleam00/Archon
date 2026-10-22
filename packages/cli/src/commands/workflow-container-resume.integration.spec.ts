@@ -511,6 +511,30 @@ test.each(['SIGINT', 'SIGTERM'] as const)(
   }
 );
 
+test('a signal during an admitted container resume fails the run under its claim', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused();
+    const baseline = process.listeners('SIGTERM');
+    const exited = Promise.withResolvers<void>();
+    watch(spyOn(process, 'exit')).mockImplementation((() => exited.resolve()) as never);
+    const fail = watch(spyOn(f.store, 'failWorkflowRun'));
+    const execute = f.execute.getMockImplementation()!;
+    f.execute.mockImplementationOnce(async (...args) => {
+      const handlers = process.listeners('SIGTERM').filter(handler => !baseline.includes(handler));
+      expect(handlers).toHaveLength(1);
+      handlers[0]?.('SIGTERM');
+      await exited.promise;
+      return execute(...args);
+    });
+    await f.command(candidate).catch(() => undefined);
+    const claim = fail.mock.calls[0]?.[2]?.expectedExecutionClaim;
+    expect(typeof claim).toBe('string');
+    expect(claim).not.toBe(executionClaim(candidate.metadata));
+    expect(fail.mock.calls[0]?.[2]).toMatchObject({ exitReason: 'process_terminated' });
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+  });
+});
+
 test('prepared context rejection retains the resumed overlay for retry', async () => {
   await fixture(async f => {
     const candidate = await f.paused();

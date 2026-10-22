@@ -33,7 +33,7 @@ import { randomUUID } from 'node:crypto';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import { runContainerWriteBackGate } from './container-gate';
-import { statusAfterPauseFailure } from './pause';
+import { type ContainerPauseReceipt, statusAfterPauseFailure } from './pause';
 
 /** What the terminal tally reads: the run's estate, and the outputs and usage its pass left. */
 export type RunTerminalContext = Pick<
@@ -70,7 +70,9 @@ interface TerminalOutput {
  * it. Returns the run's terminal output, the summary for the parent conversation and the
  * `workflow:` re-entry path.
  */
-export async function finishRun(ctx: RunTerminalContext): Promise<string | undefined> {
+export async function finishRun(
+  ctx: RunTerminalContext
+): Promise<string | undefined | ContainerPauseReceipt> {
   const { deps, workflow, workflowRun, nodeOutputs } = ctx;
   const nodeCounts = countNodeStates(nodeOutputs, workflow.nodes.length);
   const anyCompleted = nodeCounts.completed > 0;
@@ -101,8 +103,8 @@ export async function finishRun(ctx: RunTerminalContext): Promise<string | undef
   // (approve policy, non-empty diff) or applies (auto / has changes) / skips
   // (empty diff). On a RESUME after the decision, the DAG re-ran with every node
   // skipped and lands here again with `pending_writeback` set — it applies or
-  // discards and falls through to completion. `paused` short-circuits (the gate
-  // suspended the container); any other outcome falls through to completeWorkflowRun.
+  // discards and falls through to completion. A pause receipt short-circuits after
+  // the suspension attempt; other outcomes fall through to completeWorkflowRun.
   if (ctx.execContext.kind === 'container' && ctx.containerCtx) {
     const gate = await runContainerWriteBackGate(
       deps,
@@ -112,7 +114,7 @@ export async function finishRun(ctx: RunTerminalContext): Promise<string | undef
       ctx.containerCtx,
       ctx.execContext
     );
-    if (gate === 'paused') return;
+    if (typeof gate === 'object') return gate;
   }
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);

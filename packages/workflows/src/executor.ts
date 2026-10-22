@@ -1,5 +1,7 @@
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { ParentStatusReadError } from './parent-status-read';
+import { WorkflowExecutionHandoffError } from './engine-port';
+import { containerPauseHandoff, readPublishedContainerPause } from './dag/pause';
 import {
   continueBlockedRun,
   isFanOutParentReleased,
@@ -67,7 +69,12 @@ import {
 } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
-import { deadlineWaitCursor, type PersistedNodeOutput, type PriorFailedNode } from './store';
+import {
+  executionClaim,
+  deadlineWaitCursor,
+  type PersistedNodeOutput,
+  type PriorFailedNode,
+} from './store';
 import type { ResumeCause } from './run-resume';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
@@ -116,6 +123,8 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Binds host termination handling to the admitted execution, before any node can publish a pause. */
+  onExecutionClaimed?: (claim: string | null) => void;
   /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
   deferScratchCleanup?: (cleanup: () => Promise<void>) => void;
   ownedWorktree?: OwnedWorktree;
@@ -288,6 +297,9 @@ export async function executeWorkflow(
     cutFromCommit,
   } = opts;
 
+  if (opts.preCreatedRun?.status === 'running')
+    opts.onExecutionClaimed?.(executionClaim(opts.preCreatedRun.metadata));
+
   const dispatched = await resolveRunDispatch(
     deps,
     platform,
@@ -369,8 +381,7 @@ export async function executeWorkflow(
   // The finally-block backstop reads it: a second write over a channel that just
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
-  let sourceExecutionStopped = false;
-  let executionInterrupted = false;
+  let executionStopped = false;
   try {
     const sourced = await establishAdoptedRunSource(
       deps,
@@ -383,7 +394,7 @@ export async function executeWorkflow(
       dispatch.execution
     );
     if (sourced.stopped) {
-      sourceExecutionStopped = true;
+      executionStopped = true;
       return sourced.result;
     }
     const { workflowSourceRoots } = sourced.value;
@@ -537,74 +548,47 @@ export async function executeWorkflow(
     );
 
     if (typeof dagResult === 'object') {
-      // After release another executor may own even a running row; the backstop has no authority.
-      sourceExecutionStopped = true;
-      if (dagResult.released) return { success: true, paused: true, workflowRunId: workflowRun.id };
+      // Publication or release hands ownership to a successor, even when the row is running again.
+      executionStopped = true;
+      if (dagResult.kind === 'source_release' && dagResult.released)
+        return { success: true, paused: true, workflowRunId: workflowRun.id };
     }
     const dagSummary = typeof dagResult === 'string' ? dagResult : undefined;
 
-    // executeDagWorkflow throws on fatal errors; check DB status for result
-    const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
-    // Sub-run re-entry (#2121 Phase 2): if this run is a `workflow:` child that just
-    // reached a terminal state, re-enter its paused parent in-process. Guarded to be
-    // a no-op on the synchronous first-run path (parent still 'running').
+    const finalStatus =
+      typeof dagResult === 'object' && dagResult.kind === 'container_pause'
+        ? await readPublishedContainerPause(deps.store, workflowRun.id)
+        : await deps.store.getWorkflowRun(workflowRun.id);
+    const handoff =
+      typeof dagResult === 'object' && dagResult.kind === 'container_pause'
+        ? containerPauseHandoff(finalStatus, workflowRun, dagResult)
+        : undefined;
+    if (handoff !== undefined) return handoff;
     if (finalStatus?.parent_run_id && isTerminalRunStatus(finalStatus.status)) {
       await maybeResumeParentRun(
         deps,
         platform,
         conversationId,
         finalStatus,
-        // The parent resumes mid-DAG and may still have isolated sub-run nodes ahead
-        // of it; without this it would fail them for a missing resolver the surface
-        // did inject. Same resolver the child ran with — it is codebase-bound and the
-        // child shares the parent's codebase.
         resolveChildIsolation
       );
     }
-    // A fan-out parent builds its gate from a fresh read of its children, then commits
-    // its pause. A child that finished in between saw this run still `running`, so its
-    // hook stood down; check again now that the pause is committed. Whichever side reads
-    // second sees the other, and the resume claim lets only one of them continue.
-    if (finalStatus?.status === 'paused') {
-      const notifyStuck = async (reason: string): Promise<void> => {
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ Run \`${workflowRun.id.slice(0, 8)}\`'s sub-runs finished, but it couldn't ` +
-            `continue (${reason}). Resume it manually: ` +
-            `\`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\``
-        );
-      };
-      let released = false;
-      try {
-        released =
-          isApprovalContext(finalStatus.metadata.approval) &&
-          finalStatus.metadata.approval.type === 'fan_out' &&
-          (await isFanOutParentReleased(deps, finalStatus));
-      } catch (err) {
-        getLog().error(
-          { err: err as Error, workflowRunId: workflowRun.id },
-          'workflow.parent_resume_children_lookup_failed'
-        );
-        await notifyStuck('its sub-runs could not be looked up');
-      }
-      if (released) {
-        const continued = await continueBlockedRun(
-          deps,
-          platform,
-          conversationId,
-          finalStatus,
-          notifyStuck,
-          {},
-          resolveChildIsolation
-        );
-        if (continued !== undefined) return continued;
-      }
+    const continued = await continueReleasedFanOut(
+      deps,
+      platform,
+      conversationId,
+      finalStatus,
+      resolveChildIsolation,
+      opts.onExecutionClaimed
+    );
+    if (continued !== undefined) {
+      executionStopped = true;
+      return continued;
     }
     return executionResult(deps, workflowRun.id, finalStatus, dagSummary);
   } catch (error) {
     if (isWorkflowExecutionInterruption(error)) {
-      executionInterrupted = true;
+      executionStopped = true;
       if (error instanceof TerminalStatusWriteError) terminalStatusWriteFailed = true;
       if (error instanceof ParentStatusReadError) {
         getLog().error(
@@ -615,9 +599,9 @@ export async function executeWorkflow(
       }
       throw error;
     }
-    if (sourceExecutionStopped) throw error;
+    executionStopped ||= error instanceof WorkflowExecutionHandoffError;
+    if (executionStopped) throw error;
 
-    // Top-level error handler: ensure workflow is marked as failed
     const err = error as Error;
     getLog().error(
       { err, workflowName: workflow.name, workflowId: workflowRun.id },
@@ -628,8 +612,6 @@ export async function executeWorkflow(
     // precede it, so a rejection cannot silence them. The live event follows the write:
     // it announces only a failure this call committed. Terminal telemetry is reported by
     // the run store after the write commits.
-    //
-    // Log to file (separate from database - non-blocking)
     try {
       await logWorkflowError(logDir, workflowRun.id, err.message);
     } catch (logError) {
@@ -639,7 +621,6 @@ export async function executeWorkflow(
       );
     }
 
-    // Notify user about the failure
     const delivered = await sendCriticalMessage(
       platform,
       conversationId,
@@ -652,10 +633,7 @@ export async function executeWorkflow(
       );
     }
 
-    // A terminal status write is part of the result: if it fails, reject instead of
-    // reporting a completed process for a row that still says running. Record that it
-    // failed so the finally-block backstop below does not fire a second write over a
-    // write channel that just proved unreliable — that write would mask this error.
+    // A rejected terminal write must surface without a second backstop write masking it.
     const emitter = getWorkflowEventEmitter();
     try {
       const { failed } = await requireTerminalStatusWrite(
@@ -693,9 +671,7 @@ export async function executeWorkflow(
     keepAwake.release();
     leaveRunExecution();
     if (workflowRun && !terminalStatusWriteFailed) {
-      // A source release that lost to a cancel skips the backstop but still frees scratch.
-      if (!sourceExecutionStopped && !executionInterrupted)
-        await failRunLeftRunning(deps, workflowRun.id);
+      if (!executionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
   }
@@ -728,14 +704,54 @@ async function executionResult(
   }
 }
 
-/**
- * Defensive backstop: if the workflow run is still 'running' after all normal and
- * exceptional code paths, flip it to 'failed' to prevent zombie accumulation. Guards
- * against any future code path that exits without calling failWorkflowRun (e.g. a
- * generator cleanup that exits without throwing). Only fires when the process stays
- * alive long enough to run the executor's finally — see #1561 for the originating
- * zombie-state incident.
- */
+// A child can finish between the parent's child lookup and its pause publication.
+async function continueReleasedFanOut(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  finalStatus: WorkflowRun | null,
+  resolveChildIsolation: ChildIsolationResolver | undefined,
+  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
+): Promise<WorkflowExecutionResult | undefined> {
+  if (finalStatus?.status !== 'paused') return undefined;
+  const notifyStuck = async (reason: string): Promise<void> => {
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⚠️ Run \`${finalStatus.id.slice(0, 8)}\`'s sub-runs finished, but it couldn't ` +
+        `continue (${reason}). Resume it manually: ` +
+        `\`${spellWorkflowCommand(platform, `resume ${finalStatus.id}`)}\``
+    );
+  };
+  let released = false;
+  try {
+    released =
+      isApprovalContext(finalStatus.metadata.approval) &&
+      finalStatus.metadata.approval.type === 'fan_out' &&
+      (await isFanOutParentReleased(deps, finalStatus));
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, workflowRunId: finalStatus.id },
+      'workflow.parent_resume_children_lookup_failed'
+    );
+    await notifyStuck('its sub-runs could not be looked up');
+  }
+  if (released) {
+    return continueBlockedRun(
+      deps,
+      platform,
+      conversationId,
+      finalStatus,
+      notifyStuck,
+      {},
+      resolveChildIsolation,
+      onExecutionClaimed
+    );
+  }
+  return undefined;
+}
+
+// Only an execution that still owns running work may invoke this backstop.
 async function failRunLeftRunning(deps: WorkflowDeps, runId: string): Promise<void> {
   const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch((err: unknown) => {
     // A failed lookup leaves status unknown, not missing or finalized. Preserve the

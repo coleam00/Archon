@@ -3,10 +3,11 @@
  * shared by the executors.
  */
 import { escapeRegExp } from '@archon/paths/regexp';
-import type { DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
+import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
+import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -241,21 +242,34 @@ export function retainStreamTail(text: string | undefined): string | undefined {
   )}`;
 }
 
-/**
- * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
- * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
- * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
- * which is why `formatSubprocessFailure` strips the prefix and exposes a
- * controlled `logFields` subset rather than the raw error.
- */
-interface RawSubprocessError {
-  message?: string;
-  stderr?: string;
-  stdout?: string;
-  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
-  code?: number | string | null;
-  killed?: boolean;
-  cmd?: string;
+export function formatHostSpawnFailure(
+  failure: ReturnType<typeof hostSpawnFailure>,
+  runtime: ExecNode['runtime'],
+  command: string,
+  label: string
+): string | undefined {
+  if (runtime === 'sh' && (failure === 'ENOENT' || failure === 'ENOTDIR')) {
+    return (
+      `${label} failed: bash executable not found at '${command}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  }
+  if (failure === 'ENOENT') return `${label} failed: '${command}' executable not found in PATH`;
+  if (failure === 'EACCES') return `${label} failed: permission denied (check cwd permissions)`;
+  return undefined;
+}
+
+const STDERR_LABEL = '[stderr]\n';
+const STDOUT_LABEL = '\n[stdout]\n';
+
+function subprocessDiagnostic(
+  stderrTail: string | undefined,
+  stdoutTail: string | undefined,
+  fallback: string
+): string {
+  if (stderrTail && stdoutTail) return `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
+  return stderrTail || stdoutTail || fallback;
 }
 
 /**
@@ -270,27 +284,26 @@ interface RawSubprocessError {
  * of the script body (`err.message`, `err.stack`, `err.cmd`).
  */
 export function formatSubprocessFailure(
-  err: RawSubprocessError,
+  err: Partial<
+    Pick<
+      RawSubprocessRejection,
+      'message' | 'stderr' | 'stdout' | 'code' | 'killed' | 'commandFailed'
+    >
+  >,
   label: string
 ): { userMessage: string; logFields: Record<string, unknown> } {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
 
-  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
-  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
-  // body. Strip it so user-facing output never re-leaks the body.
-  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
-  const bodyAfterPrefix = hasCommandFailedPrefix
-    ? rawMessage.split('\n').slice(1).join('\n').trim()
-    : rawMessage;
+  // Node embeds multiline argv in this message, so none of it is safe as a
+  // fallback diagnostic. Actual process output belongs to stdout and stderr.
+  const hasCommandFailedPrefix = err.commandFailed || rawMessage.startsWith('Command failed:');
 
   // Well-behaved scripts print failure context to stdout, so both streams share
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
   // stream is labelled only when both are present. The budget accounts for the
   // label overhead so the joined diagnostic never truncates away a label.
-  const STDERR_LABEL = '[stderr]\n';
-  const STDOUT_LABEL = '\n[stdout]\n';
   const bothPresent = stderr.length > 0 && stdout.length > 0;
   const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
   const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
@@ -300,31 +313,30 @@ export function formatSubprocessFailure(
     SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
   );
 
-  let diagnostic: string;
-  if (stderrTail && stdoutTail) {
-    diagnostic = `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
-  } else if (stderrTail || stdoutTail) {
-    diagnostic = (stderrTail ?? '') + (stdoutTail ?? '');
-  } else if (bodyAfterPrefix) {
-    diagnostic = bodyAfterPrefix;
-  } else if (hasCommandFailedPrefix) {
-    // Prefix was the entire message — exit code in the suffix is the only signal.
-    diagnostic = 'no diagnostic output';
-  } else {
-    diagnostic = 'unknown error';
-  }
+  const diagnostic = subprocessDiagnostic(
+    stderrTail,
+    stdoutTail,
+    hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage || 'unknown error'
+  );
 
   const truncated =
     diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
       ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
       : diagnostic;
 
-  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
+  const errorCode = typeof err.code === 'string' ? err.code : undefined;
+  const codeSuffix =
+    typeof err.code === 'number'
+      ? ` [exit ${String(err.code)}]`
+      : errorCode
+        ? ` [error ${errorCode}]`
+        : '';
 
   return {
-    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
+    userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
-      exitCode: err.code ?? undefined,
+      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,

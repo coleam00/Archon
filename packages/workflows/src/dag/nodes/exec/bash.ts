@@ -12,7 +12,7 @@ import { resolveBashPath } from '@archon/git';
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { formatSubprocessFailure } from '../../../executor-shared';
+import { formatHostSpawnFailure, formatSubprocessFailure } from '../../../executor-shared';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, observeNodeCheckout, type RunLayersContext } from '../../run-context';
@@ -165,7 +165,12 @@ export async function executeBashNode(
     // user-facing branch we end up in — the timeout message also contains the
     // full `Command failed: bash -c <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
-    const spawnFailure = hostSpawnFailure(execContext, err);
+    const spawnMessage = formatHostSpawnFailure(
+      hostSpawnFailure(execContext, err),
+      'sh',
+      bashPath,
+      label
+    );
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
@@ -175,13 +180,8 @@ export async function executeBashNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR') {
-      errorMsg =
-        `${label} failed: bash executable not found at '${bashPath}'. ` +
-        'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
-        '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
-    } else if (spawnFailure === 'EACCES') {
-      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
+    } else if (spawnMessage !== undefined) {
+      errorMsg = spawnMessage;
     } else {
       errorMsg = formatted.userMessage;
     }

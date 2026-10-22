@@ -1,3 +1,4 @@
+import { scriptInvocation } from '../../../script-invocation';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -17,7 +18,11 @@ import {
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { isInlineScript, formatSubprocessFailure } from '../../../executor-shared';
+import {
+  isInlineScript,
+  formatHostSpawnFailure,
+  formatSubprocessFailure,
+} from '../../../executor-shared';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { assertNodeSourceReadable, RunSourceUnreadableError } from '../../node-source';
@@ -148,26 +153,13 @@ export async function executeScriptNode(
     PYTHONDONTWRITEBYTECODE: '1',
   };
 
-  // Build the command and args based on runtime and inline vs named
-  let cmd = '';
-  let args: string[] = [];
-
-  const nodeDeps = node.deps ?? [];
-
+  let invocation: ReturnType<typeof scriptInvocation>;
   if (isInlineScript(finalScript)) {
-    // Inline code execution
-    if (node.runtime === 'bun') {
-      cmd = 'bun';
-      // --no-env-file prevents Bun from auto-loading .env from the execution
-      // cwd (the target repo). Without this, repo .env leaks into the script
-      // subprocess despite Archon's parent process cleanup.
-      args = ['--no-env-file', '-e', finalScript];
-    } else {
-      // uv run --with dep1 --with dep2 python -c <code>
-      cmd = 'uv';
-      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-      args = ['run', ...withFlags, 'python', '-c', finalScript];
-    }
+    invocation = scriptInvocation(
+      node.runtime === 'bun' ? 'bun' : 'uv',
+      { kind: 'inline', code: finalScript },
+      node.deps
+    );
   } else {
     // Named script — look up across repo and home scopes.
     // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
@@ -203,16 +195,13 @@ export async function executeScriptNode(
       );
     }
 
-    // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
-    if (scriptDef.runtime === 'uv') {
-      cmd = 'uv';
-      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-      args = ['run', ...withFlags, scriptDef.path];
-    } else {
-      cmd = 'bun';
-      args = ['--no-env-file', 'run', scriptDef.path];
-    }
+    invocation = scriptInvocation(
+      scriptDef.runtime,
+      { kind: 'file', path: scriptDef.path },
+      node.deps
+    );
   }
+  const { command: cmd, args } = invocation;
 
   // After dispatch, a rejection may follow user side effects; source recovery must not
   // replace that outcome. Recheck while execution is still known not to have started.
@@ -283,7 +272,12 @@ export async function executeScriptNode(
     // user-facing branch we end up in — the timeout message also contains the
     // full `Command failed: bun -e <body>` line and would otherwise leak.
     const formatted = formatSubprocessFailure(err, label);
-    const spawnFailure = hostSpawnFailure(execContext, err);
+    const spawnMessage = formatHostSpawnFailure(
+      hostSpawnFailure(execContext, err),
+      node.runtime,
+      cmd,
+      label
+    );
     let errorMsg: string;
     if (contractFailure) {
       errorMsg = err.message;
@@ -293,10 +287,8 @@ export async function executeScriptNode(
       errorMsg = `${label} failed: ${err.message}`;
     } else if (err.cancelled) {
       errorMsg = `${label} cancelled`;
-    } else if (spawnFailure === 'ENOENT') {
-      errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (spawnFailure === 'EACCES') {
-      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
+    } else if (spawnMessage !== undefined) {
+      errorMsg = spawnMessage;
     } else {
       errorMsg = formatted.userMessage;
     }

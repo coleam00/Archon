@@ -69,48 +69,60 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
+    if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
+      break;
     await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
-    const isParallelLayer = layer.length > 1;
-
-    if (isParallelLayer) {
-      ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
-    }
-
-    // Build a thunk per node so the layer can run either concurrently or strictly
-    // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
-    // asserts after a node's own execution, so when a guarded node shares the layer
-    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
-    // siblings whose internal execution would overlap the window), that sibling's
-    // legitimate write would be blamed on the guarded node: such a mixed layer runs
-    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
-    // it may write: the writer still sees its own write and fails, and a sibling
-    // whose window overlapped fails with it, its error naming the siblings.
-    const guardedCount = layer.filter(isCheckoutGuarded).length;
-    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
-    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
-    // A nested interaction can persist a pause before its ordinary sibling settles.
-    // Settle ordinary peers first inside loop bodies so admission sees their failures.
-    const phases = ctx.interactionAdmission
-      ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
-      : [layer];
-    for (const phase of phases) {
-      const layerHadFailure = await runLayerPhase(
-        ctx,
-        phase,
-        isParallelLayer,
-        serializeLayer,
-        guardedLayerSnapshots
-      );
-
-      if (layerHadFailure) {
-        getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
-      }
-    }
+    await runLayer(ctx, layer, layerIdx);
 
     await ctx.afterLayer?.();
 
     if (await stopsBetweenLayers(ctx, layerIdx)) break;
+  }
+}
+
+async function runLayer(
+  ctx: RunLayersContext,
+  layer: readonly DagNode[],
+  layerIdx: number
+): Promise<void> {
+  const isParallelLayer = layer.length > 1;
+
+  if (isParallelLayer) {
+    ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
+  }
+
+  // Build a thunk per node so the layer can run either concurrently or strictly
+  // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
+  // asserts after a node's own execution, so when a guarded node shares the layer
+  // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+  // siblings whose internal execution would overlap the window), that sibling's
+  // legitimate write would be blamed on the guarded node: such a mixed layer runs
+  // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+  // it may write: the writer still sees its own write and fails, and a sibling
+  // whose window overlapped fails with it, its error naming the siblings.
+  const guardedCount = layer.filter(isCheckoutGuarded).length;
+  const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+  const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
+  // A nested interaction can persist a pause before its ordinary sibling settles.
+  // Settle ordinary peers first inside loop bodies so admission sees their failures.
+  const phases = ctx.interactionAdmission
+    ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
+    : [layer];
+  for (const phase of phases) {
+    if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
+      break;
+    const layerHadFailure = await runLayerPhase(
+      ctx,
+      phase,
+      isParallelLayer,
+      serializeLayer,
+      guardedLayerSnapshots
+    );
+
+    if (layerHadFailure) {
+      getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+    }
   }
 }
 

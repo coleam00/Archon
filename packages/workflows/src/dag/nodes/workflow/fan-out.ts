@@ -1,5 +1,5 @@
 import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
-import { pauseGateRespectingExternalTransition } from '../../pause';
+import { runOrStagePause, pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -215,25 +215,31 @@ async function suspendOnHeldChildren(
     { status: 'suspended', point: 'fan_out' },
     { output: { text: '' }, diagnostics: { fanOut: true } }
   );
-  const paused = await pauseGateRespectingExternalTransition(
-    ctx.deps,
-    ctx.workflowRun.id,
-    {
-      type: 'fan_out',
-      nodeId: stepName,
-      message,
-      childRunIds: held.map(([, id]) => id),
-      unspawnedItems,
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        ctx.deps,
+        ctx.workflowRun.id,
+        {
+          type: 'fan_out',
+          nodeId: stepName,
+          message,
+          childRunIds: held.map(([, id]) => id),
+          unspawnedItems,
+        },
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused) return serializeNodeOutput(execution);
+      await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+      await notify(
+        `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
+          `See them with \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
+      );
+      return serializeNodeOutput(suspended);
     },
-    { event: serializeNodeStateRecord(suspended) }
+    () => serializeNodeOutput(execution)
   );
-  if (!paused) return serializeNodeOutput(execution);
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  await notify(
-    `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
-      `See them with \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
-  );
-  return serializeNodeOutput(suspended);
 }
 
 /**

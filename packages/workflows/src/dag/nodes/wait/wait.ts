@@ -1,5 +1,5 @@
 import { waitMessageRenderer } from './attention-message';
-import { sendPauseNotice, statusAfterPauseFailure } from '../../pause';
+import { runOrStagePause, sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
@@ -295,42 +295,76 @@ async function pauseWait(
   context: WorkflowWaitContext
 ): Promise<NodeExecutionResult> {
   const { ctx, node, persisted, execution } = pass;
-  const { workflowRun, deps, platform, stepNamePrefix } = ctx;
-  let paused = false;
-  try {
-    await deps.store.pauseWorkflowRunForWait(
-      workflowRun.id,
-      context,
-      persisted === undefined
-        ? { kind: 'started', stepName: stepNamePrefix + node.id }
-        : { kind: 'continued' }
-    );
-    paused = true;
-  } catch (pauseError) {
-    const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
-    if (status === 'running') throw pauseError;
-    getLog().warn(
-      { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
-      'dag.wait_pause_skipped_external_transition'
-    );
-  }
-  if (paused && context.kind === 'attention') {
-    await sendPauseNotice(
-      deps,
-      platform,
-      ctx.conversationId,
-      workflowRun.id,
-      node.id,
-      attentionOccurrence(context),
-      stepNamePrefix + node.id,
-      attentionNotification(platform, workflowRun.id, context, pass.discarded)
-    );
-  }
-  if (execution === undefined) return { state: 'running', output: '' };
-  if (!paused) return serializeNodeOutput(execution);
-  return recordNodeState(
-    { store: deps.store, logDir: ctx.logDir },
-    finishNodeExecution(execution, { status: 'suspended', point: 'wait' }, { output: { text: '' } })
+  const { workflowRun, deps, platform, stepNamePrefix, logDir } = ctx;
+  return runOrStagePause(
+    ctx,
+    async () => {
+      let stagedOutput: NodeExecutionResult | undefined;
+      if (ctx.containerPause !== undefined && execution !== undefined) {
+        stagedOutput = await recordNodeState(
+          { store: deps.store, logDir },
+          finishNodeExecution(
+            execution,
+            { status: 'suspended', point: 'wait' },
+            { output: { text: '' } }
+          )
+        );
+      }
+      let paused = false;
+      try {
+        await deps.store.pauseWorkflowRunForWait(
+          workflowRun.id,
+          context,
+          persisted === undefined
+            ? { kind: 'started', stepName: stepNamePrefix + node.id }
+            : { kind: 'continued' }
+        );
+        paused = true;
+        if (ctx.containerPause !== undefined) {
+          ctx.containerPause.receipt = {
+            kind: 'container_pause',
+            pause: { kind: 'wait', context },
+          };
+        }
+      } catch (pauseError) {
+        const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
+        if (status === 'running') throw pauseError;
+        getLog().warn(
+          { workflowRunId: workflowRun.id, nodeId: node.id, status: status ?? 'deleted' },
+          'dag.wait_pause_skipped_external_transition'
+        );
+      }
+      if (paused && context.kind === 'attention') {
+        await sendPauseNotice(
+          deps,
+          platform,
+          ctx.conversationId,
+          workflowRun.id,
+          node.id,
+          attentionOccurrence(context),
+          stepNamePrefix + node.id,
+          attentionNotification(platform, workflowRun.id, context, pass.discarded)
+        );
+      }
+      if (paused && stagedOutput !== undefined) return stagedOutput;
+      if (execution === undefined) return { state: 'running', output: '' };
+      if (!paused) return serializeNodeOutput(execution);
+      return recordNodeState(
+        { store: deps.store, logDir },
+        finishNodeExecution(
+          execution,
+          { status: 'suspended', point: 'wait' },
+          { output: { text: '' } }
+        )
+      );
+    },
+    selected => {
+      if (selected && ctx.containerPause !== undefined)
+        ctx.containerPause.selected = { kind: 'wait', context };
+      return execution === undefined
+        ? { state: 'running', output: '' }
+        : serializeNodeOutput(execution);
+    }
   );
 }
 

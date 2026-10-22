@@ -36,6 +36,7 @@ import {
 import { nodeTemplateReferences } from '../../references';
 import {
   findLoopGroupTerminalSuspendNode,
+  ownsTerminalWait,
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
   type LoopGroupProgress,
@@ -339,12 +340,14 @@ export async function resumeTerminalWait(
   } catch (cause) {
     throw new ParentStatusReadError(ctx.workflowRun.id, node.id, cause);
   }
-  if (status === 'paused') {
+  if (ctx.containerPause?.publish !== undefined || status === 'paused') {
     return {
       state: 'running',
       output: '',
       loopIterations: resumeIteration,
-      suspensionPoint: 'wait',
+      ...((await ownsTerminalWait(run, resumeIteration, terminalNode.id))
+        ? { suspensionPoint: 'wait' as const }
+        : {}),
     };
   }
   ctx.nodeOutputs.set(bodyStepNamePrefix + terminalNode.id, waitOutput);

@@ -213,7 +213,9 @@ A relative path resolves from the invoking directory before the repository root.
 | `fixture.resolved-text-contains` | Map of node id to a fragment that must appear in that node's resolved text |
 | `exec-code` | `true` executes `bash:` and `script:` nodes, in a scratch worktree of `HEAD`, instead of requiring stubs |
 
-The command exits 0 when every fixture passes, including when none are declared. It exits 1 when a fixture fails, a workflow cannot load, or a named target has no fixtures. `--json` prints `{ results, passed, failed, errors }`.
+The command exits 0 when every fixture passes, including when none are declared. It exits 1 when a fixture fails, a workflow cannot load, or a named target has no fixtures. `--json` prints `{ results, passed, failed, errors }`. Each result can include `nodeFailures: [{ nodeId, reason }]` with the failed nodes' diagnostics. This field can be present when the fixture passes because it correctly expects a node to fail; `failureReason` describes a fixture verdict failure and can be absent in that case.
+
+Fixtures with `exec-code: true` receive the same environment as [executable dry runs](#deterministic-dry-run): inherited process values, file-configured `env`, then registered-project environment values, with later sources winning. Environment lookup happens only for executable fixtures. If lookup fails, that fixture fails with the lookup error; independent stub fixtures still run and workflow-load errors remain in the report.
 
 ### `workflow run <name> [message]`
 
@@ -244,7 +246,7 @@ archon workflow run archon-ship --cwd /path/to/repo \
   --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190 "finish the delivery"
 ```
 
-Foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
+Except on an execution handoff, foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
 
 ```text
   Usage (recorded totals; completeness unknown):
@@ -254,6 +256,19 @@ Foreground completion and failure output prints the run's recorded cost and inpu
 ```
 
 These are stored figures, not a certified bill, so the completeness warning is always printed. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) shows the same summary for any run.
+
+If another execution takes ownership before the foreground command returns, it prints:
+
+```text
+Workflow execution handed off. Observed status: <status>.
+```
+
+`<status>` is the status observed at handoff, or `run removed` if the row no longer exists.
+This output omits recorded usage and authored outcome. Exit `0` means this execution handed
+off without observing `failed` or `cancelled`; it does not prove the workflow completed.
+An observed `failed` or `cancelled` status exits non-zero. Use
+[`workflow wait <run-id>`](#workflow-wait) to wait for the next terminal or gate transition,
+and [`workflow get <run-id>`](#workflow-get) to read current status, usage, and authored outcome.
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution. The workflow-start output also names the absolute local path of the run's JSONL transcript. Use [`workflow logs`](#workflow-logs) when you have a run ID and want the content rather than the path.
 
@@ -398,6 +413,8 @@ The one exception is a `trigger_rule: all_done` join, which runs after its depen
 Add `--default-stubs` to fill only omitted reachable nodes with the same schema-aware placeholders used by scaffold generation; explicit values always take precedence. Without `--exec-code`, a reachable `bash:` or `script:` node that arrived through `include:` needs a stub like any other: a stubbed node never runs its body, so the caller's `with:` values are never delivered to it. With `--exec-code` it can run unstubbed and reads those values as described below. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
 A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives, before any trace output. With `--exec-code`, bash and script nodes also receive the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers: run-level inputs, an included block's own inputs, and a script node's `with:` bindings.
+
+With `--exec-code`, child processes inherit Archon's process environment, then apply file-configured `env`, registered-project environment values, and per-run `env` overrides from `--config`, in that order (later values win). Node input variables and engine-owned variables such as `ARTIFACTS_DIR` take precedence over those layers. Registered-project values come from the project resolved for the invocation's working directory. See [configuration](/reference/configuration/) for file configuration and [managed environment variables](/reference/security/#secrets-handling) for stored credentials. Executable fixtures use the same layers, without per-run CLI overrides.
 
 By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
@@ -611,8 +628,9 @@ means execution finished normally but the workflow judged the work unsuccessful;
 `paused` with authored outcome `succeeded` records a successful verdict before execution later
 failed or paused. A null outcome means the workflow did not declare one, the selected node has not
 authored it yet, or the run predates the field. In that case human output keeps its status-only
-presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
-code remains driven by execution success or failure.
+presentation. Except on an [execution handoff](#workflow-run-name-message), foreground
+`workflow run` uses the same labels when an outcome exists, and its exit code follows execution
+success or failure. A handoff reports only the observed status and has the exit meaning described above.
 
 Verbose JSON node summaries include `execution` for newly recorded work. It identifies the
 invocation, attempt, provider, requested model and any model the provider reported. Inner retries
