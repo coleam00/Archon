@@ -172,6 +172,34 @@ process.exit(9);`,
     expect(result.summary).toBe(value + value);
   });
 
+  test('redacts inherited credentials from output-contract diagnostics', async () => {
+    const secret = 'synthetic-contract-credential-4353';
+    const previous = process.env.ARCHON_DRY_RUN_TEST_SECRET;
+    process.env.ARCHON_DRY_RUN_TEST_SECRET = secret;
+    try {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'credential-contract',
+          nodes: [
+            {
+              id: 'code',
+              bash: 'printf "%s" "$ARCHON_DRY_RUN_TEST_SECRET"',
+              output_format: { type: 'object' },
+            },
+          ],
+        }),
+        execCode: true,
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toContain('must be a single JSON document');
+      expect(result.trace[0]?.reason).toContain('[REDACTED]');
+      expect(JSON.stringify(result)).not.toContain(secret);
+    } finally {
+      if (previous === undefined) delete process.env.ARCHON_DRY_RUN_TEST_SECRET;
+      else process.env.ARCHON_DRY_RUN_TEST_SECRET = previous;
+    }
+  });
+
   test('an executed code node is held to its output_format like a real run', async () => {
     const okSchema = {
       type: 'object',

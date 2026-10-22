@@ -4,7 +4,12 @@ import { execFileAsync, resolveBashPath } from '@archon/git';
 import { certifyExecOutput } from '../../dag/nodes/exec/exec-output';
 import { discoverScriptsForCwd } from '../../script-discovery';
 import { formatSubprocessFailure, isInlineScript } from '../../executor-shared';
-import { isSubprocessTimeout, type RawSubprocessRejection } from '../../subprocess';
+import {
+  isSubprocessTimeout,
+  redactSubprocessError,
+  type RawSubprocessRejection,
+} from '../../subprocess';
+import { collectCredentialValues } from '@archon/paths/credential-redaction';
 import { assertWorkflowSourceIntegrity } from '../../workflow-source';
 import { buildExecNodeEnvironment } from '../../exec-environment';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
@@ -26,37 +31,39 @@ export async function executeCodeNode(
     // a pure-stub dry run creates no directory.
     await mkdir(ctx.artifactsDir, { recursive: true });
     await mkdir(ctx.stateDir, { recursive: true });
+    const env = {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      PWD: ctx.execWorkspace,
+      OLDPWD: ctx.execWorkspace,
+      ...inputEnv,
+      ...buildExecNodeEnvironment({
+        artifactsDir: ctx.artifactsDir,
+        stateDir: ctx.stateDir,
+        logDir: ctx.logDir,
+        workflowId: 'dry-run',
+        baseBranch: 'dry-run-base',
+        userMessage: ctx.userMessage,
+        loopUserInput: '',
+        loopPrevOutput: '',
+        rejectionReason: '',
+        issueContext: '',
+        // No artifacts are written in a dry run, so there is no listing to point at.
+        typedArtifactsFile: '',
+        nodeExecution: execution ?? null,
+      }),
+    };
+    const credentialValues = collectCredentialValues(env);
     let result: Awaited<ReturnType<typeof execFileAsync>>;
     try {
       result = await execFileAsync(command, args, {
         input,
         cwd: ctx.execWorkspace,
         timeout: node.timeout ?? 300_000,
-        env: {
-          ...process.env,
-          PYTHONDONTWRITEBYTECODE: '1',
-          PWD: ctx.execWorkspace,
-          OLDPWD: ctx.execWorkspace,
-          ...inputEnv,
-          ...buildExecNodeEnvironment({
-            artifactsDir: ctx.artifactsDir,
-            stateDir: ctx.stateDir,
-            logDir: ctx.logDir,
-            workflowId: 'dry-run',
-            baseBranch: 'dry-run-base',
-            userMessage: ctx.userMessage,
-            loopUserInput: '',
-            loopPrevOutput: '',
-            rejectionReason: '',
-            issueContext: '',
-            // No artifacts are written in a dry run, so there is no listing to point at.
-            typedArtifactsFile: '',
-            nodeExecution: execution ?? null,
-          }),
-        },
+        env,
       });
     } catch (error) {
-      const err = error as RawSubprocessRejection;
+      const err = redactSubprocessError(error as RawSubprocessRejection, credentialValues);
       const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
       if (isSubprocessTimeout(err)) {
         return { error: `${label} timed out after ${String(node.timeout ?? 300_000)}ms` };
@@ -65,8 +72,7 @@ export async function executeCodeNode(
       return { error: err.signal ? `${userMessage} [signal ${err.signal}]` : userMessage };
     }
     // The real run's gate, so a fixture cannot pass a node whose stdout the engine would reject.
-    // The simulator has no credential set to redact from the quoted stdout.
-    return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), []);
+    return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), credentialValues);
   } catch (error) {
     return { error: (error as Error).message };
   }
