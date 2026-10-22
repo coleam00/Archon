@@ -10,7 +10,13 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
-In the checks below, `.env` means the file for your installation: `~/.archon/.env` or `<cwd>/.archon/.env` for the CLI, Archon's checkout-root `.env` for a source server, or the Compose `.env` for Docker. Substitute that path in the commands. The CLI strips keys named in a target repository's `<cwd>/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence.
+For credential checks below, trace the value Archon actually uses rather than checking only one file:
+
+- **Source server:** Start with the environment inherited by the server. Boot strips every key named in the CWD's `.env`, `.env.local`, `.env.development` and `.env.production`, including shell values. Archon's checkout-root `.env` then fills missing values without overriding those that remain. Next, `~/.archon/.env` overrides those values, and finally `<cwd>/.archon/.env` overrides user scope. Check all three files in that order; a key defined in either `.archon/.env` file wins over earlier sources, even if empty. CWD means the server's working directory, which may differ from the checkout.
+- **CLI or compiled server:** Skip the checkout-root file. Check the inherited environment after CWD key stripping, then `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for CLI workflow credential exceptions.
+- **Docker:** Check the Compose `.env` and the container environment, then the container's Archon env files in the same user/repo order. See [Docker configuration](/deployment/docker/#configure-env).
+
+Replace `/path/to/env-file` in each command with each applicable file above. A missing key in one file does not mean it is unset in Archon. Shell commands such as the GitHub API test use your current shell's value; set it to the effective credential you traced before testing.
 
 ## Project uses an unexpected provider
 
@@ -66,8 +72,7 @@ docker compose logs -f app
 
 **Verify bot token:**
 ```bash
-# In your .env file
-cat .env | grep TELEGRAM_BOT_TOKEN
+grep TELEGRAM_BOT_TOKEN /path/to/env-file
 ```
 
 **Test with health check:**
@@ -110,7 +115,7 @@ psql $DATABASE_URL -c "\dt"
 
 **Verify GitHub token:**
 ```bash
-cat .env | grep GH_TOKEN
+grep GH_TOKEN /path/to/env-file
 # Should have both GH_TOKEN and GITHUB_TOKEN set
 ```
 
@@ -139,7 +144,7 @@ git clone https://github.com/user/repo ~/.archon/workspaces/test-repo
 
 **Check webhook secret:**
 ```bash
-cat .env | grep WEBHOOK_SECRET
+grep WEBHOOK_SECRET /path/to/env-file
 # Must match exactly what you entered in GitHub
 ```
 
