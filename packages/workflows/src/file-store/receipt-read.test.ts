@@ -6,6 +6,7 @@ import { ZodError } from 'zod';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 import { receiptFieldsSchema, pathFor } from './admission-documents';
+import { sourceReceiptOutcomeSchema } from '../schemas/resource-start';
 import * as commitModule from './commit';
 
 const roots = trackTempRoots();
@@ -15,6 +16,23 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
   if (damage === 'json') return writeFile(path, '{');
   const row = JSON.parse(await readFile(path, 'utf8'));
   switch (damage) {
+    case 'matched-empty':
+      row.bindings = [];
+      break;
+    case 'matched-evaluated-only':
+      row.bindings[0].intent = null;
+      row.bindings[0].hostId = null;
+      row.bindings[0].status = 'unmatched';
+      break;
+    case 'unmatched-intent':
+      row.outcome = 'unmatched';
+      break;
+    case 'unsupported-intent':
+      row.outcome = 'unsupported';
+      break;
+    case 'malformed-intent':
+      row.outcome = 'malformed';
+      break;
     case 'schema':
       row.bindings = [{}];
       break;
@@ -68,6 +86,11 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
 
 test.each([
   'json',
+  'matched-empty',
+  'matched-evaluated-only',
+  'unmatched-intent',
+  'unsupported-intent',
+  'malformed-intent',
   'schema',
   'unreadable',
   'outer-id',
@@ -219,3 +242,70 @@ test.each([
     before
   );
 });
+
+for (const outcome of sourceReceiptOutcomeSchema.options) {
+  test.each([false, true])(
+    `${outcome} receipt preserves evaluated bindings: %s`,
+    async evaluated => {
+      const root = roots(await mkdtemp(join(tmpdir(), 'receipt-outcome-')));
+      const store = await createFileWorkflowStore({ root });
+      const id = crypto.randomUUID();
+      const receipt = {
+        id,
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      };
+      const evaluatedBindings = evaluated
+        ? [
+            {
+              bindingId: 'evaluated',
+              bindingRevision: null,
+              status: 'unmatched' as const,
+              reason: 'no match',
+            },
+          ]
+        : [];
+      await store.acceptStartReceipt(
+        outcome === 'matched'
+          ? {
+              receipt,
+              outcome,
+              evaluatedBindings,
+              bindings: [
+                {
+                  bindingId: 'accepted',
+                  bindingRevision: null,
+                  hostId: 'host',
+                  runAsUserId: 'operator',
+                  resource: 'resource',
+                  capacity: 1,
+                  overlap: 'queue',
+                  launch: {
+                    cwd: '/test',
+                    workflowName: 'test',
+                    inputs: {},
+                    isolation: { kind: 'in-place' },
+                  },
+                },
+              ],
+            }
+          : { receipt, outcome, evaluatedBindings, bindings: [] }
+      );
+      expect(await store.listStartReceipts()).toMatchObject([{ id, outcome }]);
+      const pending = await store.listPendingStartBindings({ hostId: 'host' });
+      expect(pending.map(binding => binding.bindingId)).toEqual(
+        outcome === 'matched' ? ['accepted'] : []
+      );
+      const stored = await store.getStartReceipt(id);
+      expect(stored?.outcome).toBe(outcome);
+      expect(stored?.bindings.map(binding => binding.bindingId)).toEqual([
+        ...(outcome === 'matched' ? ['accepted'] : []),
+        ...(evaluated ? ['evaluated'] : []),
+      ]);
+    }
+  );
+}

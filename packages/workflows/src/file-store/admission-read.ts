@@ -22,6 +22,7 @@ export async function readReceiptDocument(root: string, path: string): Promise<R
       .refine(
         row =>
           pathFor('receipts', row.id) === path &&
+          (row.outcome === 'matched') === row.bindings.some(binding => binding.intent !== null) &&
           new Set(row.bindings.map(binding => binding.bindingId)).size === row.bindings.length &&
           row.bindings.every(
             binding =>

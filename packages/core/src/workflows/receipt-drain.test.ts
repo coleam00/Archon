@@ -116,6 +116,23 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
   if (damage === 'json') return fs.writeFile(path, '{');
   const row = JSON.parse(await fs.readFile(path, 'utf8'));
   switch (damage) {
+    case 'matched-empty':
+      row.bindings = [];
+      break;
+    case 'matched-evaluated-only':
+      row.bindings[0].intent = null;
+      row.bindings[0].hostId = null;
+      row.bindings[0].status = 'unmatched';
+      break;
+    case 'unmatched-intent':
+      row.outcome = 'unmatched';
+      break;
+    case 'unsupported-intent':
+      row.outcome = 'unsupported';
+      break;
+    case 'malformed-intent':
+      row.outcome = 'malformed';
+      break;
     case 'schema':
       row.bindings = [{}];
       break;
@@ -162,6 +179,11 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
 for (const receiptHost of ['host', 'other']) {
   test.each([
     'json',
+    'matched-empty',
+    'matched-evaluated-only',
+    'unmatched-intent',
+    'unsupported-intent',
+    'malformed-intent',
     'schema',
     'unreadable',
     'outer-id',
