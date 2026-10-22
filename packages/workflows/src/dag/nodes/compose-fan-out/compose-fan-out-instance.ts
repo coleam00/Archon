@@ -173,6 +173,7 @@ function instanceRunContext(
     toolAttention: ctx.toolAttention,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
     reportedChildUsage: resumeSnapshot.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot.unattributedChildUsagePaths,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,

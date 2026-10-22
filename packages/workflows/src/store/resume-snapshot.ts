@@ -38,6 +38,8 @@ export interface PriorFailedNode {
 export interface DagResumeSnapshot extends RunUsageFigures {
   /** Cumulative usage already reported for each child run, keyed by child run id. */
   reportedChildUsage?: Map<string, RunUsageFigures>;
+  /** Historical workflow spend with no unambiguous child attribution, keyed by path. */
+  unattributedChildUsagePaths?: Set<string>;
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;

@@ -67,6 +67,83 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     await removeTempTree(testDir);
   });
 
+  it.each([false, true])(
+    'refuses unattributed historical usage inside an instance (fan-out %s)',
+    async fanOut => {
+      await writeBlock(`name: compose-blk
+description: child block
+mutates_checkout: false
+nodes:
+  - id: child
+    workflow: child-workflow
+${fanOut ? "    fan_out:\n      items: '[1]'\n      join: all_success\n" : ''}`);
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
+        'child-workflow'
+      );
+      const [instance] = buildInstanceSnapshots(['a']);
+      const path = composeInnerStep(instance.identity, 'child');
+      const store = createMockStore();
+      await store.persistWorkflowEvent({
+        workflow_run_id: 'parent',
+        step_name: path,
+        event_type: 'node_failed',
+        data: {
+          type: 'workflow',
+          error: 'old failure',
+          cost_usd: 0.02,
+          tokens: { input: 14, output: 6 },
+        },
+      });
+      store.getDagResumeSnapshot.mockImplementation(async runId =>
+        foldDagResumeSnapshot(persistedEvents(store), runId)
+      );
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        childRunId: 'child',
+        status: 'completed',
+        costUsd: 0.03,
+        tokens: { input: 21, output: 9 },
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('parent'),
+          priorUsage: await store.getDagResumeSnapshot('parent'),
+          runChildWorkflow,
+          workflow: {
+            name: 'parent',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+              },
+            ],
+          },
+        })
+      );
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(eventsOf(store)).toContainEqual({
+        event_type: 'node_failed',
+        step_name: path,
+        data: expect.objectContaining({
+          failure_kind: 'config',
+          error: expect.stringContaining('historical child usage'),
+        }),
+      });
+      const final = await store.getDagResumeSnapshot('parent');
+      expect(final.costUsd).toBeCloseTo(0.02);
+      expect(final.tokens).toEqual({ input: 14, output: 6 });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.02,
+        total_tokens_in: 14,
+        total_tokens_out: 6,
+      });
+    }
+  );
+
   async function assertRecoveredInstanceUsage(
     store: ReturnType<typeof createMockStore>,
     instance: FanOutInstanceSnapshot,

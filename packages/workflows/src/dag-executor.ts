@@ -226,6 +226,7 @@ export async function executeDagWorkflow(
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
     reportedChildUsage: resumeSnapshot?.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
     runBudget,
     deps,
     platform,

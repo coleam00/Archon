@@ -166,6 +166,7 @@ it.each(
       tokens === undefined ? undefined : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     );
     expect(snapshot.reportedChildUsage?.size).toBe(0);
+    expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
   }
 );
 
@@ -227,6 +228,7 @@ it.each(
       'parent'
     );
     expect(snapshot.costUsd).toBe('cost_usd' in usage ? usage.cost_usd : 0);
+    expect(snapshot.unattributedChildUsagePaths).toEqual(new Set(['sub']));
     expect(snapshot.reportedChildUsage?.size).toBe(0);
     expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe(
       eventType === 'node_completed' ? 'legacy output' : undefined

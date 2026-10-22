@@ -135,6 +135,7 @@ interface ResumeFold {
    * cannot tell "one of five contributions reported" from "one of two" (#2662). */
   usageContributions: UsageContribution[];
   readonly reportedChildUsage: NonNullable<DagResumeSnapshot['reportedChildUsage']>;
+  readonly unattributedChildUsagePaths: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
   readonly openAgentAttempts: Map<string, string>;
@@ -490,7 +491,10 @@ function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
   if (data.child_run_id !== undefined) ids.add(data.child_run_id);
   // Historical fan-out increments cannot be allocated among children. Keep their
   // node-level spend readable without inventing cumulative child baselines.
-  if (ids.size !== 1) return;
+  if (ids.size !== 1) {
+    fold.unattributedChildUsagePaths.add(path);
+    return;
+  }
   // Legacy workflow rows report increments, unlike child_usage's cumulative baselines.
   for (const id of ids) {
     const contributions = [fold.reportedChildUsage.get(id) ?? {}, usage];
@@ -629,6 +633,7 @@ export async function foldDagResumeSnapshot(
     completedExecutions: new Map(),
     usageContributions: [],
     reportedChildUsage: new Map(),
+    unattributedChildUsagePaths: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
     settledAgentAttempts: new Set(),
@@ -641,6 +646,7 @@ export async function foldDagResumeSnapshot(
   }
   return {
     reportedChildUsage: fold.reportedChildUsage,
+    unattributedChildUsagePaths: fold.unattributedChildUsagePaths,
     unfinishedInvocations: fold.unfinishedInvocations,
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,

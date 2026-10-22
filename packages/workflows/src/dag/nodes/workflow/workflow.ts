@@ -18,7 +18,7 @@ import type { WorkflowCommandSurface } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { WorkflowNode, WorkflowRun } from '../../../schemas';
-import { readSubrunMetadata } from '../../../schemas';
+import { isTerminalRunStatus, readSubrunMetadata } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
@@ -89,6 +89,13 @@ export async function executeWorkflowNode(
       )
     );
   };
+
+  if (ctx.unattributedChildUsagePaths?.has(executionNodeId)) {
+    return failResult(
+      `Cannot re-execute workflow node '${executionNodeId}': historical child usage lacks unambiguous attribution; cumulative child totals would count earlier spend again.`,
+      'config'
+    );
+  }
 
   if (!ctx.runChildWorkflow) {
     // Fail fast: executor.ts MUST inject the closure. A missing one means a caller
@@ -326,11 +333,7 @@ export async function executeWorkflowNode(
         await ctx.runChildWorkflow({ ...childArgs, resumeChild: { kind: 'failed', run: existing } })
       );
     }
-    if (
-      existing.status === 'paused' ||
-      existing.status === 'running' ||
-      existing.status === 'pending'
-    ) {
+    if (!isTerminalRunStatus(existing.status)) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
       return await pauseParentOnChild(existing.id);

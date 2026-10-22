@@ -20,6 +20,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { fanOutOutcome } from '../../../schemas/fan-out-outcome';
 import { type RunChildWorkflowFn } from '../../child-run';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -56,6 +57,123 @@ describe('executeDagWorkflow -- workflow: node', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it.each(
+    [false, true].flatMap(fanOut =>
+      ['node_completed', 'node_failed'].flatMap(eventType =>
+        [false, true].map(identified => ({ fanOut, eventType, identified }))
+      )
+    )
+  )(
+    'refuses ambiguous historical child recovery before dispatch: %j',
+    async ({ fanOut, eventType, identified }) => {
+      await writeBlock(
+        'name: child\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
+        'child'
+      );
+      const store = createMockStore();
+      const historical = {
+        step_name: 'sub',
+        event_type: eventType,
+        data: {
+          type: 'workflow',
+          node_output: fanOut ? '["old output"]' : 'old output',
+          cost_usd: 0.02,
+          tokens: { input: 14, output: 6 },
+          ...(identified
+            ? {
+                fan_out_outcome: fanOutOutcome([
+                  { index: 0, outcome: 'completed', child_run_id: 'a' },
+                  { index: 1, outcome: 'failed', child_run_id: 'b' },
+                ]),
+              }
+            : {}),
+        },
+      };
+      const snapshot = await foldDagResumeSnapshot([historical], 'parent');
+      store.getDagResumeSnapshot.mockResolvedValue(snapshot);
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('b', {
+          status: 'failed',
+          metadata: {
+            parent_node_id: 'sub',
+            total_cost_usd: 0.02,
+            total_tokens_in: 14,
+            total_tokens_out: 6,
+          },
+        }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        status: 'completed',
+        childRunId: 'b',
+        costUsd: 0.03,
+        tokens: { input: 21, output: 9 },
+      }));
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('parent'),
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'sub',
+              kind: 'workflow',
+              workflow: 'child',
+              ...(fanOut
+                ? { fan_out: { items: '[1,2]', max_parallel: 2, join: 'all_success' as const } }
+                : {}),
+            },
+          ],
+        },
+        runChildWorkflow,
+        priorCompletedNodes: new Map(),
+        priorUsage: snapshot,
+      });
+      await executeDagWorkflow(options);
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.findChildRuns).not.toHaveBeenCalled();
+      expect(eventsOf(store)).toContainEqual({
+        event_type: 'node_failed',
+        step_name: 'sub',
+        data: expect.objectContaining({
+          failure_kind: 'config',
+          error: expect.stringContaining('historical child usage'),
+        }),
+      });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.02,
+        total_tokens_in: 14,
+        total_tokens_out: 6,
+      });
+      const folded = await foldDagResumeSnapshot([historical, ...persistedEvents(store)], 'parent');
+      expect(folded.costUsd).toBeCloseTo(0.02);
+      expect(folded.tokens).toEqual({ input: 14, output: 6 });
+      expect(folded.reportedChildUsage?.size).toBe(0);
+      expect(folded.unattributedChildUsagePaths).toEqual(new Set(['sub']));
+      if (eventType === 'node_completed') {
+        const replayStore = createMockStore();
+        replayStore.getDagResumeSnapshot.mockResolvedValue(snapshot);
+        await executeDagWorkflow({
+          ...options,
+          deps: createMockDeps(replayStore),
+          priorCompletedNodes: snapshot.completedNodeOutputs,
+        });
+        expect(runChildWorkflow).not.toHaveBeenCalled();
+        expect(replayStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(replayStore.failWorkflowRun).not.toHaveBeenCalled();
+        expect(runUsageWrites(replayStore).at(-1)).toMatchObject({
+          total_cost_usd: 0.02,
+          total_tokens_in: 14,
+          total_tokens_out: 6,
+        });
+      }
+
+      expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe(
+        eventType === 'node_completed' ? historical.data.node_output : undefined
+      );
+    }
+  );
 
   it.each([
     { label: 'valid', malformed: false, counters: { total_tokens_out: 10 } },
