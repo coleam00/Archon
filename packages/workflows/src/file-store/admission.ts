@@ -5,8 +5,6 @@ import {
   requestSchema,
   queuedRequestSchema,
   requestEnvelopeSchema,
-  bindingSchema,
-  bindingInspectionSchema,
   receiptSchema,
   receiptFieldsSchema,
   pathFor,
@@ -25,6 +23,8 @@ import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
+  resourceStartIntentSchema,
+  RESOURCE_START_METADATA_KEY,
   sourceReceiptAcceptanceSchema,
   type ResourceStartIntent,
   type ResourceStartDisposition,
@@ -45,7 +45,6 @@ import {
   compareStartReceipts,
   compareCodeUnits,
   type IResourceStartStore,
-  type StartBindingInspection,
   type ResourceStartRequestInspection,
   type QueuedResourceStartInspection,
 } from '../resource-start-store';
@@ -64,17 +63,11 @@ import {
   listReceiptDocuments,
   readReceiptDocument,
   readRequestReceiptAttribution,
-  validateRequestBinding,
+  disposition,
+  inspectBinding,
 } from './admission-read';
 
 const log = createLogger('file-store.admission');
-
-function disposition(row: Request): ResourceStartDisposition {
-  if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
-  if ((row.status === 'queued' || row.status === 'skipped') && row.blocker)
-    return { status: row.status, requestId: row.id, blocker: row.blocker };
-  throw new Error(`Resource start request '${row.id}' has no executable disposition`);
-}
 
 interface BindingIdentity {
   receiptId: string;
@@ -375,9 +368,15 @@ export function createAdmissionTransaction(
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition> {
     const resource = await slot(intent.resource, intent.capacity);
+    const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+    const origin = resourceStartIntentSchema.shape.receipt.parse(
+      launch.run.metadata[RESOURCE_START_METADATA_KEY]
+    );
+    if (intent.receipt && origin && !isDeepStrictEqual(origin, intent.receipt))
+      throw new Error(`Resource start has inconsistent membership for request '${launch.run.id}'`);
+    if (intent.receipt) launch.run.metadata[RESOURCE_START_METADATA_KEY] = intent.receipt;
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
-    const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
     const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
@@ -393,8 +392,11 @@ export function createAdmissionTransaction(
     documents[pathFor('requests', row.id)] = row;
     if (intent.receipt) {
       const item = await binding(intent.receipt);
-      if (!item) throw new Error('Resource start receipt binding missing');
+      if (!item?.intent)
+        throw new Error('Resource start receipt binding missing preparation intent');
       item.requestIds.push(row.id);
+      item.status = 'complete';
+      item.error = null;
     }
     if (!blocker) return admitExisting(row, runs);
     if (row.status === 'queued') resource.queue.push(row.id);
@@ -572,20 +574,6 @@ export function createFileAdmissionStore(
           : null,
     };
   }
-  async function inspectBinding(
-    tx: Transaction,
-    item: z.infer<typeof bindingSchema>,
-    requestId: string | null = null
-  ): Promise<StartBindingInspection> {
-    const inspection = bindingInspectionSchema.parse(item);
-    const request = requestId ? await tx.request(requestId) : null;
-    if (request && requestId) validateRequestBinding(request, requestId, item);
-    return {
-      ...inspection,
-      requestStatus: request?.status ?? null,
-      disposition: request && request.status !== 'withdrawn' ? disposition(request) : null,
-    };
-  }
   return {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
@@ -669,7 +657,7 @@ export function createFileAdmissionStore(
                   .sort((a, b) => compareCodeUnits(a.bindingId, b.bindingId))
                   .flatMap(item =>
                     (item.requestIds.length ? item.requestIds : [null]).map(requestId =>
-                      inspectBinding(tx, item, requestId)
+                      inspectBinding(tx.request, item, requestId)
                     )
                   )
               ),
@@ -708,7 +696,7 @@ export function createFileAdmissionStore(
                 compareCodeUnits(a.binding.bindingId, b.binding.bindingId)
             )
             .slice(0, options.limit ?? 100)
-            .map(({ binding }) => inspectBinding(tx, binding))
+            .map(({ binding }) => inspectBinding(tx.request, binding))
         );
       }),
     getResourceStartRequest: id =>

@@ -7,12 +7,15 @@ import {
   type Receipt,
   type Request,
   type Binding,
+  bindingInspectionSchema,
 } from './admission-documents';
 import { readJson } from './commit';
+import type { StartBindingInspection } from '../resource-start-store';
 import {
   evaluatedStartBindingStatusSchema,
   resourceStartIntentSchema,
   RESOURCE_START_METADATA_KEY,
+  type ResourceStartDisposition,
 } from '../schemas/resource-start';
 
 export async function documentPaths(root: string, kind: string): Promise<string[]> {
@@ -44,7 +47,8 @@ export async function readReceiptDocument(root: string, path: string): Promise<R
                   binding.bindingId === binding.intent.bindingId &&
                   binding.bindingRevision === binding.intent.bindingRevision &&
                   binding.status !== 'unmatched'
-                : evaluatedStartBindingStatusSchema.safeParse(binding.status).success)
+                : evaluatedStartBindingStatusSchema.safeParse(binding.status).success &&
+                  binding.requestIds.length === 0)
           ),
         { message: 'Start receipt document identity or preparation intent is inconsistent' }
       )
@@ -100,6 +104,9 @@ export async function readRequestReceiptAttribution(root: string, id: string) {
   const origin = requestBindingIdentity(row.launch);
   const { bindings, errors } = await readReceiptMemberships(root, id);
   const { owners, conflicts } = requestReceiptOwners(row, id, bindings);
+  // Older linked requests have no forward link. A failed scan cannot distinguish
+  // their missing owner from a receipt-free request, so admission must wait.
+  if (!origin && owners.length === 0) conflicts.push(...errors);
   if (origin && !owners.some(binding => matchesBinding(origin, binding))) {
     conflicts.push(await missingOriginMembership(root, id, origin.receiptId));
   }
@@ -115,7 +122,7 @@ function requestReceiptOwners(
   id: string,
   bindings: Binding[]
 ) {
-  const conflicts: Error[] = [];
+  const conflicts: unknown[] = [];
   const owners: Binding[] = [];
   for (const binding of bindings) {
     try {
@@ -161,8 +168,36 @@ export function validateRequestBinding(
   if (
     request.id !== id ||
     request.launch.run.id !== id ||
-    (origin && !matchesBinding(origin, binding))
+    (origin && (!matchesBinding(origin, binding) || binding.status !== 'complete'))
   ) {
     throw membershipError(id, binding);
   }
+}
+
+export function disposition(row: Request): ResourceStartDisposition {
+  if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
+  if ((row.status === 'queued' || row.status === 'skipped') && row.blocker)
+    return { status: row.status, requestId: row.id, blocker: row.blocker };
+  throw new Error(`Resource start request '${row.id}' has no executable disposition`);
+}
+
+export async function inspectBinding(
+  readRequest: (id: string) => Promise<Request | null>,
+  item: Binding,
+  requestId: string | null = null
+): Promise<StartBindingInspection> {
+  const inspection = bindingInspectionSchema.parse(item);
+  const request = requestId ? await readRequest(requestId) : null;
+  if (request && requestId) validateRequestBinding(request, requestId, item);
+  if (!requestId) {
+    for (const id of item.requestIds) {
+      const linked = await readRequest(id);
+      if (linked) validateRequestBinding(linked, id, item);
+    }
+  }
+  return {
+    ...inspection,
+    requestStatus: request?.status ?? null,
+    disposition: request && request.status !== 'withdrawn' ? disposition(request) : null,
+  };
 }
