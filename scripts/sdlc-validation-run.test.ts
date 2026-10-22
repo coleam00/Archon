@@ -8,7 +8,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { COMPOSED_NODE } from '../packages/workflows/src/compiled-command';
 import { buildNodeShellEnvironment } from '../packages/workflows/src/dag/references';
-import { inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
+import { inputEnvKey } from '../packages/workflows/src/schemas/node-bindings';
 import { getRunScratchDir } from '../packages/paths/src/run-paths';
 import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
 import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';

@@ -5,7 +5,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
-import { inputEnvKey } from './schemas/dag-node';
+import { inputEnvKey } from './schemas/node-bindings';
 
 const { temporaryDirectory } = useDryRunFiles();
 
