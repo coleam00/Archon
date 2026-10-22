@@ -19,6 +19,7 @@ import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
+import { withStaleResumeRetry } from '../../../stale-resume';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import { resolveRunInputs, nodeTemplateReferences } from '../../references';
@@ -435,11 +436,26 @@ async function consumeIterationStream(
     scope.position.resumeSessionId,
     false
   );
-  const generator = run.aiClient.sendQuery(finalPrompt, ctx.cwd, pass.resumeSessionId, {
-    ...run.resolvedOptions,
-    env: run.iterationEnv,
-    abortSignal: attempt.abort.signal,
-  });
+  const generator = withStaleResumeRetry(
+    resumeSessionId =>
+      run.aiClient.sendQuery(finalPrompt, ctx.cwd, resumeSessionId, {
+        ...run.resolvedOptions,
+        env: run.iterationEnv,
+        abortSignal: attempt.abort.signal,
+      }),
+    pass.resumeSessionId,
+    {
+      logContext: { workflowRunId: ctx.workflowRun.id, nodeId: node.id, iteration: i },
+      onRetry: async () => {
+        await safeSendMessage(
+          ctx.platform,
+          ctx.conversationId,
+          `⚠️ Loop \`${node.id}\` iteration ${String(i)}: could not resume the previous iteration's session — continued with a fresh session, so the earlier context was not restored.`,
+          run.msgContext
+        );
+      },
+    }
+  );
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
   try {

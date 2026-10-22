@@ -149,6 +149,8 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     // updateSession should be called with null to clear the stale session ID
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    // An error the provider did not confirm as a missing session is not retried.
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
   test('handleBatchMode: clears session ID on error_during_execution result', async () => {
@@ -173,7 +175,90 @@ describe('stale session ID clearing on error_during_execution', () => {
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    // An error the provider did not confirm as a missing session is not retried.
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
+
+  const staleRejection = {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'error_during_execution',
+    failure: { class: 'unknown', evidence: 'error_during_execution: evidence' },
+    sessionId: 'stale-session-id',
+    sessionNotFound: true,
+  } as const;
+  async function staleTurn(mode: 'stream' | 'batch'): Promise<IPlatformAdapter> {
+    mockCaptureChatTurn.mockClear();
+    mockTransitionSession.mockResolvedValueOnce(
+      makeSession({ id: 'session-1', assistant_session_id: 'stale-session-id' })
+    );
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    return platform;
+  }
+  const resumeArgs = (): unknown[] => mockSendQuery.mock.calls.map(call => call[2]);
+  const errorReported = (): boolean =>
+    mockLogger.warn.mock.calls.some(call => call[1] === 'ai_result_error');
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a stale resume completes the turn on a fresh session',
+    async mode => {
+      mockSendQuery
+        .mockImplementationOnce(async function* () {
+          yield staleRejection;
+        })
+        .mockImplementationOnce(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+          yield { type: 'result', sessionId: 'fresh-id' };
+        });
+      const platform = await staleTurn(mode);
+
+      expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+      const updates = mockUpdateSession.mock.calls.map(call => call[1]);
+      expect(updates.indexOf(null)).toBeGreaterThanOrEqual(0);
+      expect(updates.indexOf(null)).toBeLessThan(updates.indexOf('fresh-id'));
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('could not be resumed')
+      );
+      expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Fresh reply.');
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'completed' })
+      );
+      expect(errorReported()).toBe(false);
+    }
+  );
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a stale rejection after output fails without a retry',
+    async mode => {
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+        yield staleRejection;
+      });
+      await staleTurn(mode);
+      expect(resumeArgs()).toEqual(['stale-session-id']);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'failed' })
+      );
+    }
+  );
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a second stale rejection fails without another retry',
+    async mode => {
+      mockSendQuery.mockImplementation(async function* () {
+        yield staleRejection;
+      });
+      await staleTurn(mode);
+      expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'failed' })
+      );
+      expect(errorReported()).toBe(true);
+    }
+  );
 
   test.each(['stream', 'batch'] as const)(
     '%s mode: a typed failure picks the advice from its class, not its words',

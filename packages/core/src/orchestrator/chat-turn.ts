@@ -13,6 +13,7 @@ import {
 } from '@archon/provider-contract';
 import * as sessionDb from '../db/sessions';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
+import { withStaleResumeRetry } from '@archon/workflows/stale-resume';
 import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import type { getAgentProvider } from '../services/provider-admission';
@@ -106,8 +107,32 @@ export interface ChatTurnInput {
 type TurnResult = ResultUsageTotal & { stopReason?: string };
 
 /**
- * The provider session id to persist after a `result` chunk. An `error_during_execution`
- * result clears the stored id, which the provider can no longer resume.
+ * The turn's provider stream. A resume the provider reports as stale is retried once on a
+ * fresh session, with the stored id cleared first and the user told the context is gone.
+ */
+function turnChunks(input: ChatTurnInput): ReturnType<typeof withStaleResumeRetry> {
+  const { aiClient, fullPrompt, cwd, session, requestOptions, platform, conversationId } = input;
+  return withStaleResumeRetry(
+    resumeSessionId => aiClient.sendQuery(fullPrompt, cwd, resumeSessionId, requestOptions),
+    session.assistant_session_id ?? undefined,
+    {
+      logContext: { conversationId },
+      onRetry: async () => {
+        await tryPersistSessionId(session.id, null);
+        await platform.sendMessage(
+          conversationId,
+          '⚠️ The previous conversation session could not be resumed, so this reply starts a new session without the earlier context.'
+        );
+      },
+    }
+  );
+}
+
+/**
+ * The provider session id to persist after a `result` chunk. Any `error_during_execution`
+ * result clears the stored id, so the next message starts fresh rather than resuming a
+ * session that may be broken. A stale resume the provider confirmed never reaches here:
+ * `turnChunks` already retried it.
  */
 async function sessionIdAfterResult(
   input: ChatTurnInput,
@@ -223,17 +248,12 @@ async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> 
  * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
  */
 export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
-  const { turn, platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+  const { turn, platform, conversationId, session } = input;
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
+  for await (const msg of turnChunks(input)) {
     if (msg.type === 'agent_message_chunk') {
       if (msg.text.trim()) toolFailed = false;
       allMessages.push(msg.text);
@@ -291,7 +311,7 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
  * Used by Slack, GitHub, Discord (batch), and CLI.
  */
 export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
-  const { turn, platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+  const { turn, platform, conversationId, session } = input;
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: ReplyChunk[] = [];
   let assistantChunksTruncated = false;
@@ -299,12 +319,7 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   let newSessionId: string | undefined;
   let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
+  for await (const msg of turnChunks(input)) {
     if (msg.type === 'agent_message_chunk') {
       if (msg.text.trim()) toolFailed = false;
       allChunks.push({ type: 'assistant', content: msg.text });

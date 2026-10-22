@@ -1,6 +1,7 @@
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
+  MessageChunk,
   ProviderCapabilities,
   ResolvedModel,
   ResultChunk,
@@ -16,6 +17,7 @@ import {
 } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout } from '../../../utils/idle-timeout';
+import { withStaleResumeRetry } from '../../../stale-resume';
 import { isEndTurnRequested } from '../../../end-turn-request';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -58,6 +60,8 @@ export interface AgentPassContext {
   /** The throttle key of `lastNodeCancelCheck` and `lastNodeActivityUpdate`. */
   nodeKey: string;
   nodeStartTime: number;
+  /** False for a named resume, which never falls back to a fresh session. */
+  staleResumeRetry: boolean;
 }
 
 /**
@@ -117,6 +121,19 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
   };
 }
 
+function passChunks(
+  pc: AgentPassContext,
+  prompt: string,
+  resumeSessionId: string | undefined
+): AsyncGenerator<MessageChunk> {
+  const send = (id: string | undefined): AsyncGenerator<MessageChunk> =>
+    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, pc.queryOptions);
+  if (!pc.staleResumeRetry) return send(resumeSessionId);
+  return withStaleResumeRetry(send, resumeSessionId, {
+    logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
+  });
+}
+
 /**
  * One sendQuery stream pass. Resets the per-pass state first, so a prior reask pass's output,
  * batch buffer, cost and cutoff cause never leak into this one, then streams. Throws on an
@@ -133,7 +150,7 @@ export async function runStreamPass(
   const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
     for await (const msg of withIdleTimeout(
-      pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
+      passChunks(pc, prompt, pass.resumeSessionId),
       pc.idleTimeoutMs,
       () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
