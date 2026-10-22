@@ -182,7 +182,7 @@ export function assertSupportedOutputRefs(text: string): void {
 /**
  * The one shape of a declared-input NAME — `with:` keys, `inputs:` keys, and the
  * `<name>` of a `$INPUTS.<name>` reference all share it. Lives here beside
- * OUTPUT_REF_SOURCE so every ref grammar has one home; schemas/dag-node re-exports
+ * OUTPUT_REF_SOURCE so every ref grammar has one home; schemas/node-bindings re-exports
  * it for the schema-side validators.
  */
 export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
