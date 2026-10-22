@@ -133,6 +133,11 @@ describe('the build record', () => {
     expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
   });
 
+  test("a fresh round's replacement pull request wins over the superseded one and triage's stale reference", () => {
+    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43' };
+    expect(itemPullRequest([round('r1', AT), replacement], { ...TRIAGE, pull_request: 42 }, PR.repo)).toEqual({ repo: PR.repo, number: 43 });
+  });
+
   test('an unresolved create refuses PR selection until a later round identifies the PR', () => {
     const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
     for (const prior of [[], [round('r1', AT)]]) {
