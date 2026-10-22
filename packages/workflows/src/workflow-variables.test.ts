@@ -99,7 +99,7 @@ describe('user-controlled runtime variable delivery', () => {
         ISSUE_CONTEXT: value('issue'),
         TYPED_ARTIFACTS_FILE: '/listing.json',
         ARCHON_NODE_EXECUTION: '',
-        ARCHON_INPUT_ENV_KEYS: '[]',
+        ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
       });
     });
   }

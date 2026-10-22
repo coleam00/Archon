@@ -9,7 +9,6 @@ import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-envi
 import { COMPOSED_NODE } from '../packages/workflows/src/compiled-command';
 import { buildNodeShellEnvironment } from '../packages/workflows/src/dag/references';
 import { inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
-import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
 import { getRunScratchDir } from '../packages/paths/src/run-paths';
 import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
 import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';
@@ -39,7 +38,7 @@ function env(artifacts: string, bindings: Record<string, string>): Record<string
   return {
     ...(process.env as Record<string, string>),
     ARTIFACTS_DIR: artifacts,
-    ARCHON_INPUT_ENV_KEYS: JSON.stringify(['INPUTS_DISCOVERY']),
+    ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES, ...Object.keys(bindings)]),
     ...bindings,
   };
 }
@@ -242,19 +241,15 @@ describe("the pack's scratch directory", () => {
 });
 
 describe("the gate's environment", () => {
-  it("names exactly the engine's exec-node contract", () => {
-    expect([...NODE_CONTRACT_ENV].sort()).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES].sort());
-  });
-
   it.each(['', 'null', '{}', '["INPUTS_DISCOVERY", 42]', 'invalid-json'])(
-    'refuses a gate with an invalid generated-key list: %s',
+    'refuses a gate with an invalid run-key list: %s',
     manifest => {
       const f = checkout();
       mkdirSync(f.artifacts, { recursive: true });
       const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
         cwd: f.cwd,
         env: env(f.artifacts, {
-          ARCHON_INPUT_ENV_KEYS: manifest,
+          ARCHON_RUN_ENV_KEYS: manifest,
           INPUTS_DISCOVERY: JSON.stringify({
             checks: declared([{ name: 'gate', argv: sh('touch ran') }]),
             notes: '',
@@ -316,7 +311,7 @@ describe("the gate's environment", () => {
         PROJECT_SETTING: 'kept',
         INPUTS_PROJECT_SETTING: 'kept too',
         INPUTS_PLAN: 'project value shadowed by binding',
-        ARCHON_INPUT_ENV_KEYS: '["INPUTS_PROJECT_SETTING"]',
+        ARCHON_RUN_ENV_KEYS: '["INPUTS_PROJECT_SETTING"]',
         INPUTS: 'project setting without the binding prefix',
         PROJECT_INPUTS_SETTING: 'project setting containing the binding prefix',
       },
@@ -335,8 +330,11 @@ describe("the gate's environment", () => {
       }
     );
     expect(nodeEnv.INPUTS_PLAN).toBe('bound value');
-    expect(JSON.parse(nodeEnv.ARCHON_INPUT_ENV_KEYS ?? 'null').sort()).toEqual(
-      [...names, 'discovery', 'run', 'composed'].map(inputEnvKey).sort()
+    expect(JSON.parse(nodeEnv.ARCHON_RUN_ENV_KEYS ?? 'null').sort()).toEqual(
+      [
+        ...EXEC_NODE_ENVIRONMENT_NAMES,
+        ...[...names, 'discovery', 'run', 'composed'].map(inputEnvKey),
+      ].sort()
     );
     const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
       cwd: f.cwd,
@@ -351,10 +349,8 @@ describe("the gate's environment", () => {
     expect(gate.INPUTS_HOST_SETTING).toBe('host value');
     expect(gate.INPUTS).toBe('project setting without the binding prefix');
     expect(gate.PROJECT_INPUTS_SETTING).toBe('project setting containing the binding prefix');
-    expect(gate.WORKFLOW_ID).toBeUndefined();
-    expect(gate.ARTIFACTS_DIR).toBeUndefined();
+    for (const key of EXEC_NODE_ENVIRONMENT_NAMES) expect(gate[key]).toBeUndefined();
     expect(gate.INPUTS_DISCOVERY).toBeUndefined();
-    expect(gate.ARCHON_INPUT_ENV_KEYS).toBeUndefined();
     for (const name of [...names, 'run', 'composed'])
       expect(gate[inputEnvKey(name)]).toBeUndefined();
   });

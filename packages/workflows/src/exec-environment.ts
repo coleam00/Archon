@@ -41,7 +41,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
   for (const group of USER_CONTROLLED_VARIABLES) {
     for (const name of group.names) userVariables[name] = context[group.source] ?? '';
   }
-  return {
+  const env: Record<string, string> = {
     ARTIFACTS_DIR: context.artifactsDir,
     STATE_DIR: context.stateDir,
     LOG_DIR: context.logDir,
@@ -55,10 +55,12 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // The listing path, delivered like the other engine-reserved keys: configured
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
-    ARCHON_INPUT_ENV_KEYS: JSON.stringify(context.inputEnvKeys),
+    ARCHON_RUN_ENV_KEYS: '',
     ARCHON_NODE_EXECUTION:
       context.nodeExecution === null ? '' : nodeExecutionEnvValue(context.nodeExecution),
   };
+  env.ARCHON_RUN_ENV_KEYS = JSON.stringify([...Object.keys(env), ...context.inputEnvKeys]);
+  return env;
 }
 
 function nodeExecutionEnvValue(execution: NodeExecutionIdentity): string {

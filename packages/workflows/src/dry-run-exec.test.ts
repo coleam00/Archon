@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
+import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import { existsSync, readdirSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { makeTestWorkflow } from './test-utils';
@@ -143,7 +144,7 @@ describe('dry-run code execution', () => {
           {
             id: 'code',
             runtime: 'bun',
-            script: `console.log(JSON.stringify({ value: process.env.${key}, keys: JSON.parse(process.env.ARCHON_INPUT_ENV_KEYS) }));`,
+            script: `console.log(JSON.stringify({ value: process.env.${key}, keys: JSON.parse(process.env.ARCHON_RUN_ENV_KEYS) }));`,
             with: { 'project-setting': 'bound value' },
           },
         ],
@@ -154,7 +155,7 @@ describe('dry-run code execution', () => {
     expect(result.outcome).toBe('completed');
     expect(JSON.parse(result.trace[0]?.output ?? 'null')).toEqual({
       value: 'bound value',
-      keys: [key],
+      keys: [...EXEC_NODE_ENVIRONMENT_NAMES, key],
     });
   });
 
@@ -164,7 +165,7 @@ describe('dry-run code execution', () => {
       nodes: [
         {
           id: 'code',
-          bash: `printf '%s|%s|%s|%s|%s|%s|%s' "$WORKFLOW_ID" "$BASE_BRANCH" "$ARGUMENTS" "$LOG_DIR" "$LOOP_PREV_OUTPUT" "$REJECTION_REASON" "$ARCHON_INPUT_ENV_KEYS"`,
+          bash: `printf '%s|%s|%s|%s|%s|%s|%s' "$WORKFLOW_ID" "$BASE_BRANCH" "$ARGUMENTS" "$LOG_DIR" "$LOOP_PREV_OUTPUT" "$REJECTION_REASON" "$ARCHON_RUN_ENV_KEYS"`,
         },
       ],
     });
@@ -179,7 +180,8 @@ describe('dry-run code execution', () => {
     expect(fields.slice(0, 3)).toEqual(['dry-run', 'dry-run-base', 'hello']);
     expect(fields[3]).toContain(`${sep}dry-run-`);
     expect(fields[3]).toEndWith(`${sep}logs`);
-    expect(fields.slice(4)).toEqual(['', '', '[]']);
+    expect(fields.slice(4, 6)).toEqual(['', '']);
+    expect(JSON.parse(fields[6] ?? 'null')).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES]);
   });
 
   test('a dry run that executes nothing creates no temp directory', async () => {
