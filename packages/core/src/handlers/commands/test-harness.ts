@@ -413,17 +413,6 @@ export const mockIsolationDestroy = mock(
     })
 );
 
-mock.module('../../isolation', () => ({
-  getIsolationProvider: () => ({
-    providerType: 'worktree',
-    create: mockIsolationCreate,
-    destroy: mockIsolationDestroy,
-    get: mock(() => Promise.resolve(null)),
-    list: mock(() => Promise.resolve([])),
-    adopt: mock(() => Promise.resolve(null)),
-    healthCheck: mock(() => Promise.resolve(true)),
-  }),
-}));
 mock.module('@archon/isolation', () => ({
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,

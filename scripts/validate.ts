@@ -47,8 +47,14 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     commands: [['bun', 'run', 'lint']],
   },
   {
+    id: 'mock-modules',
+    label: 'Every mock.module() factory provides every export of its module, or is in the baseline',
+    commands: [['bun', 'run', 'check:mock-modules']],
+  },
+  {
     id: 'ratchet',
-    label: 'Touched functions and files are no more complex or longer than on the base',
+    label:
+      'Touched functions and files are no more complex or longer than on the base, and the mock.module() baseline does not grow',
     commands: [['bun', 'run', 'check:ratchet']],
   },
   {
