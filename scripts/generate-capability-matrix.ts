@@ -32,6 +32,7 @@ import { join, resolve } from 'path';
 import { getRegisteredProviders, DEPRECATED_PROVIDERS_DOCS_PATH } from '@archon/providers';
 import { registerInProcessProviders } from '@archon/providers/in-process';
 import type { ProviderCapabilities, ProviderRegistration } from '@archon/providers';
+import { providerCapabilitiesSchema } from '../packages/provider-contract/src/capabilities';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const OUTPUT_PATH = join(
@@ -43,8 +44,8 @@ const CHECK_ONLY = process.argv.includes('--check');
 /**
  * Ordered rows of the matrix. `key` is the `ProviderCapabilities` field, so a
  * renamed/removed field is a compile error here. The totality guard below fails
- * loudly if a NEW capability field is added to the type without an axis, so the
- * matrix can never silently omit a capability.
+ * loudly if a schema field has neither an axis nor an explicit skip, even when
+ * no provider declares that optional field.
  */
 const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'backgroundWork', label: 'Background work observation' },
@@ -138,21 +139,14 @@ export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabi
 }
 
 /**
- * Fail loudly if a provider declares a capability key the matrix neither
- * renders nor explicitly skips — i.e. someone added a field to
- * `ProviderCapabilities` without giving it a matrix axis.
+ * Optional fields belong in the matrix even before any provider declares them.
  */
-function assertTotalCoverage(providers: ProviderRegistration[]): void {
+export function assertTotalCoverage(capabilityShape = providerCapabilitiesSchema.shape): void {
   const covered = new Set<string>([...AXES.map(a => a.key), ...SKIP_KEYS]);
-  const uncovered = new Set<string>();
-  for (const p of providers) {
-    for (const key of Object.keys(p.capabilities)) {
-      if (!covered.has(key)) uncovered.add(key);
-    }
-  }
-  if (uncovered.size > 0) {
+  const uncovered = Object.keys(capabilityShape).filter(key => !covered.has(key));
+  if (uncovered.length > 0) {
     throw new Error(
-      `ProviderCapabilities field(s) not represented in the capability matrix: ${[...uncovered].join(', ')}. ` +
+      `ProviderCapabilities field(s) not represented in the capability matrix: ${uncovered.join(', ')}. ` +
         'Add an axis in scripts/generate-capability-matrix.ts (or add to SKIP_KEYS if advisory-only).'
     );
   }
@@ -309,7 +303,7 @@ async function main(): Promise<void> {
   if (providers.length === 0) {
     throw new Error('No providers registered — registry bootstrap failed.');
   }
-  assertTotalCoverage(providers);
+  assertTotalCoverage();
   const caveats = resolveCaveats(providers);
 
   const contents = buildMarkdown(providers, caveats);
