@@ -136,7 +136,7 @@ describe('workflowRunCommand — dry-run', () => {
     } finally {
       lookup.mockRestore();
       env.mockRestore();
-      removeTempTree(dir);
+      await removeTempTree(dir);
     }
   });
 
