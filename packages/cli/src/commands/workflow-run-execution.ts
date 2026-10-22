@@ -1,6 +1,10 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
-import type { IWorkflowEngine, WorkflowRunSubscription } from '@archon/workflows/engine-port';
+import {
+  WorkflowExecutionHandoffError,
+  type IWorkflowEngine,
+  type WorkflowRunSubscription,
+} from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -27,13 +31,14 @@ import {
 
 type RunResult = Awaited<ReturnType<IWorkflowEngine['submit']>>;
 type CommonRunOptions = Parameters<IWorkflowEngine['resume']>[0]['options'];
+type OnExecutionClaimed = NonNullable<CommonRunOptions>['onExecutionClaimed'];
 
 /** What the foreground wait observed; the signal teardown reads it while the run is live. */
 interface RunExecution {
   result: RunResult | undefined;
   progress: WorkflowRunSubscription | undefined;
   /**
-   * Set once the settled run's container is kept (paused, or an un-applied write-back),
+   * Set once container ownership passes on (a pause, handoff, or un-applied write-back),
    * so a signal during the final progress drain does not destroy it.
    */
   containerPreserved: boolean;
@@ -70,11 +75,17 @@ export async function executeOwnedRun(
     progress: undefined,
     containerPreserved: false,
   };
+  let ownedExecutionClaim: string | null | undefined;
+  const onExecutionClaimed: OnExecutionClaimed = claim => {
+    ownedExecutionClaim = claim;
+  };
   let deregisterTermination: (() => void) | undefined;
   const registerTermination = (): void => {
     deregisterTermination = registerOwnedRunTermination({
       store: host.deps.store,
       runId: ownedRunId,
+      getExecutionClaim: () => ownedExecutionClaim,
+      isExecutionSettled: () => execution.result !== undefined,
       logModule: 'cli.workflow',
       liveOwner: {
         isStopRequested: () => lease.isStopRequested(),
@@ -121,10 +132,16 @@ export async function executeOwnedRun(
           preparationTermination.signal.throwIfAborted();
           registerTermination();
           preparationTermination.dispose();
-          return { cwd: workspace.workingCwd, options: commonRunOptions(launch) };
+          return {
+            cwd: workspace.workingCwd,
+            options: commonRunOptions(launch, onExecutionClaimed),
+          };
         }
       : undefined;
-    execution.result = await driveRun(launch, lease, prepareExecution);
+    execution.result = await driveRun(launch, lease, onExecutionClaimed, prepareExecution);
+  } catch (error) {
+    if (error instanceof WorkflowExecutionHandoffError) execution.containerPreserved = true;
+    throw error;
   } finally {
     try {
       containerTeardownError = await settleRun(
@@ -245,16 +262,20 @@ async function subscribeProgress(
 async function driveRun(
   launch: ForegroundLaunch,
   lease: OwnedRunLease,
+  onExecutionClaimed: OnExecutionClaimed,
   prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
 ): Promise<RunResult> {
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
-    return resumeRun(launch, resumable, prepareExecution);
+    return resumeRun(launch, resumable, onExecutionClaimed, prepareExecution);
   }
-  return submitRun(launch, lease, commonRunOptions(launch));
+  return submitRun(launch, lease, commonRunOptions(launch, onExecutionClaimed));
 }
 
-function commonRunOptions(launch: ForegroundLaunch): CommonRunOptions {
+function commonRunOptions(
+  launch: ForegroundLaunch,
+  onExecutionClaimed: OnExecutionClaimed
+): CommonRunOptions {
   const { request, admission, codebase, workspace, codebaseDefaultBranch } = launch;
   // Container run context for the engine (Phase C): the write-back backend port +
   // env id + policy. The executor drives suspend-on-pause and the write-back gate
@@ -290,12 +311,14 @@ function commonRunOptions(launch: ForegroundLaunch): CommonRunOptions {
     execContext: workspace.execContext,
     container: containerRunCtx,
     resolveChildIsolation,
+    onExecutionClaimed,
   };
 }
 
 async function resumeRun(
   launch: ForegroundLaunch,
   resumable: WorkflowRun,
+  onExecutionClaimed: OnExecutionClaimed,
   prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
 ): Promise<RunResult> {
   const { request, admission } = launch;
@@ -319,7 +342,7 @@ async function resumeRun(
       userMessage: request.userMessage,
       run: resumable,
       cursor: request.options.continuationCursor,
-      options: prepareAdmitted ? undefined : commonRunOptions(launch),
+      options: prepareAdmitted ? undefined : commonRunOptions(launch, onExecutionClaimed),
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
@@ -425,16 +448,10 @@ function submitRun(
 }
 
 /**
- * Container teardown (Phase C) — run from `finally` so a throw from executeWorkflow
- * BEFORE its own try/catch (malformed config, env resolvers, unknown provider)
- * can't orphan a privileged container+volume. A PAUSED run keeps its (already
- * suspended, by the engine) container + volume for resume — destroying it would
- * discard the overlay the resume needs. Resumes that throw before returning a result
- * also retain their overlay for retry, including prepared-context validation failures.
- * Other outcomes (completed / failed / cancelled) destroy the container. The
- * write-back apply already ran inside the engine before completion, so a
- * completed run's live-root changes are safe before this teardown removes the
- * volume. Returns a destroy failure for the caller to judge.
+ * A published pause relinquishes cleanup authority even when execution rejects.
+ * Resumes that throw before returning a result also retain their overlay for retry,
+ * including prepared-context validation failures.
+ * Earlier setup failures still need teardown to avoid orphaning a privileged container.
  */
 async function settleRun(
   launch: ForegroundLaunch,
@@ -445,7 +462,12 @@ async function settleRun(
   const { result } = execution;
   const store = launch.request.host.deps.store;
   const container = ownedContainer(launch.workspace);
-  const runPaused = Boolean(result?.success && 'paused' in result && result.paused);
+  const keepContainer =
+    execution.containerPreserved ||
+    Boolean(
+      result && ('handedOff' in result || (result.success && 'paused' in result && result.paused))
+    );
+  if (keepContainer) deregisterTermination?.();
   // H2 — preserve the container+volume whenever the un-applied overlay is still the
   // only copy of the run's changes: a PAUSED run (awaiting the decision) OR a
   // TERMINAL run whose write-back never resolved (e.g. a partial applyChanges threw
@@ -456,7 +478,7 @@ async function settleRun(
   // Kept until the lookup below proves it may go: a signal mid-lookup must not
   // destroy an overlay that may be the only copy of the changes.
   execution.containerPreserved = true;
-  if (container && !runPaused && result?.workflowRunId) {
+  if (container && !keepContainer && result?.workflowRunId) {
     unresolvedWriteback = await readUnresolvedWriteback(
       store,
       result.workflowRunId,
@@ -464,11 +486,10 @@ async function settleRun(
     );
   }
   execution.containerPreserved =
-    (defersContainerResume(launch) && result === undefined) || runPaused || unresolvedWriteback;
+    (defersContainerResume(launch) && result === undefined) || keepContainer || unresolvedWriteback;
 
   // Renders the rows the run committed since the last poll, up to its settled state.
-  // The signal handlers stay registered through it, so a Ctrl-C here still destroys
-  // a container this process would destroy below.
+  // Retain signal teardown only while this process still owns execution cleanup.
   await execution.progress?.close().catch((drainErr: unknown) => {
     getLog().warn({ err: drainErr as Error, runId }, 'cli.workflow_progress_drain_failed');
     process.stderr.write(

@@ -3,6 +3,7 @@ import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import {
+  runOrStagePause,
   pauseGateRespectingExternalTransition,
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
@@ -588,44 +589,58 @@ async function pauseAtLoopGate(
     ...(state.tokens !== undefined ? { tokens: state.tokens } : {}),
     ...(state.tokensUnknown ? { tokensUnknown: true } : {}),
   };
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused) {
-    if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
-      await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
-    }
-    return deferredLoopOutput;
-  }
-  await recordDerivedExecution({ logDir }, suspended);
-  const gateMsg =
-    `⏸ **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-    `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    run.stepName,
-    gateMsg
-  );
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: run.stepName,
-      data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-    })
-    .catch((err: Error) => {
-      logIterationEventError(node.id, err, i);
-    });
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused) {
+        if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
+          await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+        }
+        return deferredLoopOutput;
+      }
+      await recordDerivedExecution({ logDir }, suspended);
+      const gateMsg =
+        `⏸ **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        gateOccurrence(paused),
+        run.stepName,
+        gateMsg
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: run.stepName,
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
+        })
+        .catch((err: Error) => {
+          logIterationEventError(node.id, err, i);
+        });
 
-  return serializeNodeOutput(suspended);
+      return serializeNodeOutput(suspended);
+    },
+    async selected => {
+      if (
+        !selected &&
+        (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown)
+      ) {
+        await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+      }
+      return deferredLoopOutput;
+    }
+  );
 }

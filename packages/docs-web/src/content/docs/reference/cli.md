@@ -246,7 +246,7 @@ archon workflow run archon-ship --cwd /path/to/repo \
   --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190 "finish the delivery"
 ```
 
-Foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
+Except on an execution handoff, foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
 
 ```text
   Usage (recorded totals; completeness unknown):
@@ -256,6 +256,19 @@ Foreground completion and failure output prints the run's recorded cost and inpu
 ```
 
 These are stored figures, not a certified bill, so the completeness warning is always printed. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) shows the same summary for any run.
+
+If another execution takes ownership before the foreground command returns, it prints:
+
+```text
+Workflow execution handed off. Observed status: <status>.
+```
+
+`<status>` is the status observed at handoff, or `run removed` if the row no longer exists.
+This output omits recorded usage and authored outcome. Exit `0` means this execution handed
+off without observing `failed` or `cancelled`; it does not prove the workflow completed.
+An observed `failed` or `cancelled` status exits non-zero. Use
+[`workflow wait <run-id>`](#workflow-wait) to wait for the next terminal or gate transition,
+and [`workflow get <run-id>`](#workflow-get) to read current status, usage, and authored outcome.
 
 Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution. The workflow-start output also names the absolute local path of the run's JSONL transcript. Use [`workflow logs`](#workflow-logs) when you have a run ID and want the content rather than the path.
 
@@ -615,8 +628,9 @@ means execution finished normally but the workflow judged the work unsuccessful;
 `paused` with authored outcome `succeeded` records a successful verdict before execution later
 failed or paused. A null outcome means the workflow did not declare one, the selected node has not
 authored it yet, or the run predates the field. In that case human output keeps its status-only
-presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
-code remains driven by execution success or failure.
+presentation. Except on an [execution handoff](#workflow-run-name-message), foreground
+`workflow run` uses the same labels when an outcome exists, and its exit code follows execution
+success or failure. A handoff reports only the observed status and has the exit meaning described above.
 
 Verbose JSON node summaries include `execution` for newly recorded work. It identifies the
 invocation, attempt, provider, requested model and any model the provider reported. Inner retries

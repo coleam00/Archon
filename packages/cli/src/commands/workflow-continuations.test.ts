@@ -129,6 +129,42 @@ test('reports refusal, deferral and settlement failures instead of admission-onl
   });
 });
 
+test('a handed-off continuation is reported with its observed status, not as completed', async () => {
+  scan.mockResolvedValue([
+    {
+      runId: 'live',
+      kind: 'accepted',
+      run: makeTestWorkflowRun(),
+      settled: Promise.resolve({
+        success: true,
+        handedOff: true,
+        workflowRunId: 'live',
+        observedStatus: 'running',
+      }),
+    },
+    {
+      runId: 'gone',
+      kind: 'accepted',
+      run: makeTestWorkflowRun(),
+      settled: Promise.resolve({
+        success: false,
+        handedOff: true,
+        workflowRunId: 'gone',
+        observedStatus: 'cancelled',
+        error: 'run was cancelled',
+      }),
+    },
+  ]);
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
+  expect(output[0]).toMatchObject({
+    ok: false,
+    outcomes: [
+      { runId: 'live', status: 'handed_off', observedStatus: 'running' },
+      { runId: 'gone', status: 'failed', error: 'run was cancelled' },
+    ],
+  });
+});
+
 test('a continuation refused for capacity is reported as what it is and the pass succeeds', async () => {
   scan.mockResolvedValue([
     {

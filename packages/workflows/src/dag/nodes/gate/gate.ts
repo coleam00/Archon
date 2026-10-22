@@ -1,5 +1,6 @@
 import { executeAgentNode } from '../agent/agent';
 import {
+  runOrStagePause,
   pauseGateRespectingExternalTransition,
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
@@ -207,42 +208,52 @@ export async function executeApprovalNode(
     })),
     decisionsAuthored: node.decisionsAuthored,
   });
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused) return { ...serializeNodeOutput(execution), ...reworkUsage };
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  const approvalMsg =
-    `⏸ **Approval required**: ${renderedMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    choices.join(' | ');
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    stepName,
-    approvalMsg
-  );
-
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: stepName,
-      data: { message: renderedMessage },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'approval_requested' },
-        'workflow.event_persist_failed'
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
       );
-    });
+      if (!paused) return { ...serializeNodeOutput(execution), ...reworkUsage };
+      await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+      const approvalMsg =
+        `⏸ **Approval required**: ${renderedMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        choices.join(' | ');
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        gateOccurrence(paused),
+        stepName,
+        approvalMsg
+      );
 
-  return { ...serializeNodeOutput(suspended), ...reworkUsage };
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: stepName,
+          data: { message: renderedMessage },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'approval_requested' },
+            'workflow.event_persist_failed'
+          );
+        });
+
+      return { ...serializeNodeOutput(suspended), ...reworkUsage };
+    },
+    selected => {
+      if (selected && ctx.containerPause !== undefined)
+        ctx.containerPause.selected = { kind: 'gate', context: approvalContext };
+      return { ...serializeNodeOutput(execution), ...reworkUsage };
+    }
+  );
 }

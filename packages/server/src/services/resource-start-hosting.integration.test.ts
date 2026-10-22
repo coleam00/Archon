@@ -7,7 +7,7 @@ import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
-import { getWorkflowRun } from '@archon/core/db/workflows';
+import { getWorkflowRun, pauseWorkflowRun, resumeWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
 /**
  * The server hosting resource starts against a real SQLite database, a real workflow
@@ -800,6 +800,40 @@ describe('server resource-start host', () => {
 
     await Promise.allSettled([start(), start()]);
     expect(engine.claimed).toEqual([requestId]);
+  });
+
+  test('the resource-start signal guard keeps its admitted execution claim', async () => {
+    const { deliver, engine } = await fixture(false);
+    expect((await deliver('guard', 'queue')).status).toBe(200);
+    const requestId = await admitWithoutStarting();
+    let getExecutionClaim: () => string | null | undefined = () => {
+      throw new Error('guard not installed');
+    };
+    let released = false;
+    const submit = engine.submit.bind(engine);
+    engine.submit = async input => {
+      expect(getExecutionClaim()).toBeUndefined();
+      input.options?.onExecutionClaimed?.('original-claim');
+      expect(getExecutionClaim()).toBe('original-claim');
+      const result = await submit(input);
+      await pauseWorkflowRun(requestId, { nodeId: 'review', type: 'approval', message: '' });
+      await resumeWorkflowRun(requestId);
+      expect(getExecutionClaim()).toBe('original-claim');
+      return result;
+    };
+    await startAdmittedResourceStart({
+      requestId,
+      hostId: HOST_ID,
+      host: { ...createSqlWorkflowHost(), engine },
+      createPlatform: () => new HeadlessPlatform(),
+      guardOwnedRun: owned => {
+        getExecutionClaim = owned.getExecutionClaim;
+        return () => {
+          released = true;
+        };
+      },
+    });
+    expect(released).toBe(true);
   });
 
   test('a worktree creation failure reports the classified isolation message, not raw git output', async () => {

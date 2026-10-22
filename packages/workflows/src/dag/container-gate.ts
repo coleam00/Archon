@@ -2,7 +2,13 @@
  * Container run lifecycle: the lifecycle events, suspend-on-pause, and the engine-level
  * write-back gate that runs after the last node before a container run completes.
  */
-import { pauseGateRespectingExternalTransition, sendPauseNotice } from './pause';
+import {
+  pauseGateRespectingExternalTransition,
+  sendPauseNotice,
+  publishContainerPause,
+  type ContainerPauseBoundary,
+  type ContainerPauseReceipt,
+} from './pause';
 import type { IWorkflowPlatform, WorkflowDeps } from '../deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import {
@@ -68,37 +74,18 @@ type ContainerLifecycleDbEvent =
   | 'writeback_applied'
   | 'writeback_discarded';
 
-/**
- * Suspend the container on pause (`docker stop`) so a multi-day wait costs ~0
- * resources. Best-effort: a suspend failure leaves the container running (a
- * resource leak the resume/teardown reclaims) but must NOT throw — throwing here
- * would mask the pause and flip the run to failed. Surfaced loud (error log +
- * platform note); the `container_stopped` event only fires on success.
- */
+/** The stop attempt must settle before the run becomes resumable. */
 export async function suspendContainerForPause(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  containerCtx: ContainerRunContext,
-  execContext: Extract<ExecutionContext, { kind: 'container' }>,
-  runId: string
-): Promise<void> {
-  let outcome: ContainerSuspendOutcome;
+  containerCtx: ContainerRunContext
+): Promise<ContainerSuspendOutcome> {
   try {
     await containerCtx.backend.suspend(containerCtx.envId);
-    outcome = { stopped: true };
+    getLog().info({ envId: containerCtx.envId }, 'dag.container_suspend_finished');
+    return { stopped: true };
   } catch (error) {
-    outcome = { stopped: false, error };
+    getLog().error({ err: error, envId: containerCtx.envId }, 'dag.container_suspend_failed');
+    return { stopped: false, error };
   }
-  await reportContainerSuspension(
-    deps,
-    platform,
-    conversationId,
-    containerCtx,
-    execContext,
-    runId,
-    outcome
-  );
 }
 
 export type ContainerSuspendOutcome = { stopped: true } | { stopped: false; error: unknown };
@@ -136,6 +123,26 @@ export async function reportContainerSuspension(
       { workflowId: runId }
     );
   }
+}
+
+export async function recordContainerSuspendWarning(
+  deps: WorkflowDeps,
+  runId: string,
+  outcome: ContainerSuspendOutcome
+): Promise<void> {
+  if (outcome.stopped) return;
+  const err = outcome.error;
+  const warning = `Isolation container could not be stopped: ${err instanceof Error ? err.message : String(err)}`;
+  await deps.store
+    .createWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: 'workflow_cleanup_warning',
+      step_name: 'container',
+      data: { warnings: [warning] },
+    })
+    .catch((persistError: unknown) => {
+      getLog().error({ err: persistError, runId }, 'dag.container_suspend_warning_persist_failed');
+    });
 }
 
 /**
@@ -198,7 +205,7 @@ function renderWriteBackSummary(summary: OverlayChangeSummary): string {
  * The engine-level container write-back gate (Phase C). Runs after the last node
  * succeeds, and again on each resume (the DAG re-runs with every node skipped and
  * lands here). Returns:
- *  - `paused`    — pending an approval decision; the container was suspended.
+ *  - pause receipt — pending an approval decision; suspension was attempted.
  *  - `applied`   — the overlay diff landed on the live root (auto policy, or
  *                  resume-after-approve). Fall through to complete the run.
  *  - `discarded` — the overlay was discarded (resume-after-reject). Complete.
@@ -211,7 +218,7 @@ export async function runContainerWriteBackGate(
   runId: string,
   containerCtx: ContainerRunContext,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
-): Promise<'paused' | 'applied' | 'discarded' | 'skipped'> {
+): Promise<ContainerPauseReceipt | 'applied' | 'discarded' | 'skipped'> {
   const run = await deps.store.getWorkflowRun(runId);
   const meta = run?.metadata ?? {};
   const pending = meta.pending_writeback as
@@ -322,7 +329,7 @@ export async function runContainerWriteBackGate(
     getLog().warn({ runId }, 'dag.writeback_resume_unresolved_repause');
     const summary =
       pending.summary ?? (await containerCtx.backend.finalize(containerCtx.envId)).changeSummary;
-    await raiseWriteBackGate(
+    return raiseWriteBackGate(
       deps,
       platform,
       conversationId,
@@ -331,7 +338,6 @@ export async function runContainerWriteBackGate(
       execContext,
       summary
     );
-    return 'paused';
   }
 
   // FIRST arrival: inspect the overlay diff.
@@ -374,8 +380,8 @@ export async function runContainerWriteBackGate(
     return 'applied';
   }
 
-  // `approve` policy (default): raise the write-back gate (pause + suspend).
-  await raiseWriteBackGate(
+  // `approve` policy (default): suspend, then raise the write-back gate.
+  return raiseWriteBackGate(
     deps,
     platform,
     conversationId,
@@ -384,13 +390,12 @@ export async function runContainerWriteBackGate(
     execContext,
     summary
   );
-  return 'paused';
 }
 
 /**
  * Raise (or re-raise) the write-back approval gate: pause the run with a synthetic
  * `type:'writeback'` ApprovalContext, persist `pending_writeback`, emit the events +
- * live pause signal, suspend the container, and message the user. Reused by the
+ * live pause signal, and message the user, after attempting suspension. Reused by the
  * first-arrival approve path AND the fail-closed re-pause on an unresolved resume.
  */
 async function raiseWriteBackGate(
@@ -401,7 +406,7 @@ async function raiseWriteBackGate(
   containerCtx: ContainerRunContext,
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   summary: OverlayChangeSummary | undefined
-): Promise<void> {
+): Promise<ContainerPauseReceipt> {
   const message = summary
     ? renderWriteBackSummary(summary)
     : 'Container run finished — review before applying to the live folder.';
@@ -416,41 +421,64 @@ async function raiseWriteBackGate(
   // node emits, so the existing pause UI shows approve/reject). The `writeback_requested`
   // row commits with the pause, so the pause reaches the event feed; only the live
   // container-lifecycle signal follows it.
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
+  const outcome = await suspendContainerForPause(containerCtx);
+  const boundary: ContainerPauseBoundary = {};
+  const receipt = await publishContainerPause(
     runId,
-    { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
-    {
-      event: {
-        workflow_run_id: runId,
-        event_type: 'writeback_requested',
-        step_name: 'container',
-        data: { total_count: summary?.totalCount ?? 0 },
-      },
-      extraMetadata: {
-        pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) },
-      },
-      failClosed: true,
+    boundary,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        runId,
+        { nodeId: WRITEBACK_GATE_NODE_ID, message, type: 'writeback' },
+        {
+          event: {
+            workflow_run_id: runId,
+            event_type: 'writeback_requested',
+            step_name: 'container',
+            data: { total_count: summary?.totalCount ?? 0 },
+          },
+          extraMetadata: {
+            pending_writeback: { envId: containerCtx.envId, ...(summary ? { summary } : {}) },
+          },
+          failClosed: true,
+          boundary,
+        }
+      );
+      getWorkflowEventEmitter().emit({
+        type: 'container_lifecycle',
+        runId,
+        phase: 'writeback_requested',
+      });
+
+      // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
+      if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        runId,
+        WRITEBACK_GATE_NODE_ID,
+        gateOccurrence(paused),
+        'container',
+        message
+      );
+    },
+    async () => {
+      await recordContainerSuspendWarning(deps, runId, outcome);
+      await reportContainerSuspension(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        runId,
+        outcome
+      );
     }
   );
-  getWorkflowEventEmitter().emit({
-    type: 'container_lifecycle',
-    runId,
-    phase: 'writeback_requested',
-  });
-  await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  // failClosed makes a lost pause throw above, so this guards the type, not a reachable state.
-  if (paused === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    runId,
-    WRITEBACK_GATE_NODE_ID,
-    gateOccurrence(paused),
-    'container',
-    message
-  );
+  if (receipt === undefined) throw new Error(`Write-back gate for run ${runId} did not pause`);
+  return receipt;
 }
 
 /**

@@ -15,6 +15,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { executionClaim } from './store';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
@@ -456,6 +457,7 @@ nodes:
       return pause(id, approval, extra, suspension);
     };
 
+    const claims: (string | null)[] = [];
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -463,15 +465,23 @@ nodes:
       cwd,
       await discover('fan-ask-race-parent'),
       'goal',
-      { conversationId: 'conv-db' }
+      { conversationId: 'conv-db' },
+      {
+        onExecutionClaimed: claim => {
+          claims.push(claim);
+        },
+      }
     );
 
+    expect(claims).toHaveLength(2);
+    expect(claims[0]).toBeNull();
     expect(raced).toBe(true);
     expect(result.success).toBe(true);
     expect('paused' in result && result.paused).toBeFalsy();
     const parentRun = [...store.runs.values()].find(
       r => r.workflow_name === 'fan-ask-race-parent'
     )!;
+    expect(claims[1]).toBe(executionClaim(parentRun.metadata));
     expect(parentRun.status).toBe('completed');
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'

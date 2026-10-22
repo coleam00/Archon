@@ -658,6 +658,46 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
+  test.each(['running', 'completed', 'failed', 'cancelled'] as const)(
+    'background handoff observed as %s uses the failure channel only on failure',
+    async observedStatus => {
+      const failed = observedStatus === 'failed' || observedStatus === 'cancelled';
+      mockExecuteWorkflow.mockResolvedValueOnce(
+        failed
+          ? {
+              success: false,
+              handedOff: true,
+              workflowRunId: 'run-1',
+              observedStatus,
+              error: `Workflow ${observedStatus} after execution ownership changed`,
+            }
+          : { success: true, handedOff: true, workflowRunId: 'run-1', observedStatus }
+      );
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx(),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const cards = platform.sendMessage.mock.calls.filter(
+        call => call[2]?.category === 'workflow_result'
+      );
+      if (failed) {
+        expect(cards).toEqual([
+          [
+            'parent-conv',
+            `Workflow **bg-workflow** failed: Workflow ${observedStatus} after execution ownership changed`,
+            {
+              category: 'workflow_result',
+              segment: 'new',
+              workflowResult: { workflowName: 'bg-workflow', runId: 'run-1' },
+            },
+          ],
+        ]);
+      } else expect(cards).toEqual([]);
+      expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   // #2910: a rejected terminal write means the row still says 'running' and the run's
   // real outcome is unknown. Both sides of the branch are asserted — an ordinary
   // rejection keeps its compensating write and its "failed" card; a terminal-write

@@ -2,6 +2,7 @@ import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { resolveContinuationWorkflow } from './run-source';
 import {
+  WorkflowExecutionHandoffError,
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,
   type AttentionWatch,
@@ -117,6 +118,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       // before its terminal-write boundary; recovery must work without a server.
       if (
         !(error instanceof TerminalStatusWriteError) &&
+        !(error instanceof WorkflowExecutionHandoffError) &&
         (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
       ) {
         await requireTerminalStatusWrite(
