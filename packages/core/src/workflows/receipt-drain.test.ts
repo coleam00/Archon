@@ -381,7 +381,7 @@ async function queuedReceiptRequest(
   context: Awaited<ReturnType<typeof fixture>>,
   ownerReceiptId: string = crypto.randomUUID(),
   includeNeighbors = false,
-  admission: 'named' | 'direct' | 'originless' = 'named'
+  admission: 'named' | 'direct' | 'metadata' | 'originless' = 'named'
 ) {
   const { store, launch, accept, root } = context;
   const holder = launch('broken');
@@ -413,9 +413,9 @@ async function queuedReceiptRequest(
   await fs.writeFile(context.path, JSON.stringify(idle));
   const owner = { receiptId, bindingId: 'binding', ownerId: 'owner' };
   const broken = launch('broken');
-  if (admission === 'named')
+  if (admission === 'named' || admission === 'metadata')
     broken.run.metadata.resource_start = { receiptId, bindingId: 'binding' };
-  if (admission === 'direct') {
+  if (admission === 'direct' || admission === 'metadata') {
     expect(
       await store.admitResourceStart({
         resource: 'broken',
@@ -423,7 +423,7 @@ async function queuedReceiptRequest(
         hostId: 'host',
         overlap: 'queue',
         launch: broken,
-        receipt: { receiptId, bindingId: 'binding' },
+        ...(admission === 'direct' ? { receipt: { receiptId, bindingId: 'binding' } } : {}),
       })
     ).toMatchObject({ status: 'queued' });
   } else {
@@ -723,6 +723,12 @@ function errorEvidence(error: unknown): Error[] {
   ];
 }
 
+function expectReceiptFailureCause(evidence: Error[], damage: string, ioError: Error) {
+  if (damage === 'unreadable') expect(evidence).toContain(ioError);
+  if (damage === 'json') expect(evidence.some(item => item instanceof SyntaxError)).toBe(true);
+  if (damage === 'schema') expect(evidence.some(item => item.name === 'ZodError')).toBe(true);
+}
+
 for (const entry of ['direct', 'host'] as const) {
   test.each([
     'healthy',
@@ -766,7 +772,9 @@ for (const entry of ['direct', 'host'] as const) {
         for (let pass = 0; pass < 3; pass++) {
           await expectMembershipPass(context, queued, entry, damage, pass, started, ioError);
         }
-        expect(claim).not.toHaveBeenCalled();
+        if (entry === 'host' && (damage === 'pending' || damage === 'failed'))
+          expect(claim).toHaveBeenCalledTimes(3);
+        else expect(claim).not.toHaveBeenCalled();
       } finally {
         fault.mockRestore();
         claim.mockRestore();
@@ -886,9 +894,7 @@ async function expectBlockedMembership(
   const damagedPath =
     damage === 'wrong-origin' || damage === 'conflicting-claimant' ? claimantPath : path;
   expect(evidence.some(item => item.message.includes(basename(damagedPath)))).toBe(true);
-  if (damage === 'unreadable') expect(evidence).toContain(ioError);
-  if (damage === 'json') expect(evidence.some(item => item instanceof SyntaxError)).toBe(true);
-  if (damage === 'schema') expect(evidence.some(item => item.name === 'ZodError')).toBe(true);
+  expectReceiptFailureCause(evidence, damage, ioError);
   const head = await fs.readFile(join(context.root, 'head.json'), 'utf8');
   await expect(
     store.admitResourceStart({
@@ -945,18 +951,35 @@ async function expectMembershipPass(
 }
 
 for (const entry of ['direct', 'host'] as const) {
-  for (const admission of ['direct', 'originless', 'legacy'] as const) {
+  for (const admission of [
+    'direct',
+    'metadata',
+    'originless',
+    'legacy',
+    'legacy-claimant',
+  ] as const) {
     const damages: string[] =
-      admission === 'legacy'
+      admission === 'legacy-claimant'
         ? ['json', 'schema', 'unreadable']
-        : ['healthy', 'json', 'schema', 'unreadable', 'missing', 'no-membership', 'no-binding'];
+        : admission === 'legacy'
+          ? [
+              'healthy',
+              'json',
+              'schema',
+              'unreadable',
+              'pending',
+              'preparing',
+              'failed',
+              'rejected',
+            ]
+          : ['healthy', 'json', 'schema', 'unreadable', 'missing', 'no-membership', 'no-binding'];
     test.each(damages)(`${entry} drain retains ${admission} receipt links: %s`, async damage => {
       const context = await fixture('host');
       const queued = await queuedReceiptRequest(
         context,
         crypto.randomUUID(),
         true,
-        admission === 'legacy' ? 'originless' : admission
+        admission === 'legacy' || admission === 'legacy-claimant' ? 'originless' : admission
       );
       const { prefix, successor, path, requestPath } = queued;
       if (!prefix || !successor) throw new Error('expected queue neighbors');
@@ -968,9 +991,15 @@ for (const entry of ['direct', 'host'] as const) {
         bindingId: 'binding',
       });
       const row = await damageQueuedMembership(context, queued, damage);
-      if (admission === 'legacy') row.launch.run.metadata = {};
+      if (admission === 'legacy' || admission === 'legacy-claimant') row.launch.run.metadata = {};
+      if (admission === 'legacy-claimant') {
+        const claimant = JSON.parse(await fs.readFile(context.path, 'utf8'));
+        claimant.bindings[0].requestIds.push(queued.broken.run.id);
+        await fs.writeFile(context.path, JSON.stringify(claimant));
+      }
       await fs.writeFile(requestPath, JSON.stringify(row));
       const bytes = damage === 'missing' ? null : await fs.readFile(path, 'utf8');
+      const claimantBytes = await fs.readFile(context.path, 'utf8');
       const ioError = new Error('explicit receipt read refused');
       const read = fileStore.readJson;
       const fault = spyOn(fileStore, 'readJson').mockImplementation(file =>
@@ -993,6 +1022,13 @@ for (const entry of ['direct', 'host'] as const) {
         fault.mockRestore();
       }
       await expectReceiptBytes(path, bytes);
+      expect(await fs.readFile(context.path, 'utf8')).toBe(claimantBytes);
+      if (admission === 'legacy-claimant') {
+        const inspections = await context.store.listQueuedResourceStartsForHost('host');
+        const blocked = inspections.find(item => item.id === queued.broken.run.id);
+        if (!blocked || !('error' in blocked)) throw new Error('expected blocked legacy request');
+        expect(blocked.receiptId).toBeUndefined();
+      }
       if (damage !== 'healthy')
         expect(await fs.readFile(requestPath, 'utf8')).toBe(JSON.stringify(row));
     });
@@ -1067,3 +1103,148 @@ test.each(['rejected', 'unmatched'] as const)(
     });
   }
 );
+
+async function damageMetadataReceipt(path: string, damage: string): Promise<void> {
+  if (damage === 'missing') await fs.unlink(path);
+  else if (damage === 'no-binding' || damage === 'evaluated') {
+    const row = JSON.parse(await fs.readFile(path, 'utf8'));
+    if (damage === 'no-binding') {
+      row.bindings[0].bindingId = 'other';
+      row.bindings[0].intent.bindingId = 'other';
+    } else {
+      row.bindings[0].intent = null;
+      row.bindings[0].hostId = null;
+      row.bindings[0].status = 'unmatched';
+      row.outcome = 'unmatched';
+    }
+    await fs.writeFile(path, JSON.stringify(row));
+  } else if (damage !== 'healthy') await damageReceipt(path, damage);
+}
+
+for (const overlap of ['queue', 'skip'] as const) {
+  test.each(['healthy', 'json', 'schema', 'unreadable', 'missing', 'no-binding', 'evaluated'])(
+    `metadata-only direct ${overlap} admission validates its receipt atomically: %s`,
+    async damage => {
+      const { store, receiptId, path, launch, root } = await fixture('host');
+      const prepared = launch('damaged');
+      prepared.run.metadata.resource_start = { receiptId, bindingId: 'binding' };
+      if (overlap === 'skip')
+        await store.admitResourceStart({
+          resource: 'damaged',
+          capacity: 1,
+          hostId: 'host',
+          overlap,
+          launch: launch('damaged'),
+        });
+      await damageMetadataReceipt(path, damage);
+      const bytes = damage === 'missing' ? null : await fs.readFile(path, 'utf8');
+      const head = await fs.readFile(join(root, 'head.json'), 'utf8');
+      const ioError = new Error('metadata origin read refused');
+      const read = fileStore.readJson;
+      const fault = spyOn(fileStore, 'readJson').mockImplementation(file =>
+        damage === 'unreadable' && file === path ? Promise.reject(ioError) : read(file)
+      );
+      try {
+        const input = {
+          resource: 'damaged',
+          capacity: 1,
+          hostId: 'host',
+          overlap,
+          launch: prepared,
+        };
+        if (damage === 'healthy') {
+          const result = await store.admitResourceStart(input);
+          expect(result.status).toBe(overlap === 'skip' ? 'skipped' : 'admitted');
+          expect(await store.getStartReceipt(receiptId)).toMatchObject({
+            bindings: [{ status: 'complete', disposition: result }],
+          });
+        } else {
+          for (let pass = 0; pass < 2; pass++) {
+            const error = await store.admitResourceStart(input).catch((caught: unknown) => caught);
+            expect(error).toBeInstanceOf(Error);
+            expectReceiptFailureCause(errorEvidence(error), damage, ioError);
+            expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+            expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+            expect(await fs.readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+          }
+        }
+      } finally {
+        fault.mockRestore();
+      }
+      if (damage !== 'healthy') await expectReceiptBytes(path, bytes);
+    }
+  );
+}
+
+for (const origin of ['named', 'legacy'] as const) {
+  test.each(['pending', 'failed'])(
+    `a ${origin} inconsistent %s binding does not stop independent preparation`,
+    async status => {
+      const context = await fixture('host');
+      const { host, store, root, accept } = context;
+      const queued = await queuedReceiptRequest(context);
+      const row = await damageQueuedMembership(context, queued, status);
+      if (origin === 'legacy') row.launch.run.metadata = {};
+      await fs.writeFile(queued.requestPath, JSON.stringify(row));
+      const damaged = JSON.parse(await fs.readFile(queued.path, 'utf8'));
+      damaged.createdAt = '2000-01-01T00:00:00.000Z';
+      const damagedBytes = JSON.stringify(damaged);
+      await fs.writeFile(queued.path, damagedBytes);
+      setPlatformPolicies([]);
+      registerBuiltinProviders();
+      const project = join(root, 'later');
+      await fs.mkdir(join(project, '.archon/workflows'), { recursive: true });
+      await fs.writeFile(
+        join(project, '.archon/workflows/test.yaml'),
+        'name: test\ndescription: Independent preparation fixture\nnodes:\n  - id: work\n    bash: echo ok\n'
+      );
+      await host.records.codebases.createCodebase({
+        name: 'later',
+        kind: 'folder',
+        default_cwd: project,
+      });
+      const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+      if (!user) throw new Error('expected user');
+      const laterId = await accept('host', 'later', user.id);
+      const started: string[] = [];
+      const head = await fs.readFile(join(root, 'head.json'), 'utf8');
+      for (let pass = 0; pass < 2; pass++) {
+        await expect(
+          store.claimStartBindingPreparation({
+            receiptId: queued.receiptId,
+            bindingId: 'binding',
+            ownerId: 'must-not-prepare',
+          })
+        ).rejects.toThrow();
+        if (pass === 0) expect(await fs.readFile(join(root, 'head.json'), 'utf8')).toBe(head);
+        const error = await drainResourceStartHost({
+          ...host,
+          hostId: 'host',
+          startAdmitted: async id => {
+            started.push(id);
+          },
+        }).catch((caught: unknown) => caught);
+        if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+        expect(
+          error.failures.some(
+            failure =>
+              failure.receiptId === queued.receiptId &&
+              errorEvidence(failure.error).some(item =>
+                item.message.includes(basename(queued.path))
+              )
+          )
+        ).toBe(true);
+        const later = await store.getStartReceipt(laterId);
+        expect(later).toMatchObject({
+          bindings: [{ status: 'complete', requestStatus: 'admitted' }],
+        });
+        const preparedId = later?.bindings[0]?.disposition?.requestId;
+        if (!preparedId) throw new Error('expected independently prepared request');
+        expect(started).toEqual([preparedId, context.healthy.run.id]);
+        expect(await store.getWorkflowRun(queued.broken.run.id)).toBeNull();
+        expect(await fs.readFile(queued.path, 'utf8')).toBe(damagedBytes);
+        expect(await fs.readFile(queued.requestPath, 'utf8')).toBe(JSON.stringify(row));
+      }
+    }
+  );
+}

@@ -374,7 +374,8 @@ export function createAdmissionTransaction(
     );
     if (intent.receipt && origin && !isDeepStrictEqual(origin, intent.receipt))
       throw new Error(`Resource start has inconsistent membership for request '${launch.run.id}'`);
-    if (intent.receipt) launch.run.metadata[RESOURCE_START_METADATA_KEY] = intent.receipt;
+    const identity = intent.receipt ?? origin;
+    if (identity) launch.run.metadata[RESOURCE_START_METADATA_KEY] = identity;
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
@@ -390,8 +391,8 @@ export function createAdmissionTransaction(
       position: head.seq + 1,
     };
     documents[pathFor('requests', row.id)] = row;
-    if (intent.receipt) {
-      const item = await binding(intent.receipt);
+    if (identity) {
+      const item = await binding(identity);
       if (!item?.intent)
         throw new Error('Resource start receipt binding missing preparation intent');
       item.requestIds.push(row.id);
@@ -747,6 +748,10 @@ export function createFileAdmissionStore(
       write(async tx => {
         const item = await tx.binding(input);
         if (!item || (item.status !== 'pending' && item.status !== 'failed')) return false;
+        if (item.requestIds.length)
+          throw new Error(
+            `Start receipt document '${pathFor('receipts', item.receiptId)}' has requests on an incomplete binding`
+          );
         item.status = 'preparing';
         item.ownerId = input.ownerId;
         return true;

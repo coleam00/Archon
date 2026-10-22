@@ -104,16 +104,16 @@ export async function readRequestReceiptAttribution(root: string, id: string) {
   const origin = requestBindingIdentity(row.launch);
   const { bindings, errors } = await readReceiptMemberships(root, id);
   const { owners, conflicts } = requestReceiptOwners(row, id, bindings);
-  // Older linked requests have no forward link. A failed scan cannot distinguish
-  // their missing owner from a receipt-free request, so admission must wait.
-  if (!origin && owners.length === 0) conflicts.push(...errors);
+  // Without a forward link, a failed scan may hide an owner or a duplicate claimant.
+  // Even a readable claimant cannot prove ownership until the scan succeeds.
+  if (!origin) conflicts.push(...errors);
   if (origin && !owners.some(binding => matchesBinding(origin, binding))) {
     conflicts.push(await missingOriginMembership(root, id, origin.receiptId));
   }
   let receiptId: string | undefined;
   if (!origin && owners.length > 1) {
     for (const binding of owners) conflicts.push(membershipError(id, binding));
-  } else receiptId = owners[0]?.receiptId;
+  } else if (origin || conflicts.length === 0) receiptId = owners[0]?.receiptId;
   return { receiptId, errors: [...errors, ...conflicts], conflicts };
 }
 
@@ -168,7 +168,8 @@ export function validateRequestBinding(
   if (
     request.id !== id ||
     request.launch.run.id !== id ||
-    (origin && (!matchesBinding(origin, binding) || binding.status !== 'complete'))
+    binding.status !== 'complete' ||
+    (origin && !matchesBinding(origin, binding))
   ) {
     throw membershipError(id, binding);
   }
@@ -189,12 +190,6 @@ export async function inspectBinding(
   const inspection = bindingInspectionSchema.parse(item);
   const request = requestId ? await readRequest(requestId) : null;
   if (request && requestId) validateRequestBinding(request, requestId, item);
-  if (!requestId) {
-    for (const id of item.requestIds) {
-      const linked = await readRequest(id);
-      if (linked) validateRequestBinding(linked, id, item);
-    }
-  }
   return {
     ...inspection,
     requestStatus: request?.status ?? null,
