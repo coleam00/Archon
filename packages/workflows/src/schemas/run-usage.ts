@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import type { WorkflowRun } from './workflow-run';
 
 export const runUsageSchema = z.object({
@@ -16,50 +16,53 @@ export function hasUnknownTokenTotal(metadata: WorkflowRun['metadata']): boolean
 const fields = {
   cost: 'total_cost_usd',
   unknown: 'total_tokens_unknown',
+} as const;
+
+const persistedTokensSchema = tokenUsageSchema.omit({ total: true, cost: true });
+const tokenAxes = persistedTokensSchema.keyof().options;
+const tokenFields = {
   input: 'total_tokens_in',
   output: 'total_tokens_out',
   cacheRead: 'total_cache_read_tokens',
   cacheWrite: 'total_cache_write_tokens',
   cachePartial: 'total_cache_partial',
-} as const;
-
-const tokenAxes = ['input', 'output', 'cacheRead', 'cacheWrite', 'cachePartial'] as const;
+} as const satisfies Record<keyof z.infer<typeof persistedTokensSchema>, string>;
 
 export function serializeRunUsage(usage: RunUsageFigures): Record<string, unknown> {
   const metadata: Record<string, unknown> = {};
   if (usage.costUsd !== undefined) metadata[fields.cost] = usage.costUsd;
   if (usage.tokensUnknown) {
     metadata[fields.unknown] = true;
-    for (const axis of tokenAxes) metadata[fields[axis]] = null;
+    for (const axis of tokenAxes) metadata[tokenFields[axis]] = null;
   } else if (usage.tokens !== undefined) {
     for (const axis of tokenAxes) {
       const value = usage.tokens[axis];
-      if (value !== undefined) metadata[fields[axis]] = value;
+      if (value !== undefined) metadata[tokenFields[axis]] = value;
     }
   }
   return metadata;
 }
 
 export function parseRunUsage(metadata: WorkflowRun['metadata']): RunUsageFigures {
-  const input = metadata[fields.input];
-  const output = metadata[fields.output];
+  const input = metadata[tokenFields.input];
+  const output = metadata[tokenFields.output];
   const cost = metadata[fields.cost];
   const tokensUnknown =
     hasUnknownTokenTotal(metadata) ||
-    ((Object.hasOwn(metadata, fields.input) || Object.hasOwn(metadata, fields.output)) &&
+    ((Object.hasOwn(metadata, tokenFields.input) || Object.hasOwn(metadata, tokenFields.output)) &&
       (typeof input !== 'number' ||
         !Number.isFinite(input) ||
         typeof output !== 'number' ||
         !Number.isFinite(output)));
-  let tokens: TokenUsage | undefined;
-  if (!tokensUnknown && typeof input === 'number' && typeof output === 'number') {
-    tokens = { input, output };
-    for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-      const value = metadata[fields[axis]];
-      if (typeof value === 'number') tokens[axis] = value;
-    }
-    if (metadata[fields.cachePartial] === true) tokens.cachePartial = true;
-  }
+  const parsedTokens = persistedTokensSchema.safeParse(
+    Object.fromEntries(
+      tokenAxes.flatMap(axis => {
+        const parsed = persistedTokensSchema.shape[axis].safeParse(metadata[tokenFields[axis]]);
+        return parsed.success && parsed.data !== undefined ? [[axis, parsed.data]] : [];
+      })
+    )
+  );
+  const tokens = !tokensUnknown && parsedTokens.success ? parsedTokens.data : undefined;
   return {
     costUsd: typeof cost === 'number' ? cost : undefined,
     ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),

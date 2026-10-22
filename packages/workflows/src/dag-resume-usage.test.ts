@@ -162,3 +162,52 @@ describe('historical cost floor', () => {
     expect((await foldDagResumeSnapshot(attempt('a'), 'run')).costUsd).toBeUndefined();
   });
 });
+
+describe('composed instance accounting segments', () => {
+  it.each(
+    ['node_completed', 'node_failed', 'node_deferred_usage'].flatMap(eventType =>
+      ['fan__item__leaf', 'fan__item__nested__item__leaf'].map(path => ({ eventType, path }))
+    )
+  )('keeps later own spend after an instance terminal: %j', async ({ eventType, path }) => {
+    const terminalData = {
+      type: 'compose_fan_out_instance',
+      aggregate: true,
+      cost_usd: 0.01,
+      tokens: { input: 7, output: 3 },
+    };
+    const terminal: DagResumeEvent = {
+      step_name: 'fan__item',
+      event_type: 'node_failed',
+      data: terminalData,
+    };
+    const rows: DagResumeEvent[] = [
+      {
+        step_name: path,
+        event_type: 'node_failed',
+        data: { cost_usd: 0.01, tokens: { input: 7, output: 3 } },
+      },
+      terminal,
+      {
+        step_name: path,
+        event_type: eventType,
+        data: { cost_usd: 0.02, tokens: { input: 14, output: 6 } },
+      },
+    ];
+    const open = await foldDagResumeSnapshot(rows, 'run');
+    expect(open.costUsd).toBeCloseTo(0.03);
+    expect(open.tokens).toEqual({ input: 21, output: 9 });
+    const closed = await foldDagResumeSnapshot(
+      [
+        ...rows,
+        {
+          ...terminal,
+          event_type: 'node_completed',
+          data: { ...terminalData, cost_usd: 0.02, tokens: { input: 14, output: 6 } },
+        },
+      ],
+      'run'
+    );
+    expect(closed.costUsd).toBeCloseTo(0.03);
+    expect(closed.tokens).toEqual(open.tokens);
+  });
+});

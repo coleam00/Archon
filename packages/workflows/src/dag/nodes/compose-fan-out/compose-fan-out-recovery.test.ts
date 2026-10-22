@@ -182,16 +182,19 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
   it.each(
     [false, true].flatMap(legacy =>
       [false, true].flatMap(fanOut =>
-        ['open child', 'paid sibling', 'unknown sibling', 'closed segment'].map(priorScope => ({
-          fanOut,
-          priorScope,
-          legacy,
-        }))
+        ['open child', 'paid sibling', 'unknown sibling', 'closed segment'].flatMap(priorScope =>
+          (priorScope === 'closed segment' ? [false, true] : [false]).map(interrupt => ({
+            fanOut,
+            priorScope,
+            legacy,
+            interrupt,
+          }))
+        )
       )
     )
   )(
     'preserves prior spend inside a composed instance (%j)',
-    async ({ fanOut, priorScope, legacy }) => {
+    async ({ fanOut, priorScope, legacy, interrupt }) => {
       const paidSibling = priorScope === 'paid sibling' || priorScope === 'unknown sibling';
       const unknownTokens = priorScope === 'unknown sibling';
       await writeBlock(
@@ -278,7 +281,19 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
         costUsd: 0.03,
         tokens: { input: 21, output: 9 },
       }));
-      await executeDagWorkflow(
+      const cause = new Error('Unsupported parent status after child settlement');
+      if (interrupt)
+        store.getWorkflowRunStatus.mockImplementation(async () => {
+          if (
+            eventsOf(store).some(
+              row => row.step_name === path && row.event_type === 'node_completed'
+            )
+          ) {
+            throw cause;
+          }
+          return 'running';
+        });
+      const drive = executeDagWorkflow(
         dagOptions({
           deps: createMockDeps(store),
           cwd: testDir,
@@ -298,7 +313,25 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
           },
         })
       );
-      await assertRecoveredInstanceUsage(store, instance, priorScope, path);
+      if (interrupt) {
+        await expect(drive).rejects.toMatchObject({ cause });
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_cost_usd: expect.closeTo(0.03),
+          total_tokens_in: 21,
+          total_tokens_out: 9,
+        });
+        expect((await store.getDagResumeSnapshot('parent')).costUsd).toBeCloseTo(0.03);
+        expect(
+          eventsOf(store).filter(
+            row =>
+              row.step_name === `${composeScope()}__${instance.identity}` &&
+              (row.event_type === 'node_completed' || row.event_type === 'node_failed')
+          )
+        ).toHaveLength(1);
+      } else {
+        await drive;
+        await assertRecoveredInstanceUsage(store, instance, priorScope, path);
+      }
     }
   );
 

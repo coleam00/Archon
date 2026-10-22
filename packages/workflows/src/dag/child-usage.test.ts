@@ -82,35 +82,25 @@ it.each(['child_run_id', 'fan_out_outcome'])(
 
 it.each(
   [
-    {},
-    {
-      fan_out_outcome: fanOutOutcome([
-        { index: 0, outcome: 'failed', child_run_id: 'a' },
-        { index: 1, outcome: 'failed', child_run_id: 'b' },
-      ]),
-    },
     { child_run_id: 'a', child_usage: [{ childRunId: 'a', costUsd: 'bad' }] },
     { child_run_id: 'a', child_usage: null },
   ].flatMap(attribution =>
     ['node_completed', 'node_failed'].map(eventType => ({ attribution, eventType }))
   )
-)(
-  'rejects ambiguous or invalid historical child attribution: %j',
-  async ({ attribution, eventType }) => {
-    await expect(
-      foldDagResumeSnapshot(
-        [
-          {
-            step_name: 'sub',
-            event_type: eventType,
-            data: { type: 'workflow', cost_usd: 0.01, ...attribution },
-          },
-        ],
-        'parent'
-      )
-    ).rejects.toThrow();
-  }
-);
+)('rejects invalid present child attribution: %j', async ({ attribution, eventType }) => {
+  await expect(
+    foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: eventType,
+          data: { type: 'workflow', cost_usd: 0.01, ...attribution },
+        },
+      ],
+      'parent'
+    )
+  ).rejects.toThrow();
+});
 
 it('keeps malformed legacy token totals unknown in the retained child baseline', async () => {
   const snapshot = await foldDagResumeSnapshot(
@@ -213,24 +203,113 @@ it.each(
         ...['input', 'output', 'cacheRead', 'cacheWrite'].map(axis => ({
           tokens: { input: 0, output: 0, [axis]: 1 },
         })),
-        { tokens: { input: 0, output: 0, cachePartial: true } },
+        { tokens: { input: 0, output: 0, cacheRead: 0, cachePartial: true } },
       ].map(usage => ({ attribution, eventType, usage }))
     )
   )
 )(
-  'requires child identity for nonzero or unknown legacy usage: %j',
+  'preserves nonzero or unknown legacy usage without inventing child attribution: %j',
   async ({ attribution, eventType, usage }) => {
-    await expect(
-      foldDagResumeSnapshot(
-        [
-          {
-            step_name: 'sub',
-            event_type: eventType,
-            data: { type: 'workflow', cost_usd: 0, ...usage, ...attribution },
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: eventType,
+          data: {
+            type: 'workflow',
+            cost_usd: 0,
+            ...usage,
+            ...attribution,
+            node_output: 'legacy output',
           },
-        ],
-        'parent'
-      )
-    ).rejects.toThrow('Cannot attribute historical child usage');
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.costUsd).toBe('cost_usd' in usage ? usage.cost_usd : 0);
+    expect(snapshot.reportedChildUsage?.size).toBe(0);
+    expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe(
+      eventType === 'node_completed' ? 'legacy output' : undefined
+    );
+    if (usage.tokens !== undefined) {
+      expect(snapshot.tokensUnknown).toBe(!('output' in usage.tokens));
+      if ('output' in usage.tokens) expect(snapshot.tokens).toMatchObject(usage.tokens);
+    }
+  }
+);
+
+it.each([false, true])(
+  'keeps measured child baselines after an unmetered terminal (fan-out %s)',
+  async fanOut => {
+    const paid = { childRunId: 'child', costUsd: 0.01, tokens: { input: 7, output: 3 } };
+    const identity = fanOut
+      ? { fan_out_outcome: fanOutOutcome([{ index: 0, outcome: 'failed', child_run_id: 'child' }]) }
+      : { child_run_id: 'child' };
+    const rows = [
+      {
+        step_name: 'sub',
+        event_type: 'node_failed',
+        data: {
+          type: 'workflow',
+          ...identity,
+          cost_usd: 0.01,
+          tokens: paid.tokens,
+          child_usage: [paid],
+        },
+      },
+      {
+        step_name: 'sub',
+        event_type: 'node_failed',
+        data: { type: 'workflow', ...identity, child_usage: [{ childRunId: 'child' }] },
+      },
+    ];
+    const snapshot = await foldDagResumeSnapshot(rows, 'parent');
+    expect(snapshot.reportedChildUsage?.get('child')).toEqual(paid);
+    const next = unreportedChildUsage(
+      { costUsd: 0.02, tokens: { input: 14, output: 6 } },
+      snapshot.reportedChildUsage,
+      'child'
+    );
+    expect((snapshot.costUsd ?? 0) + (next.costUsd ?? 0)).toBeCloseTo(0.02);
+    expect(next.tokens).toEqual({ input: 7, output: 3 });
+  }
+);
+
+it.each([
+  {
+    measured: { costUsd: 0 },
+    expected: { costUsd: 0, tokens: { input: 7, output: 3, cacheRead: 5 } },
+  },
+  {
+    measured: { tokens: { input: 0, output: 0 } },
+    expected: { costUsd: 0.01, tokens: { input: 0, output: 0, cacheRead: 5 } },
+  },
+  { measured: { tokensUnknown: true }, expected: { costUsd: 0.01, tokensUnknown: true } },
+])(
+  'updates measured axes without erasing absent child measurements: %j',
+  async ({ measured, expected }) => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: 'node_failed',
+          data: {
+            type: 'workflow',
+            child_usage: [
+              { childRunId: 'child', costUsd: 0.01, tokens: { input: 7, output: 3, cacheRead: 5 } },
+            ],
+          },
+        },
+        {
+          step_name: 'sub',
+          event_type: 'node_failed',
+          data: { type: 'workflow', child_usage: [{ childRunId: 'child', ...measured }] },
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.reportedChildUsage?.get('child')).toMatchObject(expected);
+    if (measured.tokensUnknown)
+      expect(snapshot.reportedChildUsage?.get('child')?.tokens).toBeUndefined();
   }
 );

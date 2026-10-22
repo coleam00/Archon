@@ -27,7 +27,7 @@ The [provider capability matrix](/reference/provider-capabilities/) is the per-p
 
 `nodeCostScope` maps `accounting: node` to `own` and other accounting kinds to `total`. Historical rows fall back to `aggregate: true` for `total`, otherwise `own`. This scope is a projection rule, not an execution-record field. A total restates spend that other rows may carry, so summing every event double-counts it.
 
-The engine's resume fold treats composed-instance terminal usage as authoritative for that instance's scope: its inner observability rows can be missing after a crash. Other aggregate rows restate leaf usage. Use engine-produced run totals rather than constructing an independent client aggregation rule.
+The engine's resume fold treats composed-instance terminal usage as authoritative for the segment preceding that terminal: its inner observability rows can be missing after a crash. Inner spend after the last terminal remains counted until a later terminal closes that segment. Other aggregate rows restate leaf usage. Use engine-produced run totals rather than constructing an independent client aggregation rule.
 
 ### Reading tokens and cost
 
@@ -79,7 +79,7 @@ The reader reconstructs lifecycle from the event type and the corresponding erro
 
 `fan_out_instances` is a separate durable event: its `data.instances` restores the first valid instance snapshot for the fan-out wrapper. It is outside the node-record data schema and the tables below.
 
-Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. The optional additive `child_usage` key records cumulative usage by child run ID. Older rows remain readable; resume needs no child attribution for reported zero usage, recovers nonzero or unknown usage from an unambiguous durable child ID, and reports a read error when that usage cannot be attributed safely. See the [database reference](/reference/database/) for persistence context.
+Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. The optional additive `child_usage` key records cumulative usage by child run ID. Older rows retain their node-level spend and reusable output. Resume can recover child baselines from one unambiguous durable child ID; historical multi-child or unidentified increments remain at node scope without invented per-child allocation. Those rows cannot provide baselines for subtracting previously reported usage if a child is executed again. New `child_usage` records provide that attribution, and absent measurements do not erase earlier measured baselines. Malformed present `child_usage` is a read error. See the [database reference](/reference/database/) for persistence context.
 
 ## Schema field tables
 

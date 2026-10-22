@@ -296,6 +296,97 @@ nodes:
     ).toHaveLength((fanOut ? 3 : 2) + priorPaidAttempts);
   }
 
+  it.each([false, true])(
+    'retains paid child baselines across credential refusal (fan-out=%p)',
+    async fanOut => {
+      await writeWorkflow(
+        'paid-retry',
+        `name: paid-retry
+description: paid attempts
+nodes:
+  - id: work
+    prompt: paid attempt
+    provider: codex
+    model: gpt-5.4
+    always_run: true
+  - id: fail
+    bash: exit 1
+    depends_on: [work]
+`
+      );
+      await writeWorkflow(
+        'retry-parent',
+        `name: retry-parent
+description: retry paid child
+nodes:
+  - id: seed
+    bash: echo seed
+  - id: sub
+    workflow: paid-retry
+    depends_on: [seed]
+${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_success\n" : ''}`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const workflow = await discover('retry-parent');
+      await executeWorkflow(deps, makePlatform(), 'test', cwd, workflow, 'goal', {
+        userId: 'operator',
+      });
+      const parent = [...store.runs.values()].find(run => run.workflow_name === 'retry-parent');
+      const child = [...store.runs.values()].find(run => run.workflow_name === 'paid-retry');
+      if (!parent || !child) throw new Error('Missing parent or child');
+      expect(parent.metadata.total_cost_usd).toBeCloseTo(0.01);
+      expect(child.metadata.total_cost_usd).toBeCloseTo(0.01);
+      const retry = async () => {
+        const current = await store.getWorkflowRun(parent.id);
+        if (!current) throw new Error('Missing parent');
+        const hydrated = await hydrateResumableRun(deps, current);
+        if (!hydrated) throw new Error('Parent not resumable');
+        return executeWorkflow(
+          deps,
+          makePlatform(),
+          'test',
+          cwd,
+          workflow,
+          'goal',
+          { userId: 'operator' },
+          hydrated
+        );
+      };
+      deps.isPerUserProviderKeysEnabled = () => true;
+      deps.getUserProviderCredential = async () => ({
+        kind: 'api_key',
+        getStatus: async () => ({
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'credential unavailable',
+        }),
+      });
+      await retry();
+      expect(
+        store.events.some(
+          event =>
+            event.workflow_run_id === parent.id &&
+            event.event_type === 'node_failed' &&
+            String(event.data?.error).includes('Credential preflight failed')
+        )
+      ).toBe(true);
+      const refused = await store.getDagResumeSnapshot(parent.id);
+      expect(refused.reportedChildUsage?.get(child.id)?.costUsd).toBeCloseTo(0.01);
+      deps.isPerUserProviderKeysEnabled = () => false;
+      await retry();
+      expect((await store.getWorkflowRun(child.id))?.metadata.total_cost_usd).toBeCloseTo(0.02);
+      expect((await store.getWorkflowRun(parent.id))?.metadata).toMatchObject({
+        total_cost_usd: expect.closeTo(0.02),
+        total_tokens_in: 14,
+        total_tokens_out: 6,
+      });
+      expect(
+        [...store.runs.values()].filter(run => run.workflow_name === 'paid-retry')
+      ).toHaveLength(1);
+    }
+  );
+
   type InterruptionCaller = 'child' | 'child fan-out' | 'engine resume' | 'automatic resume';
 
   async function driveUnreadableParent(

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import type { RunUsageFigures } from '../dag/usage';
 import { parseRunUsage, serializeRunUsage } from './run-usage';
 
@@ -43,4 +44,26 @@ describe('persisted run usage', () => {
     const zero = { costUsd: 0, tokens: { input: 0, output: 0 } };
     expect(parseRunUsage(serializeRunUsage(zero))).toEqual(zero);
   });
+});
+
+it('persists the provider-owned aggregate axes and excludes provider-only totals', () => {
+  const tokens = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cachePartial: true as const,
+    total: 99,
+    cost: 5,
+  };
+  const owner = tokenUsageSchema.omit({ total: true, cost: true });
+  const metadata = serializeRunUsage({ tokens });
+  expect(Object.keys(metadata)).toHaveLength(owner.keyof().options.length);
+  expect(parseRunUsage(metadata).tokens).toEqual(owner.parse(tokens));
+  const cleared = serializeRunUsage({ tokensUnknown: true });
+  expect(
+    Object.keys(cleared)
+      .filter(key => key !== 'total_tokens_unknown')
+      .sort()
+  ).toEqual(Object.keys(metadata).sort());
 });
