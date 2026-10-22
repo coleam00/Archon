@@ -1,7 +1,3 @@
-import { isWorkflowExecutionInterruption } from './execution-interruption';
-import { ParentStatusReadError } from './parent-status-read';
-import { getWorkflowEventEmitter } from './event-emitter';
-import { TerminalStatusWriteError } from './terminal-status-write';
 import { runChildWorkflow } from './child-runs';
 import { layerRunCredentials } from './run-credential-env';
 import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
@@ -354,18 +350,6 @@ export async function executeWorkflow(
       exit
     );
   } catch (error) {
-    if (isWorkflowExecutionInterruption(error)) {
-      exit.executionStopped = true;
-      if (error instanceof TerminalStatusWriteError) exit.terminalStatusWriteFailed = true;
-      if (error instanceof ParentStatusReadError) {
-        getLog().error(
-          { err: error.cause, workflowRunId: workflowRun.id, nodeId: error.nodeId },
-          'workflow.parent_status_read_failed'
-        );
-        getWorkflowEventEmitter().unregisterRun(workflowRun.id);
-      }
-      throw error;
-    }
     exit.executionStopped ||= error instanceof WorkflowExecutionHandoffError;
     if (exit.executionStopped) throw error;
     return await recordUnhandledRunFailure(
