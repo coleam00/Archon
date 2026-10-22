@@ -21,8 +21,8 @@ import type { WorkflowNode, WorkflowRun, WorkflowRunStatus } from '../../../sche
 import {
   workflowRunStatusSchema,
   terminalWorkflowRunStatusSchema,
-  readSubrunMetadata,
-} from '../../../schemas';
+} from '../../../schemas/run-status';
+import { readSubrunMetadata } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
