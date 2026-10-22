@@ -22,7 +22,9 @@ import { GitHubAdapter } from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { RESERVED_CHAT_PLATFORMS } from '@archon/chat-contract/descriptor';
-import { installPinnedPlugin, pluginCommand, type PluginEnvironment } from './plugin';
+import { pluginCommand } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
+import { installPinnedPlugin } from './plugin-install';
 
 const windows = process.platform === 'win32';
 const enabled = !windows || (!!process.env.CI && !skipCompiledBinaryTests());

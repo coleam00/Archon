@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { matchesForgeOperationResponse } from './dispatch';
+import { matchesForgeOperationResponse } from './response-match';
 import {
   contentDigest,
   forgeAuditResponse,

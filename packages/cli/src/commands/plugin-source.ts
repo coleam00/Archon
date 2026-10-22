@@ -7,7 +7,7 @@ import {
   type PluginManifest,
   type WorkflowPackManifest,
 } from '@archon/plugin-manifest';
-import type { PluginEnvironment } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
 
 export interface PluginRef {
   owner: string;

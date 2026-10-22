@@ -9,7 +9,8 @@ import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { packTreePath, readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { pluginCommand, type PluginEnvironment } from './plugin';
+import { pluginCommand } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
 
 // One real git repository of workflow packs stands in for GitHub. The installer
 // resolves and fetches it with git over a file URL (`<root>/owner/packs.git`), exactly
