@@ -437,7 +437,7 @@ function readGhPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
  * The forge's check units on one commit, read as `checksOf` reads the gh rollup: only
  * a green unit passes, so a gated or unknown one is failing.
  */
-export function checksOfUnits(units: unknown): Checks {
+function checksOfUnits(units: unknown): Checks {
   if (!Array.isArray(units)) throw new Error('forge returned no check units');
   const failing: string[] = [];
   const pending: string[] = [];
