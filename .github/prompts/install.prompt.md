@@ -36,9 +36,7 @@ success.
   The root launcher selects the API port and passes it to the server and Vite
   proxy; do not assume a fixed API port, especially in a worktree.
 - Web UI: request the local URL printed by Vite and confirm it serves the UI HTML.
-  `packages/web/vite.config.ts` requests port 5173; use the actual printed URL if
-  Vite selects another port. Also request `/api/health` through that URL to verify
-  the API proxy.
+  Also request `/api/health` through that URL to verify the API proxy.
 - Documentation: request the local URL printed by Astro and confirm it serves
   the documentation HTML.
 
