@@ -1,10 +1,111 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { discoverPlugins } from './discovery';
-import { dispatchForge } from './dispatch';
+import { dispatchForge, matchesForgeOperationResponse } from './dispatch';
 import { repoRefSchema } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
+
+test.each([
+  ['https://forge.example/team/repo', 'forge.example', true],
+  ['https://forge.example:443/team/repo', 'forge.example', true],
+  ['https://forge.example:443/team/repo', 'other.example', false],
+  ['https://forge.example:8443/team/repo', 'forge.example', false],
+  ['https://forge.example:8443/team/repo', 'forge.example:8443', true],
+  ['http://forge.example:80/team/repo', 'forge.example', false],
+  ['http://forge.example:443/team/repo', 'forge.example', false],
+  ['ssh://git@forge.example:443/team/repo', 'forge.example', false],
+  ['ssh://git@forge.example:443/team/repo', 'forge.example:443', true],
+  ['ssh://git@forge.example:22/team/repo', 'forge.example:22', true],
+  ['git@forge.example:team/repo.git', 'forge.example', true],
+] as const)('validates normalized resolver identity for %s returning %s', (remote, host, valid) => {
+  const metadata = {
+    protocol: 1 as const,
+    name: 'test',
+    version: '1.0.0',
+    forge: 'test',
+    hosts: ['forge.example'],
+    capabilities: ['resolve' as const],
+    token_env: [],
+  };
+  const requestedHost = remote.includes('://')
+    ? remote.split('://')[1].split('/')[0].replace('git@', '')
+    : 'forge.example';
+  expect(
+    matchesForgeOperationResponse(
+      { operationId: 'identity', op: 'resolve', remote },
+      {
+        operationId: 'identity',
+        ok: true,
+        result: {
+          op: 'resolve',
+          value: {
+            kind: 'resolved',
+            forge: 'test',
+            repo: { host, path: 'team/repo' },
+            plugin: { name: 'test', version: '1.0.0' },
+          },
+        },
+      },
+      metadata,
+      requestedHost
+    )
+  ).toBe(valid);
+});
+
+test.each(['github.com', 'ghes.example.test'])(
+  'retains HTTPS :443 authority from a released normalized resolver on %s',
+  async host => {
+    const discovery = await discoverPlugins({
+      config: {
+        ...config('normalized-resolve'),
+        hosts: { [host]: 'test', [`${host}:443`]: 'test' },
+      },
+      env: {},
+    });
+    const plugin = discovery.plugins[0];
+    for (const claims of [[host], [`${host}:443`], [host, `${host}:443`]]) {
+      const selected = {
+        ...discovery,
+        byHost: new Map(claims.map(claim => [claim, plugin])),
+      };
+      const result = await dispatchForge(
+        { operationId: 'compat', op: 'resolve', remote: `https://${host}:443/team/repo.git` },
+        { discovery: selected, env: {} }
+      );
+      const repo = {
+        host: `${host}:443`,
+        path: 'team/repo',
+        ...(claims.includes(`${host}:443`)
+          ? {}
+          : { hostClaim: { host, transport: 'https' as const } }),
+      };
+      expect(result.response).toMatchObject({
+        ok: true,
+        result: { op: 'resolve', value: { kind: 'resolved', repo } },
+      });
+      if (
+        !result.response.ok ||
+        result.response.result.op !== 'resolve' ||
+        result.response.result.value.kind !== 'resolved'
+      )
+        throw new Error('Expected repository');
+      expect(result.response.result.value.repo).toEqual(repo);
+      const qualified = await dispatchForge(
+        {
+          operationId: 'qualified-compat',
+          op: 'repo.labels.list',
+          repo: JSON.parse(JSON.stringify(result.response.result.value.repo)),
+        },
+        { discovery: selected, env: {} }
+      );
+      expect(qualified.response).toMatchObject({
+        ok: true,
+        result: { op: 'repo.labels.list', value: { repo, labels: [] } },
+      });
+    }
+  }
+);
 
 test('qualified operations use the retained HTTPS claim and its credential configuration', async () => {
   const discovery = await discoverPlugins({

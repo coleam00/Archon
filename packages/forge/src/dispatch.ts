@@ -146,19 +146,31 @@ function remoteHost(remote: string | null): string | undefined {
   }
 }
 
-function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
-  if (request.op !== 'resolve') return requestRepo(request).hostClaim?.host.toLowerCase() ?? host;
-  if (discovery.byHost.has(host) || !request.remote) return host;
+function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
+  if (request.op !== 'resolve' || !request.remote) return undefined;
   try {
-    const { url, host: remoteHost } = parseRemoteUrl(request.remote.trim());
+    const { url, host } = parseRemoteUrl(request.remote.trim());
     // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
-    if (url.protocol === 'https:' && remoteHost === `${url.hostname}:443`) {
+    if (url.protocol === 'https:' && host === `${url.hostname}:443`) {
       return normalizeHost(url.hostname);
     }
   } catch {
-    return host;
+    return undefined;
   }
+  return undefined;
+}
+
+function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
+  if (request.op !== 'resolve') return requestRepo(request).hostClaim?.host.toLowerCase() ?? host;
+  if (!discovery.byHost.has(host)) return httpsDefaultPortHost(request) ?? host;
   return host;
+}
+
+function matchesResolvedHost(request: ForgeRequest, observed: string, host: string): boolean {
+  // Released resolvers normalize HTTPS :443 through WHATWG URL.host.
+  return (
+    normalizeHost(observed) === host || normalizeHost(observed) === httpsDefaultPortHost(request)
+  );
 }
 
 function retainHostClaim(response: ForgeResponse, host: string, claim: string): ForgeResponse {
@@ -173,6 +185,7 @@ function retainHostClaim(response: ForgeResponse, host: string, claim: string): 
         ...value,
         repo: {
           ...value.repo,
+          host: normalizeHost(value.repo.host) === host ? value.repo.host : host,
           hostClaim: host === claim ? undefined : { host: claim, transport: 'https' },
         },
       },
@@ -261,7 +274,7 @@ export function matchesForgeOperationResponse(
       const value = result.value;
       return (
         value.kind === 'none' ||
-        (normalizeHost(value.repo.host) === host &&
+        (matchesResolvedHost(request, value.repo.host, host) &&
           value.forge === metadata.forge &&
           value.plugin.name === metadata.name &&
           value.plugin.version === metadata.version)
