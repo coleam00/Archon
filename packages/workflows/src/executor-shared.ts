@@ -6,6 +6,7 @@ import { escapeRegExp } from '@archon/paths/regexp';
 import type { DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
+import { transitiveDepsLookup } from './depends-on';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -72,20 +73,12 @@ export function rootFailures(
   nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
   outputs: ReadonlyMap<string, NodeOutput>
 ): { nodeId: string; output: Extract<NodeOutput, { state: 'failed' }> }[] {
-  const byId = new Map(nodes.map(node => [node.id, node]));
-  const downstreamOfFailure = new Map<string, boolean>();
-  const hasFailedAncestor = (id: string): boolean => {
-    const known = downstreamOfFailure.get(id);
-    if (known !== undefined) return known;
-    const result = (byId.get(id)?.depends_on ?? []).some(
-      dep => byId.has(dep) && (outputs.get(dep)?.state === 'failed' || hasFailedAncestor(dep))
-    );
-    downstreamOfFailure.set(id, result);
-    return result;
-  };
+  const depsOf = transitiveDepsLookup(nodes);
+  const inScope = new Set(nodes.map(node => node.id));
+  const failed = (id: string): boolean => inScope.has(id) && outputs.get(id)?.state === 'failed';
   return nodes.flatMap(node => {
     const output = outputs.get(node.id);
-    return output?.state === 'failed' && !hasFailedAncestor(node.id)
+    return output?.state === 'failed' && ![...depsOf(node.id)].some(failed)
       ? [{ nodeId: node.id, output }]
       : [];
   });
