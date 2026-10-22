@@ -7,6 +7,8 @@ import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { DagNode, WorkflowRun } from '../schemas';
 import { executeDagWorkflow } from '../dag-executor';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
+import { NodeEventWriteError } from '../node-event-write';
 import type { IWorkflowStore } from '../store';
 import { readNodeRecordEvent, nodeInvocationKey } from '../node-record-reader';
 import { RATE_LIMIT_MAX_RETRIES } from '../executor-shared';
@@ -184,11 +186,100 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         );
         const usage = runUsageWrites(store).at(-1);
         expect(usage?.total_cost_usd).toBe(floor);
-        if (costs.some(cost => cost === undefined)) expect(usage?.total_cost_incomplete).toBe(true);
+        const incomplete = costs.some(cost => cost === undefined);
+        expect(usage?.total_cost_incomplete === true).toBe(incomplete);
+        const durable = await foldDagResumeSnapshot(persistedEvents(store), 'retry-rejected');
+        expect(durable.costUsd).toBe(floor);
+        expect(durable.costIncomplete === true).toBe(incomplete);
         expect(usage?.total_tokens_in).toBe(10 * costs.length);
         expect(usage?.total_tokens_out).toBe(2 * costs.length);
       }
     );
+  }
+
+  for (const rejection of ['next-start', 'next-completion', 'failure-settlement'] as const) {
+    it.each([
+      { label: 'priced', cost: 0.1 },
+      { label: 'unpriced', cost: undefined },
+    ])(`recovers durable retry usage after ${rejection} rejection ($label)`, async ({ cost }) => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls > 1) yield { type: 'agent_message_chunk', text: 'Recovered.' };
+        yield {
+          type: 'result',
+          sessionId: 'retry',
+          cost: calls === 1 ? cost : 0.2,
+          tokens: { input: 10, output: 2 },
+          ...(calls === 1
+            ? { isError: true, failure: { class: 'transient' as const, evidence: 'interrupted' } }
+            : {}),
+        };
+      });
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      const events: Array<Parameters<typeof foldDagResumeSnapshot>[0][number]> = [];
+      const error = new Error(`${rejection} unavailable`);
+      let rejected = false;
+      store.createWorkflowEvent.mockImplementation(async event => {
+        if (
+          !rejected &&
+          events.some(e => e.event_type === 'node_failed') &&
+          ((rejection === 'next-start' && event.event_type === 'node_started') ||
+            (rejection === 'next-completion' && event.event_type === 'node_completed') ||
+            (rejection === 'failure-settlement' && event.event_type === 'node_failed'))
+        ) {
+          rejected = true;
+          throw error;
+        }
+        events.push(event);
+      });
+      store.getDagResumeSnapshot.mockImplementation(() =>
+        foldDagResumeSnapshot(events, 'retry-event-rejected')
+      );
+      if (rejection === 'failure-settlement') {
+        platform.getStreamingMode.mockImplementation(() => {
+          if (calls === 1) throw new Error('preparation failed');
+          return 'batch';
+        });
+      }
+      let caught: unknown;
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('retry-event-rejected'),
+            workflow: {
+              name: 'retry-event-rejected',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Work.' },
+                  retry: { max_attempts: 2, delay_ms: 0 },
+                },
+              ],
+            },
+          })
+        );
+      } catch (failure) {
+        caught = failure;
+      }
+      expect(rejected).toBe(true);
+      expect(caught).toBeInstanceOf(NodeEventWriteError);
+      if (!(caught instanceof NodeEventWriteError)) throw caught;
+      expect(caught.cause).toBe(error);
+      const durable = await foldDagResumeSnapshot(events, 'retry-event-rejected');
+      expect(durable.costUsd).toBe(cost);
+      expect(durable.costIncomplete === true).toBe(cost === undefined);
+      const usage = runUsageWrites(store).at(-1);
+      expect(usage?.total_cost_usd).toBe(durable.costUsd);
+      expect(usage?.total_cost_incomplete === true).toBe(durable.costIncomplete === true);
+      expect(usage?.total_tokens_in).toBe(10);
+      expect(usage?.total_tokens_out).toBe(2);
+    });
   }
 
   it('node succeeds on retry after a transient error', async () => {

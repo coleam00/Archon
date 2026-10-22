@@ -132,6 +132,7 @@ export async function runStreamPass(
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
+    pc.ctx.currentExecutionProviderCalled = true;
     for await (const msg of withIdleTimeout(
       pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
       pc.idleTimeoutMs,

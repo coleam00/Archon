@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { NodeEventWriteError } from './node-event-write';
 import { hasIncompleteCostTotal, TOTAL_COST_INCOMPLETE } from './schemas/run-usage';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
@@ -460,9 +461,12 @@ export async function executeDagWorkflow(
     // execution error already in flight. A run-budget refusal also escapes the join; it
     // fails the run here instead of propagating. An unreadable source escapes it too; the
     // run is released below after persisting the settled usage and outcome.
-    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
-      // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
+    if (
+      error instanceof RunBudgetRefusedError ||
+      error instanceof RunSourceUnreadableError ||
+      error instanceof NodeEventWriteError
+    ) {
+      // These exits skip layer aggregation. Recover the usage that reached durable storage.
       await refreshRunUsage();
     }
     if (error instanceof RunSourceUnreadableError) {

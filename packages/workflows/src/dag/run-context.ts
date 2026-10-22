@@ -164,8 +164,9 @@ export interface RunDerived {
 export interface RunLayersContext extends RunInputs, RunDerived {
   /** One node dispatch, shared by its inner retry attempts. Never mutate the parent context. */
   nodeInvocation?: NodeInvocation;
-  /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
+  /** Attempt attribution for unexpected dispatch failures. */
   currentExecution?: NodeExecutionRecord;
+  currentExecutionProviderCalled?: boolean;
   /**
    * Ids of the nodes in this concurrent layer that have taken their
    * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
@@ -286,6 +287,7 @@ export function beginExecution(
     ...options,
   });
   ctx.currentExecution = execution;
+  ctx.currentExecutionProviderCalled = false;
   return execution;
 }
 

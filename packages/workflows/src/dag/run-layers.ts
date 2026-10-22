@@ -514,6 +514,9 @@ async function recordPreExecutionFailure(
   // binding, session source). After it, the executor itself threw something
   // it did not classify, such as a store read failing between iterations.
   const failureKind = ctx.currentExecution === undefined ? 'config' : 'unknown';
+  const providerNotCalled =
+    node.kind === 'agent' &&
+    (ctx.currentExecution === undefined || !ctx.currentExecutionProviderCalled);
   const failed = await recordNodeState(
     { store: ctx.deps.store, logDir: ctx.logDir },
     finishNodeExecution(
@@ -521,6 +524,7 @@ async function recordPreExecutionFailure(
       { status: 'failed', error: err.message, failureKind },
       {
         output: { text: '' },
+        providerNotCalled,
         diagnostics: isNodeContextResume(node.context)
           ? { sessionSourceNodeId: node.context.resume }
           : undefined,

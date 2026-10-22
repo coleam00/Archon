@@ -106,8 +106,8 @@ export async function dispatchAgentNode(
     ctx.deps.store,
     ctx.stepNamePrefix + node.id,
     getEffectiveNodeRetryConfig(node),
-    () =>
-      runBudgetedAttempt(ctx, node, async reserve => {
+    async () => {
+      const result = await runBudgetedAttempt(ctx, node, async reserve => {
         // Fresh per attempt: an attempt after a transient failure observes
         // artifacts published in the interval, and never reuses the
         // listing handed to AI-configuration substitution above.
@@ -131,7 +131,10 @@ export async function dispatchAgentNode(
           attemptTypedArtifactsFile,
           session.resumeIntent
         );
-      }),
+      });
+      ctx.currentExecution = undefined;
+      return result;
+    },
     { state: 'failed', output: '', error: 'Node did not execute' },
     iteration
   );
