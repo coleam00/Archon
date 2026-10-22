@@ -260,7 +260,8 @@ function stored(at: Install, number = SUBJECT.number): { revision: number; value
 interface FakePr {
   readonly state?: 'OPEN' | 'MERGED' | 'CLOSED';
   readonly headRefOid?: string;
-  readonly checks?: 'green' | 'red';
+  /** CI at the head; `unknown` is a forge unit state the gh rollup has no form for. */
+  readonly checks?: 'green' | 'red' | 'unknown';
   readonly threads?: number;
   /** The thread count the forge reports, when it is more than it returned. */
   readonly threadTotal?: number;
@@ -286,6 +287,10 @@ interface FakePr {
   readonly baseUnreadable?: boolean;
   /** Merge-queue operations the forge plugin's metadata leaves out. */
   readonly missingOps?: readonly string[];
+  /** The head `pr.merge-state` reports, when it answers about another commit than `pr.view`. */
+  readonly mergeStateHead?: string;
+  /** The revision `checks.state` reports, when it answers about another commit than `pr.view`. */
+  readonly checksRevision?: string;
 }
 
 /**
@@ -321,8 +326,8 @@ const forgeOp = (op, request) => {
     const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
     return out(true, { title: 'Fix the thing', body: '', pr: { schemaVersion: 1, repo: ref.repo, number: ref.number, url, head: 'feature', base: 'dev', is_draft: false, state: state(), head_repo: ref.repo, head_revision: forgePr.headRefOid, base_revision: null, maintainer_can_modify: null } });
   }
-  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.headRefOid, default_branch: 'dev', default_revision: ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
-  if (op === 'checks.state') return out(true, { ref, revision: forgePr.headRefOid, units: units(forgePr.checks) });
+  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
+  if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
   if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });
   if (op === 'workitem.comments') return out(true, { comments: comments.filter(row => row.issue === undefined).map(row => ({
     id: String(row.id), body: row.body, url: ${JSON.stringify(PR_URL)} + '#issuecomment-' + row.id,
@@ -1458,6 +1463,36 @@ describe('the merge queue on the forge source', () => {
     expect(forgeCalls(refused)).toEqual(['forge metadata']);
     expect(stored(at).value?.claim ?? null).toBeNull();
     expect(stored(at).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('the facts and the merge use exactly the operations the plugin must advertise', () => {
+    const at = install();
+    seed(at, item());
+    const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const facts = run(at, 'facts', {}, { source: 'forge' });
+    const gate = run(at, 'gate', {}, { source: 'forge', args });
+    expect([facts.code, gate.code]).toEqual([0, 0]);
+    const used = [...forgeCalls(facts), ...forgeCalls(gate)];
+    expect(new Set(used.filter(call => call.startsWith('forge ') && call !== 'forge metadata').map(call => call.split(' ')[1]))).toEqual(
+      new Set(MERGE_QUEUE_FORGE_OPERATIONS)
+    );
+  }, 60_000);
+
+  test.each([
+    ['merge state', { mergeStateHead: OLD }, 'moved while it was read'],
+    ['checks', { checksRevision: OLD }, 'are not on its head'],
+  ] as const)('the gate refuses %s read at another commit than the head, and merges nothing', (_, pr, reason) => {
+    const gated = run(install(), 'gate', {}, { source: 'forge', pr, args: ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'] });
+    expect(gated.code).not.toBe(0);
+    expect(gated.stderr).toContain(reason);
+    expect(merges(gated)).toEqual([]);
+  }, 60_000);
+
+  test('the gate counts a check the forge reports neither green nor pending as failing, and merges nothing', () => {
+    const gated = run(install(), 'gate', {}, { source: 'forge', pr: { checks: 'unknown' }, args: ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'] });
+    expect(gated.code).toBe(1);
+    expect(JSON.parse(gated.stdout).refusals).toEqual(['CI at its head is red (test)']);
+    expect(merges(gated)).toEqual([]);
   }, 60_000);
 
   test("a maintainer's own-PR opt-in is noted as not enrolled, and the existing work is still read", () => {

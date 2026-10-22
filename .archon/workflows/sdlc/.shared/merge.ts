@@ -211,6 +211,8 @@ export interface Verdict {
   readonly url: string | null;
 }
 
+const MERGEABLE = ['clean', 'conflict', 'unknown'] as const;
+
 export interface PrFacts {
   readonly pr: QualifiedPr;
   readonly url: string;
@@ -226,7 +228,7 @@ export interface PrFacts {
   readonly head: string;
   readonly head_revision: string;
   readonly merge_commit: string | null;
-  readonly mergeable: 'clean' | 'conflict' | 'unknown';
+  readonly mergeable: (typeof MERGEABLE)[number];
   readonly checks: Checks;
   readonly threads: { readonly unresolved: number; readonly urls: readonly string[] };
   readonly verdict: Verdict;
@@ -460,8 +462,6 @@ function readForgeBase(repo: QualifiedPr['repo']): BaseFacts {
   return { branch: value.branch, head: value.revision, checks: checksOfUnits(value.units) };
 }
 
-const MERGEABLE = ['clean', 'conflict', 'unknown'] as const;
-
 /** How far `head` is behind the default branch and whether it merges, read at that head. */
 function readForgeMergeState(ref: QualifiedPr, url: string, head: string) {
   const value = invokeForge('pr.merge-state', { ref });
@@ -579,8 +579,8 @@ export function gateRefusals(facts: PrFacts, head: string, base: { readonly head
 
 /**
  * Merge at exactly `head`; the forge refuses when the head has moved since it was read.
- * On `forge` a merge the plugin cannot verify throws its outcome; the caller's read-back
- * decides what merged.
+ * On `forge` a merge the plugin cannot verify throws its outcome, which fails the gate
+ * with nothing read back.
  */
 export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): void {
   if (forgeSource() === 'forge') {
