@@ -231,10 +231,12 @@ const BUILD_BRANCH_PREFIX = 'build/';
 
 /**
  * Whether a branch is one `buildBranch` names: the build queue owns pushes to it.
- * `buildBranch` joins only nonempty parts, so a hyphen is always followed by one.
+ * `buildBranch` joins nonempty parts of lowercase letters, digits and inner hyphens
+ * (the slug, and the start of the engine's lowercase run id), so anything else under
+ * the prefix is a branch a person made.
  */
 export function isBuildBranch(branch: string): boolean {
-  return new RegExp(`^${BUILD_BRANCH_PREFIX}\\d+(-.|$)`).test(branch);
+  return new RegExp(`^${BUILD_BRANCH_PREFIX}\\d+(-[a-z0-9]+)*$`).test(branch);
 }
 
 export interface BuildChange {

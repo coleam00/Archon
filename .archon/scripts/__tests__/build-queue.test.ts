@@ -15,6 +15,7 @@ import {
   type BuildRound,
   buildBranch,
   buildWaits,
+  isBuildBranch,
   countedRounds,
   itemPullRequest,
   ROUTE_DECISIONS,
@@ -126,6 +127,18 @@ describe('the build record', () => {
       'build/7-fix-the-build-queue-reuses-its-own-pr-a-abcdef12'
     );
     expect(buildBranch(7, '!!!', 'abcdef123456')).toBe('build/7-abcdef12');
+  });
+
+  test('the build-branch classifier accepts what buildBranch names and nothing a person could add beside it', () => {
+    const generated = [
+      buildBranch(7, 'Fix: the Build queue -- reuses its own PR!', 'abcdef123456'),
+      buildBranch(7, '!!!', 'abcdef12'),
+      buildBranch(7, 'x', 'run-1'),
+    ];
+    for (const branch of generated) expect(isBuildBranch(branch)).toBe(true);
+    for (const branch of ['build/docs', 'build/9-', 'build/50-fix/docs-abcdef12', 'build/50-fix.docs-abcdef12', 'build/50-Fix-abcdef12']) {
+      expect(isBuildBranch(branch)).toBe(false);
+    }
   });
 
   test("an item's recorded pull request URL from another repository is refused, not guessed around", () => {

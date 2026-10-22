@@ -475,15 +475,17 @@ describe('the merge queue scripts', () => {
       // Hand-opened branches under build/ that the build queue could not have created.
       { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/docs' },
       { number: 54, url: PR_URL.replace(/42$/, '54'), isDraft: false, headRefName: 'build/9-' },
+      { number: 55, url: PR_URL.replace(/42$/, '55'), isDraft: false, headRefName: 'build/50-fix/docs-abcdef12' },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true], [53, true], [54, true]]);
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true], [53, true], [54, true], [55, true]]);
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
     expect(stored(at, 51).value).toBeNull();
     expect(stored(at, 52).value).toBeNull();
     expect(stored(at, 53).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '53'));
     expect(stored(at, 54).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '54'));
+    expect(stored(at, 55).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '55'));
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
 
