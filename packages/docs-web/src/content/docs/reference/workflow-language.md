@@ -2295,6 +2295,34 @@ a fresh launch. Project child workflows still resolve from the live authoring di
 when spawned; installed packs remain captured. A transient refusal may also clear before
 resume.
 
+##### A completed fan-out node is not completed child work
+
+Under `all_done` the node completes when every child is terminal, not when every child
+succeeded. Once every slot settles, the node records what became of each one as
+`fan_out_outcome` on its `node_completed` or `node_failed` event: one slot per item, in item
+order, plus a tally that always agrees with the slots. Each slot is one of:
+
+| Outcome | Meaning |
+|---------|---------|
+| `completed` | the child run completed |
+| `failed` | a child run exists and failed |
+| `not_started` | no child run exists for this item; the slot's `error` is the refusal, its only record |
+| `cancelled_by_engine` | the engine cancelled the child: a fan-out cancel or a failed start-time precondition |
+| `cancelled_by_workflow` | the child's own workflow ended it: a `cancel:` node or a rejected approval gate |
+| `cancelled_out_of_band` | an operator, or a conversation reset, cancelled the child |
+| `cancelled_unattributed` | the child was cancelled before cancellation reasons were recorded, so who cancelled it cannot be told |
+
+Each slot is read from the child's durable run, so the same child gets the same outcome
+whatever `max_parallel` was and however many resumes it took. When a completed node has
+unfinished slots, the engine logs `workflow.fan_out_completed_with_unfinished_children` and
+sends one notice. The node and the run still complete. The all-refused failure above still
+applies, and its `node_failed` event carries the `not_started` slots.
+
+Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
+in the console. It is not a `$node.*` reference: a downstream node that decides what the
+results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
+
 ##### Why `all_done` is the default
 
 Fan-out children are independent jobs that happen to run together. One failing says nothing

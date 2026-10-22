@@ -2,6 +2,11 @@ import { formatDuration } from '@archon/paths/duration';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import {
+  describeUnfinishedFanOut,
+  fanOutSlotOutcomeLabel,
+  type FanOutOutcome,
+} from '@archon/workflows/schemas/fan-out-outcome';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
 import {
   NODE_STATE_EVENT_TYPES,
@@ -29,6 +34,40 @@ export interface NodeSummary {
   execution?: NodeExecutionMetadata;
   /** Every provider session id the node's attempts and loop iterations recorded, in order. */
   sessionIds?: string[];
+  /** A `workflow:` fan-out node's per-slot record. */
+  fanOutOutcome?: FanOutOutcome;
+}
+
+/** Non-completed slots shown under a fan-out node; the tally still counts every slot. */
+const FAN_OUT_SLOT_DISPLAY_LIMIT = 10;
+
+/**
+ * Lines describing a fan-out node's unfinished child work, or none when every slot
+ * completed. The "more" count comes from the stored tally, never from the shown list.
+ */
+export function formatFanOutOutcome(outcome: FanOutOutcome): string[] {
+  const { tally } = outcome;
+  const unfinished = tally.total - tally.completed;
+  if (unfinished === 0) return [];
+  const shown = outcome.slots
+    .filter(slot => slot.outcome !== 'completed')
+    .slice(0, FAN_OUT_SLOT_DISPLAY_LIMIT)
+    .map(slot => {
+      const reason =
+        'cancel_reason' in slot && slot.cancel_reason ? ` (${slot.cancel_reason})` : '';
+      const parts = [
+        `item ${String(slot.index)}: ${fanOutSlotOutcomeLabel(slot.outcome)}${reason}`,
+        ...('child_run_id' in slot ? [`run ${slot.child_run_id}`] : []),
+        ...('error' in slot && slot.error !== undefined ? [slot.error] : []),
+      ];
+      return `  ${parts.join(' — ')}`;
+    });
+  const more = unfinished - shown.length;
+  return [
+    `Fan-out work: ${describeUnfinishedFanOut(tally)}`,
+    ...shown,
+    ...(more > 0 ? [`  … and ${String(more)} more (see --json)`] : []),
+  ];
 }
 
 export function formatSkipCause(cause: SkipCause): string {
@@ -135,6 +174,9 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           durationMs:
             execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
           outputPreview: outputPreviewOf(record.data.node_output),
+          ...(record.data.fan_out_outcome === undefined
+            ? {}
+            : { fanOutOutcome: record.data.fan_out_outcome }),
           ...(execution === undefined ? {} : { execution }),
         });
         break;
@@ -152,6 +194,9 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           ...(record.data.blocked_on_child_run_id === undefined
             ? {}
             : { blockedOnChildRunId: record.data.blocked_on_child_run_id }),
+          ...(record.data.fan_out_outcome === undefined
+            ? {}
+            : { fanOutOutcome: record.data.fan_out_outcome }),
           ...(execution === undefined ? {} : { execution }),
         });
         break;
@@ -299,6 +344,9 @@ export function printVerboseNodes(events: WorkflowEventRow[]): void {
     }
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
+    }
+    if (node.fanOutOutcome !== undefined) {
+      for (const line of formatFanOutOutcome(node.fanOutOutcome)) console.log(`        ${line}`);
     }
     if (node.sessionIds !== undefined) {
       const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
