@@ -61,11 +61,12 @@ export function providerLimitResumeAt(
 }
 
 /**
- * The failed nodes of one scope whose failure is their own: no node they transitively depend
- * on failed, whatever state lies between. A node downstream of a failure ran only because its
- * trigger rule let it run on that failure, with inputs the failure poisoned; continuation
- * runs it again with its upstream, so it cannot hold a run in a provider-limit wait. Once the
- * upstream succeeds, a failure of its own fails the run.
+ * The failed nodes of one scope whose failure is their own. A failed node is excused only when
+ * a node it transitively depends on failed and none of its own dependencies succeeded: its
+ * trigger rule (`all_done`) ran it on nothing but the failure's poisoned inputs, so
+ * continuation runs it again with its upstream and it cannot hold a run in a provider-limit
+ * wait. A node that also had a successful dependency (`one_success`, or `all_done` beside a
+ * healthy branch) could have failed for its own reason, so it still counts.
  */
 export function ownFailures(
   nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
@@ -82,9 +83,12 @@ export function ownFailures(
     downstreamOfFailure.set(id, result);
     return result;
   };
+  const ranOnlyOnFailure = (node: Pick<DagNode, 'id' | 'depends_on'>): boolean =>
+    hasFailedAncestor(node.id) &&
+    !(node.depends_on ?? []).some(dep => outputs.get(dep)?.state === 'completed');
   return nodes.flatMap(node => {
     const output = outputs.get(node.id);
-    return output?.state === 'failed' && !hasFailedAncestor(node.id)
+    return output?.state === 'failed' && !ranOnlyOnFailure(node)
       ? [{ nodeId: node.id, output }]
       : [];
   });
