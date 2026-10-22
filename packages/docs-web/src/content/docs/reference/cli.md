@@ -266,7 +266,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | Flag | Effect |
 |------|--------|
 | `--workflow-source <path>` | Read the workflow, its commands, and its scripts from this directory instead of `--cwd`. Lets an **uncommitted** workflow in one checkout run against a different checkout, repository, or folder project, with no commit, push, or merge. Fresh runs only; rejected with `--resume`, because a resumed run executes the source it already captured. See [Running a workflow from another checkout](#running-a-workflow-from-another-checkout). Repo config is not part of the source: the run reads `.archon/config.yaml` from the launch checkout (`--cwd`); see [Where a run reads `.archon/config.yaml`](/reference/configuration/#where-a-run-reads-archonconfigyaml). |
-| `--branch`, `-b <name>` | Branch name for the worktree; reuses an existing worktree for it |
+| `--branch`, `-b <name>` | Branch name for the worktree; reuses an existing worktree for it. A worktree created for a named branch is never removed when the run ends; `isolation cleanup --merged` removes it |
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. Unlike `--base`, it does not change the PR target. |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, resume/adoption/supersedes, and dry runs. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
@@ -675,12 +675,16 @@ An event-query failure exits non-zero with `error: "workflow_events_unavailable"
 JSON; it does not masquerade as a missing historical record.
 
 When the run holds proof that it created its worktree, the record has
-`worktree_disposition`. `{ "disposition": "release" }` means the completed run's checkout
-was clean, fully on a remote and unpublished, so the engine removes it after the
-completion write, keeping the branch. The record is written before the removal, so a
-removal that is refused because work appeared in the meantime, or that fails, leaves the
-checkout and is logged. Otherwise it is
-`{ "disposition": "retained", "reason": ... }` with an optional `detail`:
+`worktree_disposition`; a completed run has it only when that worktree is on the run's own
+generated branch (launched without `--branch`). `{ "disposition": "release" }` means the
+completed run's checkout was clean and every commit on its HEAD and branch was on a
+remote, whether or not the branch was published, so the engine removes it after the
+completion write, keeping the local and remote branch. The record is written before the
+removal, so a removal that is refused because work appeared in the meantime, or that
+fails, leaves the checkout and the run's output says so. Otherwise it is
+`{ "disposition": "retained", "reason": ... }` with an optional `detail`. A completed
+run whose checkout is kept for uncommitted changes, unpushed commits, another run or a
+failed check also prints a warning naming the path:
 
 | Reason | Meaning |
 |---|---|
@@ -690,7 +694,7 @@ checkout and is logged. Otherwise it is
 | `in_use` | Another claimable run uses the checkout; `detail` names it |
 | `uncommitted_changes` | The checkout has uncommitted changes |
 | `unpushed_commits` | A commit on the HEAD or branch is on no remote; `detail` gives the count |
-| `published_branch` | The configured remote has the branch; after its PR merges, `isolation cleanup --merged` can remove the worktree and local branch, retaining the remote branch |
+| `published_branch` | Written by earlier versions: the configured remote had the branch |
 | `check_failed` | The check could not run; `detail` gives the error |
 
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
@@ -1576,13 +1580,19 @@ any other as `<n> unpushed commit(s); remove it explicitly with archon complete 
 The scheduled cleanup keeps an environment whose checkout is missing the same way while
 the branch Archon created for it holds such a commit.
 
-A completed run removes the worktree it created when it completes, if the checkout is
-clean, every commit on its HEAD and branch is on a remote, and the configured remote
-does not advertise the branch. The removal keeps the branch, so the run can still be
-adopted. A branch that was published waits for `--merged`, which removes the local
-branch and retains the remote branch with a warning. When the remote cannot be read, the worktree stays and the record says `check_failed`. The
-run's `terminal_record.worktree_disposition` says what happened and why (see
-[`workflow get`](#workflow-get)).
+A completed run removes the worktree it created on its own generated branch when it
+completes, if the checkout is clean and every commit on its HEAD and branch is on a
+remote. A published branch does not keep it. The removal keeps the local and remote
+branch, so the run can still be adopted. Otherwise the worktree stays, the run prints a
+warning naming the path and what removing it would lose, and the run's
+`terminal_record.worktree_disposition` records the reason (see
+[`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
+when its run ends: `--merged` removes it after its pull request merges (or closes, with
+`--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a
+pull request rather than to one run; the merged and age-based cleanups remove it. A
+workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
+and completion removes it the same way. A failed run keeps its worktree so it
+can resume.
 
 #### Recovering remote branch cleanup
 

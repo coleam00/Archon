@@ -100,7 +100,10 @@ export const terminalRecordSchema = z.object({
     }),
   ]),
   artifacts: artifactManifestSchema,
-  /** Present only when the run holds proof that it created its worktree. */
+  /**
+   * Present only when the run holds proof that it created its worktree; on a completed
+   * run, only when that worktree is on the run's own generated branch.
+   */
   worktree_disposition: worktreeDispositionSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;
