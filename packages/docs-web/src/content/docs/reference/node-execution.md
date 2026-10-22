@@ -79,7 +79,7 @@ The reader reconstructs lifecycle from the event type and the corresponding erro
 
 `fan_out_instances` is a separate durable event: its `data.instances` restores the first valid instance snapshot for the fan-out wrapper. It is outside the node-record data schema and the tables below.
 
-Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. The optional additive `child_usage` key records cumulative usage by child run ID. Older rows remain readable; resume recovers usage attribution from an unambiguous durable child ID and reports a read error when historical spend cannot be attributed safely. See the [database reference](/reference/database/) for persistence context.
+Persisted keys and event/envelope identities are compatibility contracts. Older rows must remain readable, and older binaries may open the same database. The optional additive `child_usage` key records cumulative usage by child run ID. Older rows remain readable; resume needs no child attribution for reported zero usage, recovers nonzero or unknown usage from an unambiguous durable child ID, and reports a read error when that usage cannot be attributed safely. See the [database reference](/reference/database/) for persistence context.
 
 ## Schema field tables
 

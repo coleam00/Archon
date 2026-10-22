@@ -453,7 +453,12 @@ function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
   }
   if (data.type !== 'workflow') return;
   const usage = readUsage(fold, path, record.rawUsage);
-  if (usage.costUsd === undefined && usage.tokens === undefined && !usage.tokensUnknown) return;
+  if (
+    (usage.costUsd ?? 0) === 0 &&
+    !usage.tokensUnknown &&
+    Object.values(usage.tokens ?? {}).every(value => value === undefined || value === 0)
+  )
+    return;
   const ids = new Set(
     data.fan_out_outcome?.slots.flatMap(slot => ('child_run_id' in slot ? [slot.child_run_id] : []))
   );

@@ -137,3 +137,75 @@ it('keeps malformed legacy token totals unknown in the retained child baseline',
   expect(incremental.tokensUnknown).toBe(true);
   expect(incremental.tokens).toBeUndefined();
 });
+
+const legacyIdentities = [
+  {},
+  { child_run_id: 'a' },
+  {
+    fan_out_outcome: fanOutOutcome([
+      { index: 0, outcome: 'completed', child_run_id: 'a' },
+      { index: 1, outcome: 'completed', child_run_id: 'b' },
+    ]),
+  },
+];
+
+it.each(
+  legacyIdentities.flatMap(attribution =>
+    ['node_completed', 'node_failed'].flatMap(eventType =>
+      [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }].map(
+        tokens => ({ attribution, eventType, tokens })
+      )
+    )
+  )
+)(
+  'folds legacy zero usage without a child baseline: %j',
+  async ({ attribution, eventType, tokens }) => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: eventType,
+          data: { type: 'workflow', cost_usd: 0, tokens, ...attribution },
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.costUsd).toBe(0);
+    expect(snapshot.tokensUnknown).toBe(false);
+    expect(snapshot.tokens).toEqual(
+      tokens === undefined ? undefined : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    );
+    expect(snapshot.reportedChildUsage?.size).toBe(0);
+  }
+);
+
+it.each(
+  [legacyIdentities[0], legacyIdentities[2]].flatMap(attribution =>
+    ['node_completed', 'node_failed'].flatMap(eventType =>
+      [
+        { cost_usd: 0.01 },
+        { tokens: { input: 1 } },
+        ...['input', 'output', 'cacheRead', 'cacheWrite'].map(axis => ({
+          tokens: { input: 0, output: 0, [axis]: 1 },
+        })),
+        { tokens: { input: 0, output: 0, cachePartial: true } },
+      ].map(usage => ({ attribution, eventType, usage }))
+    )
+  )
+)(
+  'requires child identity for nonzero or unknown legacy usage: %j',
+  async ({ attribution, eventType, usage }) => {
+    await expect(
+      foldDagResumeSnapshot(
+        [
+          {
+            step_name: 'sub',
+            event_type: eventType,
+            data: { type: 'workflow', cost_usd: 0, ...usage, ...attribution },
+          },
+        ],
+        'parent'
+      )
+    ).rejects.toThrow('Cannot attribute historical child usage');
+  }
+);
