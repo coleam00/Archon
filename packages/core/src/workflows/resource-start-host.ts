@@ -299,7 +299,10 @@ export interface ResourceStartHost extends WorkflowHost {
   startAdmitted: (requestId: string) => Promise<void>;
 }
 
-/** A preparation, dispatch, or resource drain failure. Unknown receipt origins omit `receiptId`. */
+/**
+ * A preparation, dispatch, resource drain, or damaged receipt failure. Unknown or untrusted
+ * receipt origins omit `receiptId`.
+ */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
   error: unknown;
@@ -328,7 +331,7 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 /**
  * One host pass: prepare this host's pending receipt bindings, then admit its queued
  * requests while their slots have capacity. Every admitted request is handed to the
- * host. Safe to run concurrently with other hosts and processes: preparation and
+ * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
  * admission are claimed atomically by the store.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
@@ -342,6 +345,10 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   };
 
   for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
+    if ('document' in binding) {
+      failures.push({ error: binding.error });
+      continue;
+    }
     if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
