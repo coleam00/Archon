@@ -35,6 +35,7 @@ import { loopBodyScope, type LoopBodyScope } from '../../loop-scope';
 import { shouldContinueStreamingForStatus } from '../../run-control';
 import {
   findLoopGroupTerminalSuspendNode,
+  ownsStagedGate,
   ownsTerminalWait,
   logGroupIterationEventError,
   loopGroupIterationOutput,
@@ -400,10 +401,8 @@ async function suspendedBody(
     loopIterations: i,
   };
   if (staged) {
-    const terminal = body.terminalSuspendNode;
-    return terminal?.kind === 'wait' && (await ownsTerminalWait(run, i, terminal.id))
-      ? { ...running, suspensionPoint: 'wait' }
-      : running;
+    const suspensionPoint = await stagedSuspensionPoint(run, i, body.terminalSuspendNode);
+    return { ...running, ...(suspensionPoint !== undefined ? { suspensionPoint } : {}) };
   }
   if (postBodyStatus !== 'paused') return undefined;
   const { terminalSuspendNode, scopedNodeOutputs } = body;
@@ -426,6 +425,17 @@ async function suspendedBody(
     return running;
   }
   return undefined;
+}
+
+/** The suspension this group owns when its terminal gate or wait is the staged container pause. */
+async function stagedSuspensionPoint(
+  run: LoopGroupRun,
+  i: number,
+  terminal: GateNode | WaitNode | undefined
+): Promise<'approval' | 'wait' | undefined> {
+  if (terminal === undefined) return undefined;
+  if (isGateNode(terminal)) return ownsStagedGate(run, i, terminal.id) ? 'approval' : undefined;
+  return (await ownsTerminalWait(run, i, terminal.id)) ? 'wait' : undefined;
 }
 
 async function ownedSuspensionPoint(

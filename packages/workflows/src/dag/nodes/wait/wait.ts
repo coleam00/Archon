@@ -307,7 +307,8 @@ export async function executeWaitNode(
               );
       },
       selected => {
-        if (selected && ctx.containerPause !== undefined) ctx.containerPause.selectedWait = context;
+        if (selected && ctx.containerPause !== undefined)
+          ctx.containerPause.selected = { kind: 'wait', context };
         return execution === undefined
           ? { state: 'running', output: '' }
           : serializeNodeOutput(execution);

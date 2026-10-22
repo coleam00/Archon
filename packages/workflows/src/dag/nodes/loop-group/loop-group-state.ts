@@ -146,12 +146,25 @@ export async function ownsTerminalWait(
   const wait =
     boundary === undefined
       ? (await run.ctx.deps.store.getWorkflowRun(run.ctx.workflowRun.id))?.metadata.wait
-      : boundary.selectedWait;
+      : boundary.selected?.kind === 'wait'
+        ? boundary.selected.context
+        : undefined;
   return (
     isWorkflowWaitContext(wait) &&
     wait.owner === 'loop_group' &&
     wait.nodeId === run.node.id &&
     wait.bodyWaitId === bodyWaitId &&
     wait.iteration === iteration
+  );
+}
+
+/** Whether the staged container pause is this group's terminal body gate in `iteration`. */
+export function ownsStagedGate(run: LoopGroupRun, iteration: number, bodyGateId: string): boolean {
+  const selected = run.ctx.containerPause?.selected;
+  return (
+    selected?.kind === 'gate' &&
+    selected.context.nodeId === run.node.id &&
+    selected.context.bodyGateId === bodyGateId &&
+    selected.context.iteration === iteration
   );
 }

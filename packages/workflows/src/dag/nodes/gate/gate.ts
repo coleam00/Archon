@@ -250,6 +250,10 @@ export async function executeApprovalNode(
 
       return { ...serializeNodeOutput(suspended), ...reworkUsage };
     },
-    () => ({ ...serializeNodeOutput(execution), ...reworkUsage })
+    selected => {
+      if (selected && ctx.containerPause !== undefined)
+        ctx.containerPause.selected = { kind: 'gate', context: approvalContext };
+      return { ...serializeNodeOutput(execution), ...reworkUsage };
+    }
   );
 }

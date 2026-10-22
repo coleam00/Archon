@@ -80,7 +80,8 @@ function sameContainerPause(
 /** Shared by one DAG pass and its nested bodies; never persisted. */
 export interface ContainerPauseBoundary {
   publish?: () => Promise<NodeExecutionResult>;
-  selectedWait?: WorkflowWaitContext;
+  /** The staged pause this execution will publish, so a loop group can tell it owns it. */
+  selected?: ContainerPauseReceipt['pause'];
   receipt?: ContainerPauseReceipt;
 }
 

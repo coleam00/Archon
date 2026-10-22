@@ -630,6 +630,37 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     }
   );
 
+  it('records only the selected loop-group terminal gate as suspended', async () => {
+    const { options, store, run } = await realPauseFixture(
+      ['selected', 'deferred'].map(id =>
+        dagNodeSchema.parse({
+          id,
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'review', approval: { message: 'Review' } }],
+          },
+        })
+      )
+    );
+    await executeDagWorkflow(options);
+    const approval = (await store.getWorkflowRun(run.id))?.metadata.approval;
+    if (!isApprovalContext(approval)) throw new Error('Missing approval context');
+    expect(approval).toMatchObject({ bodyGateId: 'review', iteration: 1 });
+    const selected = approval.nodeId;
+    const events = await store.listWorkflowEvents(run.id);
+    expect(
+      events
+        .filter(event => event.event_type === 'node_suspended')
+        .map(event => event.step_name)
+        .sort()
+    ).toEqual([selected, `${selected}.review`]);
+    expect(
+      events.find(event => event.step_name === selected && event.event_type === 'node_suspended')
+        ?.data
+    ).toMatchObject({ suspend_point: 'approval' });
+  });
+
   it('keeps deferred loop spend durable and selected loop spend on its gate', async () => {
     const query = async function* () {
       yield { type: 'agent_message_chunk' as const, text: 'COMPLETE' };
