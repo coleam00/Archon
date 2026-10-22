@@ -806,7 +806,7 @@ test('dispatch resolves HTTPS default ports through exact or bare host claims', 
         op: 'repo.labels.list',
         repo: JSON.parse(JSON.stringify(result.response.result.value.repo)),
       },
-      { discovery: { ...discovery, byHost }, env: {} }
+      { discovery: { ...discovery, byHost }, env: { GH_TOKEN: '' } }
     );
     expect(qualified.plugin).toEqual({ name: 'github', version: '1' });
     expect(qualified.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
