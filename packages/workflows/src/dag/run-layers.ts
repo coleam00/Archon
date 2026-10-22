@@ -567,9 +567,11 @@ async function aggregateLayerResults(
         if (Number.isFinite(output.costUsd)) {
           ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
         } else {
+          ctx.totalCostIncomplete = true;
           getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
         }
       }
+      ctx.totalCostIncomplete ||= output.costIncomplete === true;
       ctx.totalTokensUnknown ||= output.tokensUnknown === true;
       if (ctx.totalTokensUnknown) {
         ctx.totalTokens = undefined;

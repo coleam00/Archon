@@ -304,6 +304,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     lastSequentialSession: group.fresh_context || i === 1 ? undefined : state.lastSequentialSession,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
+    totalCostIncomplete: false,
     totalTokens: undefined,
     totalTokensUnknown: false,
     stepNamePrefix: run.bodyStepNamePrefix,
@@ -327,6 +328,7 @@ function addIterationUsage(run: LoopGroupRun, iterCtx: RunLayersContext, i: numb
   if (iterCtx.totalCostUsd !== undefined) {
     usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
   }
+  usage.costIncomplete ||= iterCtx.totalCostIncomplete;
   usage.tokensUnknown ||= iterCtx.totalTokensUnknown;
   if (usage.tokensUnknown) {
     usage.tokens = undefined;

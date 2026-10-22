@@ -145,6 +145,7 @@ export interface ExecutionObservations {
   costUsd?: number;
   /** Some provider call in the attempt reported no cost, so `costUsd` is a floor. */
   costPartial?: boolean;
+  costIncomplete?: boolean;
   stopReason?: string;
   numTurns?: number;
   resolvedModel?: string;
@@ -216,7 +217,8 @@ export function finishNodeExecution(
               ),
           costUsd: withCostPartial(
             observed(result.costUsd, start.spend.costUsd, Number.isFinite),
-            result.costPartial === true
+            result.costPartial === true,
+            result.costIncomplete === true
           ),
           stopReason: observed(result.stopReason, start.spend.stopReason),
           numTurns: observed(result.numTurns, start.spend.numTurns, Number.isFinite),
@@ -231,8 +233,21 @@ const NOT_APPLICABLE = { source: 'unavailable', reason: 'not_applicable' } as co
 
 type CostMeasurement = NodeExecutionRecord['spend']['costUsd'];
 
-function withCostPartial(cost: CostMeasurement, partial: boolean): CostMeasurement {
-  return partial && cost.source === 'provider' ? { ...cost, partial: true } : cost;
+export function isCostIncomplete(cost: CostMeasurement): boolean {
+  return cost.source === 'provider'
+    ? cost.partial === true || !Number.isFinite(cost.value)
+    : cost.reason !== 'not_applicable';
+}
+
+function withCostPartial(
+  cost: CostMeasurement,
+  partial: boolean,
+  incomplete = false
+): CostMeasurement {
+  if (incomplete && cost.source === 'unavailable') {
+    return { source: 'unavailable', reason: 'incomplete' };
+  }
+  return (partial || incomplete) && cost.source === 'provider' ? { ...cost, partial: true } : cost;
 }
 
 /** Excludes output bodies and diagnostics from the shared public execution facts. */

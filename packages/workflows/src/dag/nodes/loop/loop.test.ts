@@ -17,6 +17,7 @@ import {
   mockLogFn,
   mockLogger,
   createMockStore,
+  runUsageWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -26,6 +27,7 @@ import {
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
+import { NodeFailure } from '../../ai-turn';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { providerEventEnvelopeSchema } from '../../../schemas/provider-event';
 import type { DagNode } from '../../../schemas';
@@ -445,6 +447,10 @@ describe('loop node execution', () => {
       );
 
       expect(callCount).toBe(1);
+      expect(runUsageWrites(store).at(-1)).toEqual({ total_cost_incomplete: true });
+      expect(
+        persistedEvents(store).find(e => e.event_type === 'node_failed')?.data?.spend
+      ).toMatchObject({ costUsd: { source: 'unavailable', reason: 'incomplete' } });
       expect(
         persistedEvents(store).filter(event => event.event_type === 'node_retry_scheduled')
       ).toHaveLength(0);
@@ -452,6 +458,49 @@ describe('loop node execution', () => {
     } finally {
       globalThis.setTimeout = realSetTimeout;
     }
+  });
+
+  it('keeps uncertainty from a no-result attempt after a priced retry', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) throw new NodeFailure('transient', 'Provider interrupted before result');
+      yield { type: 'agent_message_chunk', text: '<promise>COMPLETE</promise>' };
+      yield { type: 'result', sessionId: 's', cost: 0.2 };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('no-result-retry'),
+        workflow: {
+          name: 'retry',
+          nodes: [
+            {
+              id: 'work',
+              kind: 'loop',
+              retry: { max_attempts: 2, delay_ms: 0 },
+              loop: {
+                prompt: 'Work.',
+                until: 'COMPLETE',
+                max_iterations: 1,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+      })
+    );
+    expect(calls).toBe(2);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.2,
+      total_cost_incomplete: true,
+    });
+    expect(
+      persistedEvents(store).find(e => e.event_type === 'node_completed')?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'provider', value: 0.2, partial: true } });
   });
 
   it('records a failed iteration’s typed failure on the loop node, unchanged', async () => {
@@ -928,6 +977,63 @@ describe('loop node execution', () => {
     expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.4);
   });
 
+  it.each([
+    [undefined, 0.2],
+    [0.2, undefined],
+    [0, 0.2],
+    [0.1, 0.2],
+    [undefined, undefined],
+  ])('retains cost evidence across iterations (%j then %j)', async (first, second) => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield {
+        type: 'agent_message_chunk',
+        text: calls === 2 ? '<promise>COMPLETE</promise>' : 'Continue.',
+      };
+      yield { type: 'result', sessionId: 's', cost: calls === 1 ? first : second };
+    });
+    const store = createMockStore();
+    const run = makeWorkflowRun('iteration-cost');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: run,
+        workflow: {
+          name: 'cost',
+          nodes: [
+            {
+              id: 'work',
+              kind: 'loop',
+              loop: {
+                prompt: 'Work.',
+                until: 'COMPLETE',
+                max_iterations: 2,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+      })
+    );
+    expect(calls).toBe(2);
+    const incomplete = first === undefined || second === undefined;
+    const cost =
+      first === undefined && second === undefined ? undefined : (first ?? 0) + (second ?? 0);
+    const event = persistedEvents(store).find(e => e.event_type === 'node_completed');
+    expect(event?.data?.cost_usd).toBe(cost);
+    expect(event?.data?.spend).toMatchObject({
+      costUsd:
+        cost === undefined
+          ? { source: 'unavailable', reason: 'incomplete' }
+          : { source: 'provider', value: cost, ...(incomplete ? { partial: true } : {}) },
+    });
+    const usage = runUsageWrites(store).at(-1);
+    expect(usage?.total_cost_usd).toBe(cost);
+    expect(usage?.total_cost_incomplete).toBe(incomplete ? true : undefined);
+  });
+
   it('keeps a finite loop cost when a later result in the same iteration is non-finite', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield {
@@ -975,6 +1081,10 @@ describe('loop node execution', () => {
     );
     expect(completedEvent).toBeDefined();
     expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.1);
+    expect(
+      persistedEvents(store).find(e => e.event_type === 'node_completed')?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'provider', value: 0.1, partial: true } });
+    expect(runUsageWrites(store).at(-1)?.total_cost_incomplete).toBe(true);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'loop_node.usage_cost_non_finite_ignored'

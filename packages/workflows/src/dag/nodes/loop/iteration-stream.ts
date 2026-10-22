@@ -101,6 +101,9 @@ interface AttemptUsage {
   tokens: TokenUsage | undefined;
   numTurns: number | undefined;
   folded: boolean;
+  providerStarted: boolean;
+  sawResult: boolean;
+  costIncomplete: boolean;
 }
 
 type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
@@ -289,6 +292,9 @@ async function streamIterationAttempt(
     tokens: undefined,
     numTurns: undefined,
     folded: false,
+    providerStarted: false,
+    sawResult: false,
+    costIncomplete: false,
   };
   const watchdogResets = createWatchdogResetRecorder(
     ctx.logDir,
@@ -332,6 +338,7 @@ async function streamIterationAttempt(
 function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: string): void {
   if (usage.folded) return;
   usage.folded = true;
+  state.costIncomplete ||= usage.costIncomplete || (usage.providerStarted && !usage.sawResult);
   if (usage.cost !== undefined) {
     state.costUsd = (state.costUsd ?? 0) + usage.cost;
   }
@@ -435,6 +442,7 @@ async function consumeIterationStream(
     scope.position.resumeSessionId,
     false
   );
+  scope.usage.providerStarted = true;
   const generator = run.aiClient.sendQuery(finalPrompt, ctx.cwd, pass.resumeSessionId, {
     ...run.resolvedOptions,
     env: run.iterationEnv,
@@ -623,6 +631,8 @@ function addResultUsage(
   msg: ResultChunk
 ): void {
   const nodeId = run.node.id;
+  usage.sawResult = true;
+  usage.costIncomplete ||= msg.cost === undefined || !Number.isFinite(msg.cost);
   if (msg.cost !== undefined) {
     if (Number.isFinite(msg.cost)) {
       usage.cost = (usage.cost ?? 0) + msg.cost;

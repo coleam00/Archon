@@ -29,6 +29,7 @@ import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
+  type NodeExecutionResult,
 } from './node-record-serialization';
 import type {
   NodeExecutionMetadata,
@@ -62,7 +63,6 @@ import type {
   WorkflowNodeSession,
   WorkflowRunNodeSession,
 } from './schemas';
-import type { TokenUsage } from '@archon/provider-contract';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
 
 export type { WorkflowNodeSession, WorkflowRunNodeSession } from './schemas';
@@ -98,7 +98,8 @@ export interface PriorFailedNode {
   failureKind?: NodeFailureKind;
 }
 
-export interface DagResumeSnapshot {
+export interface DagResumeSnapshot
+  extends Pick<NodeExecutionResult, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costIncomplete'> {
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
@@ -108,10 +109,6 @@ export interface DagResumeSnapshot {
   fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
   /** Node/instance starts with no later terminal event, in lifecycle order. */
   unresolvedNodeStarts: Set<string>;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  /** Cumulative reported USD cost from completed/failed attempts and abandoned deferred segments. */
-  costUsd?: number;
   /**
    * Run-budget consumption rebuilt from work-unit rows and `agent` attempt rows. Kept apart
    * from `costUsd`, which is telemetry and cannot tell unknown spend from none.

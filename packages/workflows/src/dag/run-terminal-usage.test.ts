@@ -73,6 +73,45 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     await removeTempTree(testDir);
   });
 
+  it('keeps a durable incompleteness fact through priced work and a durable unwind refresh', async () => {
+    for (const unwind of [false, true]) {
+      const store = createMockStore();
+      const run = makeWorkflowRun('sticky-cost', { metadata: { total_cost_incomplete: true } });
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Priced.' };
+        yield { type: 'result', sessionId: 's', cost: 0.2 };
+      });
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: run,
+          workflow: {
+            name: 'sticky',
+            ...(unwind ? { budget: { max_spend_usd: 0.1 } } : {}),
+            nodes: [
+              { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+              {
+                id: 'after',
+                kind: 'agent',
+                depends_on: ['work'],
+                source: { kind: 'inline', prompt: 'After.' },
+              },
+            ],
+          },
+        })
+      );
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: unwind ? 0.2 : 0.4,
+        total_cost_incomplete: true,
+      });
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(unwind ? 1 : 0);
+    }
+  });
+
   it('records what a FAILED run burned before it died', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'partial output before failure' };
@@ -796,7 +835,12 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     // The healthy node's spend survives; only the broken node's contribution is dropped.
     // Tokens are unaffected — both nodes reported finite ones.
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.05, total_tokens_in: 14, total_tokens_out: 3 },
+      {
+        total_cost_usd: 0.05,
+        total_cost_incomplete: true,
+        total_tokens_in: 14,
+        total_tokens_out: 3,
+      },
     ]);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(

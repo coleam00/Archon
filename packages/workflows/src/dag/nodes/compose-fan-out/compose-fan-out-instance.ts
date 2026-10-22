@@ -4,6 +4,7 @@ import {
   startNodeExecution,
   finishNodeExecution,
   newNodeInvocation,
+  isCostIncomplete,
 } from '../../../node-execution';
 import {
   serializeNodeEmitter,
@@ -38,6 +39,7 @@ export interface ComposeInstanceOutcome {
   /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
   providerFailure?: ProviderFailure;
   costUsd?: number;
+  costIncomplete?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
 }
@@ -70,6 +72,7 @@ function threadedOutcome(prior: PersistedNodeOutput): ComposeInstanceOutcome {
     ...(spend?.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete'
       ? { tokensUnknown: true }
       : {}),
+    ...(spend !== undefined && isCostIncomplete(spend.costUsd) ? { costIncomplete: true } : {}),
     status: 'completed',
     output: prior.output,
     ...(prior.structuredOutput !== undefined ? { structuredOutput: prior.structuredOutput } : {}),
@@ -204,6 +207,7 @@ function instanceRunContext(
     lastSequentialSession: undefined,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
+    totalCostIncomplete: false,
     totalTokens: undefined,
     totalTokensUnknown: false,
     stepNamePrefix: instance.stepNamePrefix,
@@ -253,6 +257,7 @@ async function releaseSourceUnreadableInstance(
       { status: 'failed', error: error.message, failureKind: 'child_failed' },
       {
         costUsd: usage.costUsd,
+        costIncomplete: usage.costIncomplete,
         tokens: usage.tokens,
         tokensUnknown: usage.tokensUnknown,
         output: { text: '' },
@@ -296,6 +301,7 @@ async function recordInstanceTerminal(
         ...(outcome.structuredOutput !== undefined ? { structured: outcome.structuredOutput } : {}),
       },
       costUsd: outcome.costUsd,
+      costIncomplete: outcome.costIncomplete,
       tokens: outcome.tokens,
       tokensUnknown: outcome.tokensUnknown,
       diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
@@ -319,10 +325,14 @@ async function settleInstance(
   primarySink: string
 ): Promise<ComposeInstanceOutcome> {
   // Every instance exit carries the work it already paid for.
-  const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+  const instanceUsage: Pick<
+    ComposeInstanceOutcome,
+    'costUsd' | 'costIncomplete' | 'tokens' | 'tokensUnknown'
+  > = {
     ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
     ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
     tokensUnknown: instanceCtx.totalTokensUnknown,
+    costIncomplete: instanceCtx.totalCostIncomplete,
   };
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
   if (failed.length > 0) {

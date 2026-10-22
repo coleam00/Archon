@@ -59,6 +59,11 @@ describe('executeDagWorkflow -- workflow: node', () => {
 
   it.each([
     { label: 'valid', malformed: false, counters: { total_tokens_out: 10 } },
+    {
+      label: 'incomplete cost',
+      malformed: false,
+      counters: { total_tokens_out: 10, total_cost_incomplete: true },
+    },
     { label: 'invalid axis', malformed: true, counters: { total_tokens_out: 'unreadable' } },
     {
       label: 'null marker',
@@ -109,6 +114,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
       expect(snapshot.tokensUnknown).toBe(malformed);
       expect(snapshot.tokens).toEqual(malformed ? undefined : { input: 100, output: 10 });
       expect(snapshot.costUsd).toBe(0.3);
+      expect(snapshot.costIncomplete).toBe('total_cost_incomplete' in counters);
       await executeDagWorkflow({
         ...options,
         priorCompletedNodes: snapshot.completedNodeOutputs,
@@ -119,6 +125,9 @@ describe('executeDagWorkflow -- workflow: node', () => {
       expect(writes).toHaveLength(2);
       expect(writes[1]).toEqual(writes[0]);
       expect(writes[1]?.total_cost_usd).toBe(0.3);
+      expect(writes[1]?.total_cost_incomplete).toBe(
+        'total_cost_incomplete' in counters ? true : undefined
+      );
       expect(writes[1]?.total_tokens_in).toBe(malformed ? null : 100);
       expect(writes[1]?.total_tokens_out).toBe(malformed ? null : 10);
       expect(writes[1]?.total_tokens_unknown).toBe(malformed ? true : undefined);
@@ -147,6 +156,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
         status: 'cancelled',
         metadata: {
           parent_node_id: 'sub',
+          total_cost_incomplete: true,
           total_tokens_in: 100,
           total_tokens_out: 'unreadable',
           total_cost_usd: 0.3,
@@ -188,6 +198,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
         total_tokens_in: null,
         total_tokens_out: null,
         total_cost_usd: 0.5,
+        total_cost_incomplete: true,
       }),
     ]);
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);

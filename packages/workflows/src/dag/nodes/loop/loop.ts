@@ -1,3 +1,4 @@
+import { isCostIncomplete } from '../../../node-execution';
 import { finalizeLoopFromSignal } from '../../loop-completion';
 import { requireProvider } from '@archon/provider-contract';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
@@ -157,6 +158,7 @@ export async function executeLoopNode(
         : undefined,
     resolvedModel: undefined,
     costUsd: resume.costUsd,
+    costIncomplete: resume.costIncomplete,
     tokens: resume.tokens,
     tokensUnknown:
       savedExecution?.spend.tokens.source === 'unavailable' &&
@@ -417,6 +419,10 @@ function readLoopResume(
       gate !== undefined
         ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
         : undefined,
+    costIncomplete:
+      gate !== undefined &&
+      (!(typeof gate.signaledCostUsd === 'number' && Number.isFinite(gate.signaledCostUsd)) ||
+        (savedExecution !== undefined && isCostIncomplete(savedExecution.spend.costUsd))),
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
@@ -465,6 +471,7 @@ async function finalizeOnBareApprove(
     finalizeOutput,
     {
       ...(resume.costUsd !== undefined ? { costUsd: resume.costUsd } : {}),
+      costIncomplete: resume.costIncomplete,
       ...(resume.tokens !== undefined ? { tokens: resume.tokens } : {}),
     },
     finalizeStructured ?? undefined,

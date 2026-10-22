@@ -1,3 +1,4 @@
+import { describeRunUsageConformance } from './store-conformance/run-usage';
 export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
@@ -3022,71 +3023,7 @@ export function describeWorkflowStoreConformance(
         ).toEqual(expected);
       }
     });
-    test('resume reduction preserves durable fan-out, starts and usage from failed and deferred attempts', async () => {
-      const run = await create(store);
-      const snapshots = [{ ordinal: 0, identity: 'one', item: 1, inputs: { value: 1 } }];
-      const rows = [
-        {
-          event_type: 'node_completed' as const,
-          step_name: 'success',
-          data: {
-            node_output: 'ok',
-            structured_output: { ok: true },
-            tokens: { input: 2, output: 3 },
-            cost_usd: 0.25,
-          },
-        },
-        {
-          event_type: 'node_skipped_prior_success' as const,
-          step_name: 'success',
-          data: {
-            node_output: 'ok',
-            structured_output: { ok: true },
-            tokens: { input: 2, output: 3 },
-            cost_usd: 0.25,
-          },
-        },
-        {
-          event_type: 'node_completed' as const,
-          step_name: 'invalidated',
-          data: { node_output: 'stale' },
-        },
-        { event_type: 'node_prior_cache_invalidated' as const, step_name: 'invalidated', data: {} },
-        { event_type: 'node_started' as const, step_name: 'unfinished', data: {} },
-        {
-          event_type: 'node_failed' as const,
-          step_name: 'failed',
-          data: { error: 'boom', tokens: { input: 5, output: 7 }, cost_usd: 0.5 },
-        },
-        {
-          event_type: 'fan_out_instances' as const,
-          step_name: 'fan',
-          data: { instances: snapshots },
-        },
-        { event_type: 'fan_out_instances' as const, step_name: 'fan', data: { instances: [] } },
-        // Deferred spend is accounting only: it must neither clear reusable output nor
-        // resolve an unfinished start.
-        {
-          event_type: 'node_deferred_usage' as const,
-          step_name: 'success',
-          data: { accounting: 'node', tokens: { input: 1, output: 1 }, cost_usd: 0.125 },
-        },
-        {
-          event_type: 'node_deferred_usage' as const,
-          step_name: 'unfinished',
-          data: { accounting: 'node', tokens: { input: 1, output: 1 }, cost_usd: 0.125 },
-        },
-      ];
-      for (const row of rows) await store.persistWorkflowEvent({ ...row, workflow_run_id: run.id });
-      const snapshot = await store.getDagResumeSnapshot(run.id);
-      expect(snapshot.completedNodeOutputs).toEqual(
-        new Map([['success', { output: 'ok', structuredOutput: { ok: true } }]])
-      );
-      expect(snapshot.fanOutSnapshots).toEqual(new Map([['fan', snapshots]]));
-      expect(snapshot.unresolvedNodeStarts).toEqual(new Set(['unfinished']));
-      expect(snapshot.tokens).toMatchObject({ input: 9, output: 12 });
-      expect(snapshot.costUsd).toBe(1);
-    });
+    describeRunUsageConformance(() => store);
     test('resume reduction keeps the failure of a node whose latest record is node_failed', async () => {
       const run = await create(store);
       const rows = [

@@ -22,7 +22,7 @@ import {
   type NodeStateRecord,
   type ExecutionOutput,
 } from './schemas/node-execution';
-import { executionMetadata } from './node-execution';
+import { executionMetadata, isCostIncomplete } from './node-execution';
 import { unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas';
 
@@ -313,10 +313,24 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
 
 export type NodeExecutionResult = NodeOutput & {
   costUsd?: number;
+  costIncomplete?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   loopIterations?: number;
 };
+
+function nodeOutputUsage(
+  spend: NodeExecutionRecord['spend']
+): Pick<NodeExecutionResult, 'costUsd' | 'costIncomplete' | 'tokens' | 'tokensUnknown'> {
+  return {
+    ...(spend.tokens.source === 'provider' ? { tokens: spend.tokens.value } : {}),
+    ...(spend.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete'
+      ? { tokensUnknown: true }
+      : {}),
+    ...(spend.costUsd.source === 'provider' ? { costUsd: spend.costUsd.value } : {}),
+    ...(isCostIncomplete(spend.costUsd) ? { costIncomplete: true } : {}),
+  };
+}
 
 export function serializeNodeOutput(
   record: NodeExecutionRecord,
@@ -330,11 +344,7 @@ export function serializeNodeOutput(
     ...(record.output?.declaredOutputPaths !== undefined
       ? { declaredOutputPaths: record.output.declaredOutputPaths }
       : {}),
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
-      ? { tokensUnknown: true }
-      : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
+    ...nodeOutputUsage(record.spend),
     ...(record.diagnostics?.loopIterations !== undefined
       ? { loopIterations: record.diagnostics.loopIterations }
       : {}),

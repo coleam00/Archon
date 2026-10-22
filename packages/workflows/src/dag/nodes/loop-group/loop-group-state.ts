@@ -24,7 +24,7 @@ export type LoopGroupBodyResult = NodeExecutionResult &
   };
 
 export interface LoopGroupProgress {
-  usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>;
+  usage: Pick<NodeExecutionResult, 'costUsd' | 'costIncomplete' | 'tokens' | 'tokensUnknown'>;
   lastStartedIteration: number;
 }
 

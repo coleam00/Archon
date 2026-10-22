@@ -223,6 +223,7 @@ export async function executeComposeFanOutNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const execution = beginExecution(ctx, node);
   let tokensUnknown = false;
+  let costIncomplete = false;
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
 
   const failResult = async (
@@ -247,6 +248,7 @@ export async function executeComposeFanOutNode(
           costUsd,
           tokens,
           tokensUnknown,
+          costIncomplete,
           diagnostics: { fanOut: true },
         }
       )
@@ -271,6 +273,7 @@ export async function executeComposeFanOutNode(
           costUsd,
           tokens,
           tokensUnknown,
+          costIncomplete,
           diagnostics: { fanOut: true },
         }
       )
@@ -366,6 +369,7 @@ export async function executeComposeFanOutNode(
   const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+  costIncomplete = outcomes.some(outcome => outcome.costIncomplete === true);
 
   const parent = await readParentStatus(ctx, node);
   if (typeof parent === 'object') {
@@ -374,9 +378,10 @@ export async function executeComposeFanOutNode(
   if (parent === 'stopped') {
     return {
       ...serializeNodeOutput(execution),
-      ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
-      ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
-      ...(tokensUnknown ? { tokensUnknown: true } : {}),
+      costUsd: totalCostUsd,
+      tokens: totalTokens,
+      tokensUnknown,
+      costIncomplete,
     };
   }
 

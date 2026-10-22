@@ -1,3 +1,5 @@
+import { startNodeExecution, finishNodeExecution, newNodeInvocation } from './node-execution';
+import { serializeNodeStateRecord, serializeDeferredNodeUsage } from './node-record-serialization';
 import { describe, expect, it } from 'bun:test';
 import { foldDagResumeSnapshot, type DagResumeEvent } from './dag-resume-snapshot';
 
@@ -117,5 +119,132 @@ describe('historical token accounting', () => {
       cacheWrite: 0,
       cachePartial: true,
     });
+  });
+});
+
+describe('historical cost accounting', () => {
+  for (const eventType of ['node_completed', 'node_failed', 'node_deferred_usage']) {
+    it.each([undefined, null, 'bad', NaN, Infinity])(
+      `${eventType} retains unpriced provider evidence before priced work: %j`,
+      async cost => {
+        const snapshot = await foldDagResumeSnapshot(
+          [
+            {
+              step_name: 'old',
+              event_type: eventType,
+              data: {
+                type: 'agent',
+                ...(cost === undefined ? {} : { cost_usd: cost }),
+                error: 'failed',
+              },
+            },
+            valid,
+          ],
+          'run'
+        );
+        expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: true });
+      }
+    );
+  }
+  it('filters cost evidence using the same replay and aggregate scope as amounts', async () => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        { step_name: 'cached', event_type: 'node_skipped_prior_success', data: { type: 'agent' } },
+        { step_name: 'skipped', event_type: 'node_skipped', data: { type: 'agent' } },
+        {
+          step_name: 'rollup',
+          event_type: 'node_completed',
+          data: { type: 'loop', aggregate: true },
+        },
+        {
+          step_name: 'rollup',
+          event_type: 'node_deferred_usage',
+          data: { type: 'loop', aggregate: true },
+        },
+        valid,
+      ],
+      'run'
+    );
+    expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: false });
+  });
+
+  it('takes cost evidence from authoritative instances before excluding their leaves', async () => {
+    for (const cost of [
+      { source: 'provider', value: 0.1 },
+      { source: 'provider', value: 0.1, partial: true },
+      { source: 'unavailable', reason: 'incomplete' },
+    ] as const) {
+      const instance = finishNodeExecution(
+        startNodeExecution({
+          runId: 'run',
+          path: 'fan__item',
+          node: { id: 'fan__item', kind: 'compose_fan_out_instance' },
+          invocation: newNodeInvocation(),
+        }),
+        { status: 'completed' }
+      );
+      instance.spend.costUsd = cost;
+      const event = serializeNodeStateRecord(instance);
+      const snapshot = await foldDagResumeSnapshot(
+        [
+          {
+            step_name: 'fan__item__leaf',
+            event_type: 'node_completed',
+            data: { type: 'loop', cost_usd: 'bad' },
+          },
+          event,
+          valid,
+        ],
+        'run'
+      );
+      expect(snapshot.costUsd).toBeCloseTo(cost.source === 'provider' ? 0.3 : 0.2);
+      expect(snapshot.costIncomplete).toBe(
+        cost.source === 'unavailable' || ('partial' in cost && cost.partial)
+      );
+    }
+  });
+
+  it('retains typed partial and unavailable cost in completed, failed and deferred rows', async () => {
+    for (const cost of [
+      { source: 'provider', value: 0, partial: true },
+      { source: 'unavailable', reason: 'unsupported' },
+      { source: 'unavailable', reason: 'not_applicable' },
+    ] as const) {
+      for (const channel of ['completed', 'failed', 'deferred'] as const) {
+        const record = finishNodeExecution(
+          startNodeExecution({
+            runId: 'run',
+            path: 'old',
+            provider: 'claude',
+            invocation: newNodeInvocation(),
+            node: { id: 'old', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
+          }),
+          channel === 'failed' ? { status: 'failed', error: 'Failed.' } : { status: 'completed' }
+        );
+        record.spend.costUsd = cost;
+        const event =
+          channel === 'deferred'
+            ? serializeDeferredNodeUsage(record)
+            : serializeNodeStateRecord(record);
+        const snapshot = await foldDagResumeSnapshot([event, valid], 'run');
+        expect(snapshot.costUsd).toBe(0.2);
+        expect(snapshot.costIncomplete).toBe(
+          cost.source === 'provider' || cost.reason !== 'not_applicable'
+        );
+      }
+    }
+  });
+
+  it('keeps reported zero and non-provider work distinct from unpriced work', async () => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        { step_name: 'exec', event_type: 'node_completed', data: { type: 'bash' } },
+        { step_name: 'zero', event_type: 'node_completed', data: { type: 'agent', cost_usd: 0 } },
+        valid,
+      ],
+      'run'
+    );
+    expect(snapshot.costUsd).toBe(0.2);
+    expect(snapshot.costIncomplete).not.toBe(true);
   });
 });

@@ -1,3 +1,5 @@
+import { isCostIncomplete } from './node-execution';
+import type { NodeExecutionRecord } from './schemas/node-execution';
 import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
@@ -29,7 +31,12 @@ export interface ReadNodeRecordEvent {
   eventType: SerializedNodeEvent['event_type'];
   data: SerializedNodeData;
   /** Raw values retained so accounting can diagnose malformed historical usage. */
-  rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown };
+  rawUsage: {
+    tokens?: unknown;
+    tokensUnknown?: boolean;
+    costUsd?: unknown;
+    costIncomplete?: boolean;
+  };
   metadata?: NodeExecutionMetadata;
 }
 
@@ -144,6 +151,7 @@ export function readNodeRecordEvent(
         ? { tokensUnknown: true }
         : {}),
       ...(Object.hasOwn(raw, 'cost_usd') ? { costUsd: raw.cost_usd } : {}),
+      costIncomplete: historicalCostIncomplete(raw, metadata?.spend.costUsd),
     },
     ...(metadata === undefined ? {} : { metadata }),
   };
@@ -170,6 +178,21 @@ export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
       tokensUnknown:
         data.spend?.tokens.source === 'unavailable' && data.spend.tokens.reason === 'incomplete',
       costUsd: raw.cost_usd,
+      costIncomplete: historicalCostIncomplete(raw, data.spend?.costUsd),
     },
   };
+}
+
+function historicalCostIncomplete(
+  raw: Record<string, unknown>,
+  cost: NodeExecutionRecord['spend']['costUsd'] | undefined
+): boolean {
+  if (cost !== undefined) return isCostIncomplete(cost);
+  const hasUsage =
+    Object.hasOwn(raw, 'cost_usd') ||
+    Object.hasOwn(raw, 'tokens') ||
+    typeof raw.provider === 'string' ||
+    raw.type === 'agent' ||
+    raw.type === 'loop';
+  return hasUsage && !(typeof raw.cost_usd === 'number' && Number.isFinite(raw.cost_usd));
 }

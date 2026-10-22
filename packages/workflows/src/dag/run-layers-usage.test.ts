@@ -111,7 +111,12 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     // #2469 (AC1): the run FAILED, and it still recorded what step1 burned before
     // step2 died. Before the fix this run's row carried nothing but { error }.
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.02, total_tokens_in: 40, total_tokens_out: 4 },
+      {
+        total_cost_usd: 0.02,
+        total_cost_incomplete: true,
+        total_tokens_in: 40,
+        total_tokens_out: 4,
+      },
     ]);
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
 
@@ -120,7 +125,7 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
       ['step1', { output: 'first execution output' }],
     ]);
-    const priorUsage = { tokens: { input: 40, output: 4 }, costUsd: 0.02 };
+    const priorUsage = { tokens: { input: 40, output: 4 }, costUsd: 0.02, costIncomplete: true };
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'resumed execution output' };
@@ -149,7 +154,12 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
     // reset to 0 on every pass, so a run that failed at 0.02 and then completed would
     // have reported 0.03 — a figure that goes DOWN.
     expect(runUsageWrites(store)).toEqual([
-      { total_cost_usd: 0.05, total_tokens_in: 100, total_tokens_out: 10 },
+      {
+        total_cost_usd: 0.05,
+        total_cost_incomplete: true,
+        total_tokens_in: 100,
+        total_tokens_out: 10,
+      },
     ]);
 
     // Usage has exactly one writer now; completeWorkflowRun carries only node_counts.
@@ -292,6 +302,136 @@ describe('executeDagWorkflow -- resumed and fresh node usage', () => {
       expect(usage?.total_tokens_out).toBeNull();
     }
   );
+
+  it.each([undefined, null, 'invalid', 0, 0.1])(
+    'resumes historical provider cost %j without losing its evidence',
+    async cost => {
+      const store = createMockStore();
+      const deps = createMockDeps(store);
+      const run = makeWorkflowRun('historical-cost');
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(
+          [
+            {
+              step_name: 'old',
+              event_type: 'node_completed',
+              data: {
+                type: 'agent',
+                node_output: 'Old.',
+                ...(cost === undefined ? {} : { cost_usd: cost }),
+              },
+            },
+          ],
+          id
+        )
+      );
+      const inspection = await inspectResumableRun(deps, run);
+      if (!inspection) throw new Error('Expected resumable run');
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Fresh.' };
+        yield { type: 'result', sessionId: 's', cost: 0.2 };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflowRun: run,
+          workflow: {
+            name: 'history',
+            nodes: [
+              { id: 'old', kind: 'agent', source: { kind: 'inline', prompt: 'Old.' } },
+              {
+                id: 'new',
+                kind: 'agent',
+                depends_on: ['old'],
+                source: { kind: 'inline', prompt: 'New.' },
+              },
+            ],
+          },
+          priorUsage: inspection.priorUsage,
+          priorCompletedNodes: inspection.priorCompletedNodes,
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      const usage = runUsageWrites(store).at(-1);
+      expect(usage?.total_cost_usd).toBeCloseTo(0.2 + (typeof cost === 'number' ? cost : 0));
+      expect(usage?.total_cost_incomplete).toBe(typeof cost === 'number' ? undefined : true);
+    }
+  );
+
+  it('retains an uncertain loop inside a group without inheriting sibling uncertainty into its scope', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+      yield { type: 'result', sessionId: 's', cost: calls === 1 ? undefined : 0.2 };
+    });
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun('group-cost');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        workflow: {
+          name: 'group-cost',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                fresh_context: false,
+                until: 'DONE',
+                max_iterations: 1,
+                nodes: [
+                  {
+                    id: 'work',
+                    kind: 'loop',
+                    loop: {
+                      fresh_context: false,
+                      prompt: 'Work.',
+                      until: 'DONE',
+                      max_iterations: 1,
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              id: 'priced',
+              kind: 'loop_group',
+              depends_on: ['group'],
+              loop_group: {
+                fresh_context: false,
+                until: 'DONE',
+                max_iterations: 1,
+                nodes: [
+                  {
+                    id: 'work',
+                    kind: 'loop',
+                    loop: {
+                      fresh_context: false,
+                      prompt: 'Work.',
+                      until: 'DONE',
+                      max_iterations: 1,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      })
+    );
+    const usage = runUsageWrites(store).at(-1);
+    expect(usage).toMatchObject({ total_cost_usd: 0.2, total_cost_incomplete: true });
+    const rows = persistedEvents(store);
+    expect(
+      rows.find(e => e.event_type === 'node_completed' && e.step_name === 'priced')?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'provider', value: 0.2 } });
+    const snapshot = await foldDagResumeSnapshot(rows, workflowRun.id);
+    expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: true });
+  });
 
   it('stores node_output in node_completed event data for AI nodes', async () => {
     const store = createMockStore();

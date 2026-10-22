@@ -275,6 +275,7 @@ export async function executeFanOutWorkflowNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const stepName = ctx.stepNamePrefix + node.id;
   let tokensUnknown = false;
+  let costIncomplete = false;
 
   // node_failed writer (mirrors executeWorkflowNode.failResult) — a fan-out failure may
   // still carry accumulated cost/tokens so spend over already-run children is tracked.
@@ -295,6 +296,7 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
+          costIncomplete,
           diagnostics: { fanOut: true, ...diagnostics },
         }
       )
@@ -321,6 +323,7 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
+          costIncomplete,
           diagnostics: { fanOut: true, ...(fanOutOutcome !== undefined ? { fanOutOutcome } : {}) },
         }
       )
@@ -512,6 +515,7 @@ export async function executeFanOutWorkflowNode(
   const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+  costIncomplete = outcomes.some(outcome => outcome.costIncomplete === true);
 
   return joinSettledChildren(node, ctx, fanOut.join, stepName, outcomes, {
     notify,

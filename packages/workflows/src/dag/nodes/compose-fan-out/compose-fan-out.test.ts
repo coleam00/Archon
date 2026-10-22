@@ -130,6 +130,65 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     }
   }
 
+  for (const kind of ['child', 'compose'] as const) {
+    it(`retains incomplete cost in ${kind} fan-out and cold replay`, async () => {
+      await writeBlock(
+        'name: compose-blk\ndescription: Cost accounting\nnodes:\n  - id: work\n    loop:\n      prompt: Work.\n      until: DONE\n      max_iterations: 1'
+      );
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+        if (calls === 1) yield { type: 'result', sessionId: 's' };
+        yield { type: 'result', sessionId: 's', cost: 0.1 };
+      });
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
+        childRunId: `child-${args.childIndex}`,
+        status: 'completed',
+        output: 'Done.',
+        costUsd: 0.1,
+        ...(args.childIndex === 0 ? { costIncomplete: true } : {}),
+      }));
+      const store = createMockStore();
+      const fan_out = { items: '[1,2]', as: 'item', max_parallel: 1, join: 'all_success' as const };
+      const node: DagNode =
+        kind === 'child'
+          ? { id: 'fan', kind: 'workflow', workflow: 'compose-blk', fan_out }
+          : { id: 'fan', kind: 'compose_fan_out', include: 'compose-blk', fan_out };
+      const run = makeWorkflowRun('cost-fan-out');
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: run,
+        workflow: { name: 'cost', nodes: [node] },
+        runChildWorkflow,
+      });
+      await executeDagWorkflow(options);
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.2,
+        total_cost_incomplete: true,
+      });
+      const rows = persistedEvents(store);
+      const wrapper = rows.find(e => e.event_type === 'node_completed' && e.step_name === 'fan');
+      expect(wrapper?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.2, partial: true },
+      });
+      const snapshot = await foldDagResumeSnapshot(rows, run.id);
+      expect(snapshot.costUsd).toBeCloseTo(0.2);
+      expect(snapshot.costIncomplete).toBe(true);
+      await executeDagWorkflow({
+        ...options,
+        priorUsage: snapshot,
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+      });
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.2,
+        total_cost_incomplete: true,
+      });
+      expect(kind === 'child' ? runChildWorkflow.mock.calls.length : calls).toBe(2);
+    });
+  }
+
   // A cancel after the instance's paid query either stops the instance between its nodes
   // (no terminal state) or lands after it completed; both exits must keep its usage.
   for (const instanceStop of ['mid-instance', 'after-instance'] as const) {

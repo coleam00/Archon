@@ -145,6 +145,7 @@ async function recordGroupResult(
         ...('structuredOutput' in result ? { structured: result.structuredOutput } : {}),
       },
       costUsd: result.costUsd,
+      costIncomplete: result.costIncomplete,
       tokens: result.tokens,
       tokensUnknown: result.tokensUnknown,
       diagnostics: { loopIterations: result.loopIterations },
@@ -161,6 +162,7 @@ function runningGroupOutput(
     ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
     ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
     ...(result.tokensUnknown ? { tokensUnknown: true } : {}),
+    ...(result.costIncomplete ? { costIncomplete: true } : {}),
   };
 }
 

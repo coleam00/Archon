@@ -395,6 +395,7 @@ export function runUsageWrites(
       (metadata): metadata is Record<string, unknown> =>
         metadata !== undefined &&
         ('total_cost_usd' in metadata ||
+          'total_cost_incomplete' in metadata ||
           'total_tokens_in' in metadata ||
           'total_tokens_out' in metadata)
     );

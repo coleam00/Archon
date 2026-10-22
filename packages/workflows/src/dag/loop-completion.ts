@@ -70,7 +70,7 @@ export async function finalizeLoopFromSignal(
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
-  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
+  finalizeUsage: { costUsd?: number; costIncomplete?: boolean; tokens?: TokenUsage } | undefined,
   finalizeStructuredOutput: unknown,
   logDir: string,
   execution?: NodeExecutionRecord,

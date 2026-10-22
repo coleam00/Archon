@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { hasIncompleteCostTotal, TOTAL_COST_INCOMPLETE } from './schemas/run-usage';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
@@ -48,7 +49,10 @@ import { announceContainerRun, suspendContainerForPause } from './dag/container-
  * only one of them is how cost came to under-report every resumed run while tokens did
  * not (#2469).
  */
-export type PriorRunUsage = Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'>;
+export type PriorRunUsage = Pick<
+  DagResumeSnapshot,
+  'tokens' | 'tokensUnknown' | 'costUsd' | 'costIncomplete'
+>;
 
 /** Inputs accepted by {@link executeDagWorkflow}. */
 export interface ExecuteDagWorkflowOptions extends RunInputs {
@@ -260,6 +264,7 @@ export async function executeDagWorkflow(
     lastSequentialSession: undefined,
     warnedProviderConflicts: new Set<string>(),
     totalCostUsd: priorUsage?.costUsd,
+    totalCostIncomplete: priorUsage?.costIncomplete || hasIncompleteCostTotal(workflowRun.metadata),
     totalTokens: priorUsage?.tokens,
     totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
@@ -324,34 +329,7 @@ export async function executeDagWorkflow(
   const persistRunUsage = async (): Promise<void> => {
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
-    const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
-      ...(runCtx.totalTokensUnknown
-        ? {
-            total_tokens_unknown: true,
-            total_tokens_in: null,
-            total_tokens_out: null,
-            total_cache_read_tokens: null,
-            total_cache_write_tokens: null,
-            total_cache_partial: null,
-          }
-        : {}),
-      ...(runCtx.totalTokens !== undefined
-        ? {
-            total_tokens_in: runCtx.totalTokens.input,
-            total_tokens_out: runCtx.totalTokens.output,
-            ...(runCtx.totalTokens.cacheRead !== undefined
-              ? { total_cache_read_tokens: runCtx.totalTokens.cacheRead }
-              : {}),
-            ...(runCtx.totalTokens.cacheWrite !== undefined
-              ? { total_cache_write_tokens: runCtx.totalTokens.cacheWrite }
-              : {}),
-            // Marks the two cache totals above as a floor rather than an exact figure.
-            ...(runCtx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
-          }
-        : {}),
-    };
+    const usage = runUsageMetadata(runCtx);
     if (Object.keys(usage).length === 0) return;
     await deps.store
       .updateWorkflowRun(workflowRun.id, { metadata: usage })
@@ -455,6 +433,21 @@ export async function executeDagWorkflow(
   };
 
   await persistAuthoredOutcome();
+  const refreshRunUsage = async (): Promise<void> => {
+    try {
+      const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
+      runCtx.totalCostUsd = durable.costUsd;
+      runCtx.totalCostIncomplete ||= durable.costIncomplete;
+      runCtx.totalTokens = durable.tokens;
+      runCtx.totalTokensUnknown = durable.tokensUnknown;
+    } catch (readError) {
+      getLog().error(
+        { err: readError as Error, workflowRunId: workflowRun.id },
+        'dag.unwind_usage_refresh_failed'
+      );
+    }
+  };
+
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
@@ -469,17 +462,7 @@ export async function executeDagWorkflow(
     if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
       // The thunk that threw never reported its spend, nor did its settled siblings, so
       // the in-memory totals miss it. The durable rows hold all of it.
-      try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        runCtx.totalCostUsd = durable.costUsd;
-        runCtx.totalTokens = durable.tokens;
-        runCtx.totalTokensUnknown = durable.tokensUnknown;
-      } catch (readError) {
-        getLog().error(
-          { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.unwind_usage_refresh_failed'
-        );
-      }
+      await refreshRunUsage();
     }
     if (error instanceof RunSourceUnreadableError) {
       sourceUnreadable = error;
@@ -538,4 +521,36 @@ export async function executeDagWorkflow(
   }
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
+}
+
+function runUsageMetadata(ctx: RunLayersContext) {
+  return {
+    // No usage stays absent: a bash-only workflow must not read as a free AI run.
+    ...(ctx.totalCostUsd !== undefined ? { total_cost_usd: ctx.totalCostUsd } : {}),
+    ...(ctx.totalCostIncomplete ? { [TOTAL_COST_INCOMPLETE]: true } : {}),
+    ...(ctx.totalTokensUnknown
+      ? {
+          total_tokens_unknown: true,
+          total_tokens_in: null,
+          total_tokens_out: null,
+          total_cache_read_tokens: null,
+          total_cache_write_tokens: null,
+          total_cache_partial: null,
+        }
+      : {}),
+    ...(ctx.totalTokens !== undefined
+      ? {
+          total_tokens_in: ctx.totalTokens.input,
+          total_tokens_out: ctx.totalTokens.output,
+          ...(ctx.totalTokens.cacheRead !== undefined
+            ? { total_cache_read_tokens: ctx.totalTokens.cacheRead }
+            : {}),
+          ...(ctx.totalTokens.cacheWrite !== undefined
+            ? { total_cache_write_tokens: ctx.totalTokens.cacheWrite }
+            : {}),
+          // Marks the two cache totals above as a floor rather than an exact figure.
+          ...(ctx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
+        }
+      : {}),
+  };
 }

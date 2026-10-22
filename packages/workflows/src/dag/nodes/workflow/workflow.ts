@@ -67,7 +67,8 @@ export async function executeWorkflowNode(
     failureKind: NodeFailureKind,
     costUsd?: number,
     tokens?: TokenUsage,
-    tokensUnknown?: boolean
+    tokensUnknown?: boolean,
+    costIncomplete?: boolean
   ): Promise<NodeExecutionResult> => {
     // A settled child can fail after spending money. Keep those measurements on the
     // failed node so the run-level accumulator includes the work already performed.
@@ -81,6 +82,7 @@ export async function executeWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
+          costIncomplete,
         }
       )
     );
@@ -198,6 +200,7 @@ export async function executeWorkflowNode(
             ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
           },
           costUsd: outcome.costUsd,
+          costIncomplete: outcome.costIncomplete,
           tokens: outcome.tokens,
           tokensUnknown: outcome.tokensUnknown,
           diagnostics: { childRunId: outcome.childRunId },
@@ -254,7 +257,8 @@ export async function executeWorkflowNode(
           'child_failed',
           outcome.costUsd,
           outcome.tokens,
-          outcome.tokensUnknown
+          outcome.tokensUnknown,
+          outcome.costIncomplete
         );
       case 'cancelled':
         return failResult(
@@ -262,7 +266,8 @@ export async function executeWorkflowNode(
           'cancelled',
           outcome.costUsd,
           outcome.tokens,
-          outcome.tokensUnknown
+          outcome.tokensUnknown,
+          outcome.costIncomplete
         );
       default: {
         // Compile-time exhaustiveness + runtime fail-loud: without this, a status

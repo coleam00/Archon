@@ -1,5 +1,5 @@
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
-import { hasUnknownTokenTotal } from '../schemas/run-usage';
+import { hasUnknownTokenTotal, hasIncompleteCostTotal } from '../schemas/run-usage';
 import type { TokenUsage } from '@archon/provider-contract';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
@@ -25,6 +25,7 @@ export interface ChildWorkflowOutcome {
   declaredOutputPaths?: DeclaredOutputPaths;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
+  costIncomplete?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   error?: string;
@@ -106,6 +107,31 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
+  // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
+  // reading through readSubrunMetadata's summaryValue keeps them distinguishable
+  // from "not stamped".
+  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
+  return {
+    childRunId: run.id,
+    status: run.status,
+    output: typeof md.summary === 'string' ? md.summary : undefined,
+    ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
+    // The child's own field contract (#2453) — read from the row so the synchronous
+    // path and the parent re-entry/resume path stay one source, exactly like the
+    // summary and usage above.
+    ...(summaryDeclaredOutputPaths !== undefined
+      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
+      : {}),
+    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    ...(hasIncompleteCostTotal(md) ? { costIncomplete: true } : {}),
+    ...childTokenUsage(md),
+    error: typeof md.error === 'string' ? md.error : undefined,
+  };
+}
+
+function childTokenUsage(
+  md: WorkflowRun['metadata']
+): Pick<ChildWorkflowOutcome, 'tokens' | 'tokensUnknown'> {
   const input = md.total_tokens_in;
   const output = md.total_tokens_out;
   const hasValidTokens =
@@ -132,23 +158,5 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
         ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
       }
     : undefined;
-  // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
-  // reading through readSubrunMetadata's summaryValue keeps them distinguishable
-  // from "not stamped".
-  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
-  return {
-    childRunId: run.id,
-    status: run.status,
-    output: typeof md.summary === 'string' ? md.summary : undefined,
-    ...(summaryValue !== undefined ? { structuredOutput: summaryValue } : {}),
-    // The child's own field contract (#2453) — read from the row so the synchronous
-    // path and the parent re-entry/resume path stay one source, exactly like the
-    // summary and usage above.
-    ...(summaryDeclaredOutputPaths !== undefined
-      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
-      : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
-    error: typeof md.error === 'string' ? md.error : undefined,
-  };
+  return tokensUnknown ? { tokensUnknown: true } : { tokens };
 }

@@ -118,6 +118,7 @@ interface UsageContribution {
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
+  costIncomplete?: boolean;
 }
 
 /** What one fold accumulates across a run's rows. */
@@ -206,6 +207,7 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
 function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
   const contribution: UsageContribution = {
     stepName,
+    costIncomplete: rawUsage.costIncomplete,
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
   };
   if (rawUsage.tokens !== undefined) {
@@ -218,6 +220,7 @@ function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawU
     if (costUsd !== undefined) contribution.costUsd = costUsd;
   }
   if (
+    contribution.costIncomplete ||
     contribution.tokensUnknown ||
     contribution.tokens !== undefined ||
     contribution.costUsd !== undefined
@@ -483,7 +486,7 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
 
 function countedUsage(
   fold: ResumeFold
-): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'> {
+): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costIncomplete'> {
   const authoritativeInstancePrefixes = [...fold.authoritativeInstanceScopes].map(
     scope => `${scope}__`
   );
@@ -502,6 +505,7 @@ function countedUsage(
           )
         ),
     costUsd: sumReportedCost(counted),
+    costIncomplete: counted.some(contribution => contribution.costIncomplete),
   };
 }
 

@@ -56,6 +56,49 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     await removeTempTree(testDir);
   });
 
+  it('retains an unpriced earlier attempt when the final attempt is priced', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) {
+        yield {
+          type: 'result',
+          sessionId: 'old',
+          isError: true,
+          failure: { class: 'transient', evidence: 'Provider interrupted' },
+        };
+      } else {
+        yield { type: 'agent_message_chunk', text: 'Recovered.' };
+        yield { type: 'result', sessionId: 'new', cost: 0.2 };
+      }
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('retry-cost'),
+        workflow: {
+          name: 'retry-cost',
+          nodes: [
+            {
+              id: 'work',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Work.' },
+              retry: { max_attempts: 2, delay_ms: 0 },
+            },
+          ],
+        },
+      })
+    );
+    expect(calls).toBe(2);
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.2,
+      total_cost_incomplete: true,
+    });
+  });
+
   it('node succeeds on retry after a transient error', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {

@@ -131,6 +131,42 @@ describe('node record serializers', () => {
     expect(unavailable.spend.costUsd).toEqual(record().spend.costUsd);
   });
 
+  it('projects incomplete cost independently of its numeric floor', () => {
+    for (const costUsd of [undefined, 0, 0.2]) {
+      const start = record();
+      start.spend.costUsd = { source: 'unavailable', reason: 'not_applicable' };
+      const finished = finishNodeExecution(
+        start,
+        { status: 'completed' },
+        {
+          costUsd,
+          costIncomplete: true,
+        }
+      );
+      expect(finished.spend.costUsd).toEqual(
+        costUsd === undefined
+          ? { source: 'unavailable', reason: 'incomplete' }
+          : { source: 'provider', value: costUsd, partial: true }
+      );
+      expect(serializeNodeOutput(finished)).toMatchObject({ costIncomplete: true });
+      expect(serializeNodeOutput(finished).costUsd).toBe(costUsd);
+      const event = serializeNodeStateRecord(finished);
+      expect(readNodeRecordEvent(event)?.rawUsage.costIncomplete).toBe(true);
+      expect(
+        readDeferredNodeUsageEvent(serializeDeferredNodeUsage(finished))?.rawUsage.costIncomplete
+      ).toBe(true);
+      const noProvider = finishNodeExecution(
+        start,
+        { status: 'failed', error: 'before call' },
+        {
+          costIncomplete: true,
+          providerNotCalled: true,
+        }
+      );
+      expect(serializeNodeOutput(noProvider).costIncomplete).toBeUndefined();
+    }
+  });
+
   it('capacity failure survives a persisted JSON round trip', () => {
     const failure = { class: 'overloaded', evidence: 'opaque vendor failure' } as const;
     const failed = finishNodeExecution(record(), {

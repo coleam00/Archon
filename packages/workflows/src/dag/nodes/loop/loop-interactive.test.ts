@@ -18,6 +18,7 @@ import {
   makeWorkflowRun,
   expectLoopGateEvidence,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -570,6 +571,151 @@ describe('interactive loop node', () => {
     expect(completed.length).toBe(1);
     expect(String(completed[0][0].data.node_output)).toContain('Validation PASS');
   });
+
+  it.each([false, true])(
+    'restores a modern partial-cost gate on cold resume (feedback: %j)',
+    async feedback => {
+      const first = createMockDeps();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 's' };
+        yield { type: 'result', sessionId: 's', cost: 0.1 };
+      });
+      const workflow = {
+        name: 'modern-cost',
+        nodes: [
+          {
+            id: 'work',
+            kind: 'loop',
+            loop: {
+              prompt: 'Work.',
+              until: 'DONE',
+              max_iterations: 2,
+              fresh_context: false,
+              interactive: true,
+              gate_message: 'Review.',
+            },
+          },
+        ] as DagNode[],
+      };
+      await executeDagWorkflow(
+        dagOptions({
+          deps: first,
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('modern-cost'),
+        })
+      );
+      const approval = first.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(approval?.execution?.spend.costUsd).toEqual({
+        source: 'provider',
+        value: 0.1,
+        partial: true,
+      });
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+        yield { type: 'result', sessionId: 's', cost: 0.2 };
+      });
+      const second = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: second,
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('modern-cost', {
+            metadata: {
+              approval,
+              loop_feedback_given: feedback,
+              loop_user_input: feedback ? 'Improve.' : '',
+            },
+          }),
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(feedback ? 1 : 0);
+      expect(runUsageWrites(second.store).at(-1)?.total_cost_usd).toBeCloseTo(feedback ? 0.3 : 0.1);
+      expect(runUsageWrites(second.store).at(-1)?.total_cost_incomplete).toBe(true);
+      expect(
+        persistedEvents(second.store).find(e => e.event_type === 'node_completed')?.data?.spend
+      ).toMatchObject({ costUsd: { source: 'provider', partial: true } });
+    }
+  );
+
+  for (const feedback of [false, true]) {
+    it.each([null, 0, 0.1])(
+      `preserves legacy gate cost through ${feedback ? 'feedback' : 'bare approval'} (%j)`,
+      async cost => {
+        const deps = createMockDeps();
+        const workflowRun = makeWorkflowRun('legacy-cost', {
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'refine',
+              message: 'Review.',
+              iteration: 1,
+              completionSignaled: true,
+              signaledOutput: 'Old output',
+              signaledCostUsd: cost,
+            },
+            loop_feedback_given: feedback,
+            loop_user_input: feedback ? 'Improve.' : '',
+          },
+        });
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: '<promise>DONE</promise>' };
+          yield { type: 'result', sessionId: 'new', cost: 0.2 };
+        });
+        const workflow = {
+          name: 'legacy-cost',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop',
+              loop: {
+                prompt: 'Refine $LOOP_USER_INPUT',
+                until: 'DONE',
+                max_iterations: 2,
+                fresh_context: false,
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+            {
+              id: 'after',
+              kind: 'agent',
+              depends_on: ['refine'],
+              source: { kind: 'inline', prompt: 'After.' },
+            },
+          ] as DagNode[],
+        };
+        await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflowRun, workflow }));
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(feedback ? 2 : 1);
+        const usage = runUsageWrites(deps.store).at(-1);
+        expect(usage?.total_cost_usd).toBeCloseTo((cost ?? 0) + (feedback ? 0.4 : 0.2));
+        expect(usage?.total_cost_incomplete).toBe(cost === null ? true : undefined);
+        const completed = persistedEvents(deps.store).find(
+          e => e.event_type === 'node_completed' && e.step_name === 'refine'
+        );
+        if (!feedback) expect(completed?.data).not.toHaveProperty('spend');
+        if (cost === null && !feedback) {
+          const snapshot = await foldDagResumeSnapshot(persistedEvents(deps.store), workflowRun.id);
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              cwd: testDir,
+              workflow,
+              workflowRun: { ...workflowRun, metadata: { ...workflowRun.metadata, ...usage } },
+              priorCompletedNodes: snapshot.completedNodeOutputs,
+              priorUsage: snapshot,
+            })
+          );
+          expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+          expect(runUsageWrites(deps.store).at(-1)?.total_cost_incomplete).toBe(true);
+          expect(runUsageWrites(deps.store).at(-1)?.total_cost_usd).toBe(0.2);
+        }
+      }
+    );
+  }
 
   it('finalizes at resume from persisted signaledOutput on a bare approve — no re-run (#2074 C)', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
