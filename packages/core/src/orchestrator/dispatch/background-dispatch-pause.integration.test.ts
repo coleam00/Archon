@@ -8,13 +8,13 @@ import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { loadConfig } from '../config/config-loader';
-import { setPlatformPolicies } from '../platforms/registry';
-import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
-import { createWorkflowDeps } from '../workflows/store-adapter';
-import { createSqlWorkflowOperations } from '../workflows/sql-host';
-import type { IPlatformAdapter } from '../types';
-import { dispatchBackgroundWorkflow } from './orchestrator';
+import { loadConfig } from '../../config/config-loader';
+import { setPlatformPolicies } from '../../platforms/registry';
+import { closeDatabase, getDatabase, resetDatabase } from '../../db/connection';
+import { createWorkflowDeps } from '../../workflows/store-adapter';
+import { createSqlWorkflowOperations } from '../../workflows/sql-host';
+import type { IPlatformAdapter } from '../../types';
+import { dispatchBackgroundWorkflow } from './background';
 
 const WORKFLOW = `name: bg-pause
 description: pauses twice in a background run

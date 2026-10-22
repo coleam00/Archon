@@ -163,7 +163,8 @@ export async function presentRunResult(
       console.log('\nWorkflow paused — waiting for approval.');
     }
   } else if (result.success) {
-    // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
+    // Surface workflow result to Web UI as a result card (mirrors the background dispatch
+    // result message in core's orchestrator/dispatch/background-run.ts).
     // Paused workflows are handled in the branch above and intentionally do not get a result card.
     if ('summary' in result && result.summary) {
       await sendResultCard(

@@ -11,11 +11,8 @@ import * as db from '../../db/conversations';
 import { createIsolationStore } from '../../db/isolation-environments';
 import { toError } from '../../utils/error';
 import { configureWorktreeIsolation } from '../../workflows/worktree-setup';
-import {
-  cleanupToMakeRoom,
-  getWorktreeStatusBreakdown,
-  STALE_THRESHOLD_DAYS,
-} from '../../services/cleanup-service';
+import { getWorktreeStatusBreakdown, STALE_THRESHOLD_DAYS } from '../../services/cleanup-service';
+import { cleanupToMakeRoom } from '../../services/cleanup/merged-sweep';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

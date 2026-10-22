@@ -16,7 +16,7 @@ import {
   cleanupStaleWorktrees,
   getLiveRunBlocker,
 } from '../../services/cleanup-service';
-import { ensureIsolationConfigured } from '../../orchestrator/orchestrator';
+import { ensureIsolationConfigured } from '../../orchestrator/dispatch/isolation-resolver';
 import { createRegisteredWorktree } from '../../workflows/registered-worktree';
 import { safeDeactivateSession } from '../../state/session-transitions';
 import { getLog } from './log';

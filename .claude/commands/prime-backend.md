@@ -23,7 +23,6 @@ the lazy logger pattern and MAX_BATCH constants.
 
 Read `packages/core/src/orchestrator/dispatch/isolation-resolver.ts` — `validateAndResolveIsolation` —
 and the top of `packages/core/src/orchestrator/dispatch/background.ts` — `dispatchBackgroundWorkflow`.
-Both are re-exported from `orchestrator/orchestrator.ts` for orchestrator-agent.
 
 Read `packages/core/src/orchestrator/prompt-builder.ts` first 40 lines — how system prompts
 are assembled with codebase context.
