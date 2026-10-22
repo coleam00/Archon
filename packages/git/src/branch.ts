@@ -87,10 +87,8 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
     });
   } catch (error) {
     const err = error as Error & { stderr?: string };
-    const mayCreate =
-      error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1;
     const exists =
-      !mayCreate ||
+      !isExitOne(error) ||
       (await checkoutBranchExists(repoPath, branchName).catch((inspectionError: unknown) => {
         getLog().debug(
           { err: inspectionError, repoPath, branchName },
@@ -110,7 +108,25 @@ export async function checkout(repoPath: RepoPath, branchName: BranchName): Prom
   }
 }
 
+/** Whether `branchName` names a local commit or a remote-tracking ref a checkout could start from. */
 async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
+  if (await localCommitExists(repoPath, branchName)) return true;
+  const sourceRef = `refs/heads/${branchName}`;
+  for (const remote of await listRemotes(repoPath)) {
+    for (const spec of await remoteFetchSpecs(repoPath, remote)) {
+      const destination = fetchDestination(spec, sourceRef);
+      if (destination !== undefined && (await refExists(repoPath, destination))) return true;
+    }
+  }
+  return false;
+}
+
+/** Git's plain exit 1: `rev-parse --verify --quiet` found no such ref, `config --get` no such key. */
+function isExitOne(error: unknown): boolean {
+  return error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1;
+}
+
+async function localCommitExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
   try {
     await execFileAsync(
       'git',
@@ -127,50 +143,52 @@ async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName):
     );
     return true;
   } catch (error) {
-    if (!(error instanceof GitFailure) || error.kind !== 'unclassified' || error.code !== 1)
-      throw error;
+    if (!isExitOne(error)) throw error;
+    return false;
   }
-  const { stdout: remotes } = await execFileAsync('git', ['-C', repoPath, 'remote'], {
-    timeout: 10000,
-  });
-  const sourceRef = `refs/heads/${branchName}`;
-  for (const remote of remotes.trim().split('\n').filter(Boolean)) {
-    let fetchSpecs: string;
-    try {
-      const result = await execFileAsync(
-        'git',
-        ['-C', repoPath, 'config', '--get-all', `remote.${remote}.fetch`],
-        { timeout: 10000 }
-      );
-      fetchSpecs = result.stdout;
-    } catch (error) {
-      // A remote without a fetch mapping cannot supply a checkout candidate.
-      if (error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1)
-        continue;
-      throw error;
-    }
-    for (const spec of fetchSpecs.trim().split('\n')) {
-      if (spec.startsWith('^')) continue;
-      const [source, destination] = spec.replace(/^\+/, '').split(':');
-      if (!source || !destination) continue;
-      const star = source.indexOf('*');
-      if (star === -1) {
-        if (source === sourceRef && (await refExists(repoPath, destination))) return true;
-      } else {
-        const prefix = source.slice(0, star);
-        const suffix = source.slice(star + 1);
-        if (
-          sourceRef.length < prefix.length + suffix.length ||
-          !sourceRef.startsWith(prefix) ||
-          !sourceRef.endsWith(suffix)
-        )
-          continue;
-        const matched = sourceRef.slice(prefix.length, sourceRef.length - suffix.length);
-        if (await refExists(repoPath, destination.replace('*', matched))) return true;
-      }
-    }
+}
+
+async function listRemotes(repoPath: RepoPath): Promise<string[]> {
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
+  return stdout.trim().split('\n').filter(Boolean);
+}
+
+async function remoteFetchSpecs(repoPath: RepoPath, remote: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'config', '--get-all', `remote.${remote}.fetch`],
+      { timeout: 10000 }
+    );
+    return stdout.trim().split('\n');
+  } catch (error) {
+    // A remote without a fetch mapping cannot supply a checkout candidate.
+    if (isExitOne(error)) return [];
+    throw error;
   }
-  return false;
+}
+
+/**
+ * The local ref a fetch refspec maps `sourceRef` to, or undefined when the spec is
+ * negative, malformed or does not match it. A `*` in the source matches any run of
+ * characters, substituted into the destination's `*`.
+ */
+function fetchDestination(spec: string, sourceRef: string): string | undefined {
+  if (spec.startsWith('^')) return undefined;
+  const [source, destination] = spec.replace(/^\+/, '').split(':');
+  if (!source || !destination) return undefined;
+  const star = source.indexOf('*');
+  if (star === -1) return source === sourceRef ? destination : undefined;
+  const prefix = source.slice(0, star);
+  const suffix = source.slice(star + 1);
+  if (
+    sourceRef.length < prefix.length + suffix.length ||
+    !sourceRef.startsWith(prefix) ||
+    !sourceRef.endsWith(suffix)
+  )
+    return undefined;
+  const matched = sourceRef.slice(prefix.length, sourceRef.length - suffix.length);
+  return destination.replace('*', matched);
 }
 
 /**
