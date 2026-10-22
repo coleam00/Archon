@@ -497,6 +497,16 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 50).value).toBeNull();
   }, 60_000);
 
+  test('a pull request an earlier build round recorded is not enrolled, though a later round moved on', () => {
+    const earlier = { ...BUILT.rounds[0]!, run_id: 'ship-0', pr_url: PR_URL.replace(/42$/, '50') };
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, status: 'next', rounds: [earlier, BUILT.rounds[0]!] }));
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
+    expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
+    expect(stored(at, 50).value).toBeNull();
+  }, 60_000);
+
   test('a recorded pull request URL that differs from the listed one only in case is the same pull request', () => {
     const recorded = { ...BUILT.rounds[0]!, pr_url: 'https://GHE.example.com/Example/Repo/pull/50' };
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');

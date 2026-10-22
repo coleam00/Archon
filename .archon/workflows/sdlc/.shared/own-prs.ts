@@ -12,7 +12,7 @@
 
 import { record, samePr, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
-import { prFromUrl, itemPr } from './merge.ts';
+import { prFromUrl } from './merge.ts';
 import { stateDocuments, stateGet, statePut } from './state.ts';
 import { newWorkItem, read, type WorkItem, workItemName } from './workitem.ts';
 
@@ -40,18 +40,23 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
 }
 
 /**
- * The pull requests some work item already names, and the work items themselves. A
- * malformed item is noted and skipped, as the pickup skips it.
+ * The pull requests some work item already names: its subject, its own-PR URL, and the
+ * PR every one of its build rounds recorded. Not only the latest round's, as `itemPr`
+ * picks for the merge path: a PR an earlier round abandoned is build history, not a
+ * maintainer's own PR. A malformed item or URL is noted and skipped, as the pickup
+ * skips it.
  */
 function namedPrs(): QualifiedPr[] {
   const named: QualifiedPr[] = [];
   for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
     named.push(doc.subject);
-    try {
-      const pr = itemPr(doc);
-      if (pr !== null) named.push(pr);
-    } catch (error) {
-      note(`own-PR enrollment skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    const urls = [...(doc.facts.build?.rounds ?? []).map(round => round.pr_url), doc.facts.own_pr?.url ?? ''];
+    for (const url of urls.filter(recorded => recorded !== '')) {
+      try {
+        named.push(prFromUrl(url));
+      } catch (error) {
+        note(`own-PR enrollment skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
   return named;
