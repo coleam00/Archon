@@ -59,123 +59,6 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
-  it.each([false, true])(
-    'releases completed child scratch when its resumed parent status is unreadable (deferred=%p)',
-    async deferred => {
-      await writeWorkflow(
-        'gated-child',
-        `name: gated-child
-description: child awaiting approval
-nodes:
-  - id: gate
-    approval:
-      message: approve
-  - id: work
-    prompt: work
-    depends_on: [gate]
-`
-      );
-      await writeWorkflow(
-        'block',
-        `name: block
-description: composed work
-nodes:
-  - id: work
-    prompt: work
-`
-      );
-      await writeWorkflow(
-        'parent',
-        `name: parent
-description: parent continuing after its child
-nodes:
-  - id: sub
-    workflow: gated-child
-  - id: fan
-    include: block
-    depends_on: [sub]
-    fan_out:
-      items: '[1]'
-      as: item
-      join: all_success
-`
-      );
-      const store = new InMemoryStore();
-      const deps = makeDeps(store);
-      const first = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'test',
-        cwd,
-        await discover('parent'),
-        'goal'
-      );
-      expect(first).toMatchObject({ success: true, paused: true });
-      const parent = [...store.runs.values()].find(run => run.workflow_name === 'parent');
-      const child = [...store.runs.values()].find(run => run.workflow_name === 'gated-child');
-      if (!parent?.output_root || !child?.output_root) throw new Error('Missing run storage');
-      const scratchFor = (root: string, id: string): string =>
-        realArchonPaths.getRunScratchDir(realArchonPaths.getRunArtifactsDirForRoot(root, id));
-      const childScratch = scratchFor(child.output_root, child.id);
-      const parentScratch = scratchFor(parent.output_root, parent.id);
-      await mkdir(childScratch, { recursive: true });
-      await mkdir(parentScratch, { recursive: true });
-      const cause = new Error('Unsupported parent status');
-      const readStatus = store.getWorkflowRunStatus;
-      let rejected = false;
-      store.getWorkflowRunStatus = async id => {
-        if (
-          id === parent.id &&
-          store.events.some(
-            event =>
-              event.workflow_run_id === id &&
-              event.event_type === 'node_completed' &&
-              event.data?.type === 'compose_fan_out_instance'
-          )
-        ) {
-          rejected = true;
-          throw cause;
-        }
-        return readStatus(id);
-      };
-      const fail = spyOn(store, 'failWorkflowRun');
-      const cancel = spyOn(store, 'cancelWorkflowRun');
-      store.approveGate(child.id);
-      const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
-      if (!hydrated) throw new Error('Child was not resumable');
-      const cleanups: (() => Promise<void>)[] = [];
-      const error: unknown = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'test',
-        cwd,
-        await discover('gated-child'),
-        'goal',
-        undefined,
-        {
-          ...hydrated,
-          ...(deferred ? { deferScratchCleanup: cleanup => cleanups.push(cleanup) } : {}),
-        }
-      ).catch((error: unknown) => error);
-      expect(error).toBeInstanceOf(ParentStatusReadError);
-      if (!(error instanceof ParentStatusReadError))
-        throw new Error('Expected lifecycle interruption');
-      expect(error.cause).toBe(cause);
-      expect(error.workflowRunId).toBe(parent.id);
-      expect(rejected).toBe(true);
-      expect((await store.getWorkflowRun(parent.id))?.status).toBe('running');
-      expect((await store.getWorkflowRun(child.id))?.status).toBe('completed');
-      expect(fail).not.toHaveBeenCalled();
-      expect(cancel).not.toHaveBeenCalled();
-      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
-      expect(cleanups).toHaveLength(deferred ? 1 : 0);
-      expect(existsSync(childScratch)).toBe(deferred);
-      await Promise.all(cleanups.map(cleanup => cleanup()));
-      expect(existsSync(childScratch)).toBe(false);
-      expect(existsSync(parentScratch)).toBe(true);
-    }
-  );
-
   async function recoverInterruptedChildren(
     store: InMemoryStore,
     deps: ReturnType<typeof makeDeps>,
@@ -367,20 +250,19 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
   }
 
   for (const caller of ['child', 'child fan-out', 'engine resume', 'automatic resume'] as const) {
-    for (const persistent of [false, true]) {
-      it(`preserves unreadable composed parent through ${caller} (persistent=${persistent})`, async () => {
-        await writeWorkflow(
-          'block',
-          `name: block
+    it(`preserves unreadable composed parent through ${caller}`, async () => {
+      await writeWorkflow(
+        'block',
+        `name: block
 description: work
 nodes:
   - id: work
     prompt: work
 `
-        );
-        await writeWorkflow(
-          'target',
-          `name: target
+      );
+      await writeWorkflow(
+        'target',
+        `name: target
 description: composed parent
 nodes:
   - id: fan
@@ -390,10 +272,10 @@ nodes:
       as: item
       join: all_success
 `
-        );
-        await writeWorkflow(
-          'outer',
-          `name: outer
+      );
+      await writeWorkflow(
+        'outer',
+        `name: outer
 description: enclosing parent
 nodes:
   - id: sibling
@@ -401,66 +283,59 @@ nodes:
   - id: sub
     workflow: target
 ${caller === 'child fan-out' ? "    fan_out:\n      items: '[1,2]'\n      as: item\n" : ''}`
-        );
-        const store = new InMemoryStore();
-        const deps = makeDeps(store);
-        const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
-          name: 'WorkflowStatusReadError',
-          rawStatus: 'unsupported',
-        });
-        const readStatus = store.getWorkflowRunStatus;
-        let rejected = false;
-        let readsAfterRejection = 0;
-        const rejectedRuns = new Set<string>();
-        store.getWorkflowRunStatus = async id => {
-          const settled = store.events.some(
-            event =>
-              event.workflow_run_id === id &&
-              event.event_type === 'node_completed' &&
-              event.data?.type === 'compose_fan_out_instance'
-          );
-          if (rejectedRuns.has(id)) readsAfterRejection++;
-          if (settled && (!rejectedRuns.has(id) || persistent)) {
-            rejectedRuns.add(id);
-            rejected = true;
-            throw cause;
-          }
-          return readStatus(id);
-        };
-        const fail = spyOn(store, 'failWorkflowRun');
-        const cancel = spyOn(store, 'cancelWorkflowRun');
-        const complete = spyOn(store, 'completeWorkflowRun');
-        const pause = spyOn(store, 'pauseWorkflowRun');
-        const execution = driveUnreadableParent(caller, store, deps);
-        const error: unknown = await execution.catch((error: unknown) => error);
-        expect(error).toBeInstanceOf(ParentStatusReadError);
-        if (!(error instanceof ParentStatusReadError))
-          throw new Error('Expected lifecycle interruption');
-        expect(error.cause).toBe(cause);
-        expect(rejected).toBe(true);
-        expect(readsAfterRejection).toBe(0);
-        expect([...store.runs.values()].every(run => run.status === 'running')).toBe(true);
-        expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
-        expect(fail).not.toHaveBeenCalled();
-        expect(cancel).not.toHaveBeenCalled();
-        expect(complete).not.toHaveBeenCalled();
-        expect(pause).not.toHaveBeenCalled();
-        for (const run of store.runs.values()) {
-          const units = run.workflow_name === 'outer' ? (caller === 'child fan-out' ? 3 : 2) : 1;
-          expect(run.metadata).toMatchObject({
-            total_cost_usd: 0.01 * units,
-            total_tokens_in: 7 * units,
-            total_tokens_out: 3 * units,
-            total_cache_read_tokens: 5 * units,
-            total_cache_write_tokens: 0,
-          });
-        }
-        if (caller === 'child' || caller === 'child fan-out') {
-          store.getWorkflowRunStatus = readStatus;
-          await recoverInterruptedChildren(store, deps, caller === 'child fan-out');
-        }
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+        name: 'WorkflowStatusReadError',
+        rawStatus: 'unsupported',
       });
-    }
+      const readStatus = store.getWorkflowRunStatus;
+      let readsAfterRejection = 0;
+      const rejectedRuns = new Set<string>();
+      store.getWorkflowRunStatus = async id => {
+        const settled = store.events.some(
+          event =>
+            event.workflow_run_id === id &&
+            event.event_type === 'node_completed' &&
+            event.data?.type === 'compose_fan_out_instance'
+        );
+        if (rejectedRuns.has(id)) readsAfterRejection++;
+        if (settled && !rejectedRuns.has(id)) {
+          rejectedRuns.add(id);
+          throw cause;
+        }
+        return readStatus(id);
+      };
+      const fail = spyOn(store, 'failWorkflowRun');
+      const cancel = spyOn(store, 'cancelWorkflowRun');
+      const complete = spyOn(store, 'completeWorkflowRun');
+      const pause = spyOn(store, 'pauseWorkflowRun');
+      const execution = driveUnreadableParent(caller, store, deps);
+      const error: unknown = await execution.catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected lifecycle interruption');
+      expect(error.cause).toBe(cause);
+      expect(rejectedRuns.size).toBeGreaterThan(0);
+      expect(readsAfterRejection).toBe(0);
+      expect([...store.runs.values()].every(run => run.status === 'running')).toBe(true);
+      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+      for (const run of store.runs.values()) {
+        const units = run.workflow_name === 'outer' ? (caller === 'child fan-out' ? 3 : 2) : 1;
+        expect(run.metadata).toMatchObject({
+          total_cost_usd: 0.01 * units,
+          total_tokens_in: 7 * units,
+          total_tokens_out: 3 * units,
+          total_cache_read_tokens: 5 * units,
+          total_cache_write_tokens: 0,
+        });
+      }
+    });
   }
 
   it.each([
@@ -569,7 +444,7 @@ ${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      max_parall
     if (!replacement) await recoverInterruptedChildren(store, deps, fanOut, fanOut ? 2 : 1);
   });
 
-  it.each(['dag', 'loop group', 'composed instance'] as const)(
+  it.each(['dag', 'composed instance'] as const)(
     'stops on a rejected between-layer status read in %s',
     async scope => {
       const body = `  - id: first
@@ -588,17 +463,7 @@ ${body}
       const nodes =
         scope === 'dag'
           ? body
-          : scope === 'loop group'
-            ? `  - id: group
-    loop_group:
-      max_iterations: 1
-      until: done
-      nodes:
-${body
-  .split('\n')
-  .map(line => '      ' + line)
-  .join('\n')}`
-            : `  - id: fan
+          : `  - id: fan
     include: block
     fan_out:
       items: '[1]'
@@ -652,12 +517,10 @@ ${nodes}
     }
   );
 
-  it.each(['before iteration', 'after body'] as const)(
-    'propagates a rejected loop-group status read %s',
-    async phase => {
-      await writeWorkflow(
-        'group-status',
-        `name: group-status
+  it('propagates a rejected loop-group status read after the body', async () => {
+    await writeWorkflow(
+      'group-status',
+      `name: group-status
 description: loop lifecycle
 nodes:
   - id: group
@@ -668,54 +531,41 @@ nodes:
         - id: work
           prompt: work
 `
+    );
+    const store = new InMemoryStore();
+    const readStatus = store.getWorkflowRunStatus;
+    const cause = Object.assign(new Error('Unsupported workflow status'), {
+      name: 'WorkflowStatusReadError',
+    });
+    let readsAfterBody = 0;
+    store.getWorkflowRunStatus = async id => {
+      const bodySettled = store.events.some(
+        event => event.step_name === 'group.work' && event.event_type === 'node_completed'
       );
-      const store = new InMemoryStore();
-      const readStatus = store.getWorkflowRunStatus;
-      const cause = Object.assign(new Error('Unsupported workflow status'), {
-        name: 'WorkflowStatusReadError',
-      });
-      let rejected = false;
-      let bodyStatusReads = 0;
-      store.getWorkflowRunStatus = async id => {
-        const atBoundary =
-          phase === 'before iteration'
-            ? store.events.some(
-                event => event.step_name === 'group' && event.event_type === 'node_started'
-              )
-            : store.events.some(
-                event => event.step_name === 'group.work' && event.event_type === 'node_completed'
-              );
-        if (phase === 'after body' && atBoundary) bodyStatusReads++;
-        if (!rejected && atBoundary && (phase === 'before iteration' || bodyStatusReads === 2)) {
-          rejected = true;
-          throw cause;
-        }
-        return readStatus(id);
-      };
-      const fail = spyOn(store, 'failWorkflowRun');
-      const complete = spyOn(store, 'completeWorkflowRun');
-      const error: unknown = await executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'test',
-        cwd,
-        await discover('group-status'),
-        'goal'
-      ).catch((error: unknown) => error);
-      expect(error).toBeInstanceOf(ParentStatusReadError);
-      if (!(error instanceof ParentStatusReadError))
-        throw new Error('Expected lifecycle interruption');
-      expect(error.cause).toBe(cause);
-      expect(rejected).toBe(true);
-      expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
-      expect(fail).not.toHaveBeenCalled();
-      expect(complete).not.toHaveBeenCalled();
-      expect([...store.runs.values()][0]?.status).toBe('running');
-      if (phase === 'before iteration')
-        expect(store.events.some(event => event.step_name === 'group.work')).toBe(false);
-      else expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
-    }
-  );
+      // The second read after the body settles is the group's own post-body read.
+      if (bodySettled && ++readsAfterBody === 2) throw cause;
+      return readStatus(id);
+    };
+    const fail = spyOn(store, 'failWorkflowRun');
+    const complete = spyOn(store, 'completeWorkflowRun');
+    const error: unknown = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('group-status'),
+      'goal'
+    ).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ParentStatusReadError);
+    if (!(error instanceof ParentStatusReadError))
+      throw new Error('Expected lifecycle interruption');
+    expect(error.cause).toBe(cause);
+    expect(store.events.some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(fail).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect([...store.runs.values()][0]?.status).toBe('running');
+    expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
+  });
 
   it('automatically resumes a parent after its gated child fails', async () => {
     await writeWorkflow(

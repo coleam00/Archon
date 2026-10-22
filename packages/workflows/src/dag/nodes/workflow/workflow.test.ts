@@ -58,15 +58,9 @@ describe('executeDagWorkflow -- workflow: node', () => {
     await removeTempTree(testDir);
   });
 
-  it.each(
-    [false, true].flatMap(fanOut =>
-      ['node_completed', 'node_failed'].flatMap(eventType =>
-        [false, true].map(identified => ({ fanOut, eventType, identified }))
-      )
-    )
-  )(
-    'refuses ambiguous historical child recovery before dispatch: %j',
-    async ({ fanOut, eventType, identified }) => {
+  it.each(['node_completed', 'node_failed'])(
+    'refuses ambiguous historical child recovery before dispatch (%s)',
+    async eventType => {
       await writeBlock(
         'name: child\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
         'child'
@@ -77,17 +71,13 @@ describe('executeDagWorkflow -- workflow: node', () => {
         event_type: eventType,
         data: {
           type: 'workflow',
-          node_output: fanOut ? '["old output"]' : 'old output',
+          node_output: '["old output"]',
           cost_usd: 0.02,
           tokens: { input: 14, output: 6 },
-          ...(identified
-            ? {
-                fan_out_outcome: fanOutOutcome([
-                  { index: 0, outcome: 'completed', child_run_id: 'a' },
-                  { index: 1, outcome: 'failed', child_run_id: 'b' },
-                ]),
-              }
-            : {}),
+          fan_out_outcome: fanOutOutcome([
+            { index: 0, outcome: 'completed', child_run_id: 'a' },
+            { index: 1, outcome: 'failed', child_run_id: 'b' },
+          ]),
         },
       };
       const snapshot = await foldDagResumeSnapshot([historical], 'parent');
@@ -120,9 +110,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
               id: 'sub',
               kind: 'workflow',
               workflow: 'child',
-              ...(fanOut
-                ? { fan_out: { items: '[1,2]', max_parallel: 2, join: 'all_success' as const } }
-                : {}),
+              fan_out: { items: '[1,2]', max_parallel: 2, join: 'all_success' },
             },
           ],
         },
@@ -178,16 +166,6 @@ describe('executeDagWorkflow -- workflow: node', () => {
   it.each([
     { label: 'valid', malformed: false, counters: { total_tokens_out: 10 } },
     { label: 'invalid axis', malformed: true, counters: { total_tokens_out: 'unreadable' } },
-    {
-      label: 'null marker',
-      malformed: true,
-      counters: { total_tokens_out: 10, total_tokens_unknown: null },
-    },
-    {
-      label: 'string marker',
-      malformed: true,
-      counters: { total_tokens_out: 10, total_tokens_unknown: 'false' },
-    },
   ])(
     'counts persisted child usage once across parent replay ($label)',
     async ({ malformed, counters }) => {

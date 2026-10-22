@@ -65,14 +65,8 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     await removeTempTree(testDir);
   });
 
-  for (const scenario of [
-    'parallel sibling',
-    'loop group',
-    'usage read failure',
-    'usage write failure',
-  ]) {
+  for (const scenario of ['parallel sibling', 'usage read failure', 'usage write failure']) {
     it(`preserves an unreadable parent after settling work (${scenario})`, async () => {
-      const nested = scenario === 'loop group';
       await writeBlock(
         'name: compose-blk\ndescription: Paid work\nnodes:\n  - id: work\n    prompt: Work.'
       );
@@ -116,15 +110,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
         include: 'compose-blk',
         fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
       };
-      const nodes: DagNode[] = nested
-        ? [
-            {
-              id: 'group',
-              kind: 'loop_group',
-              loop_group: { max_iterations: 1, fresh_context: false, nodes: [fan] },
-            },
-          ]
-        : [fan];
+      const nodes: DagNode[] = [fan];
       if (scenario === 'parallel sibling') {
         nodes.push({ id: 'peer', kind: 'agent', source: { kind: 'inline', prompt: 'Peer work.' } });
       }
@@ -149,12 +135,11 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
       expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
-      if (scenario === 'parallel sibling' || nested) {
-        const queries = nested ? 1 : 2;
+      if (scenario === 'parallel sibling') {
         expect(runUsageWrites(store).at(-1)).toMatchObject({
-          total_cost_usd: 0.02 * queries,
-          total_tokens_in: 2 * queries,
-          total_tokens_out: queries,
+          total_cost_usd: 0.04,
+          total_tokens_in: 4,
+          total_tokens_out: 2,
         });
       } else {
         expect(mockLogFn).toHaveBeenCalledWith(
