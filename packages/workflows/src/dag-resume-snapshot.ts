@@ -449,24 +449,31 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   }
 }
 
+function foldReportedChildUsage(
+  fold: ResumeFold,
+  usages: NonNullable<NodeRecord['data']['child_usage']>
+): void {
+  for (const usage of usages) {
+    const prior = fold.reportedChildUsage.get(usage.childRunId);
+    const hasTokenMeasurement = usage.tokens !== undefined || usage.tokensUnknown === true;
+    fold.reportedChildUsage.set(usage.childRunId, {
+      ...usage,
+      costUsd: usage.costUsd ?? prior?.costUsd,
+      tokens:
+        usage.tokens !== undefined
+          ? { ...prior?.tokens, ...usage.tokens }
+          : hasTokenMeasurement
+            ? undefined
+            : prior?.tokens,
+      tokensUnknown: hasTokenMeasurement ? usage.tokensUnknown : prior?.tokensUnknown,
+    });
+  }
+}
+
 function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
   const { data, path } = record;
   if (data.child_usage !== undefined) {
-    for (const usage of data.child_usage) {
-      const prior = fold.reportedChildUsage.get(usage.childRunId);
-      const hasTokenMeasurement = usage.tokens !== undefined || usage.tokensUnknown === true;
-      fold.reportedChildUsage.set(usage.childRunId, {
-        ...usage,
-        costUsd: usage.costUsd ?? prior?.costUsd,
-        tokens:
-          usage.tokens !== undefined
-            ? { ...prior?.tokens, ...usage.tokens }
-            : hasTokenMeasurement
-              ? undefined
-              : prior?.tokens,
-        tokensUnknown: hasTokenMeasurement ? usage.tokensUnknown : prior?.tokensUnknown,
-      });
-    }
+    foldReportedChildUsage(fold, data.child_usage);
     return;
   }
   if (data.type !== 'workflow') return;
