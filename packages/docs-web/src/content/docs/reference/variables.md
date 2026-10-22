@@ -264,9 +264,11 @@ the workflow otherwise, so a binding can never race its producer. Node-local bin
 the **nearest** input layer: they win over a composed block's inputs, which win over the
 run's own `$INPUTS`.
 
-The load-time environment-read check uses these same binding names and the workflow's declared
-input names. For example, `process.env.INPUTS_GREEN` requires `with: { green: ... }` on that
-script node or a declared `green` workflow input. Engine-owned names such as `ARTIFACTS_DIR`,
+The load-time environment-read check accepts these binding names, declared workflow inputs,
+and environment names configured in Archon or the project's `.archon/.env`. Within a declared
+`inputs:` contract, an unconfigured `process.env.INPUTS_GREEN` read requires
+`with: { green: ... }` on that script node or a declared `green` workflow input.
+Engine-owned names such as `ARTIFACTS_DIR`,
 `BASE_BRANCH`, `ARGUMENTS`, and `WORKFLOW_ID` are always accepted.
 
 `with:` on other node types: `include:` and `workflow:` nodes keep their existing caller-input
