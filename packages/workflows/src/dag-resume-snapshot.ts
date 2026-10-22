@@ -469,7 +469,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
       row.event_type === 'node_failed' ||
       row.event_type === 'node_suspended'
     ) {
-      addUsage(fold, row.step_name, { costIncomplete: true });
+      addUsage(fold, row.step_name, { costIncomplete: true, tokensUnknown: true });
     }
     return;
   }

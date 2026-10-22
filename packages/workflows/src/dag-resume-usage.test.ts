@@ -284,7 +284,19 @@ it('replaces cumulative child snapshots within an invocation while counting dist
 });
 
 it.each(['node_completed', 'node_failed', 'node_suspended'])(
-  '%s unreadable cost evidence obeys authoritative instance scope',
+  '%s unreadable counted usage keeps tokens unknown and readable cost available',
+  async eventType => {
+    const snapshot = await foldDagResumeSnapshot(
+      [{ step_name: 'old', event_type: eventType, data: '{' }, valid],
+      'run'
+    );
+    expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: true, tokensUnknown: true });
+    expect(snapshot.tokens).toBeUndefined();
+  }
+);
+
+it.each(['node_completed', 'node_failed', 'node_suspended'])(
+  '%s unreadable usage evidence obeys authoritative instance scope',
   async eventType => {
     const snapshot = await foldDagResumeSnapshot(
       [
@@ -300,6 +312,8 @@ it.each(['node_completed', 'node_failed', 'node_suspended'])(
     );
     expect(snapshot.costUsd).toBeCloseTo(0.3);
     expect(snapshot.costIncomplete).toBe(false);
+    expect(snapshot.tokensUnknown).toBe(false);
+    expect(snapshot.tokens).toEqual({ input: 7, output: 3 });
   }
 );
 
@@ -316,4 +330,6 @@ it.each([
     'run'
   );
   expect(snapshot).toMatchObject({ costUsd: 0.2, costIncomplete: false });
+  expect(snapshot.tokensUnknown).toBe(false);
+  expect(snapshot.tokens).toEqual({ input: 7, output: 3 });
 });
