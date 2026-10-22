@@ -10,6 +10,7 @@
  * `url.<base>.insteadOf` rewrite: that is the repository the operator named.
  */
 
+import { randomUUID } from 'node:crypto';
 import { sameRepo, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
 
@@ -92,17 +93,19 @@ export function remoteFor(repo: Repo, checkout = process.cwd()): string {
 }
 
 /**
- * Fetch the advertised default-branch commit without writing refs shared by other
- * worktrees or FETCH_HEAD, which another fetch in this checkout could overwrite.
+ * Fetch into a unique ref: tracking refs are shared by worktrees, and FETCH_HEAD
+ * can be overwritten by another fetch in this checkout.
  */
 export function fetchDefaultBranch(repo: Repo): { readonly branch: string; readonly sha: string } {
   const remote = remoteFor(repo);
   const head = gitOrThrow('ls-remote', '--symref', remote, 'HEAD');
   const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head)?.[1];
   if (branch === undefined) throw new Error(`${remote} reports no default branch`);
-  const sha = /^([0-9a-f]+)\tHEAD$/m.exec(head)?.[1];
-  if (sha === undefined) throw new Error(`${remote} reports no default-branch commit`);
-  gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, sha);
-  return { branch, sha };
+  const ref = `refs/archon/fetch/${randomUUID()}`;
+  try {
+    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `refs/heads/${branch}:${ref}`);
+    return { branch, sha: gitOrThrow('rev-parse', '--verify', ref) };
+  } finally {
+    gitOrThrow('update-ref', '-d', ref);
+  }
 }
-

@@ -41,7 +41,17 @@ describe('remote identity', () => {
 });
 
 describe('the default branch snapshot', () => {
-  it('fetches fresh objects without changing tracking refs or FETCH_HEAD', () => {
+  it('returns no maintainers for a confirmed absent policy file', () => {
+    const cwd = gitCheckout({}, track);
+    const run = spawnSync(process.execPath, ['-e', `
+      import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
+      console.log(JSON.stringify([...readMaintainers(${JSON.stringify(PR.repo)})]));
+    `], { cwd, encoding: 'utf8' });
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(JSON.parse(run.stdout)).toEqual([]);
+  });
+
+  it.each(['before lookup', 'after lookup'])('fetches fresh objects when the remote advances %s without changing tracking refs or FETCH_HEAD', timing => {
     const cwd = gitCheckout({}, track);
     const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
     git(cwd, 'fetch', '-q', 'upstream', 'dev');
@@ -54,12 +64,23 @@ describe('the default branch snapshot', () => {
     writeFileSync(join(writer, '.archon/sdlc/policy/maintainers.json'), '["NewMaintainer"]');
     git(writer, 'add', '.archon/sdlc/policy/maintainers.json');
     git(writer, 'commit', '-q', '-m', 'new maintainer');
-    git(writer, 'push', '-q', 'origin', 'dev');
+    if (timing === 'before lookup') git(writer, 'push', '-q', 'origin', 'dev');
     const fresh = git(writer, 'rev-parse', 'HEAD');
 
     const run = spawnSync(process.execPath, ['-e', `
       import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
+      const nativeGit = Bun.spawnSync.bind(Bun);
+      let advance = ${JSON.stringify(timing === 'after lookup')};
+      Bun.spawnSync = (argv, options) => {
+        const result = nativeGit(argv, options);
+        if (advance && argv[0] === 'git' && argv[1] === 'ls-remote') {
+          advance = false;
+          const pushed = nativeGit(['git', '-C', ${JSON.stringify(writer)}, 'push', '-q', 'origin', 'dev']);
+          if (pushed.exitCode !== 0) throw new Error(pushed.stderr.toString());
+        }
+        return result;
+      };
       const repo = ${JSON.stringify(PR.repo)};
       console.log(JSON.stringify({ base: fetchDefaultBranch(repo), maintainers: [...readMaintainers(repo)] }));
     `], { cwd, encoding: 'utf8' });
@@ -67,6 +88,7 @@ describe('the default branch snapshot', () => {
     expect(JSON.parse(run.stdout)).toEqual({ base: { branch: 'dev', sha: fresh }, maintainers: ['newmaintainer'] });
     expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);
     expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
+    expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
   });
 });
 
