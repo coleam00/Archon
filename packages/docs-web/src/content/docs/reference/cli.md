@@ -664,6 +664,14 @@ transcripts retain the names `node_start`, `node_complete` and `node_error`; the
 metadata describes the same fact as the durable node event. Suspended nodes remain active and
 appear as running until their gate or wait resolves.
 
+A `workflow:` fan-out node whose children did not all complete prints a `Fan-out work:`
+line with the tally, then up to 10 unfinished slots (item index, outcome, child run and
+error). The rest are counted as `… and N more`; the complete record is
+`terminal_record.nodes[].fan_out_outcome` in `--json`, or `nodes[].fanOutOutcome` with
+`--json --verbose`. The text view shows it under the terminal record for a finished run and
+under the node with `--verbose`. See
+[fan-out join semantics](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work).
+
 Every `workflow get --json` shape includes `terminal_record`. The API detail endpoint,
 `GET /api/workflows/runs/:runId`, exposes the same value as `run.terminal_record`.
 The engine persists this record with the terminal status transition, including detached

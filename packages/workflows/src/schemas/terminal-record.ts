@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fanOutOutcomeSchema } from './fan-out-outcome';
 import { nodeArtifactSchema } from './node-artifact';
 import {
   nodeStateSchema,
@@ -70,6 +71,8 @@ export const runNodeStateSchema = z.object({
   error: z.string().optional(),
   reason: nodeSkipReasonSchema.optional(),
   cause: skipCauseSchema.optional(),
+  /** A `workflow:` fan-out node's per-slot record; the node's state says nothing about its children. */
+  fan_out_outcome: fanOutOutcomeSchema.optional(),
 });
 export type RunNodeState = z.infer<typeof runNodeStateSchema>;
 

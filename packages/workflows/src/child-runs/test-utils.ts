@@ -189,6 +189,7 @@ registerBuiltinProviders();
 
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from '../deps';
 import type { IWorkflowStore } from '../store';
+import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   FAN_OUT_CANCEL_REASONS,
   waitCompletionEvents,
@@ -337,8 +338,24 @@ export class InMemoryStore implements IWorkflowStore {
   listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async () => {
     throw new Error('Not used by this test');
   };
-  listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async () => {
-    throw new Error('Not used by this test');
+  listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (runIds, eventTypes) => {
+    const byRun = new Map<string, WorkflowEventRow[]>();
+    this.events.forEach((event, i) => {
+      if (!runIds.includes(event.workflow_run_id)) return;
+      if (!eventTypes.some(type => type === event.event_type)) return;
+      const rows = byRun.get(event.workflow_run_id) ?? [];
+      rows.push({
+        id: `event-${String(i)}`,
+        workflow_run_id: event.workflow_run_id,
+        event_type: event.event_type,
+        step_index: null,
+        step_name: event.step_name ?? null,
+        data: event.data ?? {},
+        created_at: new Date(0).toISOString(),
+      });
+      byRun.set(event.workflow_run_id, rows);
+    });
+    return byRun;
   };
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
@@ -569,11 +586,14 @@ export class InMemoryStore implements IWorkflowStore {
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
   releaseWritebackClaim = (): Promise<void> => Promise.resolve();
 
-  cancelWorkflowRun = (id: string): Promise<{ cancelled: boolean }> => {
+  // Both cancels write their terminal event in the same step, as the SQL transitions do.
+  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event) => {
     const r = this.runs.get(id);
     if (r && r.status !== 'completed' && r.status !== 'cancelled') {
       r.status = 'cancelled';
       r.completed_at = new Date();
+      const { step_name, ...data } = event ?? {};
+      this.events.push({ workflow_run_id: id, event_type: 'workflow_cancelled', step_name, data });
       return Promise.resolve({ cancelled: true });
     }
     return Promise.resolve({ cancelled: false });
@@ -585,6 +605,11 @@ export class InMemoryStore implements IWorkflowStore {
       r.status = 'cancelled';
       r.completed_at = new Date();
       r.metadata = { ...r.metadata, cancelled_reason: reason };
+      this.events.push({
+        workflow_run_id: id,
+        event_type: 'workflow_cancelled',
+        data: { reason, cancel_reason: 'fan_out' },
+      });
       return Promise.resolve({ cancelled: true });
     }
     return Promise.resolve({ cancelled: false });
