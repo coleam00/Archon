@@ -163,7 +163,7 @@ interface DispatchHosts {
   selected: string;
 }
 
-type Credential = Awaited<ReturnType<typeof selectCredential>>;
+type OperationCredential = Awaited<ReturnType<typeof selectCredential>>;
 
 export async function dispatchForge(
   input: ForgeRequest,
@@ -282,7 +282,7 @@ function operationCredential(
   discovery: PluginDiscovery,
   selectedHost: string,
   options: DispatchOptions
-): Promise<Credential> {
+): Promise<OperationCredential> {
   if (request.op === 'resolve') return Promise.resolve({ kind: 'none' });
   const env = options.env ?? process.env;
   const metadata = plugin.metadata;
