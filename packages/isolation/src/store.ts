@@ -39,7 +39,10 @@ export interface IIsolationStore {
     metadata: Record<string, unknown>,
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
-  /** With an observation, restore only that retired worktree without replacing an active workflow. */
+  /**
+   * Worktree retirement requires markWorktreeDestroyed or withWorktreeRegistration.
+   * With an observation, restore only that retired worktree without replacing an active workflow.
+   */
   updateStatus(
     id: string,
     status: 'active' | 'destroyed',

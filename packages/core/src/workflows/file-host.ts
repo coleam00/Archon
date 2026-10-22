@@ -313,6 +313,9 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           const rows = await environments();
           const row = rows.find(row => row.id === id);
           if (!row) throw new Error(`Isolation environment ${id} not found`);
+          if (row.provider === 'worktree' && status === 'destroyed') {
+            throw new Error(`Worktree '${id}' retirement requires markWorktreeDestroyed`);
+          }
           if (
             observed &&
             (row.status !== 'destroyed' ||

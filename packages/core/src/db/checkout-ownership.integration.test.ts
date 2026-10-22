@@ -180,6 +180,52 @@ for (const kind of ['sql', 'files'] as const) {
     }
   );
 
+  for (const observed of [false, true]) {
+    test.each(['pending', 'running', 'paused', 'failed'] as const)(
+      `${kind}: status writer refuses retirement with a %s owner (observed=${observed})`,
+      async status => {
+        const { env, create } = await fixture();
+        const run = await create({ metadata: { isolation_env_id: env.id } });
+        if (status !== 'pending') await store.claimPendingWorkflowRun(run.id);
+        if (status === 'paused') await store.updateWorkflowRun(run.id, { status });
+        if (status === 'failed') await store.failWorkflowRun(run.id, 'preserved');
+        await expect(
+          isolation.updateStatus(env.id, 'destroyed', observed ? env : undefined)
+        ).rejects.toThrow('markWorktreeDestroyed');
+        expect(await isolation.getById(env.id)).toEqual(env);
+      }
+    );
+
+    test.each(['active', 'destroyed'] as const)(
+      `${kind}: status writer refuses even unowned %s worktree retirement (observed=${observed})`,
+      async status => {
+        const { env } = await fixture();
+        if (status === 'destroyed') await isolation.markWorktreeDestroyed(env);
+        const before = await isolation.getById(env.id);
+        await expect(
+          isolation.updateStatus(env.id, 'destroyed', observed ? env : undefined)
+        ).rejects.toThrow('markWorktreeDestroyed');
+        expect(await isolation.getById(env.id)).toEqual(before);
+      }
+    );
+  }
+
+  test(`${kind}: status writer preserves container retirement and reactivation`, async () => {
+    const { env } = await fixture();
+    const container = await isolation.create({
+      ...env,
+      provider: 'container',
+      workflow_id: randomUUID(),
+      branch_name: toBranchName(env.branch_name),
+      created_by_platform: env.created_by_platform ?? undefined,
+      created_by_user_id: env.created_by_user_id ?? undefined,
+    });
+    await isolation.updateStatus(container.id, 'destroyed');
+    expect((await isolation.getById(container.id))?.status).toBe('destroyed');
+    await isolation.updateStatus(container.id, 'active');
+    expect((await isolation.getById(container.id))?.status).toBe('active');
+  });
+
   test(`${kind}: retiring an already retired registration preserves a later alias owner`, async () => {
     const { env, create } = await fixture();
     await isolation.markWorktreeDestroyed(env);
