@@ -163,13 +163,14 @@ nodes:
 
   # A round that continues a pull request (route's declaration) starts from that pull
   # request's head, not from the branch the run's checkout was cut from, so its publish
-  # fast-forwards. A fresh round stays on the base.
+  # fast-forwards. A fresh round stays on the base, and refuses when it is not on it.
   - id: checkout
     script: checkout
     runtime: bun
     depends_on: [facts, route]
     when: "$route.output.decision == 'launch'"
     with:
+      item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
       candidate: "$facts.output.continues"
       continues: "$route.output.continues"

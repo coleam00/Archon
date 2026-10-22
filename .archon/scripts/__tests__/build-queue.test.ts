@@ -934,11 +934,23 @@ describe('the build queue checkout', () => {
     git(at.checkout, 'checkout', '-q', 'dev');
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
-    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    const item = JSON.stringify(SUBJECT);
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
     // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
-    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
-    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
-    expect(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
+    expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
+  }, 60_000);
+
+  test('a fresh round refuses a checkout left off the base, such as an adopted one at the superseded head', () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const result = run(at, 'checkout', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("a fresh round must start on dev, but the checkout's HEAD is not on it");
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
   }, 60_000);
 });

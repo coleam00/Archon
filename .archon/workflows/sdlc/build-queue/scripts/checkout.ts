@@ -9,7 +9,12 @@
  * The checkout moves only when it is clean and its commit is already on a remote, so
  * nothing local is lost.
  *
- * Bound inputs: INPUTS_PULL_REQUEST, the item's pull request from facts, or null;
+ * A fresh round stays where it is, but only when that is on the repository's current
+ * default branch: an adopted checkout left at a superseded pull request's head would
+ * otherwise carry its commits into the replacement pull request. It refuses instead.
+ *
+ * Bound inputs: INPUTS_ITEM, the item from facts, whose repository names the base;
+ * INPUTS_PULL_REQUEST, the item's pull request from facts, or null;
  * INPUTS_CANDIDATE, the number facts found continuable, else empty or `null`;
  * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`.
  * Route may decline the candidate, never name another pull request.
@@ -22,18 +27,22 @@
  * `none` needs its own value.
  */
 
-import type { PrRecord } from '../../.shared/forge.ts';
+import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
 import { forgeSource } from '../../.shared/forge.ts';
-import { gitOrThrow } from '../../.shared/git.ts';
+import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { remoteFor } from '../../.shared/remote.ts';
+import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
 function main(): void {
   const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
   const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
   const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (continues === null) {
+    const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
+    const base = fetchDefaultBranch(item.repo);
+    if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
+      throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
     emit({ head: null, pull_request: known === null ? null : 'none' });
     return;
   }

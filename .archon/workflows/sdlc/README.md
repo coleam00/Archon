@@ -544,7 +544,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
   takes, pushing onto its head so the same pull request updates. A superseded one is
   never checked out or pushed to: ship gets `none`, so its triage cannot route the
-  round back onto it. The round starts fresh and its brief asks for the old
+  round back onto it. The round starts fresh, refusing a checkout that is not on the
+  default branch, and its brief asks for the old
   pull request to be closed as superseded once the replacement opens. A round that failed
   after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
