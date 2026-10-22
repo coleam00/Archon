@@ -1,21 +1,15 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { executionClaim, type IWorkflowStore } from '../store';
-import { readSourceRelease, type ApprovalContext } from '../schemas';
+import { readSourceRelease } from '../schemas';
+import { approval, types } from './fixtures';
 
-const approval: ApprovalContext = {
-  nodeId: 'review',
-  message: 'Choose',
-  type: 'approval',
-  pauseId: 'first',
-};
+/** The claimed row, whose metadata carries the execution claim the release must match. */
 async function running(store: IWorkflowStore) {
   const run = await store.createWorkflowRun({ workflow_name: 'source-release', user_message: '' });
   const claimed = await store.claimPendingWorkflowRun(run.id);
   if (!claimed) throw new Error('run was not claimed');
   return claimed;
 }
-const types = async (store: IWorkflowStore, id: string) =>
-  (await store.listWorkflowEvents(id)).map(event => event.event_type);
 
 export function describeSourceReleaseConformance(getStore: () => IWorkflowStore): void {
   describe('source release', () => {

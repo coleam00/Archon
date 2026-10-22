@@ -683,19 +683,21 @@ Archon sends a few anonymous events — `archon_started` (once per CLI invocatio
 
 ### `.env` File Locations
 
-Archon keys env loading on **directory ownership, not filename**. `.archon/` (at `~/` or `<cwd>/`) is archon-owned. Anything else is yours.
+Archon loads its own environment files, separate from the target repository's app configuration. The CLI and compiled server load `.archon/.env` files at user and repo scope. A server running from source also loads the Archon checkout's root `.env`.
 
 | Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
 | --- | --- | --- | --- |
-| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| Target repo `<cwd>/.env` | **yes** (safety guard) | no | never |
+| `<archon-checkout>/.env` | yes if the checkout is CWD | source server only, after stripping, without override | never |
 | `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope with CLI exceptions below) | yes iff `--scope project` |
 | `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
 **Load order at boot** (every entry point — CLI and server):
 
-1. Strip keys Bun auto-loaded from `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production` (prevents target-repo env from leaking into Archon).
-2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
-3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
+1. Strip every key named in `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production`, including shell or direnv values with those names (prevents target-repo env from leaking into Archon).
+2. **Source-checkout server only:** load `<archon-checkout>/.env` without `override`, so values still in the process environment win. This path is resolved from the server source location, independently of CWD. When CWD is the Archon checkout, this deliberately reloads its root `.env` after stripping. The CLI and compiled server skip this step.
+3. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars and source-checkout values).
+4. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
 The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
@@ -718,7 +720,8 @@ The `[archon] loaded N keys from …` lines are suppressed by default (they woul
 
 - **`~/.archon/.env`** — user-wide defaults (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, etc.). Applies to every project.
 - **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc. It cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`.
-- **`<cwd>/.env`** — **your app's** env file. Archon does not read this file; it strips the keys at boot so they do not leak into Archon's process.
+- **Target repo `<cwd>/.env`** — **your app's** env file. Archon strips its keys at boot and does not load its values.
+- **`<archon-checkout>/.env`** — configuration for a server running from Archon source, as described in the [developer guide](https://github.com/coleam00/Archon/blob/dev/CONTRIBUTING.md#getting-started). This is Archon's own checkout, not a separate target repository. Its root `.env` loads even when the server starts with another CWD; when the checkout itself is CWD, its root `.env` is the exception to the target-repo rule above.
 
 ```bash
 # User-wide
