@@ -931,6 +931,8 @@ describe('the build queue checkout', () => {
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
+    // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
+    expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
     expect(ok(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
     expect(run(at, 'checkout', { INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);

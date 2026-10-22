@@ -15,10 +15,11 @@
  * Route may decline the candidate, never name another pull request.
  *
  * It emits the pull request the round's `archon-ship` continues: the number, `none`
- * when route declined the candidate, so ship's triage cannot route the round back onto
- * the superseded pull request, or null when facts offered none, which leaves it to
- * ship's triage as before. A declared null reaches ship as empty, so the declined case
- * needs its own value.
+ * when the forge knows a pull request for the item that the round does not continue
+ * (one route declined, or a closed, merged or fork one facts never offered), so ship's
+ * triage cannot route the round back onto it, or null when the item has no pull
+ * request, which leaves it to ship's triage. A declared null reaches ship as empty, so
+ * `none` needs its own value.
  */
 
 import type { PrRecord } from '../../.shared/forge.ts';
@@ -31,13 +32,13 @@ import { remoteFor } from '../../.shared/remote.ts';
 function main(): void {
   const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
   const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
+  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (continues === null) {
-    emit({ head: null, pull_request: candidate === null ? null : 'none' });
+    emit({ head: null, pull_request: known === null ? null : 'none' });
     return;
   }
   if (continues !== candidate)
     throw new Error(`route continues pull request ${String(continues)}, but only ${String(candidate ?? 'none')} can be continued`);
-  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (known === null || known.number !== continues)
     throw new Error(`route continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
   const pr = viewPr({ repo: known.repo, number: continues }, forgeSource()).pr;

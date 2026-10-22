@@ -548,7 +548,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   pull request to be closed as superseded once the replacement opens. A round that failed
   after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
-  merged pull request, or one from a fork, is asked about.
+  merged pull request, or one from a fork, is asked about; a round launched anyway
+  never continues it, since ship gets `none` for it too.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new

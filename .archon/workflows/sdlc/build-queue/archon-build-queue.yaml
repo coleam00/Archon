@@ -177,8 +177,9 @@ nodes:
       type: object
       properties:
         head: { type: [string, 'null'] }
-        # What ship continues: the number, `none` when route declined the candidate,
-        # or null when facts offered none and ship's triage decides.
+        # What ship continues: the number, `none` when the item has a pull request
+        # the round does not continue, or null when it has none and ship's triage
+        # decides.
         pull_request:
           anyOf:
             - { type: integer, minimum: 1 }
