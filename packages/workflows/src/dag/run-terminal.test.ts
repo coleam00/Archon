@@ -24,6 +24,7 @@ import {
   readTranscript,
 } from './test-utils';
 import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from '../dag-executor';
+import { ParentStatusReadError } from '../parent-status-read';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../event-emitter';
 import type { DagNode, ExecNode, WorkflowRun } from '../schemas';
 import type { IWorkflowPlatform } from '../deps';
@@ -408,29 +409,60 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ step: 'config' });
   });
 
-  it('an error escaping a node that already started is unknown, not config', async () => {
-    const { failureKinds } = await runDag(
-      [
-        {
-          id: 'group',
-          kind: 'loop_group',
-          loop_group: {
-            fresh_context: false,
-            until_bash: 'exit 1',
-            max_iterations: 3,
-            nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+  it.each([1, 2])(
+    'a rejected loop-group status read at check %i interrupts without failing work',
+    async check => {
+      const store = createMockStore();
+      const cause = new Error('database is locked');
+      if (check === 2) store.getWorkflowRunStatus.mockResolvedValueOnce('running');
+      store.getWorkflowRunStatus.mockImplementationOnce(async () => {
+        throw cause;
+      });
+      const error = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(),
+          workflow: {
+            name: 'status-read-interruption',
+            nodes: [
+              {
+                id: 'group',
+                kind: 'loop_group',
+                loop_group: {
+                  fresh_context: false,
+                  until_bash: 'exit 1',
+                  max_iterations: 3,
+                  nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+                },
+              },
+            ],
           },
-        },
-      ],
-      store => {
-        // Only the group's own status check fails; the run-level checks still answer.
-        store.getWorkflowRunStatus.mockImplementationOnce(async () => {
-          throw new Error('database is locked');
-        });
-      }
-    );
-    expect(failureKinds.group).toBe('unknown');
-  });
+        })
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError)) throw error;
+      expect(error.cause).toBe(cause);
+      expect(error.workflowRunId).toBe('dag-test-run-id');
+      expect(error.nodeId).toBe('group');
+      const events = persistedEvents(store);
+      expect(
+        events.some(event => event.event_type === 'node_started' && event.step_name === 'group')
+      ).toBe(true);
+      expect(
+        events.some(
+          event => event.event_type === 'node_completed' && event.step_name === 'group.body'
+        )
+      ).toBe(check === 2);
+      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(
+        events.some(event => event.event_type === 'node_completed' && event.step_name === 'group')
+      ).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   it('one completed node and one failed node is a node_error', async () => {
     const { store } = await runDag([

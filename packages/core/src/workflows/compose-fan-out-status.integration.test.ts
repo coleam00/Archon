@@ -13,11 +13,19 @@ import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
 import { WorkflowStatusReadError } from '../db/workflow-run-status';
 
 const db = new SqliteAdapter(':memory:');
+function unexpectedConnectionCall(): never {
+  throw new Error('Unexpected database connection operation in private SQLite test');
+}
 mock.module('../db/connection', () => ({
   pool: db,
   getDatabase: () => db,
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
+  getSqliteDbPath: unexpectedConnectionCall,
+  getSchemaVersion: unexpectedConnectionCall,
+  getDbNotificationListener: unexpectedConnectionCall,
+  closeDatabase: unexpectedConnectionCall,
+  resetDatabase: unexpectedConnectionCall,
 }));
 const { createWorkflowStore } = await import('./store-adapter');
 const track = trackTempRoots();
