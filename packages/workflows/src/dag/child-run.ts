@@ -131,34 +131,38 @@ export function childRunUsage(
   run: WorkflowRun
 ): Pick<ChildWorkflowOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> {
   const md: Record<string, unknown> = run.metadata ?? {};
-  const input = md.total_tokens_in;
-  const output = md.total_tokens_out;
-  const hasValidTokens =
-    typeof input === 'number' &&
-    Number.isFinite(input) &&
-    typeof output === 'number' &&
-    Number.isFinite(output);
+  const tokens = childRunTokens(md);
   const tokensUnknown =
     hasUnknownTokenTotal(md) ||
     ((Object.hasOwn(md, 'total_tokens_in') || Object.hasOwn(md, 'total_tokens_out')) &&
-      !hasValidTokens);
+      tokens === undefined);
+  return {
+    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
+  };
+}
+
+function childRunTokens(md: Record<string, unknown>): TokenUsage | undefined {
+  const input = md.total_tokens_in;
+  const output = md.total_tokens_out;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output)
+  )
+    return undefined;
   const cacheRead =
     typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
   const cacheWrite =
     typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens = hasValidTokens
-    ? {
-        input,
-        output,
-        ...(cacheRead !== undefined ? { cacheRead } : {}),
-        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-        // Persisted by persistRunUsage; without it a child's floor would contribute to
-        // the parent as though it were an exact total.
-        ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-      }
-    : undefined;
   return {
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
+    input,
+    output,
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    // Persisted by persistRunUsage; without it a child's floor would contribute to
+    // the parent as though it were an exact total.
+    ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
   };
 }
