@@ -30,6 +30,8 @@ import {
   prepareCase,
   type ReviewItem,
   runCost,
+  type BatchSample,
+  unaccounted,
   validateJudgement,
   writeBatch,
   readSamples,
@@ -525,6 +527,17 @@ describe('latestLines', () => {
 const testJudge = { spec: 'opus', prompt_sha: 'rubric' };
 
 describe('the batch page', () => {
+  it('leaves a finding a known defect accounts for out of the clean sample’s false-positive candidates', () => {
+    const finding = (id: string, claim: string): Finding => ({ id, severity: 'note', sources: ['code'], claim, status: 'open', round: 1 });
+    const sample: BatchSample = {
+      line: { case: 'counting', variant: 'clean', sample: 1, run_id: 'run-1', label: 'v', passed: true, item: 'items/run-1', cost_usd: null, cost_partial: false, duration_ms: null, problems: [] },
+      item: { defects: [], known_defects: [{ id: 'K1', claim: 'Never stops.' }], lenses: { code: 'review/code.md' } },
+      findings: [finding('R1', 'Never stops.'), finding('R2', 'Unlinked problem.')],
+      judgement: { valid: true, defects: [{ id: 'K1', caught_by: ['code'], finding: 'R1', evidence: 'States the mechanism.' }], shape_unmatched: 0 },
+    };
+    expect(unaccounted(sample).map(entry => entry.id)).toEqual(['R2']);
+  });
+
   it('shows a cost that is only a floor as at least that much', () => {
     const out = track(mkdtempSync(join(tmpdir(), 'archon-bench-page-')));
     const sample = { case: 'counting', variant: 'v1', run_id: 'run-1', version: { label: 'v' }, passed: false };

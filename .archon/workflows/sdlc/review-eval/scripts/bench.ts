@@ -890,7 +890,7 @@ function latestJudgements(outDir: string, judge: Judge): Map<string, Record<stri
 }
 
 /** One judged sample, read back with its item and findings. */
-interface BatchSample {
+export interface BatchSample {
   readonly line: SampleLine;
   readonly item: ItemRecord | null;
   readonly findings: readonly Finding[];
@@ -922,7 +922,7 @@ function batchSamples(outDir: string, caseId: string, judge: Judge): BatchSample
 }
 
 /** Findings no judged defect accounts for: on a clean sample, the false-positive candidates. */
-function unaccounted(sample: BatchSample): Finding[] {
+export function unaccounted(sample: BatchSample): Finding[] {
   if (sample.judgement?.valid !== true) return [];
   const accounted = new Set(sample.judgement.defects.map(defect => defect.finding));
   return sample.findings.filter(finding => !accounted.has(finding.id));
