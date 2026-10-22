@@ -36,6 +36,7 @@ import {
   type SessionCheckpoint,
 } from '../../run-context';
 import { getEffectiveNodeRetryConfig } from '../../retry';
+import { attemptSpend } from '../../../run-budget';
 import {
   failLoopNode,
   loopSpend,
@@ -157,6 +158,7 @@ export async function executeLoopNode(
         : undefined,
     resolvedModel: undefined,
     costUsd: resume.costUsd,
+    priorCostKnown: resume.priorCostKnown,
     tokens: resume.tokens,
     tokensUnknown:
       savedExecution?.spend.tokens.source === 'unavailable' &&
@@ -417,6 +419,8 @@ function readLoopResume(
       gate !== undefined
         ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
         : undefined,
+    // A legacy gate has no saved execution, so its carried-in cost is never proven.
+    priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
@@ -465,6 +469,7 @@ async function finalizeOnBareApprove(
     finalizeOutput,
     {
       ...(resume.costUsd !== undefined ? { costUsd: resume.costUsd } : {}),
+      costPartial: !resume.priorCostKnown,
       ...(resume.tokens !== undefined ? { tokens: resume.tokens } : {}),
     },
     finalizeStructured ?? undefined,
