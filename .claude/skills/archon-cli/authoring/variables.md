@@ -9,7 +9,7 @@ Variables are placeholders in command files and workflow prompts that get replac
 | `$ARGUMENTS` | All modes | The user's original message passed to the workflow |
 | `$USER_MESSAGE` | All modes | Same as `$ARGUMENTS` — both resolve to the user's message |
 | `$WORKFLOW_ID` | All modes | Unique workflow run ID (for tracking and logging) |
-| `$ARTIFACTS_DIR` | All modes | Pre-created directory for this workflow run's artifacts. Write outputs here |
+| `$ARTIFACTS_DIR` | All modes | Pre-created directory for this workflow run's artifacts. Write outputs here. Scratch work (a throwaway checkout, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`, which Archon deletes once the run ends and its nodes have stopped (a container run's when its container is removed) |
 | `$BASE_BRANCH` | All modes | The run's resolved or recorded base branch. Throws if referenced but unresolved. See the [Variable Reference](https://archon.diy/reference/variables/#workflow-variables) for resolution and child inheritance rules |
 | `$DOCS_DIR` | All modes | Documentation directory (config `docs.path`, default `docs/`). Never throws |
 | `$CONTEXT` | All modes | GitHub issue/PR context (if available from platform). Empty string if unavailable |

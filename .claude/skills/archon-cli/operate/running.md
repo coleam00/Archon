@@ -107,6 +107,11 @@ Rules:
    `upkeep/<dependency>`, `triage/<source>`. To run on
    different models for one run, see `managing-runs.md` ("Overriding models for one
    run").
+   A worktree created for `--branch` stays when the run ends; `archon isolation
+   cleanup --merged` removes it after its pull request merges. Without `--branch`, a
+   completed run removes the worktree it created on its own generated branch when the
+   checkout is clean and every commit is on a remote, keeping the branch. A kept
+   checkout is named in the run's output with what removing it would lose.
    Folder projects run in place and reject `--branch`, `--from`, and `--base`.
 3. **One workflow per shell.** Multiple pieces of work = separate invocations with
    separate branches; they cannot conflict because each gets its own worktree.
