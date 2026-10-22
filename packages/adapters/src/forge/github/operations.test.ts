@@ -791,6 +791,25 @@ test('dispatch resolves HTTPS default ports through exact or bare host claims', 
         value: { kind: 'resolved', repo: { host: `${host}:443`, path: 'team/repo' } },
       },
     });
+    if (
+      !result.response.ok ||
+      result.response.result.op !== 'resolve' ||
+      result.response.result.value.kind !== 'resolved'
+    )
+      throw new Error('Expected resolved repository');
+    expect(result.response.result.value.repo.hostClaim).toEqual(
+      byHost.has(`${host}:443`) ? undefined : { host, transport: 'https' }
+    );
+    const qualified = await dispatchForge(
+      {
+        operationId: 'qualified-port',
+        op: 'repo.labels.list',
+        repo: JSON.parse(JSON.stringify(result.response.result.value.repo)),
+      },
+      { discovery: { ...discovery, byHost }, env: {} }
+    );
+    expect(qualified.plugin).toEqual({ name: 'github', version: '1' });
+    expect(qualified.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
   }
   for (const remote of [
     `http://${host}:80/team/repo.git`,

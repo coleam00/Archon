@@ -146,19 +146,38 @@ function remoteHost(remote: string | null): string | undefined {
   }
 }
 
-function selectPlugin(discovery: PluginDiscovery, request: ForgeRequest, host: string) {
-  const exact = discovery.byHost.get(host);
-  if (exact || request.op !== 'resolve' || !request.remote) return exact;
+function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
+  if (request.op !== 'resolve') return requestRepo(request).hostClaim?.host.toLowerCase() ?? host;
+  if (discovery.byHost.has(host) || !request.remote) return host;
   try {
     const { url, host: remoteHost } = parseRemoteUrl(request.remote.trim());
     // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
     if (url.protocol === 'https:' && remoteHost === `${url.hostname}:443`) {
-      return discovery.byHost.get(normalizeHost(url.hostname));
+      return normalizeHost(url.hostname);
     }
   } catch {
-    return undefined;
+    return host;
   }
-  return undefined;
+  return host;
+}
+
+function retainHostClaim(response: ForgeResponse, host: string, claim: string): ForgeResponse {
+  if (!response.ok || response.result.op !== 'resolve' || response.result.value.kind !== 'resolved')
+    return response;
+  const value = response.result.value;
+  return {
+    ...response,
+    result: {
+      op: 'resolve',
+      value: {
+        ...value,
+        repo: {
+          ...value.repo,
+          hostClaim: host === claim ? undefined : { host: claim, transport: 'https' },
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -483,8 +502,9 @@ export async function dispatchForge(
       response = discoveryError(request, error);
       return finish(request, pluginIdentity, response, started);
     }
-    const selectedHost = host ?? '';
-    const plugin = selectPlugin(discovery, request, selectedHost);
+    const repositoryHost = host ?? '';
+    const selectedHost = selectHost(discovery, request, repositoryHost);
+    const plugin = discovery.byHost.get(selectedHost);
     if (!plugin) {
       response =
         discovery.unavailable.length > 0
@@ -609,7 +629,7 @@ export async function dispatchForge(
               !parsed.success ||
               parsed.data.operationId !== request.operationId ||
               parsed.data.ok !== (outcome.exitCode === 0) ||
-              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, selectedHost)
+              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, repositoryHost)
             ) {
               response = errorResponse(
                 request,
@@ -619,7 +639,7 @@ export async function dispatchForge(
                 },
                 lost
               );
-            } else response = parsed.data;
+            } else response = retainHostClaim(parsed.data, repositoryHost, selectedHost);
           }
         }
       }

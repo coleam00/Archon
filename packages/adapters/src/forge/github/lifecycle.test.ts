@@ -8,10 +8,17 @@ import {
   type ForgeResponse,
 } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
+import { prRecord } from './pull-requests';
 
 const repo = { host: 'github.com', path: 'archon/test' };
 const ref = { repo, number: 7 };
 const ROOT = 'https://api.github.com/repos/archon/test';
+
+test('pull request head repositories retain the authorizing HTTPS host claim', () => {
+  const hostClaim = { host: 'ghes.example.test', transport: 'https' } as const;
+  const record = prRecord({ host: 'ghes.example.test:443', path: repo.path, hostClaim }, pull());
+  expect(record.head_repo).toEqual({ host: 'ghes.example.test:443', path: repo.path, hostClaim });
+});
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });

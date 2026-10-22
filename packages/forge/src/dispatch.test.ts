@@ -2,8 +2,63 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
+import { repoRefSchema } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
+
+test('qualified operations use the retained HTTPS claim and its credential configuration', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [
+        {
+          plugin: 'mutator',
+          command: process.execPath,
+          args: [join(import.meta.dir, 'fixtures', 'mutation-plugin.ts')],
+        },
+      ],
+      hosts: { 'forge.example': { plugin: 'mutator', token_env: 'BARE_TOKEN' } },
+      scanPath: false,
+    },
+    env: {},
+  });
+  const repo = repoRefSchema.parse(
+    JSON.parse(
+      JSON.stringify({
+        host: 'forge.example:443',
+        path: 'team/repo',
+        hostClaim: { host: 'forge.example', transport: 'https' },
+      })
+    )
+  );
+  for (const request of [
+    { operationId: 'labels', op: 'repo.labels.list', repo },
+    { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
+  ] as const) {
+    const result = await dispatchForge(request, { discovery, env: { BARE_TOKEN: 'fixture' } });
+    expect(result.response.ok).toBe(true);
+    expect(result.credentialSource).toBe('BARE_TOKEN');
+    expect(result.audit.target).toEqual('repo' in request ? repo : request.ref);
+  }
+  const missing = await dispatchForge(
+    { operationId: 'missing', op: 'repo.labels.list', repo },
+    { discovery, env: {} }
+  );
+  expect(missing.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+});
+
+test.each([
+  ['other.example:443', 'forge.example', 'https'],
+  ['forge.example:8443', 'forge.example', 'https'],
+  ['forge.example:443', 'forge.example', 'http'],
+  ['forge.example:443', 'forge.example', 'ssh'],
+  ['forge.example:443', 'forge.example:443', 'https'],
+  ['forge.example:443', 'user@forge.example', 'https'],
+])('rejects invalid host claim %s / %s / %s', (host, claim, transport) => {
+  expect(
+    repoRefSchema.safeParse({ host, path: 'team/repo', hostClaim: { host: claim, transport } })
+      .success
+  ).toBe(false);
+});
 function config(mode = 'ok') {
   return {
     plugins: [{ plugin: 'test', command: process.execPath, args: [fixture, '--mode', mode] }],
