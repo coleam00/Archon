@@ -46,8 +46,9 @@ nodes:
       type: object
       properties:
         path: { type: string, enum: [idle, record, sweep] }
-        # The default branch, its head and CI there, read once before the sweep.
-        base: { type: object }
+        # The default branch snapshot, or null with its diagnostic in base_error.
+        base: { type: [object, 'null'] }
+        base_error: { type: string }
         # The claimed pull requests the sweep decides, each with its facts snapshot.
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
@@ -55,7 +56,7 @@ nodes:
         # The gate command the sweep runs to merge.
         gate: { type: string }
         policy_defaults: { type: string }
-      required: [path, base, items, settled, gate, policy_defaults]
+      required: [path, base, base_error, items, settled, gate, policy_defaults]
 
   - id: sweep
     command: sweep
@@ -163,6 +164,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
+      base_error: "$facts.output.base_error"
       items: { from: "$facts.output.items" }
       settled: { from: "$facts.output.settled" }
       base: { from: "$facts.output.base" }

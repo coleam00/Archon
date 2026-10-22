@@ -289,10 +289,8 @@ export function parseWorkflow(
     // parse_error is what the author sees, and discovery re-parses on every command.
     getLog().debug(
       {
-        err,
         filename,
         lineInfo: lineInfo || undefined,
-        contentPreview: content.slice(0, 200) + (content.length > 200 ? '...' : ''),
       },
       'workflow_parse_failed'
     );

@@ -68,20 +68,32 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 const windowsHandleCodes = ['EPERM', 'EBUSY', 'EACCES'];
+/** How long a Windows handle error is retried before the original error is rethrown. */
+const windowsHandleDeadlineMs = 2000;
+
+interface HandleRetryClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+const systemClock: HandleRetryClock = { now: () => Date.now(), sleep: ms => Bun.sleep(ms) };
 
 /**
  * Windows reports a name it cannot touch yet as EPERM, EBUSY or EACCES: another
  * process holds a handle that denies delete sharing, or the file was unlinked
  * while open and stays delete-pending until the last handle closes. Every read,
- * link, rename and unlink of a shared lock or store file retries those codes a
- * bounded number of times; the retry never changes what the operation decides.
+ * link, rename and unlink of a shared lock or store file retries those codes for
+ * up to `windowsHandleDeadlineMs` of elapsed time, then rethrows the original
+ * error. The bound is time, not attempts, because a loaded runner makes each
+ * attempt slower. The retry never changes what the operation decides.
  */
 export async function retryFileStoreHandles<T>(
   operation: string,
   path: string,
-  attempt: () => Promise<T>
+  attempt: () => Promise<T>,
+  clock: HandleRetryClock = systemClock
 ): Promise<{ value: T; retries: number }> {
   const codes: string[] = [];
+  const startedAt = clock.now();
   for (;;) {
     try {
       const value = await attempt();
@@ -91,9 +103,23 @@ export async function retryFileStoreHandles<T>(
       return { value, retries: codes.length };
     } catch (error) {
       const code = windowsHandleCodes.find(candidate => hasCode(error, candidate));
-      if (process.platform !== 'win32' || codes.length === 20 || !code) throw error;
+      if (process.platform !== 'win32' || !code) throw error;
+      const elapsedMs = clock.now() - startedAt;
+      if (elapsedMs >= windowsHandleDeadlineMs) {
+        log.warn(
+          {
+            operation,
+            path,
+            attempts: codes.length + 1,
+            codes: [...new Set([...codes, code])],
+            elapsedMs,
+          },
+          'file_store.windows_handle_retry_exhausted'
+        );
+        throw error;
+      }
       codes.push(code);
-      await Bun.sleep(10);
+      await clock.sleep(10);
     }
   }
 }

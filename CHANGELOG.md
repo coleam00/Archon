@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A provider plugin protocol failure now names what was wrong (malformed JSON, or the schema path and issue code), the message name when the host handles it, the line length and the plugin version, in both the node error and the `provider.plugin.protocol_failed` log, without recording any text from the message. (#4928)
 - Server telemetry reports how many chat plugins it hosts (`chat_plugins`), and `adapter_slack` now means the Slack plugin is installed rather than that Slack tokens are set. Plugin ids are not sent. Telemetry `schema_version` is 11. (#3646)
 - A workflow node that carries a key belonging to another node type, or a loop setting outside `loop:`/`loop_group:`, now fails the workflow load instead of being ignored or only warned about. For example, `runtime: bun` on a `prompt:` node or a top-level `interactive: true` on a `command:` node is now a load error naming the node, the key and the node types that support it. Move the key to a node that honours it, or delete it. (#2478)
 - `archon doctor` no longer checks SDLC forge access, and its exit code no longer depends on it. Run `archon workflow run archon-forge-check` from a checkout instead: the new bundled workflow runs the same check the pack's delivery workflows run first, and names the credential source used or says why it refused. (#4435)
@@ -26,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The one-time warnings for repo-local `.archon/state/`, `.archon/artifacts/`, `.archon/logs/` and the old home workflow directory are gone. These locations are neither read nor migrated automatically. To move old state, set `STATE_DIR` in your shell to the destination used by your workflow, then run `mkdir -p "$STATE_DIR"` and `mv .archon/state/* "$STATE_DIR"/` from the repository; update workflows to use `$STATE_DIR`. The glob moves non-hidden entries; inspect hidden entries and destination conflicts before moving them. For home workflows, with `ARCHON_HOME` set to your Archon home (default `~/.archon`), run `mv "$ARCHON_HOME/.archon/workflows" "$ARCHON_HOME/workflows"` if the destination does not exist; otherwise merge the files manually. Old artifacts and logs remain where they were; inspect them manually, since run-scoped destinations make a bulk move unsafe. The separate notice for legacy `_cwd/<basename>` storage remains. (#4174)
 - The `script:` node no longer warns when a body still uses a literal `$ARGUMENTS`, `$USER_MESSAGE` or `$CONTEXT`. The one-release migration warning from #2115 is gone. A literal user-controlled variable in a `script:` body is not substituted: the text stays in the source. Read it from the environment instead: `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). (#4597)
+
+### Fixed
+
+- A Codex node no longer fails with `Provider plugin codex protocol failed ... (invalid_message): provider stream ended before settled` after its turn finished. With many Codex nodes ending together, Codex often took more than three seconds to exit after stdin closed, and the SIGTERM Archon then sent made it wait about 40 seconds and exit 1, which failed the node. After a turn, Archon now waits for Codex to exit without sending SIGTERM, logging `codex.app_server_still_exiting` every 30 seconds while it waits. Cancelling the run still interrupts Codex and sends SIGTERM if it does not exit. (#4928)
 
 ## [0.12.1] - 2026-10-17
 

@@ -1,8 +1,4 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
-import type {
-  ContinuationWakeOutcome,
-  ContinuationAdmission,
-} from '@archon/core/workflows/continuation-resume';
+import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -31,8 +27,12 @@ function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun 
 }
 
 const output: unknown[] = [];
-const scan = mock(async (): Promise<ContinuationWakeOutcome[]> => []);
-const resume = mock(async (): Promise<ContinuationAdmission> => ({ kind: 'not-accepted' }));
+const scan = mock<
+  typeof import('@archon/core/workflows/continuation-resume').wakeDueWorkflowContinuations
+>(async () => []);
+const resume = mock<
+  typeof import('@archon/core/workflows/continuation-host').resumeWorkflowContinuation
+>(async () => ({ kind: 'not-accepted' }));
 const getRun = mock(async () => makeTestWorkflowRun());
 const signal = mock(async () => ({ signaled: true }));
 const install = mock(async (_config: NativeScheduleConfig) => 'installed');
@@ -47,11 +47,10 @@ const host = {
   deps: { store: { getWorkflowRun: getRun } },
   operations: { signalWorkflowWait: signal },
 } as unknown as import('@archon/core/workflows/host-store').WorkflowHost;
-mock.module('../utils/stdout', () => ({
-  writeStdout: async (value: string) => {
-    output.push(JSON.parse(value));
-  },
-}));
+const writeStdout = mock(async (value: string) => {
+  output.push(JSON.parse(value));
+});
+mock.module('../utils/stdout', () => ({ writeStdout }));
 mock.module('../triggers/native-schedule', () => ({
   installMacosNativeSchedule: install,
   removeMacosNativeSchedule: remove,
@@ -65,6 +64,7 @@ beforeEach(() => {
   resume.mockReset();
   resume.mockResolvedValue({ kind: 'not-accepted' });
   getRun.mockReset();
+  writeStdout.mockClear();
   signal.mockClear();
   install.mockClear();
   remove.mockClear();
@@ -287,12 +287,19 @@ test.each(['occurrence', 'deadline', 'both'])(
     expect(resume).not.toHaveBeenCalled();
     signal.mockResolvedValueOnce({ signaled: true });
     expect(await workflowContinuationCommand(host, 'signal', ['run'], values)).toBe(0);
-    expect(resume).toHaveBeenCalledWith(host, 'run', expect.any(Function), {
-      kind: 'wait',
-      pauseId: wait.pauseId,
-      nodeId: wait.nodeId,
-      resumeAt: wait.resumeAt,
-    });
+    expect(resume).toHaveBeenCalledWith(
+      host,
+      'run',
+      expect.any(Function),
+      {
+        kind: 'wait',
+        pauseId: wait.pauseId,
+        nodeId: wait.nodeId,
+        resumeAt: wait.resumeAt,
+      },
+      undefined,
+      { deferScratchCleanup: undefined }
+    );
   }
 );
 
@@ -317,4 +324,127 @@ test('a stale occurrence with an equal deadline never signals or resumes', async
   ).toBe(1);
   expect(signal).not.toHaveBeenCalled();
   expect(resume).not.toHaveBeenCalled();
+});
+
+test('SIGTERM wakes installed idle sleep without firing its timer or scanning again', async () => {
+  const installed = Promise.withResolvers<void>();
+  const originalTimeout = globalThis.setTimeout;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let fireIdleTimer: (() => void) | undefined;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation(callback => {
+    fireIdleTimer = callback;
+    idleTimer = originalTimeout(callback, 5_000);
+    installed.resolve();
+    return idleTimer;
+  });
+  let done = false;
+  const command = workflowContinuationCommand(host, 'wake', [], { json: true, watch: true }).then(
+    result => {
+      done = true;
+      return result;
+    }
+  );
+  try {
+    await installed.promise;
+    process.emit('SIGTERM');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(done).toBe(true);
+    expect(await command).toBe(0);
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(timer).toHaveBeenCalledTimes(1);
+  } finally {
+    timer.mockRestore();
+    if (idleTimer) clearTimeout(idleTimer);
+    process.emit('SIGTERM');
+    fireIdleTimer?.();
+    await command;
+  }
+});
+
+test.each([false, true])(
+  'watch reports settled outcome before draining cleanup on shutdown (failed=%p)',
+  async failed => {
+    const started = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    let done = false;
+    resume.mockImplementationOnce(async (_host, _runId, _context, _cursor, _actor, options) => {
+      if (!options?.deferScratchCleanup) throw new Error('Cleanup must be deferred');
+      options.deferScratchCleanup(async () => {
+        process.emit('SIGTERM');
+        started.resolve();
+        await drained.promise;
+      });
+      return {
+        kind: 'accepted',
+        run: makeTestWorkflowRun(),
+        settled: Promise.resolve(
+          failed
+            ? { success: false, error: 'DAG failed', workflowRunId: 'run' }
+            : { success: true, workflowRunId: 'run' }
+        ),
+      };
+    });
+    scan.mockImplementationOnce(async (_store, _now, admit) => [
+      {
+        runId: 'run',
+        ...(await admit(makeTestWorkflowRun(), {
+          kind: 'wait',
+          pauseId: 'wait',
+          nodeId: 'hold',
+          resumeAt: '2026-08-24T11:00:00Z',
+        })),
+      },
+    ]);
+    const command = workflowContinuationCommand(host, 'wake', [], { json: true, watch: true }).then(
+      result => {
+        done = true;
+        return result;
+      }
+    );
+    try {
+      await started.promise;
+      expect(output[0]).toMatchObject({
+        ok: !failed,
+        accepted: 1,
+        outcomes: [{ status: failed ? 'failed' : 'completed' }],
+      });
+      expect(done).toBe(false);
+    } finally {
+      drained.resolve();
+    }
+    expect(await command).toBe(failed ? 1 : 0);
+    expect(scan).toHaveBeenCalledTimes(1);
+  }
+);
+
+test('a failed accepted report still drains cleanup and fails the wake', async () => {
+  const cleanup = mock(async () => {});
+  resume.mockImplementationOnce(async (_host, _runId, _context, _cursor, _actor, options) => {
+    options?.deferScratchCleanup?.(cleanup);
+    return {
+      kind: 'accepted',
+      run: makeTestWorkflowRun(),
+      settled: Promise.resolve({ success: true, workflowRunId: 'run' }),
+    };
+  });
+  scan.mockImplementationOnce(async (_store, _now, admit) => [
+    {
+      runId: 'run',
+      ...(await admit(makeTestWorkflowRun(), {
+        kind: 'wait',
+        pauseId: 'wait',
+        nodeId: 'hold',
+        resumeAt: '2026-08-24T11:00:00Z',
+      })),
+    },
+  ]);
+  writeStdout.mockImplementationOnce(async () => {
+    throw new Error('stdout closed');
+  });
+  expect(await workflowContinuationCommand(host, 'wake', [], { json: true })).toBe(1);
+  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(output).toEqual([{ ok: false, action: 'wake', error: 'stdout closed' }]);
 });

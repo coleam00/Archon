@@ -13,6 +13,7 @@
  * fake.
  */
 import { beforeEach, afterAll, describe, test, expect, mock } from 'bun:test';
+import { isolationStatusReadTests } from './isolation-status-read-harness';
 
 const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -225,7 +226,7 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
     await seedRunAt('run-old-paused', 'conv-old-paused', 'paused', '2020-01-01 00:00:00');
     await seedRunAt('run-newer-failed', 'conv-old-paused', 'failed', '2020-01-02 00:00:00');
     await failedDaysAgo('run-newer-failed', 30);
-    const paused = { id: 'run-old-paused', status: 'paused' };
+    const paused = { id: 'run-old-paused', status: 'paused' } as const;
 
     await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
     await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(
@@ -281,13 +282,13 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
     });
     await seedConversation('conv-exclude', env.id);
     await seedRunAt('run-deciding', 'conv-exclude', 'running', '2026-08-02T00:00:00.000Z');
-    const deciding = { id: 'run-deciding', status: 'running' };
+    const deciding = { id: 'run-deciding', status: 'running' } as const;
 
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual(deciding);
     await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toBeNull();
 
     await seedRunAt('run-other', 'conv-exclude', 'failed', '2026-08-01T00:00:00.000Z');
-    const other = { id: 'run-other', status: 'failed' };
+    const other = { id: 'run-other', status: 'failed' } as const;
     await expect(getLiveRunOwningEnv(env.id, undefined, 'run-deciding')).resolves.toEqual(other);
     // The exclusion's placeholder follows the release filter's parameters.
     await expect(
@@ -319,4 +320,16 @@ test.each(['pending', 'running', 'paused', 'failed'])(
     );
     await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
   }
+);
+
+isolationStatusReadTests(
+  () => db,
+  workflow_id =>
+    create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id,
+      working_path: '/tmp/status-read',
+      branch_name: '' as never,
+    })
 );

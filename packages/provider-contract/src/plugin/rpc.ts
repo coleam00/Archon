@@ -7,13 +7,23 @@ export interface PluginIO {
   writable: WritableStream<Uint8Array>;
 }
 
+export interface PluginMessageEvidence {
+  /** UTF-8 byte length of the offending line, excluding its newline. */
+  readonly bytes: number;
+  /** A method this reader handles, `<method> response` for a reply to one of its own requests, else `unknown`. */
+  readonly message: string;
+}
+
+// `detail` and `evidence` are host-authored or built from schema vocabulary, never from text
+// on the plugin's line, so a host may surface and log them. `cause` may quote the line.
 export class PluginProtocolError extends Error {
   constructor(
     public readonly plugin: string,
     public readonly line: number,
-    detail: string,
+    public readonly detail: string,
     options?: ErrorOptions,
-    public readonly reason: 'invalid_message' | 'closed' = 'invalid_message'
+    public readonly reason: 'invalid_message' | 'closed' = 'invalid_message',
+    public readonly evidence?: PluginMessageEvidence
   ) {
     super(`Plugin ${plugin}, line ${String(line)}: ${detail}`, options);
     this.name = 'PluginProtocolError';
@@ -69,8 +79,60 @@ export const rpcMessageSchema = z.union([
 type RpcMessage = z.infer<typeof rpcMessageSchema>;
 type RequestHandler = (params: unknown) => unknown;
 interface PendingRequest {
+  method: string;
+  schema: z.ZodType | undefined;
   resolve(value: unknown): void;
   reject(error: unknown): void;
+}
+
+const MAX_EXPLAINED_ISSUES = 5;
+
+// Explains a validation failure as `path: code` per issue. Messages, received values and
+// unrecognized key names are never read, and a path segment renders only when the schema
+// declares it as a key; anything else, such as a record key from the line, renders as `*`.
+function explainIssues(schema: z.ZodType, error: z.ZodError): string {
+  const declared = new Set<string>();
+  const collect = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return;
+    if ('properties' in node && node.properties !== null && typeof node.properties === 'object')
+      for (const key of Object.keys(node.properties)) declared.add(key);
+    for (const child of Object.values(node)) collect(child);
+  };
+  collect(z.toJSONSchema(schema, { unrepresentable: 'any', io: 'input' }));
+  const renderPath = (path: readonly PropertyKey[]): string => {
+    let rendered = '';
+    for (const segment of path) {
+      if (typeof segment === 'number') rendered += `[${String(segment)}]`;
+      else {
+        const name = typeof segment === 'string' && declared.has(segment) ? segment : '*';
+        rendered += rendered ? `.${name}` : name;
+      }
+    }
+    return rendered || '<root>';
+  };
+  const explained: string[] = [];
+  const walk = (issues: readonly z.core.$ZodIssue[], base: readonly PropertyKey[]): void => {
+    for (const issue of issues) {
+      const path = [...base, ...issue.path];
+      // Nested union issue paths are relative to the union; the branch with the fewest
+      // issues is the one the value most nearly matched.
+      if (issue.code === 'invalid_union' && issue.errors.length) {
+        walk(
+          issue.errors.reduce((best, branch) => (branch.length < best.length ? branch : best)),
+          path
+        );
+        continue;
+      }
+      explained.push(
+        `${renderPath(path)}: ${issue.code}${issue.code === 'invalid_type' ? `, expected ${issue.expected}` : ''}`
+      );
+    }
+  };
+  walk(error.issues, []);
+  const shown = explained.slice(0, MAX_EXPLAINED_ISSUES).join('; ');
+  return explained.length > MAX_EXPLAINED_ISSUES
+    ? `${shown}; +${String(explained.length - MAX_EXPLAINED_ISSUES)} more`
+    : shown;
 }
 
 export class PluginRpc {
@@ -85,6 +147,8 @@ export class PluginRpc {
   private ended = false;
   private failure: Error | undefined;
   private line = 0;
+  // The line being handled, so errors raised while handling it carry its evidence.
+  private reading: PluginMessageEvidence | undefined;
   private closing: Promise<void> | undefined;
   private writes: Promise<void> = Promise.resolve();
   plugin = 'uninitialized';
@@ -105,7 +169,14 @@ export class PluginRpc {
     this.notifications.set(method, handler);
   }
   error(detail: string, cause?: unknown): PluginProtocolError {
-    return new PluginProtocolError(this.plugin, this.line, detail, { cause });
+    return new PluginProtocolError(
+      this.plugin,
+      this.line,
+      detail,
+      { cause },
+      'invalid_message',
+      this.reading
+    );
   }
   mismatch(
     hostProtocol: number | string,
@@ -115,15 +186,20 @@ export class PluginRpc {
   }
   parse<T>(schema: z.ZodType<T>, value: unknown): T {
     const parsed = schema.safeParse(value);
-    if (!parsed.success)
-      throw this.error(`invalid payload (${parsed.error.message})`, parsed.error);
+    if (!parsed.success) throw this.invalidPayload(schema, parsed.error);
     return parsed.data;
   }
-  request(method: string, params: unknown): Promise<unknown> {
+  private invalidPayload(schema: z.ZodType, error: z.ZodError): PluginProtocolError {
+    return this.error(`invalid payload (${explainIssues(schema, error)})`, error);
+  }
+  /** With a schema, the response is validated while its line is read, so a failure carries that line's evidence. */
+  request(method: string, params: unknown): Promise<unknown>;
+  request<T>(method: string, params: unknown, schema: z.ZodType<T>): Promise<T>;
+  request(method: string, params: unknown, schema?: z.ZodType): Promise<unknown> {
     if (this.ended) return Promise.reject(this.failure ?? this.error('connection closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { method, schema, resolve, reject });
       void this.send({ jsonrpc: '2.0', id, method, params }).catch(error => {
         this.pending.delete(id);
         reject(error instanceof Error ? error : this.error('request failed', error));
@@ -217,11 +293,55 @@ export class PluginRpc {
     const pending = message.id === null ? undefined : this.pending.get(message.id);
     if (!pending) throw this.error('response has no matching request');
     if (message.id !== null) this.pending.delete(message.id);
-    if ('error' in message)
+    if ('error' in message) {
       pending.reject(
         new PluginRemoteError(message.error.code, message.error.message, message.error.data)
       );
-    else pending.resolve(message.result);
+      return;
+    }
+    if (!pending.schema) {
+      pending.resolve(message.result);
+      return;
+    }
+    // Rejects only this request, like a caller-side parse would; the connection stays usable.
+    const parsed = pending.schema.safeParse(message.result);
+    if (parsed.success) pending.resolve(parsed.data);
+    else pending.reject(this.invalidPayload(pending.schema, parsed.error));
+  }
+  private messageName(raw: unknown): string {
+    if (raw === null || typeof raw !== 'object') return 'unknown';
+    if (
+      'method' in raw &&
+      typeof raw.method === 'string' &&
+      (this.requests.has(raw.method) || this.notifications.has(raw.method))
+    )
+      return raw.method;
+    if ('id' in raw && (typeof raw.id === 'string' || typeof raw.id === 'number')) {
+      const pending = this.pending.get(raw.id);
+      if (pending) return `${pending.method} response`;
+    }
+    return 'unknown';
+  }
+  private handleLine(decoder: TextDecoder, line: Uint8Array): void {
+    this.reading = { bytes: line.byteLength, message: 'unknown' };
+    try {
+      let text: string;
+      try {
+        text = decoder.decode(line);
+      } catch (error) {
+        throw this.error('invalid UTF-8', error);
+      }
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch (error) {
+        throw this.error('malformed JSON', error);
+      }
+      this.reading = { bytes: line.byteLength, message: this.messageName(raw) };
+      this.dispatch(this.parse(rpcMessageSchema, raw));
+    } finally {
+      this.reading = undefined;
+    }
   }
   private async read(): Promise<void> {
     let parts: Uint8Array[] = [];
@@ -252,13 +372,7 @@ export class PluginRpc {
               line.set(piece, offset);
               offset += piece.length;
             }
-            let raw: unknown;
-            try {
-              raw = JSON.parse(decoder.decode(line));
-            } catch (error) {
-              throw this.error('malformed JSON or UTF-8', error);
-            }
-            this.dispatch(this.parse(rpcMessageSchema, raw));
+            this.handleLine(decoder, line);
             parts = [];
             bytes = 0;
           }

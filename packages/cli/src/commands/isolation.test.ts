@@ -15,6 +15,7 @@ import {
   isolationCompleteCommand,
   isolationCleanupCommand,
   isolationCleanupMergedCommand,
+  isolationListCommand,
 } from './isolation';
 import { runIsolation } from '../routes/commands';
 import type { CliRouteContext } from '../routes/context';
@@ -103,6 +104,9 @@ const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupConta
 const mockGetLiveRunBlocker = mock<typeof CleanupService.getLiveRunBlocker>(() =>
   Promise.resolve(null)
 );
+const mockListContainerEnvironments = mock<typeof CleanupService.listContainerEnvironments>(() =>
+  Promise.resolve([])
+);
 
 function liveRunBlocker(runStatus: string): CleanupService.LiveRunBlocker {
   return {
@@ -123,6 +127,7 @@ mock.module('@archon/core/services/cleanup-service', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupContainerEnvironments: mockCleanupContainerEnvironments,
   getLiveRunBlocker: mockGetLiveRunBlocker,
+  listContainerEnvironments: mockListContainerEnvironments,
 }));
 
 const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>(() =>
@@ -227,6 +232,38 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
 }
 
 const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
+
+describe('isolationListCommand', () => {
+  it.each([
+    { runId: null, runStatus: 'lookup-failed', display: 'run lookup failed' },
+    { runId: null, runStatus: null, display: 'no run (orphan)' },
+    { runId: 'run-12345678', runStatus: 'paused', display: 'run run-1234 (paused)' },
+  ] satisfies (Pick<CleanupService.ContainerEnvSummary, 'runId' | 'runStatus'> & {
+    display: string;
+  })[])('displays container run state: $display', async ({ runId, runStatus, display }) => {
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    mockListContainerEnvironments.mockResolvedValue([
+      {
+        envId: 'container-123',
+        codebaseName: 'test-project',
+        workingPath: '/workspace',
+        ageDays: 3,
+        runId,
+        runStatus,
+      },
+    ]);
+    try {
+      await isolationListCommand();
+      expect(log).toHaveBeenCalledWith(`    ${display} | Age: 3d`);
+      if (runStatus === 'lookup-failed') {
+        expect(log.mock.calls.flat().join('\n')).not.toContain('orphan');
+      }
+    } finally {
+      log.mockRestore();
+      mockListContainerEnvironments.mockReset().mockResolvedValue([]);
+    }
+  });
+});
 
 describe('isolationCompleteCommand', () => {
   let consoleLogSpy: ReturnType<typeof spyOn>;
