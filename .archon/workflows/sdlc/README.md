@@ -391,7 +391,7 @@ request, never the state.
   The file is a JSON array whose entries are forge logins, or objects naming one with
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except those on a build-queue branch (see
+  open pull requests in the merge queue, except one a work item already names (see
   Pickup there). No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
@@ -637,11 +637,11 @@ then the project's file, whose lines win where the two conflict.
   queue's last round delivered. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet and whose head branch is not one the build queue creates
-  (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). Enrollment
-  leaves a pull request on a build branch to its build item. The rule governs
-  enrollment only: an own-PR item that already exists for such a pull request is not
-  removed and still goes through the sweep. No build
+  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
+  a build round recorded is named by its build item and never enrolls. A build round
+  records its pull request once the round ends, so one listed while the round is still
+  running can enroll; that short window is an accepted gap, and enrollment after the
+  round finds the pull request recorded. No build
   round owns an own-PR pull request, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and

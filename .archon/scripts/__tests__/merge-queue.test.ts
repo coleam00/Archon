@@ -279,7 +279,7 @@ interface FakePr {
   readonly merged?: readonly number[];
   readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft: boolean; headRefName?: string }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -467,44 +467,31 @@ describe('the merge queue scripts', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item());
     const ownPrs = [
-      { number: 42, url: PR_URL, isDraft: false, headRefName: 'build/7-fix-the-thing-abcdef12' },
-      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' },
-      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true, headRefName: 'wip' },
-      // A build-queue branch no round has recorded yet.
-      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false, headRefName: 'build/9-add-a-thing-0123abcd' },
-      // Hand-opened branches under build/ that the build queue could not have created.
-      { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/docs' },
-      { number: 54, url: PR_URL.replace(/42$/, '54'), isDraft: false, headRefName: 'build/9-' },
-      { number: 55, url: PR_URL.replace(/42$/, '55'), isDraft: false, headRefName: 'build/50-fix/docs-abcdef12' },
-      { number: 56, url: PR_URL.replace(/42$/, '56'), isDraft: false, headRefName: 'build/7' },
-      { number: 57, url: PR_URL.replace(/42$/, '57'), isDraft: false, headRefName: `build/7-${'a'.repeat(41)}-abcdef12` },
+      { number: 42, url: PR_URL, isDraft: false },
+      { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false },
+      { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true], [53, true], [54, true], [55, true], [56, true], [57, true]]);
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
     expect(stored(at, 51).value).toBeNull();
-    expect(stored(at, 52).value).toBeNull();
-    expect(stored(at, 53).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '53'));
-    expect(stored(at, 54).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '54'));
-    expect(stored(at, 55).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '55'));
-    for (const number of [56, 57]) expect(stored(at, number).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, String(number)));
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
 
-  test('an own pull request listed without its head branch is not enrolled', () => {
+  test('an own pull request listed without its draft flag is not enrolled', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false }] } });
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 52, url: PR_URL.replace(/42$/, '52') }] } });
     expect(picked.code).toBe(0);
     expect(picked.stderr).toContain('own-PR enrollment stopped');
     expect(stored(at, 52).value).toBeNull();
   }, 60_000);
 
-  test('a pull request a build round recorded is not enrolled, whatever its head branch', () => {
+  test('a pull request a build round recorded is not enrolled', () => {
     const recorded = { ...BUILT.rounds[0]!, pr_url: PR_URL.replace(/42$/, '50') };
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item({ ...BUILT, status: 'next', rounds: [recorded] }));
-    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
     const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
     expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
     expect(stored(at, 50).value).toBeNull();
@@ -514,7 +501,7 @@ describe('the merge queue scripts', () => {
     const recorded = { ...BUILT.rounds[0]!, pr_url: 'https://GHE.example.com/Example/Repo/pull/50' };
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item({ ...BUILT, status: 'next', rounds: [recorded] }));
-    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
     const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { own_pr: boolean }[] };
     expect(output.items.filter(entry => entry.own_pr)).toEqual([]);
     expect(stored(at, 50).value).toBeNull();
@@ -525,7 +512,7 @@ describe('the merge queue scripts', () => {
     const otherRound = { ...BUILT.rounds[0]!, pr_url: `https://${other.host}/${other.path}/pull/50` };
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, { ...item({ ...BUILT, status: 'next', rounds: [otherRound] }), subject: { repo: other, number: 8 } });
-    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
     const output = ok(run(at, 'facts', {}, { pr: { ownPrs } })) as { items: { item: { number: number }; own_pr: boolean }[] };
     expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[50, true]]);
   }, 60_000);
@@ -533,7 +520,7 @@ describe('the merge queue scripts', () => {
   test('a malformed work item is noted and skipped, and own pull requests still enroll', () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     inProcess(at, () => expect(statePut('work/9', { version: 0 }, stateGet('work/9').revision)).toBe('ok'));
-    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }];
+    const ownPrs = [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     expect(picked.code).toBe(0);
     expect(picked.stderr).not.toContain('own-PR enrollment stopped');
@@ -716,7 +703,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 
   test('without the opt-in, nobody\'s pull requests are enrolled', () => {
     const at = install();
-    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'fix-typo' }] } });
+    const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }] } });
     expect(ok(picked)).toMatchObject({ path: 'idle' });
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
   }, 60_000);

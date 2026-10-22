@@ -25,10 +25,10 @@ reference covers launching and tending the queues by hand.
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. An entry can be an object,
   `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
-  maintainer's own open pull requests through the merge queue. New enrollment skips
-  those on a build-queue branch (`build/<number>-…`), which the build queue delivers.
-  Without the file every author is an outsider: intake labels their issues
-  `archon-needs-maintainer` and runs no agent.
+  maintainer's own open pull requests through the merge queue, except one a work item
+  already names, such as a pull request the build queue delivered. Without the file
+  every author is an outsider: intake labels their issues `archon-needs-maintainer`
+  and runs no agent.
 - The forge account the pack's review runs post as must also be on
   `maintainers.json`. The merge queue counts only a review comment a listed
   maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.

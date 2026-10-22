@@ -212,48 +212,19 @@ function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
   return Number(match[2]);
 }
 
-const BUILD_BRANCH_PREFIX = 'build/';
-const SLUG_LIMIT = 40;
-const RUN_SUFFIX_LENGTH = 8;
-
-function branchSlug(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, SLUG_LIMIT)
-    .replace(/-+$/, '');
-}
-
-/** The start of the run id, kept to characters a slug may hold so the classifier can read it back. */
-function runSuffix(runId: string): string {
-  return runId.slice(0, RUN_SUFFIX_LENGTH).toLowerCase().replace(/[^a-z0-9-]/g, '-');
-}
-
 /**
  * The branch a round with no pull request to continue opens one from. The run-id
  * suffix keeps a name from being reused: after a closed pull request or a failed
  * create, the non-forcing push onto the old branch would refuse every round.
  */
 export function buildBranch(number: number, title: string, runId: string): string {
-  return [BUILD_BRANCH_PREFIX + String(number), branchSlug(title), runSuffix(runId)].filter(part => part !== '').join('-');
-}
-
-/**
- * Whether a branch is one `buildBranch` names: the build queue owns pushes to it.
- * Decided by naming it again: split the branch into its number, its slug and a
- * full-length run suffix, and it is a build branch exactly when `buildBranch` gives
- * the same name back. Engine run ids are longer than the suffix, so every build
- * branch carries the full suffix; `build/7`, an over-long slug or a character the
- * slug drops is a branch a person made.
- */
-export function isBuildBranch(branch: string): boolean {
-  if (!branch.startsWith(BUILD_BRANCH_PREFIX)) return false;
-  const [number = '', ...rest] = branch.slice(BUILD_BRANCH_PREFIX.length).split('-');
-  const named = rest.join('-');
-  if (!/^[1-9][0-9]*$/.test(number) || named.length < RUN_SUFFIX_LENGTH) return false;
-  const title = named.slice(0, -RUN_SUFFIX_LENGTH).replace(/-$/, '');
-  return buildBranch(Number(number), title, named.slice(-RUN_SUFFIX_LENGTH)) === branch;
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  return ['build/' + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
 }
 
 export interface BuildChange {

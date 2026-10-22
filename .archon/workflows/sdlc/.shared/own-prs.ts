@@ -5,11 +5,11 @@
  * their open, non-draft pull requests a work item of its own, so a pull request they
  * opened by hand merges under the policy like one the build queue delivered. A pull
  * request a work item already names, through a build round or an earlier enrollment,
- * is left alone, and so is one on a build-queue branch: the build queue is delivering it,
- * and only it pushes there until it hands the pull request over as ready.
+ * is left alone. A build round records its pull request when the round ends, so one
+ * listed while the round still runs can enroll; that short window is an accepted gap,
+ * and enrollment after the round finds the pull request recorded.
  */
 
-import { isBuildBranch } from './build.ts';
 import { record, samePr, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
 import { prFromUrl, itemPr } from './merge.ts';
@@ -17,7 +17,7 @@ import { stateDocuments, stateGet, statePut } from './state.ts';
 import { newWorkItem, read, type WorkItem, workItemName } from './workitem.ts';
 
 /** The fields `gh pr list --json` selects, and the type each row carries for them. */
-const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean', headRefName: 'string' } as const;
+const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean' } as const;
 type OpenPr = {
   readonly [Field in keyof typeof OPEN_PR_FIELDS]: { number: number; string: string; boolean: boolean }[(typeof OPEN_PR_FIELDS)[Field]];
 };
@@ -68,8 +68,7 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
   const named = namedPrs();
   const enrolled: number[] = [];
   for (const author of authors) {
-    const listed = openPrsBy(repo, author).filter(pr => !pr.isDraft && !isBuildBranch(pr.headRefName));
-    for (const pr of listed) {
+    for (const pr of openPrsBy(repo, author).filter(listed => !listed.isDraft)) {
       const subject = prFromUrl(pr.url);
       if (named.some(claimed => samePr(claimed, subject))) continue;
       const name = workItemName(subject.number);

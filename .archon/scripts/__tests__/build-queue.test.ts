@@ -15,7 +15,6 @@ import {
   type BuildRound,
   buildBranch,
   buildWaits,
-  isBuildBranch,
   countedRounds,
   itemPullRequest,
   ROUTE_DECISIONS,
@@ -127,23 +126,6 @@ describe('the build record', () => {
       'build/7-fix-the-build-queue-reuses-its-own-pr-a-abcdef12'
     );
     expect(buildBranch(7, '!!!', 'abcdef123456')).toBe('build/7-abcdef12');
-  });
-
-  test('the build-branch classifier accepts what buildBranch names and nothing a person could add beside it', () => {
-    const generated = [
-      buildBranch(7, 'Fix: the Build queue -- reuses its own PR!', 'abcdef123456'),
-      buildBranch(7, '!!!', 'abcdef12'),
-      buildBranch(7, '', '12345678-0000-4000-8000-000000000000'),
-      buildBranch(7, 'a'.repeat(60), 'abcdef12'),
-    ];
-    for (const branch of generated) expect(isBuildBranch(branch)).toBe(true);
-    const handMade = [
-      'build/docs', 'build/7', 'build/9-', 'build/07-abcdef12', 'build/50-fix/docs-abcdef12', 'build/50-fix.docs-abcdef12',
-      'build/50-Fix-abcdef12', 'build/50-fix-docs/api', `build/50-${'a'.repeat(60)}`, `build/50-${'a'.repeat(41)}-abcdef12`,
-    ];
-    for (const branch of handMade) {
-      expect(isBuildBranch(branch)).toBe(false);
-    }
   });
 
   test("an item's recorded pull request URL from another repository is refused, not guessed around", () => {
