@@ -17,7 +17,11 @@ import { type DagNode, type EffortLevel, type NodeMcp, mcpDeclaration } from '..
 import { type McpPathResolution, resolveMcpPath, missingMcpConfigMessage } from '../mcp-path';
 import type { McpUnavailable } from '../schemas/node-execution';
 import { capturedSourceReadGuard } from '../workflow-source';
-import { resolveNodeModel, assistantModelDefaults } from '../node-model-resolution';
+import {
+  type NodeModelResolution,
+  resolveNodeModel,
+  assistantModelDefaults,
+} from '../node-model-resolution';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
@@ -130,6 +134,21 @@ export async function resolveNodeMcp(
   return { kind: 'load', path: fullPath, servers: new Set(servers) };
 }
 
+type ProviderResolutionContext = Pick<
+  RunLayersContext,
+  | 'deps'
+  | 'workflowProvider'
+  | 'workflowModel'
+  | 'config'
+  | 'platform'
+  | 'conversationId'
+  | 'workflowRun'
+  | 'workflowLevelOptions'
+  | 'aiProfile'
+  | 'workflowPreset'
+  | 'execContext'
+>;
+
 /**
  * Resolve per-node provider and model.
  * Node-level overrides take precedence over workflow defaults.
@@ -139,20 +158,7 @@ export async function resolveNodeMcp(
  * Capability warnings inform users when features are unsupported.
  */
 export async function resolveNodeProviderAndModel(
-  ctx: Pick<
-    RunLayersContext,
-    | 'deps'
-    | 'workflowProvider'
-    | 'workflowModel'
-    | 'config'
-    | 'platform'
-    | 'conversationId'
-    | 'workflowRun'
-    | 'workflowLevelOptions'
-    | 'aiProfile'
-    | 'workflowPreset'
-    | 'execContext'
-  >,
+  ctx: ProviderResolutionContext,
   node: DagNode,
   {
     resolveAiText,
@@ -181,86 +187,118 @@ export async function resolveNodeProviderAndModel(
   effort?: EffortLevel;
   preset?: ModelAliasPreset;
 }> {
-  const {
-    workflowProvider,
-    workflowModel,
-    config,
-    platform,
-    conversationId,
-    workflowLevelOptions,
-    aiProfile,
-    workflowPreset,
-    execContext,
-  } = ctx;
+  const { config, workflowLevelOptions } = ctx;
   const providers = ctx.deps.providers;
-  const workflowRunId = ctx.workflowRun.id;
   // The chain itself lives in node-model-resolution.ts so `workflow dry-run` reports the
   // same answer this produces (#1764). Everything below is the part a dry run must NOT
   // do: warn the user, throw, and build provider options.
   const resolution = resolveNodeModel(
     node,
     {
-      provider: workflowProvider,
-      model: workflowModel,
-      preset: workflowPreset,
+      provider: ctx.workflowProvider,
+      model: ctx.workflowModel,
+      preset: ctx.workflowPreset,
       tier: workflowLevelOptions.workflowTier,
       effort: workflowLevelOptions.effort,
       // Only used to LABEL an inherited provider in a dry run; the executor discards it.
       providerOrigin: 'workflow',
     },
     assistantModelDefaults(config),
-    aiProfile
+    ctx.aiProfile
   );
-  const { provider, model, preset: effectivePreset } = resolution;
-
-  const conflict = resolution.providerConflict;
-  const conflictKey = conflict && `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
-  if (conflict && conflictKey !== undefined && !warnedProviderConflicts?.has(conflictKey)) {
-    warnedProviderConflicts?.add(conflictKey);
-    getLog().warn(
-      {
-        nodeId: node.id,
-        configuredProvider: conflict.declared,
-        resolvedProvider: conflict.resolved,
-        modelRef: conflict.modelRef,
-      },
-      'dag.model_provider_conflict'
-    );
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error(
-        { nodeId: node.id, workflowRunId },
-        'dag.model_provider_conflict_warning_delivery_failed'
-      );
-    }
+  const { provider, model, preset: effectivePreset, declaredEffort } = resolution;
+  if (resolution.providerConflict) {
+    await warnProviderConflict(ctx, node, resolution.providerConflict, warnedProviderConflicts);
   }
 
-  const descriptor = requireProvider(providers, provider);
-
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
-  const caps = descriptor.capabilities;
+  const caps = requireProvider(providers, provider).capabilities;
+  assertDispatchCapabilities(ctx, node, provider, caps);
+  const unsupported = unsupportedCapabilities(ctx, node, provider, caps, declaredEffort);
 
-  // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
-  // decided it keeps no node-level form, making it the single workflow-level
-  // field with no per-node counterpart. There is deliberately no
-  // ProviderCapabilities axis for one provider's one field.
-  //
-  // Reasoning depth is NOT in this category any more: the loader translates the
-  // deprecated `modelReasoningEffort:` into `effort:`, so the executor sees one
-  // provider-agnostic field and needs no Codex branch for it.
-  const isCodex = provider === 'codex';
+  const aiFields = resolveNodeAiFields(node, workflowLevelOptions, resolveAiText);
+  const baseOptions = baseQueryOptions(ctx, node, model, aiFields);
+  const nodeConfig = buildNodeConfig(node, workflowLevelOptions, caps, declaredEffort, aiFields);
 
-  // The one reasoning depth this node will run at, before any preset fallback.
-  const declaredEffort = resolution.declaredEffort;
+  // Pass assistantConfig from config — provider parses internally
+  const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
+  const presetEffortRejection = applyPresetOptions(
+    providers,
+    provider,
+    effectivePreset,
+    node,
+    declaredEffort,
+    nodeConfig
+  );
+  if (presetEffortRejection?.reason === 'unsupported') {
+    unsupported.push('effort');
+  }
+  if (unsupported.length > 0) await warnUnsupportedCapabilities(ctx, node, provider, unsupported);
 
+  // `webSearchMode:` has no node-level form and no other consumer, so the
+  // workflow-level value is the only value — written only where it is read.
+  if (provider === 'codex' && workflowLevelOptions.webSearchMode !== undefined) {
+    assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
+  }
+
+  // `node.model` is the original ref (e.g. "large"); `model` is the resolved
+  // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
+  // the node's own `model`, or (when the node inherits the workflow-level model)
+  // from the workflow tier, mirroring the effectivePreset inheritance condition.
+  return {
+    provider,
+    model,
+    options: { ...baseOptions, nodeConfig, assistantConfig },
+    tier: resolution.tier,
+    effort: reportedEffort(nodeConfig, assistantConfig),
+    preset: effectivePreset,
+  };
+}
+
+/** Warn once per run, in the log and in chat, that a node's model ref overrides its provider. */
+async function warnProviderConflict(
+  ctx: Pick<ProviderResolutionContext, 'platform' | 'conversationId' | 'workflowRun'>,
+  node: DagNode,
+  conflict: NonNullable<NodeModelResolution['providerConflict']>,
+  warnedProviderConflicts: Set<string> | undefined
+): Promise<void> {
+  const conflictKey = `${conflict.declared}|${conflict.resolved}|${conflict.modelRef}`;
+  if (warnedProviderConflicts?.has(conflictKey)) return;
+  warnedProviderConflicts?.add(conflictKey);
+  const workflowRunId = ctx.workflowRun.id;
+  getLog().warn(
+    {
+      nodeId: node.id,
+      configuredProvider: conflict.declared,
+      resolvedProvider: conflict.resolved,
+      modelRef: conflict.modelRef,
+    },
+    'dag.model_provider_conflict'
+  );
+  const delivered = await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `Warning: Node '${node.id}' sets provider '${conflict.declared}' but model '${conflict.modelRef}' resolves to provider '${conflict.resolved}' — using '${conflict.resolved}'.`,
+    { workflowId: workflowRunId, nodeName: node.id }
+  );
+  if (!delivered) {
+    getLog().error(
+      { nodeId: node.id, workflowRunId },
+      'dag.model_provider_conflict_warning_delivery_failed'
+    );
+  }
+}
+
+/** Capabilities a node cannot run without fail the dispatch instead of warning. */
+function assertDispatchCapabilities(
+  ctx: Pick<ProviderResolutionContext, 'execContext'>,
+  node: DagNode,
+  provider: string,
+  caps: ProviderCapabilities
+): void {
   // Keep the container capability check at dispatch as well as preflight: every
   // actual turn must honour the requested execution context.
-  if (execContext.kind === 'container' && !caps.containerExec) {
+  if (ctx.execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
         'capability). Use provider claude, or run without --container.'
@@ -274,8 +312,17 @@ export async function resolveNodeProviderAndModel(
       scopedCapabilityMismatchMessage([{ nodeId: node.id, provider, capabilities: unscoped }])
     );
   }
+}
 
-  // Capability warnings — inform users when features are unsupported
+/** Fields the node sets that its provider does not support, so they will be ignored. */
+function unsupportedCapabilities(
+  ctx: Pick<ProviderResolutionContext, 'config' | 'workflowLevelOptions'>,
+  node: DagNode,
+  provider: string,
+  caps: ProviderCapabilities,
+  declaredEffort: EffortLevel | undefined
+): string[] {
+  const { config, workflowLevelOptions } = ctx;
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
     [
       'allowed_tools/denied_tools',
@@ -295,40 +342,40 @@ export async function resolveNodeProviderAndModel(
     ['settingSources', 'settingSources', node.settingSources !== undefined],
     ['env', 'envInjection', (config.envVars && Object.keys(config.envVars).length > 0) === true],
   ];
+  const unsupported = capChecks.filter(([, cap, isSet]) => isSet && !caps[cap]).map(([f]) => f);
 
-  const unsupported: string[] = [];
-  for (const [field, cap, isSet] of capChecks) {
-    if (isSet && !caps[cap]) {
-      unsupported.push(field);
-    }
-  }
-
-  // `webSearchMode` has no ProviderCapabilities axis, so capChecks above cannot
-  // see it. Surfacing it here reuses the existing loud-mismatch path so a
+  // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
+  // decided it keeps no node-level form, making it the single workflow-level
+  // field with no per-node counterpart. There is deliberately no
+  // ProviderCapabilities axis for one provider's one field, so capChecks above
+  // cannot see it. Surfacing it here reuses the existing loud-mismatch path so a
   // workflow that declares it on a node that cannot read it gets the same
   // warning every other capability mismatch produces, instead of a silent no-op.
-  if (!isCodex && workflowLevelOptions.webSearchMode !== undefined) {
+  //
+  // Reasoning depth is NOT in this category any more: the loader translates the
+  // deprecated `modelReasoningEffort:` into `effort:`, so the executor sees one
+  // provider-agnostic field and needs no Codex branch for it.
+  if (provider !== 'codex' && workflowLevelOptions.webSearchMode !== undefined) {
     unsupported.push('webSearchMode');
   }
+  return unsupported;
+}
 
-  // Build universal base options
-  const baseOptions: SendQueryOptions = {};
-  if (model) baseOptions.model = model;
-  // Only annotate options with the execution context when running in a container
-  // (Phase B). Host is the default/absent case, so host runs produce byte-identical
-  // options — the provider infers host behavior from the missing field.
-  if (execContext.kind === 'container') {
-    baseOptions.execContext = execContext;
-  }
-  if (config.envVars && Object.keys(config.envVars).length > 0) {
-    baseOptions.env = config.envVars;
-  }
-  baseOptions.userCredentialEnvKeys = config.userCredentialEnvKeys;
-  if (config.protectedEnvKeys && config.protectedEnvKeys.length > 0) {
-    baseOptions.protectedEnvKeys = config.protectedEnvKeys;
-  }
-  // Resolved, never mutated in place: the node object is the shared definition and a loop
-  // or a resume would otherwise substitute into an already-substituted string.
+interface NodeAiFields {
+  systemPrompt: string | undefined;
+  agents: NodeConfig['agents'];
+  fallbackModel: string | undefined;
+}
+
+/**
+ * Resolved, never mutated in place: the node object is the shared definition and a loop
+ * or a resume would otherwise substitute into an already-substituted string.
+ */
+function resolveNodeAiFields(
+  node: DagNode,
+  workflowLevelOptions: ProviderResolutionContext['workflowLevelOptions'],
+  resolveAiText: (text: string) => string
+): NodeAiFields {
   const systemPrompt =
     node.systemPrompt !== undefined ? resolveAiText(node.systemPrompt) : undefined;
   const agents =
@@ -344,16 +391,54 @@ export async function resolveNodeProviderAndModel(
           ])
         )
       : undefined;
+  return {
+    systemPrompt,
+    agents,
+    fallbackModel: node.fallbackModel ?? workflowLevelOptions.fallbackModel,
+  };
+}
+
+/** Universal options every provider reads. */
+function baseQueryOptions(
+  ctx: Pick<ProviderResolutionContext, 'config' | 'execContext'>,
+  node: DagNode,
+  model: string | undefined,
+  { systemPrompt, fallbackModel }: NodeAiFields
+): SendQueryOptions {
+  const { config, execContext } = ctx;
+  const baseOptions: SendQueryOptions = {};
+  if (model) baseOptions.model = model;
+  // Only annotate options with the execution context when running in a container
+  // (Phase B). Host is the default/absent case, so host runs produce byte-identical
+  // options — the provider infers host behavior from the missing field.
+  if (execContext.kind === 'container') {
+    baseOptions.execContext = execContext;
+  }
+  if (config.envVars && Object.keys(config.envVars).length > 0) {
+    baseOptions.env = config.envVars;
+  }
+  baseOptions.userCredentialEnvKeys = config.userCredentialEnvKeys;
+  if (config.protectedEnvKeys && config.protectedEnvKeys.length > 0) {
+    baseOptions.protectedEnvKeys = config.protectedEnvKeys;
+  }
   if (systemPrompt !== undefined) baseOptions.systemPrompt = systemPrompt;
   if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
-  const fb = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
-  if (fb) baseOptions.fallbackModel = fb;
+  if (fallbackModel) baseOptions.fallbackModel = fallbackModel;
   if (node.output_format) {
     baseOptions.outputFormat = { type: 'json_schema', schema: node.output_format };
   }
+  return baseOptions;
+}
 
-  // Build raw nodeConfig — provider translates internally
-  const nodeConfig: NodeConfig = {
+/** Raw nodeConfig — the provider translates it internally. */
+function buildNodeConfig(
+  node: DagNode,
+  workflowLevelOptions: ProviderResolutionContext['workflowLevelOptions'],
+  caps: ProviderCapabilities,
+  declaredEffort: EffortLevel | undefined,
+  { systemPrompt, agents, fallbackModel }: NodeAiFields
+): NodeConfig {
+  return {
     nodeId: node.id,
     // `mcp` is set per attempt by `executeAgentNode`, which decides whether an
     // optional declaration reaches the provider.
@@ -367,86 +452,60 @@ export async function resolveNodeProviderAndModel(
     allowed_tools: node.allowed_tools,
     denied_tools: node.denied_tools,
     // Dropped for a provider with no reasoning control, matching what the preset
-    // path does two functions up. `capChecks` has already told the author it
-    // will be ignored; writing it anyway would make `node_started` report a
-    // depth that was never applied, and would leave declared and preset effort
-    // behaving oppositely on the same provider.
+    // path does in `applyPresetOptions`. `unsupportedCapabilities` has already told
+    // the author it will be ignored; writing it anyway would make `node_started`
+    // report a depth that was never applied, and would leave declared and preset
+    // effort behaving oppositely on the same provider.
     effort: caps.effortControl ? declaredEffort : undefined,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,
     systemPrompt,
-    fallbackModel: fb,
+    fallbackModel,
     settingSources: node.settingSources,
   };
+}
 
-  // Pass assistantConfig from config — provider parses internally
-  const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  const presetEffortRejection = applyPresetOptions(
-    providers,
-    provider,
-    effectivePreset,
-    node,
-    declaredEffort,
-    nodeConfig
+async function warnUnsupportedCapabilities(
+  ctx: Pick<ProviderResolutionContext, 'platform' | 'conversationId' | 'workflowRun'>,
+  node: DagNode,
+  provider: string,
+  unsupported: readonly string[]
+): Promise<void> {
+  const workflowRunId = ctx.workflowRun.id;
+  getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
+  const delivered = await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `Warning: Node '${node.id}' uses ${unsupported.join(', ')} but ${provider} doesn't support ${unsupported.length === 1 ? 'it' : 'them'} — ${unsupported.length === 1 ? 'this will be' : 'these will be'} ignored.`,
+    { workflowId: workflowRunId, nodeName: node.id }
   );
-  if (presetEffortRejection?.reason === 'unsupported') {
-    unsupported.push('effort');
+  if (!delivered) {
+    getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
   }
+}
 
-  if (unsupported.length > 0) {
-    getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' uses ${unsupported.join(', ')} but ${provider} doesn't support ${unsupported.length === 1 ? 'it' : 'them'} — ${unsupported.length === 1 ? 'this will be' : 'these will be'} ignored.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
-    }
-  }
-
-  // `webSearchMode:` has no node-level form and no other consumer, so the
-  // workflow-level value is the only value — written only where it is read.
-  if (isCodex && workflowLevelOptions.webSearchMode !== undefined) {
-    assistantConfig.webSearchMode = workflowLevelOptions.webSearchMode;
-  }
-
-  // There is one effort channel now, so telemetry has one place to read (#2556).
-  // `nodeConfig.effort` holds whatever will be applied — declared, or filled in
-  // from the preset just above, or absent when the provider warned and dropped
-  // it. `assistants.<provider>.modelReasoningEffort` from config.yaml never
-  // enters nodeConfig, so it stays the fallback.
-  //
-  // Providers clamp a rung their SDK lacks (`ultra` → `max` on Claude/Pi or `xhigh` on Copilot),
-  // and this reports the declared rung rather than the clamped one — consistent
-  // across providers, and no longer able to name a field the provider ignored,
-  // which was the #2395 failure mode.
+/**
+ * There is one effort channel now, so telemetry has one place to read (#2556).
+ * `nodeConfig.effort` holds whatever will be applied — declared, or filled in from the
+ * preset, or absent when the provider warned and dropped it.
+ * `assistants.<provider>.modelReasoningEffort` from config.yaml never enters nodeConfig,
+ * so it stays the fallback.
+ *
+ * Providers clamp a rung their SDK lacks (`ultra` → `max` on Claude/Pi or `xhigh` on
+ * Copilot), and this reports the declared rung rather than the clamped one — consistent
+ * across providers, and no longer able to name a field the provider ignored, which was
+ * the #2395 failure mode.
+ */
+function reportedEffort(
+  nodeConfig: NodeConfig,
+  assistantConfig: Record<string, unknown>
+): EffortLevel | undefined {
   const assistantEffort = isEffortRung(assistantConfig.modelReasoningEffort)
     ? assistantConfig.modelReasoningEffort
     : undefined;
-  const resolvedEffort: EffortLevel | undefined = nodeConfig.effort ?? assistantEffort;
-
-  const options: SendQueryOptions = {
-    ...baseOptions,
-    nodeConfig,
-    assistantConfig,
-  };
-
-  // `node.model` is the original ref (e.g. "large"); `model` is the resolved
-  // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
-  // the node's own `model`, or (when the node inherits the workflow-level model)
-  // from the workflow tier, mirroring the effectivePreset inheritance condition.
-  return {
-    provider,
-    model,
-    options,
-    tier: resolution.tier,
-    effort: resolvedEffort,
-    preset: effectivePreset,
-  };
+  return nodeConfig.effort ?? assistantEffort;
 }
 
 /**
