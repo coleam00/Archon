@@ -1,9 +1,13 @@
 // @archon-test-isolated
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import * as paths from '@archon/paths';
-import type { PluginEnvironment } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
 const replacePlugin = mock(async (_ref: string, _env: PluginEnvironment) => undefined);
-mock.module('./plugin', () => ({ replacePlugin }));
+mock.module('./plugin-install', () => ({
+  replacePlugin,
+  installPlugin: mock(),
+  installPinnedPlugin: mock(),
+}));
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
 const { providerCommand } = await import('./provider');
 const env = { pluginsDir: '/unused', projectDir: '/unused', archonVersion: '0.13.0' };

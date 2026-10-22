@@ -9,7 +9,8 @@ import { receiptPath } from '@archon/plugin-manifest/store';
 import { loadProviderPlugins } from '@archon/core/providers/load-provider-plugins';
 import { processProviderRegistration } from '@archon/core';
 import { descriptor } from '../../../core/src/providers/fixtures/process-provider-data';
-import { checkAssistantLogin, checkProviderDiagnostics, checkInstalledProviders } from './doctor';
+import { checkAssistantLogin } from './doctor-assistant-login';
+import { checkProviderDiagnostics, checkInstalledProviders } from './doctor-providers';
 
 test('doctor gets credential status through a process-backed registration', async () => {
   const registration = processProviderRegistration(descriptor, [
