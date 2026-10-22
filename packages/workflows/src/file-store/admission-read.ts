@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathFor, receiptSchema, type Receipt } from './admission-documents';
 import { readJson } from './commit';
+import { evaluatedStartBindingStatusSchema } from '../schemas/resource-start';
 
 export async function documentPaths(root: string, kind: string): Promise<string[]> {
   let names: string[];
@@ -30,10 +31,9 @@ export async function readReceiptDocument(root: string, path: string): Promise<R
               (binding.intent
                 ? binding.hostId === binding.intent.hostId &&
                   binding.bindingId === binding.intent.bindingId &&
-                  binding.bindingRevision === binding.intent.bindingRevision
-                : binding.status !== 'pending' &&
-                  binding.status !== 'failed' &&
-                  binding.status !== 'preparing')
+                  binding.bindingRevision === binding.intent.bindingRevision &&
+                  binding.status !== 'unmatched'
+                : evaluatedStartBindingStatusSchema.safeParse(binding.status).success)
           ),
         { message: 'Start receipt document identity or preparation intent is inconsistent' }
       )

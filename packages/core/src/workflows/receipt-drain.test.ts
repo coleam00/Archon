@@ -167,6 +167,18 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
     case 'host':
       row.bindings[0].hostId = row.bindings[0].hostId === 'host' ? 'other' : 'host';
       break;
+    case 'unmatched-status-intent':
+      row.bindings[0].status = 'unmatched';
+      break;
+    case 'complete-null-intent':
+      row.bindings.push({
+        ...row.bindings[0],
+        bindingId: 'evaluated',
+        hostId: null,
+        intent: null,
+        status: 'complete',
+      });
+      break;
     case 'null-intent':
       row.bindings[0].intent = null;
       break;
@@ -194,6 +206,8 @@ for (const receiptHost of ['host', 'other']) {
     'intent-binding-id',
     'intent-revision',
     'host',
+    'unmatched-status-intent',
+    'complete-null-intent',
     'null-intent',
   ] as const)(
     `receipt %s failure from ${receiptHost} preserves independent queued progress`,

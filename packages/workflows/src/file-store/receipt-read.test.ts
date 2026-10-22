@@ -6,7 +6,11 @@ import { ZodError } from 'zod';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 import { receiptFieldsSchema, pathFor } from './admission-documents';
-import { sourceReceiptOutcomeSchema } from '../schemas/resource-start';
+import {
+  evaluatedStartBindingStatusSchema,
+  sourceReceiptOutcomeSchema,
+  startBindingPreparationStatusSchema,
+} from '../schemas/resource-start';
 import * as commitModule from './commit';
 
 const roots = trackTempRoots();
@@ -67,6 +71,18 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
     case 'host':
       row.bindings[0].hostId = 'host';
       break;
+    case 'unmatched-status-intent':
+      row.bindings[0].status = 'unmatched';
+      break;
+    case 'complete-null-intent':
+      row.bindings.push({
+        ...row.bindings[0],
+        bindingId: 'evaluated',
+        hostId: null,
+        intent: null,
+        status: 'complete',
+      });
+      break;
     case 'null-intent':
       row.bindings[0].intent = null;
       break;
@@ -101,6 +117,8 @@ test.each([
   'intent-binding-id',
   'intent-revision',
   'host',
+  'unmatched-status-intent',
+  'complete-null-intent',
   'null-intent',
   'failed-null-intent',
   'preparing-null-intent',
@@ -244,9 +262,9 @@ test.each([
 });
 
 for (const outcome of sourceReceiptOutcomeSchema.options) {
-  test.each([false, true])(
+  test.each([null, ...evaluatedStartBindingStatusSchema.options])(
     `${outcome} receipt preserves evaluated bindings: %s`,
-    async evaluated => {
+    async evaluatedStatus => {
       const root = roots(await mkdtemp(join(tmpdir(), 'receipt-outcome-')));
       const store = await createFileWorkflowStore({ root });
       const id = crypto.randomUUID();
@@ -259,12 +277,12 @@ for (const outcome of sourceReceiptOutcomeSchema.options) {
         occurredAt: null,
         sourceActor: null,
       };
-      const evaluatedBindings = evaluated
+      const evaluatedBindings = evaluatedStatus
         ? [
             {
               bindingId: 'evaluated',
               bindingRevision: null,
-              status: 'unmatched' as const,
+              status: evaluatedStatus,
               reason: 'no match',
             },
           ]
@@ -304,8 +322,24 @@ for (const outcome of sourceReceiptOutcomeSchema.options) {
       expect(stored?.outcome).toBe(outcome);
       expect(stored?.bindings.map(binding => binding.bindingId)).toEqual([
         ...(outcome === 'matched' ? ['accepted'] : []),
-        ...(evaluated ? ['evaluated'] : []),
+        ...(evaluatedStatus ? ['evaluated'] : []),
       ]);
+      if (outcome === 'matched') {
+        const path = join(root, pathFor('receipts', id));
+        const row = JSON.parse(await readFile(path, 'utf8'));
+        for (const status of startBindingPreparationStatusSchema.exclude(['unmatched']).options) {
+          row.bindings[0].status = status;
+          await writeFile(path, JSON.stringify(row));
+          const updated = await store.getStartReceipt(id);
+          expect(updated?.bindings.find(binding => binding.bindingId === 'accepted')?.status).toBe(
+            status
+          );
+          expect(await store.listStartReceipts()).toHaveLength(1);
+          expect(await store.listPendingStartBindings({ hostId: 'host' })).toHaveLength(
+            status === 'pending' || status === 'failed' ? 1 : 0
+          );
+        }
+      }
     }
   );
 }

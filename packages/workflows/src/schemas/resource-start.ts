@@ -246,6 +246,11 @@ export const resourceStartBindingIntentSchema = z
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
 
+export const evaluatedStartBindingStatusSchema = startBindingPreparationStatusSchema.extract([
+  'unmatched',
+  'rejected',
+]);
+
 const sourceReceiptAcceptanceBaseSchema = z
   .object({
     receipt: sourceReceiptInputSchema,
@@ -256,7 +261,7 @@ const sourceReceiptAcceptanceBaseSchema = z
           .object({
             bindingId: z.string().min(1),
             bindingRevision: z.string().min(1).nullable(),
-            status: startBindingPreparationStatusSchema.extract(['unmatched', 'rejected']),
+            status: evaluatedStartBindingStatusSchema,
             reason: z.string(),
           })
           .strict()
