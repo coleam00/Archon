@@ -510,6 +510,8 @@ export function createFileAdmissionStore(
     const path = pathFor('requests', id);
     try {
       const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
+      const { conflicts } = await readRequestReceiptAttribution(root, id);
+      if (conflicts.length) throw new AggregateError(conflicts, 'Conflicting receipt membership');
       return { inspection: await inspect(row), position: row.position };
     } catch (error) {
       let inspectionError = error;
@@ -566,7 +568,7 @@ export function createFileAdmissionStore(
   ): Promise<StartBindingInspection> {
     const inspection = bindingInspectionSchema.parse(item);
     const request = requestId ? await tx.request(requestId) : null;
-    if (request) validateRequestBinding(request, item);
+    if (request && requestId) validateRequestBinding(request, requestId, item);
     return {
       ...inspection,
       requestStatus: request?.status ?? null,

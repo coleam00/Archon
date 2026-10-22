@@ -190,52 +190,85 @@ test.each([-999999, 1.5])(
   }
 );
 
-test('receipt-linked requests validate their binding and inspection follows every linked request', async () => {
-  const { root, store } = await fixture();
-  const first = intent();
-  first.capacity = 2;
-  const receiptId = crypto.randomUUID();
-  first.receipt = { receiptId, bindingId: 'binding' };
-  const before = await readFile(join(root, 'head.json'), 'utf8');
-  await expect(store.admitResourceStart(first)).rejects.toThrow('receipt binding missing');
-  expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(before);
-  expect(await store.getWorkflowRun(first.launch.run.id)).toBeNull();
-  await store.acceptStartReceipt({
-    receipt: {
-      id: receiptId,
-      sourceInstanceId: 'source',
-      deliveryId: null,
-      contentDigest: 'digest',
-      receivedAt: new Date().toISOString(),
-      occurredAt: null,
-      sourceActor: null,
-    },
-    outcome: 'matched',
-    bindings: [
-      {
-        bindingId: 'binding',
-        bindingRevision: null,
-        hostId: 'host',
-        runAsUserId: 'operator',
-        resource: 'resource',
-        capacity: 2,
-        overlap: 'queue',
-        launch: { cwd: '/test', workflowName: 'test', inputs: {}, isolation: { kind: 'in-place' } },
+test.each(['none', 'id', 'launch-id'])(
+  'receipt-linked inspection validates membership IDs (%s) without requiring launch origin',
+  async damage => {
+    const { root, store } = await fixture();
+    const first = intent();
+    first.capacity = 2;
+    const receiptId = crypto.randomUUID();
+    first.receipt = { receiptId, bindingId: 'binding' };
+    const before = await readFile(join(root, 'head.json'), 'utf8');
+    await expect(store.admitResourceStart(first)).rejects.toThrow('receipt binding missing');
+    expect(await readFile(join(root, 'head.json'), 'utf8')).toBe(before);
+    expect(await store.getWorkflowRun(first.launch.run.id)).toBeNull();
+    await store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'source',
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
       },
-    ],
-  });
-  await store.admitResourceStart(first);
-  const second = { ...intent(), capacity: 2, receipt: first.receipt };
-  await store.admitResourceStart(second);
-  const receipt = await store.getStartReceipt(receiptId);
-  expect(receipt?.bindings.map(item => item.disposition?.requestId)).toEqual([
-    first.launch.run.id,
-    second.launch.run.id,
-  ]);
-  expect(receipt).not.toHaveProperty('createdAt');
-  expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
-  expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
-});
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: 'operator',
+          resource: 'resource',
+          capacity: 2,
+          overlap: 'queue',
+          launch: {
+            cwd: '/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    await store.admitResourceStart(first);
+    const second = { ...intent(), capacity: 2, receipt: first.receipt };
+    second.launch.execution.cwd = '/second';
+    await store.admitResourceStart(second);
+    if (damage !== 'none') {
+      const path = join(
+        root,
+        'resource/requests',
+        `${createHash('sha256').update(first.launch.run.id).digest('hex')}.json`
+      );
+      const row = JSON.parse(await readFile(path, 'utf8'));
+      if (damage === 'id') row.id = crypto.randomUUID();
+      else row.launch.run.id = crypto.randomUUID();
+      const bytes = JSON.stringify(row);
+      await writeFile(path, bytes);
+      await expect(store.getStartReceipt(receiptId)).rejects.toThrow('inconsistent membership');
+      expect(await readFile(path, 'utf8')).toBe(bytes);
+      return;
+    }
+    const receipt = await store.getStartReceipt(receiptId);
+    expect(receipt?.bindings.map(item => item.disposition?.requestId)).toEqual([
+      first.launch.run.id,
+      second.launch.run.id,
+    ]);
+    expect(receipt).not.toHaveProperty('createdAt');
+    expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
+    expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
+    const queued = { ...intent(), capacity: 2, receipt: first.receipt };
+    expect(await store.admitResourceStart(queued)).toMatchObject({ status: 'queued' });
+    await store.cancelWorkflowRun(first.launch.run.id);
+    expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+      { id: queued.launch.run.id, status: 'queued' },
+    ]);
+    expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject(
+      [{ requestId: queued.launch.run.id, status: 'admitted' }]
+    );
+  }
+);
 
 test('admission cannot reuse a deleted run ID', async () => {
   const { store } = await fixture();

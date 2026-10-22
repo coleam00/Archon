@@ -526,59 +526,82 @@ function combinedQueueFailure(error: unknown): AggregateError {
   return combined;
 }
 
-test.each(['wrong-receipt', 'wrong-binding', 'duplicate-membership', 'unreadable-origin'])(
-  '%s cannot invent receipt ownership or display another binding request',
-  async damage => {
-    const context = await fixture('host');
-    const { store, host, healthy, path: claimantPath, receiptId: claimantId } = context;
-    const { broken, receiptId, requestPath } = await queuedReceiptRequest(context);
-    const claimant = JSON.parse(await fs.readFile(claimantPath, 'utf8'));
-    claimant.bindings[0].status = 'complete';
-    claimant.bindings[0].requestIds = [broken.run.id];
-    await fs.writeFile(claimantPath, JSON.stringify(claimant));
-    const row = JSON.parse(await fs.readFile(requestPath, 'utf8'));
-    if (damage === 'wrong-receipt')
+test.each([
+  'wrong-receipt',
+  'wrong-binding',
+  'duplicate-membership',
+  'valid-duplicate-membership',
+  'direct-duplicate-membership',
+  'unreadable-origin',
+])('%s cannot invent receipt ownership or display another binding request', async damage => {
+  const context = await fixture('host');
+  const { store, host, healthy, path: claimantPath, receiptId: claimantId } = context;
+  const { broken, receiptId, requestPath } = await queuedReceiptRequest(context);
+  const claimant = JSON.parse(await fs.readFile(claimantPath, 'utf8'));
+  claimant.bindings[0].status = 'complete';
+  claimant.bindings[0].requestIds = [broken.run.id];
+  await fs.writeFile(claimantPath, JSON.stringify(claimant));
+  const row = JSON.parse(await fs.readFile(requestPath, 'utf8'));
+  switch (damage) {
+    case 'wrong-receipt':
       row.launch.run.metadata.resource_start.receiptId = crypto.randomUUID();
-    if (damage === 'wrong-binding') row.launch.run.metadata.resource_start.bindingId = 'other';
-    if (damage === 'unreadable-origin') row.launch = {};
-    await fs.writeFile(requestPath, JSON.stringify(row));
-    await expect(store.getStartReceipt(claimantId)).rejects.toThrow();
-    if (damage === 'duplicate-membership') {
-      expect(await store.getStartReceipt(receiptId)).toMatchObject({
-        bindings: [{ disposition: { requestId: broken.run.id } }],
-      });
-    } else await expect(store.getStartReceipt(receiptId)).rejects.toThrow();
-    row.position = -1;
-    await fs.writeFile(requestPath, JSON.stringify(row));
-    const started: string[] = [];
-    for (let pass = 0; pass < 2; pass++) {
-      const error = await drainResourceStartHost({
-        ...host,
-        hostId: 'host',
-        startAdmitted: async id => {
-          started.push(id);
-        },
-      }).catch((caught: unknown) => caught);
-      if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
-      const failure = error.failures.find(
-        f => f.error instanceof Error && f.error.message.includes(broken.run.id)
-      );
-      expect(failure?.receiptId).toBe(damage === 'duplicate-membership' ? receiptId : undefined);
-      const combined = combinedQueueFailure(failure?.error);
-      if (damage !== 'unreadable-origin') {
-        expect(combined.errors).toContainEqual(
-          expect.objectContaining({
-            message: expect.stringContaining(basename(claimantPath)),
-          })
-        );
-      }
-      expect(started).toEqual([healthy.run.id]);
-      expect(await store.getWorkflowRun(broken.run.id)).toBeNull();
-    }
-    expect(await fs.readFile(requestPath, 'utf8')).toBe(JSON.stringify(row));
-    expect(await fs.readFile(claimantPath, 'utf8')).toBe(JSON.stringify(claimant));
+      break;
+    case 'wrong-binding':
+      row.launch.run.metadata.resource_start.bindingId = 'other';
+      break;
+    case 'unreadable-origin':
+      row.launch = {};
+      break;
+    case 'direct-duplicate-membership':
+      row.launch.run.metadata = {};
+      break;
   }
-);
+  await fs.writeFile(requestPath, JSON.stringify(row));
+  if (damage === 'direct-duplicate-membership') {
+    expect(await store.getStartReceipt(claimantId)).toMatchObject({
+      bindings: [{ disposition: { requestId: broken.run.id } }],
+    });
+  } else await expect(store.getStartReceipt(claimantId)).rejects.toThrow();
+  if (damage.endsWith('duplicate-membership')) {
+    expect(await store.getStartReceipt(receiptId)).toMatchObject({
+      bindings: [{ disposition: { requestId: broken.run.id } }],
+    });
+  } else await expect(store.getStartReceipt(receiptId)).rejects.toThrow();
+  if (!['valid-duplicate-membership', 'direct-duplicate-membership'].includes(damage))
+    row.position = -1;
+  await fs.writeFile(requestPath, JSON.stringify(row));
+  const expectedReceiptId =
+    damage.endsWith('duplicate-membership') && damage !== 'direct-duplicate-membership'
+      ? receiptId
+      : undefined;
+  const started: string[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    const error = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        started.push(id);
+      },
+    }).catch((caught: unknown) => caught);
+    if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+    const failure = error.failures.find(
+      f => f.error instanceof Error && f.error.message.includes(broken.run.id)
+    );
+    expect(failure?.receiptId).toBe(expectedReceiptId);
+    const combined = combinedQueueFailure(failure?.error);
+    if (damage !== 'unreadable-origin') {
+      expect(combined.errors).toContainEqual(
+        expect.objectContaining({
+          message: expect.stringContaining(basename(claimantPath)),
+        })
+      );
+    }
+    expect(started).toEqual([healthy.run.id]);
+    expect(await store.getWorkflowRun(broken.run.id)).toBeNull();
+  }
+  expect(await fs.readFile(requestPath, 'utf8')).toBe(JSON.stringify(row));
+  expect(await fs.readFile(claimantPath, 'utf8')).toBe(JSON.stringify(claimant));
+});
 
 test.each([
   ['json', true],
