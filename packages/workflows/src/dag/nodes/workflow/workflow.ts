@@ -17,8 +17,12 @@ import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import type { WorkflowCommandSurface } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
-import type { WorkflowNode, WorkflowRun } from '../../../schemas';
-import { isTerminalRunStatus, readSubrunMetadata } from '../../../schemas';
+import type { WorkflowNode, WorkflowRun, WorkflowRunStatus } from '../../../schemas';
+import {
+  workflowRunStatusSchema,
+  terminalWorkflowRunStatusSchema,
+  readSubrunMetadata,
+} from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
@@ -33,6 +37,10 @@ import {
   type ShellInputContext,
   resolveWorkflowValue,
 } from '../../references';
+
+const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchema.exclude(
+  terminalWorkflowRunStatusSchema.options
+).options;
 
 /**
  * Execute a `workflow:` (sub-run) node (#2121 Phase 2). Starts — or, on parent
@@ -333,7 +341,7 @@ export async function executeWorkflowNode(
         await ctx.runChildWorkflow({ ...childArgs, resumeChild: { kind: 'failed', run: existing } })
       );
     }
-    if (!isTerminalRunStatus(existing.status)) {
+    if (LIVE_CHILD_STATUSES.includes(existing.status)) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
       return await pauseParentOnChild(existing.id);

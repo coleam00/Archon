@@ -244,6 +244,86 @@ describe('executeDagWorkflow -- workflow: node', () => {
     }
   );
 
+  it.each(['pending', 'running', 'paused'] as const)(
+    'waits on supported live child status %s on re-entry',
+    async status => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('live-child', { status, metadata: { parent_node_id: 'sub' } }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+        throw new Error('Live child must not be dispatched');
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('live-child-reentry'),
+          workflow: {
+            name: 'parent',
+            nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          runChildWorkflow,
+        })
+      );
+
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    }
+  );
+
+  it.each(['unsupported', ''])(
+    'rejects unsupported persisted child status %j on re-entry',
+    async status => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const child = makeWorkflowRun('invalid-child', {
+        metadata: { parent_node_id: 'sub' },
+      });
+      Object.defineProperty(child, 'status', { value: status });
+      store.findChildRuns.mockResolvedValue([child]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+        throw new Error('Invalid child must not be dispatched');
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('invalid-child-reentry'),
+          workflow: {
+            name: 'parent',
+            nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          runChildWorkflow,
+        })
+      );
+
+      expect(runChildWorkflow).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(eventsOf(store)).toContainEqual({
+        event_type: 'node_failed',
+        step_name: 'sub',
+        data: expect.objectContaining({
+          failure_kind: 'unknown',
+          error: `Sub-run 'child-workflow' returned unexpected status '${status}'`,
+        }),
+      });
+    }
+  );
+
   it('retains cancelled child uncertainty alongside valid sibling usage on re-entry', async () => {
     await writeBlock(
       'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
