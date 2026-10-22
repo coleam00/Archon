@@ -26,6 +26,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
+import { sumReportedCost, sumFanOutTokens, type RunUsageFigures } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
 
@@ -61,6 +62,7 @@ interface InstanceRun {
   /** The prefix on every inner node's step name. */
   stepNamePrefix: string;
   execution: NodeExecutionRecord;
+  priorUsage: RunUsageFigures;
 }
 
 /** A previously completed instance, threaded without re-running it. */
@@ -215,6 +217,29 @@ function instanceRunContext(
   };
 }
 
+async function readOpenInstanceUsage(
+  instance: Pick<InstanceRun, 'scope' | 'scopeName' | 'stepNamePrefix'>
+): Promise<RunUsageFigures> {
+  const { ctx } = instance.scope;
+  const rows = await ctx.deps.store.listWorkflowEvents(ctx.workflowRun.id);
+  let lastTerminal = rows.length - 1;
+  while (lastTerminal >= 0) {
+    const row = rows[lastTerminal];
+    if (
+      row.step_name === instance.scopeName &&
+      (row.event_type === 'node_completed' || row.event_type === 'node_failed')
+    )
+      break;
+    lastTerminal--;
+  }
+  // Earlier instance terminals already own their segment's usage. An unfinished
+  // segment can span multiple starts, so a recovery start must not reset its spend.
+  return foldDagResumeSnapshot(
+    rows.slice(lastTerminal + 1).filter(row => row.step_name?.startsWith(instance.stepNamePrefix)),
+    ctx.workflowRun.id
+  );
+}
+
 function isLifecycleWriteError(error: unknown): boolean {
   return error instanceof NodeEventWriteError || error instanceof TerminalStatusWriteError;
 }
@@ -230,25 +255,14 @@ async function releaseSourceUnreadableInstance(
 ): Promise<void> {
   const { ctx } = instance.scope;
   const parentRunId = ctx.workflowRun.id;
-  const { snapshot, execution, scopeName, stepNamePrefix } = instance;
+  const { snapshot, execution, scopeName } = instance;
   let releasedRecord = finishNodeExecution(
     execution,
     { status: 'failed', error: error.message, failureKind: 'child_failed' },
     { output: { text: '' } }
   );
   try {
-    const rows = await ctx.deps.store.listWorkflowEvents(parentRunId);
-    let start = rows.length - 1;
-    while (
-      start >= 0 &&
-      !(rows[start].step_name === scopeName && rows[start].event_type === 'node_started')
-    ) {
-      start--;
-    }
-    const usage = await foldDagResumeSnapshot(
-      rows.slice(start + 1).filter(row => row.step_name?.startsWith(stepNamePrefix)),
-      parentRunId
-    );
+    const usage = await readOpenInstanceUsage(instance);
     releasedRecord = finishNodeExecution(
       execution,
       { status: 'failed', error: error.message, failureKind: 'child_failed' },
@@ -296,9 +310,9 @@ async function recordInstanceTerminal(
         text: outcome.output,
         ...(outcome.structuredOutput !== undefined ? { structured: outcome.structuredOutput } : {}),
       },
-      costUsd: outcome.costUsd,
-      tokens: outcome.tokens,
-      tokensUnknown: outcome.tokensUnknown,
+      costUsd: sumReportedCost([instance.priorUsage, outcome]),
+      tokens: sumFanOutTokens([instance.priorUsage, outcome]),
+      tokensUnknown: instance.priorUsage.tokensUnknown === true || outcome.tokensUnknown === true,
       diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
     });
     await ctx.deps.store.persistWorkflowEvent(serializeNodeStateRecord(record));
@@ -424,6 +438,7 @@ export async function runComposeInstance(
     scopeName,
     stepNamePrefix,
     execution: startInstanceExecution(scope, scopeName, snapshot),
+    priorUsage: await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix }),
   };
   const notStarted = await claimInstanceStart(instance);
   if (notStarted !== undefined) return notStarted;

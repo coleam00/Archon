@@ -278,9 +278,22 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
+      createWorkflowEvent.mock.calls.flatMap(([event], index) =>
+        event.workflow_run_id === runId
+          ? [
+              {
+                ...event,
+                id: String(index),
+                step_index: event.step_index ?? null,
+                step_name: event.step_name ?? null,
+                data: event.data ?? {},
+                created_at: new Date(0).toISOString(),
+              },
+            ]
+          : []
+      )
+    ),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),

@@ -335,26 +335,30 @@ export class InMemoryStore implements IWorkflowStore {
   deleteOldWorkflowRuns: IWorkflowStore['deleteOldWorkflowRuns'] = async () => {
     throw new Error('Not used by this test');
   };
-  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async () => {
-    throw new Error('Not used by this test');
-  };
+  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async runId =>
+    this.events.flatMap((event, i) =>
+      event.workflow_run_id === runId
+        ? [
+            {
+              id: `event-${String(i)}`,
+              workflow_run_id: event.workflow_run_id,
+              event_type: event.event_type,
+              step_index: null,
+              step_name: event.step_name ?? null,
+              data: event.data ?? {},
+              created_at: new Date(0).toISOString(),
+            },
+          ]
+        : []
+    );
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (runIds, eventTypes) => {
     const byRun = new Map<string, WorkflowEventRow[]>();
-    this.events.forEach((event, i) => {
-      if (!runIds.includes(event.workflow_run_id)) return;
-      if (!eventTypes.some(type => type === event.event_type)) return;
-      const rows = byRun.get(event.workflow_run_id) ?? [];
-      rows.push({
-        id: `event-${String(i)}`,
-        workflow_run_id: event.workflow_run_id,
-        event_type: event.event_type,
-        step_index: null,
-        step_name: event.step_name ?? null,
-        data: event.data ?? {},
-        created_at: new Date(0).toISOString(),
-      });
-      byRun.set(event.workflow_run_id, rows);
-    });
+    for (const runId of runIds) {
+      const rows = (await this.listWorkflowEvents(runId)).filter(event =>
+        eventTypes.some(type => type === event.event_type)
+      );
+      if (rows.length > 0) byRun.set(runId, rows);
+    }
     return byRun;
   };
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
