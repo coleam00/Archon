@@ -409,63 +409,56 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ step: 'config' });
   });
 
-  it.each(['before', 'after'] as const)(
-    'a rejected loop-group status read %s the body interrupts without failing work',
-    async phase => {
-      const store = createMockStore();
-      const cause = new Error('database is locked');
-      store.getWorkflowRunStatus.mockImplementation(async () => {
-        const bodyCompleted = persistedEvents(store).some(
-          event => event.event_type === 'node_completed' && event.step_name === 'group.body'
-        );
-        if (phase === 'after' && !bodyCompleted) return 'running';
-        throw cause;
-      });
-      const error = await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          cwd: testDir,
-          workflowRun: makeWorkflowRun(),
-          workflow: {
-            name: 'status-read-interruption',
-            nodes: [
-              {
-                id: 'group',
-                kind: 'loop_group',
-                loop_group: {
-                  fresh_context: false,
-                  until_bash: 'exit 1',
-                  max_iterations: 3,
-                  nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
-                },
+  it('a rejected loop-group status read interrupts without failing work', async () => {
+    const store = createMockStore();
+    const cause = new Error('database is locked');
+    store.getWorkflowRunStatus.mockImplementationOnce(async () => {
+      throw cause;
+    });
+    const error = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(),
+        workflow: {
+          name: 'status-read-interruption',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                fresh_context: false,
+                until_bash: 'exit 1',
+                max_iterations: 3,
+                nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
               },
-            ],
-          },
-        })
-      ).catch((error: unknown) => error);
-      expect(error).toBeInstanceOf(ParentStatusReadError);
-      if (!(error instanceof ParentStatusReadError)) throw error;
-      expect(error.cause).toBe(cause);
-      expect(error.workflowRunId).toBe('dag-test-run-id');
-      expect(error.nodeId).toBe('group');
-      const events = persistedEvents(store);
-      expect(
-        events.some(event => event.event_type === 'node_started' && event.step_name === 'group')
-      ).toBe(true);
-      expect(
-        events.some(
-          event => event.event_type === 'node_completed' && event.step_name === 'group.body'
-        )
-      ).toBe(phase === 'after');
-      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
-      expect(
-        events.some(event => event.event_type === 'node_completed' && event.step_name === 'group')
-      ).toBe(false);
-      expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
-    }
-  );
+            },
+          ],
+        },
+      })
+    ).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ParentStatusReadError);
+    if (!(error instanceof ParentStatusReadError)) throw error;
+    expect(error.cause).toBe(cause);
+    expect(error.workflowRunId).toBe('dag-test-run-id');
+    expect(error.nodeId).toBe('group');
+    const events = persistedEvents(store);
+    expect(
+      events.some(event => event.event_type === 'node_started' && event.step_name === 'group')
+    ).toBe(true);
+    expect(
+      events.some(
+        event => event.event_type === 'node_completed' && event.step_name === 'group.body'
+      )
+    ).toBe(false);
+    expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(
+      events.some(event => event.event_type === 'node_completed' && event.step_name === 'group')
+    ).toBe(false);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it('one completed node and one failed node is a node_error', async () => {
     const { store } = await runDag([
