@@ -380,17 +380,19 @@ describe('AppServerConnection', () => {
       const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
       const response = connection.request('thread/start', {});
       const notifications = connection.notifications();
-      fake.stdout.write(`${line}\n{"id":1,"result":"ok"}\n{"method":"turn/started","params":{}}\n`);
+      fake.stdout.write(
+        `${line}\n{"id":1,"result":"ok"}\n{"method":"thread/archived","params":{"threadId":"t"}}\n`
+      );
 
       expect(await response).toBe('ok');
       expect(await notifications.next()).toEqual({
         done: false,
-        value: { method: 'turn/started', params: {} },
+        value: { method: 'thread/archived', params: { threadId: 't' } },
       });
       expect(log.warn.mock.calls).toEqual([
         [{ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line'],
       ]);
-      await notifications.return();
+      await notifications.return(undefined);
     }
   );
 });
