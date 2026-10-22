@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { ParentStatusReadError } from './parent-status-read';
+import { ParentSnapshotReadError } from './parent-snapshot-read';
 import { NodeEventWriteError } from './node-event-write';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
@@ -484,34 +485,37 @@ describe('scratch on exit', () => {
     }
   );
 
-  it('surfaces a parent status read cause without finalizing or deleting scratch', async () => {
-    const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
-    const run = makeRun({ output_root: root });
-    run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
-    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
-    mkdirSync(join(checkout, '.git'), { recursive: true });
-    const cause = new Error('Unsupported parent status');
-    const interruption = new ParentStatusReadError(run.id, 'fan', cause);
-    mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
-    const store = makeStore({
-      getWorkflowRun: mock(async () => run),
-      getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
-    });
+  it.each([ParentStatusReadError, ParentSnapshotReadError])(
+    'surfaces %p without finalizing or deleting scratch',
+    async ReadError => {
+      const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
+      const run = makeRun({ output_root: root });
+      run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
+      const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+      mkdirSync(join(checkout, '.git'), { recursive: true });
+      const cause = new Error('Unsupported parent status');
+      const interruption = new ReadError(run.id, 'fan', cause);
+      mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+      const store = makeStore({
+        getWorkflowRun: mock(async () => run),
+        getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
+      });
 
-    await expect(startWorkflow({ store })).rejects.toBe(interruption);
-    expect(interruption.cause).toBe(cause);
+      await expect(startWorkflow({ store })).rejects.toBe(interruption);
+      expect(interruption.cause).toBe(cause);
 
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
-    expect(existsSync(checkout)).toBe(true);
-    expect(noExecutorCanWrite(run)).toBe(true);
-    expect(keepAwake.activeCount()).toBe(0);
-    expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
-    expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
-      false
-    );
-  });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+      expect(existsSync(checkout)).toBe(true);
+      expect(noExecutorCanWrite(run)).toBe(true);
+      expect(keepAwake.activeCount()).toBe(0);
+      expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
+      expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
+        false
+      );
+    }
+  );
 
   it.each([false, true])(
     'host can report before draining scratch cleanup (failed=%p)',

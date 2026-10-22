@@ -4,6 +4,7 @@
  * layer's results into the shared run context.
  */
 import { ParentStatusReadError } from '../parent-status-read';
+import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
@@ -144,7 +145,7 @@ async function runLayerPhase(
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
-          if (error instanceof ParentStatusReadError) throw error;
+          if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
           return await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {

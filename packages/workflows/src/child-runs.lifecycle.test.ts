@@ -11,6 +11,7 @@ import {
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { ParentStatusReadError } from './parent-status-read';
+import { ParentSnapshotReadError } from './parent-snapshot-read';
 import { continueBlockedRun } from './parent-resume';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
@@ -58,6 +59,104 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
+
+  for (const fanOut of [false, true]) {
+    for (const persistent of [false, true]) {
+      it(`propagates settled-child parent snapshot rejection (fanOut=${fanOut}, persistent=${persistent})`, async () => {
+        await writeWorkflow(
+          'paid-child',
+          `name: paid-child
+description: paid child
+nodes:
+  - id: work
+    prompt: work
+`
+        );
+        await writeWorkflow(
+          'snapshot-parent',
+          `name: snapshot-parent
+description: parent accounting for child work
+nodes:
+  - id: sub
+    workflow: paid-child
+${fanOut ? "    fan_out:\n      items: '[1,2]'\n      as: item\n      join: all_success\n" : ''}  - id: after
+    prompt: must not run
+    depends_on: [sub]
+`
+        );
+        await writeWorkflow(
+          'snapshot-outer',
+          `name: snapshot-outer
+description: enclosing workflow
+nodes:
+  - id: nested
+    workflow: snapshot-parent
+`
+        );
+        const store = new InMemoryStore();
+        const readSnapshot = store.getDagResumeSnapshot;
+        const cause = new Error('Invalid persisted parent node record');
+        let rejections = 0;
+        store.getDagResumeSnapshot = async id => {
+          const children = [...store.runs.values()].filter(run => run.parent_run_id === id);
+          if (
+            children.length === (fanOut ? 2 : 1) &&
+            children.every(run => run.status === 'completed') &&
+            (persistent || rejections === 0)
+          ) {
+            rejections++;
+            throw cause;
+          }
+          return readSnapshot(id);
+        };
+        const fail = spyOn(store, 'failWorkflowRun');
+        const cancel = spyOn(store, 'cancelWorkflowRun');
+        const complete = spyOn(store, 'completeWorkflowRun');
+        const error: unknown = await executeWorkflow(
+          makeDeps(store),
+          makePlatform(),
+          'test',
+          cwd,
+          await discover('snapshot-outer'),
+          'goal'
+        ).catch((error: unknown) => error);
+        const parent = [...store.runs.values()].find(
+          run => run.workflow_name === 'snapshot-parent'
+        );
+        if (!parent) throw new Error('Missing parent run');
+        expect(error).toMatchObject({
+          name: 'ParentSnapshotReadError',
+          cause,
+          workflowRunId: parent.id,
+          nodeId: 'sub',
+        });
+        if (!(error instanceof ParentSnapshotReadError))
+          throw new Error('Expected snapshot interruption');
+        expect(error.cause).toBe(cause);
+        expect(rejections).toBe(persistent ? 2 : 1);
+        const outer = [...store.runs.values()].find(run => run.workflow_name === 'snapshot-outer');
+        if (!outer) throw new Error('Missing enclosing run');
+        expect(parent.status).toBe('running');
+        expect(outer.status).toBe('running');
+        expect(fail).not.toHaveBeenCalled();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(complete.mock.calls.some(([id]) => id === parent.id || id === outer.id)).toBe(false);
+        expect(
+          store.events.some(
+            event =>
+              (event.workflow_run_id === parent.id || event.workflow_run_id === outer.id) &&
+              (event.event_type === 'node_completed' ||
+                event.event_type === 'node_failed' ||
+                event.data?.node_id === 'after')
+          )
+        ).toBe(false);
+        const children = [...store.runs.values()].filter(run => run.parent_run_id === parent.id);
+        expect(children).toHaveLength(fanOut ? 2 : 1);
+        expect(children.every(run => run.status === 'completed')).toBe(true);
+        if (!persistent) expect(parent.metadata?.total_cost_usd).toBeCloseTo(fanOut ? 0.02 : 0.01);
+      });
+    }
+  }
 
   it.each([false, true])(
     'releases completed child scratch when its resumed parent status is unreadable (deferred=%p)',

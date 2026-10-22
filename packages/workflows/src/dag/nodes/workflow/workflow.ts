@@ -1,3 +1,4 @@
+import { readParentUsageSnapshot } from '../../../parent-snapshot-read';
 import { unreportedChildUsage } from '../../child-usage';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { pauseGateRespectingExternalTransition } from '../../pause';
@@ -248,7 +249,7 @@ export async function executeWorkflowNode(
       ...outcome,
       ...unreportedChildUsage(
         outcome,
-        await deps.store.getDagResumeSnapshot(parentRun.id),
+        await readParentUsageSnapshot(deps.store, parentRun.id, executionNodeId),
         executionNodeId
       ),
     };

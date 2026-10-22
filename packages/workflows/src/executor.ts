@@ -1,3 +1,4 @@
+import { ParentSnapshotReadError } from './parent-snapshot-read';
 import { ParentStatusReadError } from './parent-status-read';
 import {
   continueBlockedRun,
@@ -369,7 +370,7 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   let sourceExecutionStopped = false;
-  let parentStatusUnknown = false;
+  let parentStateUnreadable = false;
   try {
     const sourced = await establishAdoptedRunSource(
       deps,
@@ -602,11 +603,13 @@ export async function executeWorkflow(
     }
     return executionResult(deps, workflowRun.id, finalStatus, dagSummary);
   } catch (error) {
-    if (error instanceof ParentStatusReadError) {
-      parentStatusUnknown = true;
+    if (error instanceof ParentStatusReadError || error instanceof ParentSnapshotReadError) {
+      parentStateUnreadable = true;
       getLog().error(
         { err: error.cause, workflowRunId: workflowRun.id, nodeId: error.nodeId },
-        'workflow.parent_status_read_failed'
+        error instanceof ParentSnapshotReadError
+          ? 'workflow.parent_snapshot_read_failed'
+          : 'workflow.parent_status_read_failed'
       );
       getWorkflowEventEmitter().unregisterRun(workflowRun.id);
       throw error;
@@ -694,7 +697,7 @@ export async function executeWorkflow(
     leaveRunExecution();
     if (workflowRun && !terminalStatusWriteFailed) {
       // A source release that lost to a cancel skips the backstop but still frees scratch.
-      if (!sourceExecutionStopped && !parentStatusUnknown)
+      if (!sourceExecutionStopped && !parentStateUnreadable)
         await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
     }
