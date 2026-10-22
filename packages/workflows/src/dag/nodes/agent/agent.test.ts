@@ -2557,7 +2557,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
     expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.002 }]);
   });
 
-  it('writes no usage metadata at all when no node yielded cost or tokens', async () => {
+  it('marks unreported provider cost incomplete without inventing an amount', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Some output' };
       yield { type: 'result', sessionId: 'sid-no-cost' };
@@ -2581,16 +2581,14 @@ describe('executeDagWorkflow -- cost tracking', () => {
       })
     );
 
-    // A zero must stay ABSENT, not written as 0 — a bash-only workflow reading as a
-    // free AI run is the misleading shape the `> 0` guards exist to prevent.
-    expect(runUsageWrites(store)).toEqual([]);
+    expect(runUsageWrites(store)).toEqual([{ total_cost_incomplete: true }]);
     const completeCalls = (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>)
       .mock.calls;
     expect(completeCalls.length).toBe(1);
     expect(completeCalls[0][2]).not.toHaveProperty('total_cost_usd');
   });
 
-  it('accumulates finite loop costs and ignores a later non-finite cost', async () => {
+  it('retains finite loop costs and marks a later non-finite cost incomplete', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
@@ -2636,7 +2634,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
     );
 
     // The final NaN is omitted without erasing the first three iterations.
-    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.004 }]);
+    expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.004, total_cost_incomplete: true }]);
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
