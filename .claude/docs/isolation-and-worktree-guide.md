@@ -230,5 +230,5 @@ Anything past the proving commit is unmerged work: run branch names get reused, 
 | `WorktreeProvider` | `packages/isolation/src/providers/worktree.ts` |
 | File copy utilities | `packages/isolation/src/worktree-copy.ts` |
 | Error classification | `packages/isolation/src/errors.ts` |
-| Cleanup service | `packages/core/src/services/cleanup-service.ts` (entry), `packages/core/src/services/cleanup/` (one module per job) |
+| Cleanup service | `packages/core/src/services/cleanup-service.ts` (scheduled and stale sweeps, configuration), `packages/core/src/services/cleanup/` (one module per job) |
 | Port allocation | `packages/core/src/utils/port-allocation.ts` |

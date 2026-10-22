@@ -2,8 +2,8 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands.
  *
- * This is the public entry: the cleanup jobs live under ./cleanup/, and the
- * environment configuration below stays here because it is read once, when
+ * The cleanup jobs live under ./cleanup/. The scheduled and stale sweeps stay
+ * here with the environment configuration they read, which is read once, when
  * this module initializes.
  */
 import type { WorktreeStatusBreakdown } from '@archon/isolation';
@@ -26,42 +26,6 @@ import { removeEnvironment } from './cleanup/remove-environment';
 import { reapContainerEnvironments, type ContainerCleanupReport } from './cleanup/containers';
 import { recordCleanupRemoval, type CleanupOperationResult } from './cleanup/merged-sweep';
 import { sweepScheduledEnvironment, type CleanupReport } from './cleanup/scheduled-sweep';
-
-export {
-  reclaimContainerEnv,
-  listContainerEnvironments,
-  type ContainerEnvSummary,
-  type ContainerCleanupReport,
-} from './cleanup/containers';
-export {
-  removeEnvironment,
-  type RemoveEnvironmentOptions,
-  type RemoveEnvironmentResult,
-} from './cleanup/remove-environment';
-export {
-  getLiveRunBlocker,
-  getCleanupRunLock,
-  type LiveRunBlocker,
-  type CleanupSettlement,
-  type FailedRunReleaseReason,
-  type ReleasedFailedRun,
-  type CleanupRunLock,
-} from './cleanup/run-lock';
-export {
-  cleanupMergedWorktrees,
-  cleanupToMakeRoom,
-  type CleanupOperationResult,
-  type MergedCleanupResult,
-} from './cleanup/merged-sweep';
-export type { CleanupReport } from './cleanup/scheduled-sweep';
-export {
-  assessCompletedRunWorktree,
-  releaseCompletedRunWorktree,
-  reclaimRunWorktree,
-  type ReleasedWorktree,
-  type RunWorktreeRelease,
-  type WorktreeOwnershipReaders,
-} from './cleanup/run-worktree';
 
 function readPositiveIntegerEnv(
   name: string,

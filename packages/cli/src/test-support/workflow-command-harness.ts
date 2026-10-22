@@ -154,16 +154,16 @@ mock.module('@archon/core/services/run-live-owner', () => ({
   isRunOwnerAnswering: mockIsRunOwnerAnswering,
 }));
 
-mock.module(
-  '@archon/core/services/cleanup-service',
-  (): {
-    reclaimRunWorktree: () => Promise<{ warnings: string[] }>;
-    reclaimContainerEnv: typeof mockReclaimContainerEnv;
-  } => ({
-    reclaimRunWorktree: async () => ({ warnings: [] }),
-    reclaimContainerEnv: mockReclaimContainerEnv,
-  })
-);
+mock.module('@archon/core/services/cleanup/run-worktree', () => ({
+  reclaimRunWorktree: async () => ({ warnings: [] }),
+  assessCompletedRunWorktree: mock(),
+  releaseCompletedRunWorktree: mock(),
+}));
+mock.module('@archon/core/services/cleanup/containers', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
+  listContainerEnvironments: mock(),
+  reapContainerEnvironments: mock(),
+}));
 
 // The waiter itself is proven in @archon/core and against a real detached run in
 // workflow-wait.integration.spec.ts. Here the command's OWN responsibilities are

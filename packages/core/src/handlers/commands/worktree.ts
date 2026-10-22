@@ -11,11 +11,9 @@ import * as db from '../../db/conversations';
 import * as codebaseDb from '../../db/codebases';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
-import {
-  cleanupMergedWorktrees,
-  cleanupStaleWorktrees,
-  getLiveRunBlocker,
-} from '../../services/cleanup-service';
+import { cleanupStaleWorktrees } from '../../services/cleanup-service';
+import { cleanupMergedWorktrees } from '../../services/cleanup/merged-sweep';
+import { getLiveRunBlocker } from '../../services/cleanup/run-lock';
 import { ensureIsolationConfigured } from '../../orchestrator/dispatch/isolation-resolver';
 import { createRegisteredWorktree } from '../../workflows/registered-worktree';
 import { safeDeactivateSession } from '../../state/session-transitions';
