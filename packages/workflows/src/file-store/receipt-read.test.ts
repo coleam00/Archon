@@ -37,6 +37,9 @@ async function damageReceipt(path: string, damage: string): Promise<void> {
     case 'malformed-intent':
       row.outcome = 'malformed';
       break;
+    case 'created-at':
+      row.createdAt = 42;
+      break;
     case 'schema':
       row.bindings = [{}];
       break;
@@ -108,6 +111,7 @@ test.each([
   'unsupported-intent',
   'malformed-intent',
   'schema',
+  'created-at',
   'unreadable',
   'outer-id',
   'binding-id',

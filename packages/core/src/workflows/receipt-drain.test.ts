@@ -118,106 +118,15 @@ async function fixture(receiptHost: string, damagedReceiptId?: string) {
 async function damageReceipt(path: string, damage: string): Promise<void> {
   if (damage === 'unreadable') return;
   if (damage === 'json') return fs.writeFile(path, '{');
-  const row = JSON.parse(await fs.readFile(path, 'utf8'));
-  switch (damage) {
-    case 'matched-empty':
-      row.bindings = [];
-      break;
-    case 'matched-evaluated-only':
-      row.bindings[0].intent = null;
-      row.bindings[0].hostId = null;
-      row.bindings[0].status = 'unmatched';
-      break;
-    case 'unmatched-intent':
-      row.outcome = 'unmatched';
-      break;
-    case 'unsupported-intent':
-      row.outcome = 'unsupported';
-      break;
-    case 'malformed-intent':
-      row.outcome = 'malformed';
-      break;
-    case 'created-at':
-      row.createdAt = 42;
-      break;
-    case 'schema':
-      row.bindings = [{}];
-      break;
-    case 'outer-id':
-      row.id = crypto.randomUUID();
-      break;
-    case 'binding-id':
-      row.bindings[0].receiptId = 'wrong';
-      break;
-    case 'duplicate-binding':
-      row.bindings.push({ ...row.bindings[0] });
-      break;
-    case 'evaluated-collision':
-    case 'duplicate-evaluated': {
-      const evaluated = {
-        ...row.bindings[0],
-        bindingId: damage === 'duplicate-evaluated' ? 'evaluated' : row.bindings[0].bindingId,
-        hostId: null,
-        status: 'unmatched',
-        intent: null,
-      };
-      row.bindings.push(evaluated);
-      if (damage === 'duplicate-evaluated') row.bindings.push({ ...evaluated });
-      break;
-    }
-    case 'intent-binding-id':
-      row.bindings[0].intent.bindingId = 'wrong';
-      break;
-    case 'intent-revision':
-      row.bindings[0].intent.bindingRevision = 'wrong';
-      break;
-    case 'host':
-      row.bindings[0].hostId = row.bindings[0].hostId === 'host' ? 'other' : 'host';
-      break;
-    case 'unmatched-status-intent':
-      row.bindings[0].status = 'unmatched';
-      break;
-    case 'complete-null-intent':
-      row.bindings.push({
-        ...row.bindings[0],
-        bindingId: 'evaluated',
-        hostId: null,
-        intent: null,
-        status: 'complete',
-      });
-      break;
-    case 'null-intent':
-      row.bindings[0].status = 'pending';
-      row.bindings[0].intent = null;
-      break;
-    default:
-      throw new Error('unknown receipt damage');
+  if (damage === 'schema') {
+    const row = JSON.parse(await fs.readFile(path, 'utf8'));
+    row.bindings = [{}];
+    return fs.writeFile(path, JSON.stringify(row));
   }
-  await fs.writeFile(path, JSON.stringify(row));
+  throw new Error('unknown receipt damage');
 }
 
-const receiptDamages = [
-  'json',
-  'matched-empty',
-  'matched-evaluated-only',
-  'unmatched-intent',
-  'unsupported-intent',
-  'malformed-intent',
-  'schema',
-  'created-at',
-  'unreadable',
-  'outer-id',
-  'binding-id',
-  'duplicate-binding',
-  'evaluated-collision',
-  'duplicate-evaluated',
-  'intent-binding-id',
-  'intent-revision',
-  'host',
-  'unmatched-status-intent',
-  'complete-null-intent',
-  'null-intent',
-] as const;
+const receiptDamages = ['json', 'schema', 'unreadable'] as const;
 
 for (const receiptHost of ['host', 'other']) {
   test.each([...receiptDamages])(

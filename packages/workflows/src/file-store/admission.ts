@@ -522,16 +522,18 @@ export function createFileAdmissionStore(
     position: number
   ) {
     const path = pathFor('requests', id);
+    let attribution: Awaited<ReturnType<typeof readRequestReceiptAttribution>> | undefined;
     try {
       const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
-      const { conflicts } = await readRequestReceiptAttribution(root, id);
-      if (conflicts.length) throw new AggregateError(conflicts, 'Untrustworthy receipt membership');
+      attribution = await readRequestReceiptAttribution(root, id);
+      if (attribution.conflicts.length)
+        throw new AggregateError(attribution.conflicts, 'Untrustworthy receipt membership');
       return { inspection: await inspect(row), position: row.position };
     } catch (error) {
       let inspectionError = error;
       let receiptId: string | undefined;
       try {
-        const attribution = await readRequestReceiptAttribution(root, id);
+        attribution ??= await readRequestReceiptAttribution(root, id);
         receiptId = attribution.receiptId;
         if (attribution.errors.length) {
           inspectionError = new AggregateError(
