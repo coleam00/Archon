@@ -8,7 +8,7 @@ import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
-import type { DagNode, SkipCause } from '../schemas';
+import type { DagNode, SessionCursor, SkipCause } from '../schemas';
 import {
   canSuspend,
   nodeUsesPersistedScope,
@@ -551,119 +551,131 @@ async function aggregateLayerResults(
   const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
-    if (result.status === 'fulfilled') {
-      const { nodeId, output, sessionProvider } = result.value;
-      // SINGLE aggregation point for this segment's run-level usage: the run
-      // row's persisted totals and the transcript. Per-node cost/tokens must be
-      // summed here and ONLY here. Terminal telemetry does not read this: it
-      // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
-      }
-      ctx.totalTokensUnknown ||= output.tokensUnknown === true;
-      if (ctx.totalTokensUnknown) {
-        ctx.totalTokens = undefined;
-      } else if (output.tokens !== undefined) {
-        ctx.totalTokens = sumTokenUsage(
-          [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
-          { nodeId }
-        );
-      }
-      ctx.nodeOutputs.set(nodeId, output);
-      if (
-        ctx.nodeSessionHandles !== undefined &&
-        ctx.namedResumeSourceIds?.has(nodeId) === true &&
-        output.state === 'completed' &&
-        output.sessionId !== undefined &&
-        sessionProvider !== undefined
-      ) {
-        ctx.nodeSessionHandles.set(nodeId, {
-          sessionId: output.sessionId,
-          provider: sessionProvider,
-        });
-      }
-      const ownerNode = nodeById.get(nodeId);
-      if (
-        ownerNode &&
-        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
-        output.state === 'completed' &&
-        output.sessionId !== undefined &&
-        sessionProvider !== undefined
-      ) {
-        ctx.bodySessionCursors?.set(nodeId, {
-          sessionId: output.sessionId,
-          provider: sessionProvider,
-        });
-      }
-      // Typed artifact: when a node declares `output_type`, persist its output
-      // as a typed sidecar so other nodes and later runs can locate it by type.
-      // The writer keeps top-level node paths stable and qualifies loop body
-      // paths with ctx.loopGroupPath. Best-effort — a metadata write must never
-      // fail an otherwise-successful node.
-      const completedNode = nodeById.get(nodeId);
-      if (output.state === 'completed' && completedNode?.output_type) {
-        const meta = {
-          nodeId,
-          outputType: completedNode.output_type,
-          runId: ctx.workflowRun.id,
-          producedAt: new Date().toISOString(),
-          ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-        };
-        try {
-          await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
-        } catch (err) {
-          getLog().warn(
-            { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
-            'artifacts.write_failed'
-          );
-        }
-        // Scope mirror (#1846): persistence-participating nodes also write their
-        // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
-        // NEXT invocation can recover this output by reference if its persisted
-        // session comes back cold. Per-node files; concurrent same-scope runs are
-        // last-writer-wins for a given node. Best-effort, like the run-dir write.
-        if (
-          ctx.scopeArtifactsDir &&
-          nodeUsesPersistedScope(completedNode, ctx.workflowPersistSessions)
-        ) {
-          try {
-            await writeNodeArtifact(ctx.scopeArtifactsDir, meta, output.output);
-          } catch (err) {
-            getLog().warn(
-              {
-                err: err as Error,
-                nodeId,
-                workflowRunId: ctx.workflowRun.id,
-                scopeArtifactsDir: ctx.scopeArtifactsDir,
-              },
-              'artifacts.scope_write_failed'
-            );
-          }
-        }
-      }
-      if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
-        // Tag the cursor with the provider that created the session (#1992). A session
-        // id from a path that can't attest its provider is never threaded — fail-safe:
-        // a fresh downstream session beats a guaranteed-broken cross-provider resume.
-        ctx.lastSequentialSession =
-          sessionProvider !== undefined
-            ? { sessionId: output.sessionId, provider: sessionProvider }
-            : undefined;
-      }
-      if (output.state === 'failed') layerHadFailure = true;
+    if (result.status !== 'fulfilled') continue;
+    const { nodeId, output } = result.value;
+    const node = nodeById.get(nodeId);
+    addNodeUsage(ctx, result.value);
+    ctx.nodeOutputs.set(nodeId, output);
+    recordSessionCursors(ctx, result.value, node, bodyNodeIds);
+    if (output.state === 'completed' && node?.output_type) {
+      await writeTypedArtifacts(ctx, node, node.output_type, output.output);
     }
+    advanceSequentialSession(ctx, result.value, isParallelLayer);
+    if (output.state === 'failed') layerHadFailure = true;
   }
   return layerHadFailure;
+}
+
+// SINGLE aggregation point for this segment's run-level usage: the run
+// row's persisted totals and the transcript. Per-node cost/tokens must be
+// summed here and ONLY here. Terminal telemetry does not read this: it
+// folds the persisted node events (getDagResumeSnapshot) across segments.
+function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
+  if (output.costUsd !== undefined) {
+    // Same guard as tokens below, and for the same reason: cost comes from
+    // providers (incl. community ones), and one NaN poisons the run total for
+    // every other node — NaN > 0 is false, so the cost is dropped from the run
+    // row with no trace. Exactly the silent loss #2469 exists to
+    // remove. Guarded here, at the single aggregation point, so one bad node
+    // costs only its own contribution.
+    if (Number.isFinite(output.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+    } else {
+      getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
+    }
+  }
+  ctx.totalTokensUnknown ||= output.tokensUnknown === true;
+  if (ctx.totalTokensUnknown) {
+    ctx.totalTokens = undefined;
+  } else if (output.tokens !== undefined) {
+    ctx.totalTokens = sumTokenUsage(
+      [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
+      { nodeId }
+    );
+  }
+}
+
+/** A completed node's session, when its provider attested it. */
+function completedSession({ output, sessionProvider }: LayerNodeResult): SessionCursor | undefined {
+  if (output.state !== 'completed' || output.sessionId === undefined) return undefined;
+  if (sessionProvider === undefined) return undefined;
+  return { sessionId: output.sessionId, provider: sessionProvider };
+}
+
+function recordSessionCursors(
+  ctx: RunLayersContext,
+  result: LayerNodeResult,
+  node: DagNode | undefined,
+  bodyNodeIds: ReadonlySet<string>
+): void {
+  const session = completedSession(result);
+  if (session === undefined) return;
+  if (ctx.nodeSessionHandles !== undefined && ctx.namedResumeSourceIds?.has(result.nodeId)) {
+    ctx.nodeSessionHandles.set(result.nodeId, session);
+  }
+  if (node && ownsBodySessionCursor(node, bodyNodeIds)) {
+    ctx.bodySessionCursors?.set(result.nodeId, session);
+  }
+}
+
+// Typed artifact: when a node declares `output_type`, persist its output
+// as a typed sidecar so other nodes and later runs can locate it by type.
+// The writer keeps top-level node paths stable and qualifies loop body
+// paths with ctx.loopGroupPath. Best-effort — a metadata write must never
+// fail an otherwise-successful node.
+async function writeTypedArtifacts(
+  ctx: RunLayersContext,
+  node: DagNode,
+  outputType: string,
+  content: string
+): Promise<void> {
+  const meta = {
+    nodeId: node.id,
+    outputType,
+    runId: ctx.workflowRun.id,
+    producedAt: new Date().toISOString(),
+    ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
+  };
+  try {
+    await writeNodeArtifact(ctx.artifactsDir, meta, content);
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, nodeId: node.id, workflowRunId: ctx.workflowRun.id },
+      'artifacts.write_failed'
+    );
+  }
+  // Scope mirror (#1846): persistence-participating nodes also write their
+  // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
+  // NEXT invocation can recover this output by reference if its persisted
+  // session comes back cold. Per-node files; concurrent same-scope runs are
+  // last-writer-wins for a given node. Best-effort, like the run-dir write.
+  if (!ctx.scopeArtifactsDir || !nodeUsesPersistedScope(node, ctx.workflowPersistSessions)) return;
+  try {
+    await writeNodeArtifact(ctx.scopeArtifactsDir, meta, content);
+  } catch (err) {
+    getLog().warn(
+      {
+        err: err as Error,
+        nodeId: node.id,
+        workflowRunId: ctx.workflowRun.id,
+        scopeArtifactsDir: ctx.scopeArtifactsDir,
+      },
+      'artifacts.scope_write_failed'
+    );
+  }
+}
+
+function advanceSequentialSession(
+  ctx: RunLayersContext,
+  result: LayerNodeResult,
+  isParallelLayer: boolean
+): void {
+  const { output } = result;
+  if (output.state !== 'completed' || isParallelLayer || output.sessionId === undefined) return;
+  // Tag the cursor with the provider that created the session (#1992). A session
+  // id from a path that can't attest its provider is never threaded — fail-safe:
+  // a fresh downstream session beats a guaranteed-broken cross-provider resume.
+  ctx.lastSequentialSession = completedSession(result);
 }
 
 /**
