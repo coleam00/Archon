@@ -12,6 +12,7 @@ import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { ContainerBackend } from '@archon/isolation';
 import * as credentials from '@archon/workflows/run-preflight';
 import * as subprocess from '@archon/workflows/subprocess';
+import * as git from '@archon/git';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -86,6 +87,13 @@ async function prepare(root: string) {
   );
   const discard = watch(spyOn(ContainerBackend.prototype, 'discardChanges')).mockResolvedValue();
   const auth = watch(spyOn(credentials, 'assertRunCredentials')).mockResolvedValue();
+  // Each node start probes the container checkout with `docker exec`. A real docker on a
+  // CI runner can take longer than the test budget, so answer as a missing container would.
+  const execFile = git.execFileAsync;
+  watch(spyOn(git, 'execFileAsync')).mockImplementation(async (cmd, args, options) => {
+    if (cmd === 'docker') throw new Error('Error response from daemon: No such container');
+    return execFile(cmd, args, options);
+  });
   const execute = watch(spyOn(subprocess, 'runSubprocess')).mockImplementation(async context => {
     expect(context).toEqual({ kind: 'container', containerId: 'restarted' });
     return { stdout: 'second', stderr: '', credentialValues: [] };
