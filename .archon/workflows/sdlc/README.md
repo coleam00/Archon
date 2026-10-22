@@ -446,11 +446,6 @@ request, never the state.
   decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
   trust. Only the binding, or someone with access to the install, can supply it.
-  `trust: outside` sends the item down the outside path whatever the maintainer
-  list says. It only lowers trust a run decides: an item whose trust is already
-  recorded as a maintainer's refuses the run, since recorded trust never changes.
-  There is no `maintainer` value; `facts` refuses any value but `auto` and
-  `outside` before it reads or writes anything.
 
 The pack installs no binding. Two bindings in the GitHub source plugin's configuration start
 it; both share one resource so runs queue rather than overlap:

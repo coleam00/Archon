@@ -46,14 +46,6 @@ inputs:
       Pickup order, a JSON array of "<key> <asc|desc>" with keys urgency,
       importance, size, complexity and created. An item with no value for a
       key sorts after every item that has one.
-  trust:
-    default: "auto"
-    description: >-
-      auto or outside. Outside decides the item as an outside author's whatever
-      the maintainer list says, and refuses an item whose trust is already
-      recorded as maintainer, because recorded trust never changes. There is no
-      maintainer value: any other value refuses the run at facts, before
-      anything is read or written, so no input can raise trust.
 
 returns: outcome
 

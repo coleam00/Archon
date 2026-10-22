@@ -17,16 +17,12 @@ import {
   enqueue,
   type IntakeRequest,
   parseOrder,
-  parseTrustInput,
   REQUEST_ACTIONS,
   type RequestAction,
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 
 function main(): void {
-  // The inputs' own validation: a value outside their vocabularies refuses the run
-  // here, before anything is read or written.
-  const trustInput = parseTrustInput(text(process.env.INPUTS_TRUST));
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '')
     throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
@@ -75,8 +71,7 @@ function main(): void {
     { ...issue, digest: bodyDigest(issue.body) },
     maintainers,
     at,
-    runId,
-    trustInput
+    runId
   );
   emit({ path: decision.path, item: doc.subject, target: issue.url, decision });
 }
