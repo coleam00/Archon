@@ -345,7 +345,7 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   try {
     bindings = await host.deps.store.listPendingStartBindings({ hostId: host.hostId });
   } catch (error) {
-    // Queued requests already contain their prepared launch; admission need not reread receipts.
+    // Independent queued requests may still have trustworthy admission evidence.
     failures.push({ error });
   }
   for (const binding of bindings) {

@@ -99,6 +99,22 @@ export async function readRequestReceiptAttribution(root: string, id: string) {
     .parse(await readJson(join(root, pathFor('requests', id))));
   const origin = requestBindingIdentity(row.launch);
   const { bindings, errors } = await readReceiptMemberships(root, id);
+  const { owners, conflicts } = requestReceiptOwners(row, id, bindings);
+  if (origin && !owners.some(binding => matchesBinding(origin, binding))) {
+    conflicts.push(await missingOriginMembership(root, id, origin.receiptId));
+  }
+  let receiptId: string | undefined;
+  if (!origin && owners.length > 1) {
+    for (const binding of owners) conflicts.push(membershipError(id, binding));
+  } else receiptId = owners[0]?.receiptId;
+  return { receiptId, errors: [...errors, ...conflicts], conflicts };
+}
+
+function requestReceiptOwners(
+  row: Pick<Request, 'id' | 'launch'>,
+  id: string,
+  bindings: Binding[]
+) {
   const conflicts: Error[] = [];
   const owners: Binding[] = [];
   for (const binding of bindings) {
@@ -110,11 +126,24 @@ export async function readRequestReceiptAttribution(root: string, id: string) {
       conflicts.push(error);
     }
   }
-  let receiptId: string | undefined;
-  if (!origin && owners.length > 1) {
-    for (const binding of owners) conflicts.push(membershipError(id, binding));
-  } else receiptId = owners[0]?.receiptId;
-  return { receiptId, errors: [...errors, ...conflicts], conflicts };
+  return { owners, conflicts };
+}
+
+async function missingOriginMembership(
+  root: string,
+  id: string,
+  receiptId: string
+): Promise<Error> {
+  const path = pathFor('receipts', receiptId);
+  try {
+    const receipt = await readReceiptDocument(root, path);
+    return new Error(
+      `Start receipt document '${path}' ${receipt ? 'cannot establish binding membership' : 'is missing'} for request '${id}'`
+    );
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    return error;
+  }
 }
 
 function membershipError(id: string, binding: Binding): Error {

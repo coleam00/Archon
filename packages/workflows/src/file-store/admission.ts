@@ -273,9 +273,20 @@ export function createAdmissionTransaction(
     const queue: QueuedStart[] = [];
     for (const id of ids) {
       try {
-        queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id)));
+        const row = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
+        const { conflicts } = await readRequestReceiptAttribution(root, id);
+        if (conflicts.length)
+          throw new AggregateError(conflicts, 'Untrustworthy receipt membership');
+        queue.push(row);
       } catch (error) {
-        if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+        if (
+          !(
+            error instanceof z.ZodError ||
+            error instanceof SyntaxError ||
+            error instanceof AggregateError
+          )
+        )
+          throw error;
         const queueError = new Error(`Queued resource request '${id}' is invalid`, {
           cause: error,
         });
@@ -511,7 +522,7 @@ export function createFileAdmissionStore(
     try {
       const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
       const { conflicts } = await readRequestReceiptAttribution(root, id);
-      if (conflicts.length) throw new AggregateError(conflicts, 'Conflicting receipt membership');
+      if (conflicts.length) throw new AggregateError(conflicts, 'Untrustworthy receipt membership');
       return { inspection: await inspect(row), position: row.position };
     } catch (error) {
       let inspectionError = error;
