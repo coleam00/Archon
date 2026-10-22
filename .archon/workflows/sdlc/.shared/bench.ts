@@ -1,7 +1,7 @@
 /**
  * What every bench in this pack shares: the version record and its resolution, the
  * pack source snapshot, launching and waiting on ordinary runs through the `archon`
- * CLI, reading a finished run, JSONL lines, and the operator's marks.
+ * CLI, reading a finished run, and JSONL lines.
  *
  * A bench is a script that launches ordinary top-level runs; the engine knows nothing
  * about it. It uses the `archon` on `PATH`, so pointing `PATH` at a development build
@@ -511,18 +511,6 @@ export function latestLines(
   }
   return latest;
 }
-
-/**
- * The operator's marks. On a judged defect a mark says whether the judge was right; on
- * a finding no planted or known defect accounts for, whether it is a real problem. An
- * unmarked entry is null.
- */
-export const MARKS = {
-  defect: ['right', 'wrong', 'partly'],
-  finding: ['false_positive', 'real'],
-} as const;
-export type DefectMark = (typeof MARKS.defect)[number];
-export type FindingMark = (typeof MARKS.finding)[number];
 
 /** JSON with object keys sorted, so two records compare by content. */
 export function canonical(value: unknown): string {
