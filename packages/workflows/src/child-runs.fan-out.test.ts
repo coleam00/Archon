@@ -1048,7 +1048,7 @@ nodes:
     });
     expect(sentMessages(platform)).toContain(
       '**Fan-out completed with unfinished children** (node `work`): ' +
-        '1 of 2 children did not complete (1 failed)'
+        `1 of 2 children did not complete (1 failed). See \`/workflow get ${String(parentRun?.id)}\`.`
     );
   });
 
@@ -1152,6 +1152,59 @@ nodes:
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
     expect(children.map(c => c.status).sort()).toEqual(['completed', 'failed']);
     expect(store.events.some(e => e.event_type === 'workflow_cancelled')).toBe(false);
+  });
+
+  it('under all_success, a failed read of settled children keeps the failing child as the cause', async () => {
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    await writeWorkflow(
+      'fan-read-fails-strict',
+      `
+name: fan-read-fails-strict
+description: the post-settle child read fails under all_success
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","boom"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      join: all_success
+`
+    );
+    const store = new InMemoryStore();
+    const findChildRuns = store.findChildRuns;
+    store.findChildRuns = async parentRunId => {
+      const rows = await findChildRuns(parentRunId);
+      if (rows.length === 2 && rows.every(r => isTerminalRunStatus(r.status))) {
+        throw new Error('db read timed out');
+      }
+      return rows;
+    };
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-read-fails-strict'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    const failed = store.events.filter(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(failed).toHaveLength(1);
+    const error = String(failed[0].data?.error);
+    expect(error).toMatch(
+      /^fan_out node 'work' \(join: all_success\): child 1 \(run [^)]+\) failed/
+    );
+    expect(error).toContain(
+      "Failed to look up settled fan-out child runs for node 'work': db read timed out"
+    );
+    expect(failed[0].data?.failure_kind).toBe('child_failed');
+    expect(failed[0].data?.fan_out_outcome).toBeUndefined();
   });
 
   it('an unknown static workflow target records every slot as not started', async () => {

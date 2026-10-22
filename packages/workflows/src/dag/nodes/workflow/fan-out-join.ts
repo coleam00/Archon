@@ -66,31 +66,7 @@ export function joinFanOutOutcomes(
   outcomes: readonly ChildWorkflowOutcome[],
   slots: FanOutOutcome['slots']
 ): FanOutJoinResult {
-  if (join === 'all_success') {
-    // Every child ran to its own terminal state, so the lowest-index non-completed outcome
-    // IS the causal one — nothing here is a casualty of another child's failure.
-    const firstBad = outcomes.findIndex(o => o.status !== 'completed');
-    if (firstBad !== -1) {
-      const bad = outcomes[firstBad];
-      const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
-      return {
-        status: 'failed',
-        error:
-          `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
-          (bad.error ? `: ${bad.error}` : ''),
-        notice:
-          `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${ref} ${bad.status}` +
-          (bad.error ? ` — ${bad.error}` : ''),
-        failureKind: 'child_failed',
-      };
-    }
-    // All completed → aggregate the child results in item order: a LOGICAL array
-    // (#2637), serialized once for the text channel.
-    return {
-      status: 'completed',
-      elements: outcomes.map((o, i) => childElement(o, i, parentRunId, node.id)),
-    };
-  }
+  if (join === 'all_success') return joinAllSuccess(parentRunId, node, outcomes);
 
   if (slots.every(slot => slot.outcome === 'not_started')) {
     const reason = outcomes[0].error ?? `child ${outcomes[0].status}`;
@@ -120,5 +96,39 @@ export function joinFanOutOutcomes(
         ? childElement(o, i, parentRunId, node.id)
         : { archon_failed: true, error: o.error ?? `child ${o.status}`, status: o.status }
     ),
+  };
+}
+
+/**
+ * `all_success` decides from the outcomes alone: it fails on the lowest-index
+ * non-completed child, and needs no slot record to say which one.
+ */
+export function joinAllSuccess(
+  parentRunId: string,
+  node: WorkflowNode,
+  outcomes: readonly ChildWorkflowOutcome[]
+): FanOutJoinResult {
+  // Every child ran to its own terminal state, so the lowest-index non-completed outcome
+  // IS the causal one — nothing here is a casualty of another child's failure.
+  const firstBad = outcomes.findIndex(o => o.status !== 'completed');
+  if (firstBad !== -1) {
+    const bad = outcomes[firstBad];
+    const ref = bad.childRunId ? ` (run ${bad.childRunId.slice(0, 8)})` : '';
+    return {
+      status: 'failed',
+      error:
+        `fan_out node '${node.id}' (join: all_success): child ${String(firstBad)}${ref} ${bad.status}` +
+        (bad.error ? `: ${bad.error}` : ''),
+      notice:
+        `❌ **Fan-out failed** (node \`${node.id}\`): child ${String(firstBad)}${ref} ${bad.status}` +
+        (bad.error ? ` — ${bad.error}` : ''),
+      failureKind: 'child_failed',
+    };
+  }
+  // All completed → aggregate the child results in item order: a LOGICAL array
+  // (#2637), serialized once for the text channel.
+  return {
+    status: 'completed',
+    elements: outcomes.map((o, i) => childElement(o, i, parentRunId, node.id)),
   };
 }

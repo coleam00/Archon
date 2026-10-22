@@ -48,7 +48,7 @@ import {
   unclaimedIndices,
   type FanOutChildState,
 } from './fan-out-children';
-import { joinFanOutOutcomes } from './fan-out-join';
+import { joinAllSuccess, joinFanOutOutcomes } from './fan-out-join';
 import { buildFanOutOutcome } from './fan-out-outcome';
 
 /**
@@ -550,6 +550,13 @@ async function joinSettledChildren(
   const built = await buildFanOutOutcome(ctx.deps.store, parentRunId, stepName, outcomes);
   if ('lookupError' in built) {
     const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(built.lookupError as Error).message}`;
+    // `all_success` names its failing child without the slot record, so a read failure
+    // must not replace that child-attributed failure with an anonymous one.
+    const joined = join === 'all_success' ? joinAllSuccess(parentRunId, node, outcomes) : undefined;
+    if (joined?.status === 'failed') {
+      await writers.notify(joined.notice);
+      return writers.fail(`${joined.error} (${msg})`, joined.failureKind);
+    }
     await writers.notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
     return writers.fail(msg, 'unknown');
   }
@@ -578,7 +585,7 @@ async function joinSettledChildren(
     await writers.notify(
       `⚠️ **Fan-out completed with unfinished children** (node \`${node.id}\`): ` +
         `${describeUnfinishedFanOut(tally)}. ` +
-        `See \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
+        `See \`${spellWorkflowCommand(ctx.platform, `get ${parentRunId}`)}\`.`
     );
   }
   return completed;
