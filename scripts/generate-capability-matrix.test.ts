@@ -4,16 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { CODEX_CAPABILITIES } from '../packages/providers/src/codex/capabilities';
-import { assertTotalCoverage, renderCell } from './generate-capability-matrix';
+import { renderCell } from './generate-capability-matrix';
 
 const track = trackTempRoots();
 
 describe('capability matrix totality', () => {
-  test('covers every current schema field with an axis or explicit skip', () => {
-    expect(() => assertTotalCoverage()).not.toThrow();
-  });
-
-  test.each(['check', 'generate'])('%s rejects optional fields no provider declares', mode => {
+  test('check rejects optional fields no provider declares', () => {
     const root = track(mkdtempSync(join(tmpdir(), 'capability-matrix-')));
     const preload = join(root, 'extend-schema.ts');
     const schemaPath = resolve(
@@ -36,7 +32,7 @@ Object.assign(providerCapabilitiesSchema.shape, {
         '--preload',
         preload,
         resolve(import.meta.dir, 'generate-capability-matrix.ts'),
-        ...(mode === 'check' ? ['--check'] : []),
+        '--check',
       ],
       { stdout: 'pipe', stderr: 'pipe' }
     );

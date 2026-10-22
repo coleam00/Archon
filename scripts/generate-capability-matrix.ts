@@ -141,7 +141,7 @@ export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabi
 /**
  * Optional fields belong in the matrix even before any provider declares them.
  */
-export function assertTotalCoverage(): void {
+function assertTotalCoverage(): void {
   const covered = new Set<string>([...AXES.map(a => a.key), ...SKIP_KEYS]);
   const uncovered = Object.keys(providerCapabilitiesSchema.shape).filter(key => !covered.has(key));
   if (uncovered.length > 0) {
