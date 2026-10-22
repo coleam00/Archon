@@ -641,8 +641,8 @@ then the project's file, whose lines win where the two conflict.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
-  (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
-  else can post a verdict. The login that authors the pack's published review comment
+  (`.archon/sdlc/policy/maintainers.json` on the default branch) counts; verdicts
+  from other authors are ignored. The login that authors the pack's published review comment
   must be listed in that file on the default branch for its verdict to count.
   With the default `gh` source, this is the identity `gh` acts as; with the opt-in
   `forge` source, it is the forge plugin's credential identity, which may differ.
