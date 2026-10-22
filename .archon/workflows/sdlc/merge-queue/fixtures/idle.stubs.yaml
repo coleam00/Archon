@@ -4,6 +4,7 @@
 facts:
   path: idle
   base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  base_error: ""
   items: []
   settled: []
   gate: ""
@@ -15,8 +16,11 @@ record:
   options: []
   class: ""
   asked: null
+retriage:
+  retriaged: []
+  summary: "stub: Sent 0 of 0 merged issue(s) back to intake."
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, record]
+  reached: [facts, record, retriage]
 exec-code: true
