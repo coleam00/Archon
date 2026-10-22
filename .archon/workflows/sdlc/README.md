@@ -631,8 +631,10 @@ then the project's file, whose lines win where the two conflict.
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet and whose head branch is not one the build queue creates
-  (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). A pull request
-  on a build branch belongs to its build item alone until that item is ready. No build
+  (`build/<number>-…`): it gets a work item of its own (`facts.own_pr`). Enrollment
+  leaves a pull request on a build branch to its build item. The rule governs
+  enrollment only: an own-PR item that already exists for such a pull request is not
+  removed and still goes through the sweep. No build
   round owns an own-PR pull request, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and
