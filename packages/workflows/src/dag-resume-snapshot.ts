@@ -12,6 +12,7 @@ import {
   nodeCostScope,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   type SerializedNodeData,
+  type NodeUsage,
 } from './node-record-serialization';
 import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/node-execution';
 import {
@@ -113,13 +114,7 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
   return snapshots;
 }
 
-interface UsageContribution {
-  stepName: string;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  costUsd?: number;
-  costIncomplete?: boolean;
-}
+type UsageContribution = NodeUsage & { stepName: string };
 
 /** What one fold accumulates across a run's rows. */
 interface ResumeFold {
@@ -454,7 +449,7 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
     fold,
     row.step_name,
     record.rawUsage,
-    record.data.node?.kind === 'workflow'
+    record.data.node?.kind === 'workflow' || record.data.type === 'workflow'
       ? nodeInvocationKey(record.path, record.metadata?.invocation.loopPath ?? [])
       : undefined
   );

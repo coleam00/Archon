@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { childOutcomeFromRun } from './child-run';
+import { childOutcomeFromRun, readChildOutcome } from './child-run';
 import type { WorkflowRun } from '../schemas';
+import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 
 function settledRun(metadata: Record<string, unknown>): WorkflowRun {
   return {
@@ -116,3 +117,40 @@ describe('childOutcomeFromRun historical required counters', () => {
     expect(zero.tokensUnknown).toBeUndefined();
   });
 });
+
+for (const status of [
+  'completed',
+  'failed',
+  'cancelled',
+  'paused',
+  'running',
+  'pending',
+] as const) {
+  for (const marker of [undefined, true]) {
+    it.each([undefined, null, 'invalid', NaN, Infinity, 0, 0.3])(
+      `recovers the child floor for ${status}, marker ${String(marker)}, row cost %j`,
+      async cost => {
+        const outcome = await readChildOutcome(
+          {
+            getDagResumeSnapshot: async id =>
+              foldDagResumeSnapshot(
+                [
+                  {
+                    step_name: 'priced',
+                    event_type: 'node_completed',
+                    data: { type: 'agent', cost_usd: 0.2 },
+                  },
+                ],
+                id
+              ),
+          },
+          { ...settledRun({ total_cost_usd: cost, total_cost_incomplete: marker }), status }
+        );
+        expect(outcome.costUsd).toBe(
+          typeof cost === 'number' && Number.isFinite(cost) ? cost : 0.2
+        );
+        expect(outcome.costIncomplete).toBe(marker);
+      }
+    );
+  }
+}

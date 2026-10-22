@@ -123,7 +123,10 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
+    costUsd:
+      typeof md.total_cost_usd === 'number' && Number.isFinite(md.total_cost_usd)
+        ? md.total_cost_usd
+        : undefined,
     ...(hasIncompleteCostTotal(md) ? { costIncomplete: true } : {}),
     ...childTokenUsage(md),
     error: typeof md.error === 'string' ? md.error : undefined,
@@ -171,9 +174,10 @@ export async function readChildOutcome(
     run.status === 'running' || run.status === 'pending' ? { ...run, status: 'paused' } : run
   );
   // Older runs have no positive marker, so their events still own evidence of unpriced work.
-  if (!outcome.costIncomplete) {
+  if (!outcome.costIncomplete || outcome.costUsd === undefined) {
     const usage = await store.getDagResumeSnapshot(run.id);
     if (usage.costIncomplete) outcome.costIncomplete = true;
+    outcome.costUsd ??= usage.costUsd;
   }
   return outcome;
 }
