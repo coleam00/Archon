@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { join } from 'path';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolveBashPath } from '@archon/git';
-import { getArchonHome } from '@archon/paths';
+import { getArchonHome, getRunScratchDir } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { OVERLAY_MODES } from '@archon/workflows/container-context';
 import { ContainerBackend } from './container';
 import * as containerModule from './container';
@@ -1587,6 +1588,34 @@ describe('ContainerBackend artifacts mount', () => {
     const rm = docker.calls.findIndex(c => c[0] === 'rm');
     expect(chown).toBeGreaterThan(-1);
     expect(chown).toBeLessThan(rm);
+  });
+
+  test("removes the run's scratch only after the container, keeping its evidence", async () => {
+    const scratch = join(getRunScratchDir(ARTIFACTS_MOUNT), 'bisect', 'node_modules');
+    const report = join(ARTIFACTS_MOUNT, 'report.md');
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(report, 'evidence');
+    let scratchAtRm: boolean | undefined;
+    const docker = readyDocker(args => {
+      if (args[0] === 'rm') scratchAtRm = existsSync(scratch);
+      return undefined;
+    });
+    try {
+      const store = fakeStore();
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.prepare({
+        codebase: FOLDER,
+        artifactsMount: ARTIFACTS_MOUNT,
+      });
+
+      await backend.destroy(prepared.envId!);
+
+      expect(scratchAtRm).toBe(true);
+      expect(existsSync(scratch)).toBe(false);
+      expect(readFileSync(report, 'utf8')).toBe('evidence');
+    } finally {
+      await removeTempTree(ARTIFACTS_MOUNT);
+    }
   });
 
   test('skips the hand-back when the host user is root', async () => {

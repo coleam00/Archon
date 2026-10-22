@@ -1,6 +1,10 @@
 // @archon-test-isolated
 import { expect, mock, test } from 'bun:test';
-import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
+import type {
+  IWorkflowEngine,
+  WorkflowResumeInput,
+  WorkflowResumeOptions,
+} from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IIsolationProvider, IIsolationStore } from '@archon/isolation';
 import { toBranchName } from '@archon/git';
@@ -75,7 +79,8 @@ const isolationStore = {
 async function resumeAndResolveChild(
   storedBranch: string | null,
   resumedRun: WorkflowRun,
-  actorUserId?: string
+  actorUserId?: string,
+  executionOptions?: Pick<WorkflowResumeOptions, 'deferScratchCleanup'>
 ): Promise<WorkflowResumeInput | undefined> {
   let captured: WorkflowResumeInput | undefined;
   const engine: IWorkflowEngine = {
@@ -117,7 +122,8 @@ async function resumeAndResolveChild(
       conversationId: 'conv',
     }),
     undefined,
-    actorUserId
+    actorUserId,
+    executionOptions
   );
   const resolver = captured?.options?.resolveChildIsolation;
   if (!resolver) throw new Error('Child resolver missing');
@@ -155,3 +161,9 @@ for (const [label, actorUserId, expectedUser] of [
     );
   });
 }
+
+test('continuation forwards host-owned scratch cleanup to the engine', async () => {
+  const deferScratchCleanup = mock((_cleanup: () => Promise<void>) => {});
+  const captured = await resumeAndResolveChild(null, run, undefined, { deferScratchCleanup });
+  expect(captured?.options?.deferScratchCleanup).toBe(deferScratchCleanup);
+});

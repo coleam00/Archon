@@ -1066,8 +1066,8 @@ describe('streaming tail completion', () => {
     } as unknown as AgentSession;
 
     const chunks: MessageChunk[] = [];
-    const schema = { type: 'object' };
-    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+    const noToolCall = (): undefined => undefined;
+    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, noToolCall)) {
       chunks.push(chunk);
     }
 

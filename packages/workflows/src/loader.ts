@@ -94,7 +94,7 @@ function parseWorkflowHeader(
   }
 
   if (Object.hasOwn(raw, 'steps')) {
-    return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/guides/authoring-workflows/ for the workflow language reference.';
+    return '`steps:` format has been removed. Workflows must use `nodes:` (DAG) format. See https://archon.diy/reference/workflow-language/ for the workflow language reference.';
   }
 
   if (!Array.isArray(raw.nodes) || raw.nodes.length === 0) {
@@ -289,10 +289,8 @@ export function parseWorkflow(
     // parse_error is what the author sees, and discovery re-parses on every command.
     getLog().debug(
       {
-        err,
         filename,
         lineInfo: lineInfo || undefined,
-        contentPreview: content.slice(0, 200) + (content.length > 200 ? '...' : ''),
       },
       'workflow_parse_failed'
     );

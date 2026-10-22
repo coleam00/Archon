@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fanOutOutcomeSchema } from './fan-out-outcome';
 import { nodeArtifactSchema } from './node-artifact';
 import {
   nodeStateSchema,
@@ -70,6 +71,8 @@ export const runNodeStateSchema = z.object({
   error: z.string().optional(),
   reason: nodeSkipReasonSchema.optional(),
   cause: skipCauseSchema.optional(),
+  /** A `workflow:` fan-out node's per-slot record; the node's state says nothing about its children. */
+  fan_out_outcome: fanOutOutcomeSchema.optional(),
 });
 export type RunNodeState = z.infer<typeof runNodeStateSchema>;
 
@@ -100,7 +103,10 @@ export const terminalRecordSchema = z.object({
     }),
   ]),
   artifacts: artifactManifestSchema,
-  /** Present only when the run holds proof that it created its worktree. */
+  /**
+   * Present only when the run holds proof that it created its worktree; on a completed
+   * run, only when that worktree is on the run's own generated branch.
+   */
   worktree_disposition: worktreeDispositionSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

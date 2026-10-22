@@ -66,7 +66,7 @@ ls ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/
 cat ~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/issues/issue-42.md
 ```
 
-Artifacts are **external** to the repo on purpose — they don't pollute git.
+Artifacts are **external** to the repo on purpose — they don't pollute git. They are kept until you remove them, except `.archon/scratch/` inside the run's directory, which holds throwaway checkouts and installs and is deleted once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed). A run whose nodes Archon cannot confirm stopped keeps its scratch.
 
 ## Common Failure Modes
 
@@ -103,13 +103,14 @@ See [archon.diy/getting-started/installation/](https://archon.diy/getting-starte
 
 ### Workflow shows `running` for a long time but nothing happens
 
-Three possibilities:
+Four possibilities:
 
 1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool` or `assistant` events in the tail, it's fine. Wait.
 2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "Do not guess lifecycle ownership" rule — `AGENTS.md`). Transition it manually:
    - Any cancel (Web UI Cancel, `archon workflow cancel <run-id>`, chat `/workflow cancel [id]`) stops a live owner process before marking the row cancelled, and refuses when no owner answers — an orphan row gets that refusal, with the host and pid it recorded
    - Verified orphan: `archon workflow abandon <run-id>` (or Abandon in the Web UI after the refused Cancel, or `/workflow abandon <id>` in chat) — marks the row cancelled
 3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.
+4. **A tool call or background command never finished.** While the provider reports open work, `idle_timeout` does not fire. `archon workflow wait <run-id>` and `archon workflow status` show `stalled_tool_calls` attention once that work has made no progress for `workflows.toolCallAttentionMs` (30 minutes by default). `archon workflow end-turn <run-id>` ends that turn without cancelling the run; see `managing-runs.md`, "A stalled turn".
 
 ### Workflow fails mid-way; how do I resume?
 
@@ -135,11 +136,9 @@ A run is paused at a gate or an attention wait, but no message reached the conve
 
 **Cause:** the platform could not deliver the pause notice. The run still waits. The failure is logged as `platform_message_send_failed` and recorded on the run as a `pause_notice_undelivered` event, which the console's run view shows. Answer the run by id: `archon workflow status`, then `approve`, `reject`, or `respond`.
 
-### `MCP server connection failed: <plugin>` noise in chat
+### `MCP server connection failed: <server>`
 
-User-level Claude plugin MCPs (e.g. `telegram`, `notion`) inherited from `~/.claude/` fail to connect in the headless subprocess. This is normal — they're not configured for Archon's worktree context. Archon filters these to debug logs (`dag.mcp_plugin_connection_suppressed`) and surfaces only workflow-configured MCP failures.
-
-If you see a failure for an MCP you DID configure via `mcp:` in the workflow: check the config JSON path, the MCP server's `command`/`args`, and any referenced env vars.
+Archon reports only the MCP servers a node declares with `mcp:`. Status for any other server goes to the debug log as `dag.mcp_server_status`. A declared server is required: on Claude and Codex the node fails as `misconfigured` before its first model call, with an error naming the server and its cause. Check the config JSON path, the server's `command` and `args`, and any env vars it references.
 
 ### A node was skipped and I don't know why
 
@@ -167,11 +166,11 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
+Invalid values for optional workflow-level fields (`effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead. A key that belongs to another node type, such as `timeout:` on a prompt node, is a load error that names the node, the key and the node types that accept it. Run `archon validate workflows` or `archon workflow list` to see the warnings, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 
-A `persist_session` node whose provider couldn't restore the prior session runs FRESH with a warning (it does not fail). The warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
+When a node resumes a session that no longer exists, what happens depends on the provider. Pi starts a fresh session with a warning. Claude rejects the resume; when Archon confirms on the host that the transcript is gone and the rejection came before any output or tool call, it runs the node once more on a fresh session with the same warning. A second rejection, a rejection after output, a container run, or a named resume (`context: { resume }`) fails the node. Codex fails the node every time, so clear its saved session with `archon workflow reset-sessions <workflow>`. The fresh-session warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
 
 ### `cannot fork a session` warning
 

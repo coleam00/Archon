@@ -252,7 +252,7 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   // parsed positionals so `archon <command> [--subcommand] --help` shows only
   // the matching slice instead of the full index.
   if (values.help) {
-    await printUsageFor(command, subcommand);
+    await printUsageFor(positionals);
     await shutdownTelemetry();
     return 0;
   }
@@ -370,10 +370,7 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
     values.config,
     values['config-from-run']
   );
-  if (configOutsideRun) {
-    console.error(configOutsideRun);
-    return 1;
-  }
+  if (configOutsideRun) return await fail(ctx.json, configOutsideRun);
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
   if (command === 'plugin') return await routes.runPlugin(ctx);

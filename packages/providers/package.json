@@ -183,6 +183,9 @@
       "src/community/pi/provider.integration.test.ts"
     ],
     [
+      "src/community/pi/structured-output-tool.integration.test.ts"
+    ],
+    [
       "src/community/pi/provider-lazy-load.test.ts"
     ],
     [

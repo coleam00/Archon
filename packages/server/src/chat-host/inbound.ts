@@ -175,7 +175,11 @@ export function registerChatInbound(
           status: 'done',
           result:
             result.kind === 'cooperative'
-              ? { kind: 'cooperative', cancelled: result.cancelled }
+              ? {
+                  kind: 'cooperative',
+                  cancelled: result.cancelled,
+                  cleanupWarnings: result.cleanupWarnings,
+                }
               : {
                   kind: 'stopped',
                   pid: result.pid,

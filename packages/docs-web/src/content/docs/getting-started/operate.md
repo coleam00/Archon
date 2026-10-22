@@ -74,9 +74,16 @@ In a terminal, an answer continues the run in place. With `--json`, the answer i
 ```bash
 archon workflow resume <run-id>       # rerun a failed or paused run, skipping completed nodes
 archon workflow resume <run-id> --detach
+archon workflow end-turn <run-id>     # end a running run's stalled turn
 archon workflow cancel <run-id>       # stop a running run
 archon workflow abandon <run-id>      # give up on a run for good
 ```
+
+Pick the command by what is wrong:
+
+- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
+- **The run should stop.** Use `cancel`.
+- **The run failed or paused.** Use `resume` to continue it.
 
 `cancel` works only on a `running` run. It stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
 
@@ -233,7 +240,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 
 ### Several items from one workflow
 
-A workflow can [fan out one child per question](/guides/authoring-workflows/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
+A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
 
 ```bash
 archon workflow attention --json --all

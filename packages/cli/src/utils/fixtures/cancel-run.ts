@@ -17,9 +17,7 @@ try {
       ok: true,
       kind: result.kind,
       pid: result.kind === 'stopped' ? result.pid : null,
-      ...(result.kind === 'stopped' && result.cleanupWarnings
-        ? { cleanupWarnings: result.cleanupWarnings }
-        : {}),
+      ...(result.cleanupWarnings ? { cleanupWarnings: result.cleanupWarnings } : {}),
     })
   );
 } catch (error) {

@@ -3,7 +3,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
-import type { AttentionLabels } from './schemas/dag-node';
+import type { AttentionLabels } from './schemas/wait-node';
 import type { AttentionQueueScope } from './attention-queue';
 import type { AttentionStreamLine } from './attention-watch';
 
@@ -129,7 +129,8 @@ export interface IWorkflowEngine {
    * for a fresh open set, or replay from before the gap for history. Later bookmarks do
    * not restore coverage. Readable delivery is at least once and one line at a time;
    * the listener's promise is awaited before the next line. Observes only: no run state
-   * is written. Rejects with
+   * is written. Startup resolves after the listener accepts the snapshot and `ready`;
+   * an initial listener failure rejects with its cause before background watches start. Rejects with
    * `WorkflowEventCursorError`, before any line, when `after` cannot be read; a tail that
    * later cannot read its own cursor sends an `error` line and stops.
    */

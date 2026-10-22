@@ -1063,8 +1063,6 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     // No project resolves, so the isolation gate throws after the row was handed over.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
-    (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce('pending');
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
 
     await expect(
@@ -1077,7 +1075,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
       'run-precreated',
       expect.stringContaining('Detached run failed to start'),
-      { exitReason: 'launch_failed' }
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
     );
   });
 
@@ -1091,10 +1089,8 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     });
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    // The run got as far as executing — its lifecycle is not this handler's to mutate.
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      ...preCreatedRow,
-      status: 'running',
+    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      failed: false,
     });
     (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
 
@@ -1105,7 +1101,11 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       })
     ).rejects.toThrow(/Cannot create worktree/);
 
-    expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+      'run-precreated',
+      expect.stringContaining('Detached run failed to start'),
+      { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
+    );
   });
 
   // #2872 R3 — the flag names a row this process will execute AS. Both halves are
@@ -1127,6 +1127,11 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(preCreatedRow);
       (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+      if (token) {
+        (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+          failed: false,
+        });
+      }
       const { executeWorkflow } = await import('@archon/workflows/executor');
       (executeWorkflow as ReturnType<typeof mock>).mockClear();
       (prepareWorkflowSource as ReturnType<typeof mock>).mockClear();
@@ -1135,7 +1140,15 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
           detachedRunId: preCreatedRow.id,
         })
       ).rejects.toThrow('detached launch identity does not match');
-      expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+      if (token) {
+        expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+          preCreatedRow.id,
+          expect.stringContaining('detached launch identity does not match'),
+          { exitReason: 'launch_failed', pendingLaunchToken: token }
+        );
+      } else {
+        expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+      }
       expect(prepareWorkflowSource).not.toHaveBeenCalled();
       expect(executeWorkflow).not.toHaveBeenCalled();
     }
@@ -1181,22 +1194,13 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     async mode => {
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
-      if (mode === 'owned' || mode === 'claim refused') {
-        (workflowDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValueOnce(
-          'pending'
-        );
-      }
       if (mode === 'unowned') delete process.env.ARCHON_DETACHED_RUN_OWNER;
       if (mode === 'claim refused') {
         mockClaimDetachedRunProcessOwner.mockRejectedValueOnce(new Error('claim refused'));
       }
-      if (mode !== 'unowned') {
-        (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-          ...preCreatedRow,
-          metadata: {
-            cli_detached_launch_token:
-              mode === 'different launch' ? 'another-launch' : 'launch-token',
-          },
+      if (mode === 'different launch') {
+        (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+          failed: false,
         });
       }
       await expect(
@@ -1205,11 +1209,11 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
           modelAssignments: ['invalid-assignment'],
         })
       ).rejects.toThrow();
-      if (mode === 'owned' || mode === 'claim refused') {
+      if (mode !== 'unowned') {
         expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
           preCreatedRow.id,
           expect.stringContaining('Detached run failed to start'),
-          { exitReason: 'launch_failed' }
+          { exitReason: 'launch_failed', pendingLaunchToken: 'launch-token' }
         );
       } else {
         expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();

@@ -35,6 +35,32 @@ bun --cwd packages/server run dev
 
 Note: The root `bun dev` uses `--filter` to fix hot reload path issues, but this comes with log condensing.
 
+## `mock.module()` merges over the real module
+
+Bun merges a `mock.module()` factory over the real module: an export the factory leaves out keeps its real implementation. When a mocked module gains an export, every factory that does not list it starts running real code (a database, the network, the filesystem) while its tests still pass, often until a 5-second timeout.
+
+`bun run check:mock-modules` (validate id `mock-modules`, run in CI) fails on every factory that leaves out a value export of the module it mocks, naming the file, line, specifier and missing names. Mock each missing export, or spread the real module to keep the rest real on purpose:
+
+```ts
+mock.module('../db/workflows', async () => ({
+  ...(await import('../db/workflows')),
+  getWorkflowRun: mockGetWorkflowRun,
+}));
+```
+
+A spreading factory provides every export, including ones the module gains later; that is the author's declaration. Where test files share a process (packages other than `@archon/core`, unless the file has its own group), the `import()` can return a module an earlier file already mocked.
+
+Factories that were incomplete when the check landed are grandfathered in `scripts/mock-module-baseline.json`. A grandfathered site may omit only the exports its module's grandfathered sites omitted then, so a new export still fails at every one of them. The baseline only shrinks: after completing a factory, run `bun run check:mock-modules --write`. `bun run check:ratchet` refuses entries the baseline gains unless a commit in the change carries `Ratchet-Allow: scripts/mock-module-baseline.json`.
+
+What the check does not prove:
+
+- It reads factory keys from the factory's type, so an `as` cast can misstate them.
+- It checks only literal specifiers, and refuses a non-literal one.
+- It refuses a module TypeScript cannot read (no type declarations, or a path that does not resolve) unless the site is grandfathered.
+- A grandfathered factory can drop a key that another grandfathered site of the same module already omits.
+- It says nothing about a client a test never stubbed, or about I/O outside `mock.module()`. The adapters package preloads `no-network` (it traps only `globalThis.fetch`) and `no-archon-home-writes` guards for part of that; Bun reads `bunfig.toml` only from the working directory, so those guards apply only when the tests run from `packages/adapters`. Their headers list the limits.
+- It runs in validate and CI, not inside `bun test`.
+
 ## `mock.module()` Pollution
 
 Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it.

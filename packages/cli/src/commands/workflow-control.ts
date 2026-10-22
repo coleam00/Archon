@@ -270,9 +270,7 @@ export async function workflowCancelCommand(
         status: 'cancelled',
         processStopped: result.kind === 'stopped',
         workflowName: result.run.workflow_name,
-        ...(result.kind === 'stopped' && result.cleanupWarnings
-          ? { cleanupWarnings: result.cleanupWarnings }
-          : {}),
+        cleanupWarnings: result.cleanupWarnings,
         ...(result.kind === 'stopped' && result.cascadeFailures > 0
           ? { cascadeFailures: result.cascadeFailures }
           : {}),
@@ -292,12 +290,13 @@ export async function workflowCancelCommand(
     console.log(`Cancelled workflow run: ${resolvedId}`);
     console.log(`Workflow: ${result.run.workflow_name}`);
     console.log("It runs inside its parent run's process and stops at its next status check.");
+    printCleanupWarnings(result.cleanupWarnings);
     return 0;
   }
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Run owner stopped before run state was changed.');
-  for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
+  printCleanupWarnings(result.cleanupWarnings);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
   return 0;
 }
@@ -788,4 +787,8 @@ export async function workflowRespondCommand(
     recorded: 'response',
   });
   return 0;
+}
+
+function printCleanupWarnings(warnings: readonly string[] = []): void {
+  for (const warning of warnings) console.log(`Warning: ${warning}`);
 }

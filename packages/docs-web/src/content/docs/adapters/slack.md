@@ -145,7 +145,7 @@ archon plugin add coleam00/Archon/plugins/chat-slack
 
 In a source checkout, run `bun run cli plugin add coleam00/Archon/plugins/chat-slack`.
 
-In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Docker plugins](/deployment/docker/#plugins) for release pins and build args.
+In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Building the image](/deployment/docker/#building-the-image) for the release pin and build args.
 
 Without a tag, manual `plugin add` installs the latest release. Restart the server; Slack appears in `/api/health` once the plugin connects. Keep the plugin current with `archon plugin update coleam00/Archon/plugins/chat-slack`, and remove it with `archon plugin remove coleam00/Archon/plugins/chat-slack`. In Docker, remove Slack tokens from every effective env source as well, or the image plugin is reinstalled on restart. Outside Docker, removal followed by a restart keeps Slack off. See [`archon plugin`](/reference/cli/#plugin).
 

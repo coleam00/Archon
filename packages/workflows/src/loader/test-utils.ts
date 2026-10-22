@@ -6,7 +6,6 @@ import { clearRegistry, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverWorkflows as discoverWorkflowsWithProviders } from '../workflow-discovery';
-import { resetLegacyHomeWarningForTests } from '../workflow-discovery/scopes';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 import { isAgentNode, isExecNode, isIncludeDirective, isWorkflowNode } from '../schemas';
 import type { BindingDirective, DagNode, IncludeDirective } from '../schemas';
@@ -141,7 +140,6 @@ export function useTempWorkflowRoot(): () => string {
     await mkdir(dir, { recursive: true });
     process.env.ARCHON_HOME = join(dir, 'home');
     delete process.env.ARCHON_DOCKER;
-    resetLegacyHomeWarningForTests();
   });
 
   afterEach(async () => {

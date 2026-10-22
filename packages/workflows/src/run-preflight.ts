@@ -373,6 +373,11 @@ export function assertCredentialStatus(
   }
 }
 
+// A native probe can spawn the provider's CLI. When many runs launch at once, machine load
+// slows that spawn well past a quiet machine's few seconds, so the bound leaves room for a
+// launch burst. A definite answer still returns as soon as the probe has it.
+const NATIVE_CREDENTIAL_TIMEOUT_MS = 60_000;
+
 async function checkNativeCredential(
   deps: Pick<WorkflowDeps, 'getAgentProvider'>,
   prepared: PreparedRunAiConfiguration,
@@ -381,8 +386,15 @@ async function checkNativeCredential(
 ): Promise<CredentialStatus> {
   // A container runs with only the environment Archon forwards, never the host's.
   const baseEnv = context.execContext?.kind === 'container' ? {} : process.env;
+  const signal = AbortSignal.timeout(NATIVE_CREDENTIAL_TIMEOUT_MS);
+  const timedOut = (): WorkflowCredentialPreflightError =>
+    new WorkflowCredentialPreflightError(
+      requirement,
+      `native authentication check timed out after ${NATIVE_CREDENTIAL_TIMEOUT_MS / 1000}s; the provider did not answer, which is not a definite authentication failure`
+    );
+  let status: CredentialStatus;
   try {
-    return await deps.getAgentProvider(requirement.provider).checkCredential({
+    status = await deps.getAgentProvider(requirement.provider).checkCredential({
       ...context,
       settingSources: requirement.settingSources,
       model: requirement.model,
@@ -395,18 +407,22 @@ async function checkNativeCredential(
         ),
         ...prepared.config.envVars,
       },
-      signal: AbortSignal.timeout(20_000),
+      signal,
     });
   } catch (error) {
     log.warn(
       { err: error as Error, provider: requirement.provider },
       'workflow.native_credential_check_failed'
     );
+    if (signal.aborted) throw timedOut();
     throw new WorkflowCredentialPreflightError(
       requirement,
       'could not verify native authentication'
     );
   }
+  // Some providers report their own abort as a failed check rather than throwing.
+  if (status.state === 'check_failed' && signal.aborted) throw timedOut();
+  return status;
 }
 
 export async function assertRunCredentials(

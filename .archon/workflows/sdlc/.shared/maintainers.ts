@@ -10,7 +10,7 @@
  */
 
 import { record, type QualifiedPr } from './forge.ts';
-import { git, gitOrThrow } from './git.ts';
+import { gitOrThrow } from './git.ts';
 import { fetchDefaultBranch } from './remote.ts';
 
 export const MAINTAINERS_PATH = '.archon/sdlc/policy/maintainers.json';
@@ -62,9 +62,9 @@ export function parseMaintainers(text: string): Set<string> {
  * file means nobody: every author is outside.
  */
 export function readMaintainerList(repo: QualifiedPr['repo']): MaintainerList {
-  const { ref } = fetchDefaultBranch(repo);
-  if (git('cat-file', '-e', `${ref}:${MAINTAINERS_PATH}`).code !== 0) return { logins: new Set(), ownPrs: new Set() };
-  return parseMaintainerList(gitOrThrow('show', `${ref}:${MAINTAINERS_PATH}`));
+  const { sha } = fetchDefaultBranch(repo);
+  if (gitOrThrow('ls-tree', '--name-only', sha, '--', MAINTAINERS_PATH) === '') return { logins: new Set(), ownPrs: new Set() };
+  return parseMaintainerList(gitOrThrow('show', `${sha}:${MAINTAINERS_PATH}`));
 }
 
 export function readMaintainers(repo: QualifiedPr['repo']): Set<string> {

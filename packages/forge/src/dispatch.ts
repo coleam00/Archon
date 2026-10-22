@@ -22,6 +22,7 @@ import { normalizeHost, type ForgePluginConfig } from './plugin-config';
 import { runPluginProcess } from './plugin-process';
 import { selectCredential } from './credentials';
 import { GH_DOTCOM_TOKEN_KEYS } from '@archon/paths/github-token-env';
+import { parseRemoteUrl } from './remote-url';
 
 export type ForgeOperationAudit = z.infer<typeof forgeOperationAuditSchema>;
 export interface ForgeDispatchResult {
@@ -137,12 +138,59 @@ function remoteHost(remote: string | null): string | undefined {
   try {
     const scp = /^(?:[^@\s]+@)?([^:/\s]+):.+$/.exec(remote);
     if (scp && !remote.includes('://')) return normalizeHost(scp[1]);
-    const url = new URL(remote);
+    const { url, host } = parseRemoteUrl(remote.trim());
     if (!['http:', 'https:', 'ssh:', 'git:'].includes(url.protocol)) return undefined;
-    return normalizeHost(url.host);
+    return normalizeHost(host);
   } catch {
     return undefined;
   }
+}
+
+function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
+  if (request.op !== 'resolve' || !request.remote) return undefined;
+  try {
+    const { url, host } = parseRemoteUrl(request.remote.trim());
+    // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
+    if (url.protocol === 'https:' && host === `${url.hostname}:443`) {
+      return normalizeHost(url.hostname);
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function selectHost(discovery: PluginDiscovery, request: ForgeRequest, host: string): string {
+  if (request.op !== 'resolve') return requestRepo(request).hostClaim ? host.slice(0, -4) : host;
+  if (!discovery.byHost.has(host)) return httpsDefaultPortHost(request) ?? host;
+  return host;
+}
+
+function matchesResolvedHost(request: ForgeRequest, observed: string, host: string): boolean {
+  // Released resolvers normalize HTTPS :443 through WHATWG URL.host.
+  return (
+    normalizeHost(observed) === host || normalizeHost(observed) === httpsDefaultPortHost(request)
+  );
+}
+
+function retainHostClaim(response: ForgeResponse, host: string, claim: string): ForgeResponse {
+  if (!response.ok || response.result.op !== 'resolve' || response.result.value.kind !== 'resolved')
+    return response;
+  const value = response.result.value;
+  return {
+    ...response,
+    result: {
+      op: 'resolve',
+      value: {
+        ...value,
+        repo: {
+          ...value.repo,
+          host: normalizeHost(value.repo.host) === host ? value.repo.host : host,
+          hostClaim: host === claim ? undefined : true,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -226,7 +274,7 @@ export function matchesForgeOperationResponse(
       const value = result.value;
       return (
         value.kind === 'none' ||
-        (normalizeHost(value.repo.host) === host &&
+        (matchesResolvedHost(request, value.repo.host, host) &&
           value.forge === metadata.forge &&
           value.plugin.name === metadata.name &&
           value.plugin.version === metadata.version)
@@ -467,7 +515,8 @@ export async function dispatchForge(
       response = discoveryError(request, error);
       return finish(request, pluginIdentity, response, started);
     }
-    const selectedHost = host ?? '';
+    const repositoryHost = host ?? '';
+    const selectedHost = selectHost(discovery, request, repositoryHost);
     const plugin = discovery.byHost.get(selectedHost);
     if (!plugin) {
       response =
@@ -543,6 +592,7 @@ export async function dispatchForge(
           credentialSource = credential.kind === 'selected' ? credential.source : undefined;
           const outcome = await runPluginProcess(plugin, ['op', request.op], {
             env,
+            forge: plugin.metadata.forge,
             stdin: JSON.stringify(request),
             token: credential.kind === 'selected' ? credential.token : undefined,
             timeoutMs: options.timeoutMs,
@@ -592,7 +642,7 @@ export async function dispatchForge(
               !parsed.success ||
               parsed.data.operationId !== request.operationId ||
               parsed.data.ok !== (outcome.exitCode === 0) ||
-              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, selectedHost)
+              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, repositoryHost)
             ) {
               response = errorResponse(
                 request,
@@ -602,7 +652,7 @@ export async function dispatchForge(
                 },
                 lost
               );
-            } else response = parsed.data;
+            } else response = retainHostClaim(parsed.data, repositoryHost, selectedHost);
           }
         }
       }

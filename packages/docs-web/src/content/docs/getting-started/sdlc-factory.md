@@ -46,7 +46,7 @@ Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branc
 Each entry is a GitHub login, or an object naming one. With no file, every author is outside. The list decides three things:
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
-- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. The pack posts its reviews as the `gh` account, so **that account must be on the list**, or nothing ever merges.
+- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. With the default `gh` source, this is the identity `gh` acts as; with the opt-in `forge` source, it is the forge plugin's credential identity, which may differ. Check the published comment's author when choosing which login to list.
 - **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue.
 
 ## 3. Adjust policy and models (optional)
@@ -170,7 +170,7 @@ Everything below is written as the `gh` account, to the repository the queues na
 | Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met. Before merging, the merge queue changes `Refs #N` to `Closes #N` when the Ready review left nothing open, and changes it back if the merge doesn't land | Build queue rounds; merge queue |
 | CI | Reruns the failed jobs of a run once, when red is outside the change or on the default branch | Build queue rounds, merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
-| Worktrees and branches | If you schedule it, removes each worktree whose pull request merged, with the branch Archon created, remote included | `archon-worktree-cleanup` |
+| Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon-worktree-cleanup` |
 
 On your machine it keeps state documents (`archon state list --prefix work/`), worktrees and run artifacts under `~/.archon/`.
 

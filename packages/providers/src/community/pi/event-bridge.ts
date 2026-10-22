@@ -378,6 +378,26 @@ export type BridgeQueueItem =
   | { kind: 'done' }
   | { kind: 'error'; error: Error };
 
+/** Attach the structured output to the result and log which channel produced it. */
+function attachStructuredOutput(
+  terminal: ResultChunk,
+  toolOutput: Record<string, unknown> | undefined,
+  replyText: string
+): void {
+  const fields = { bufferLength: replyText.length };
+  if (toolOutput !== undefined) {
+    terminal.structuredOutput = toolOutput;
+    getLog().info({ ...fields, channel: 'tool' }, 'pi.event-bridge.structured_output_resolved');
+    return;
+  }
+  const parsed = tryParseStructuredOutput(replyText);
+  if (parsed !== undefined) terminal.structuredOutput = parsed;
+  getLog().warn(
+    { ...fields, channel: parsed === undefined ? 'none' : 'text_fallback' },
+    'pi.event-bridge.structured_output_resolved'
+  );
+}
+
 /** Lets the UI stub push notifications into the session's chunk queue. */
 export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
@@ -399,7 +419,7 @@ export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
   abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>,
+  structuredToolOutput?: () => Record<string, unknown> | undefined,
   uiBridge?: BridgeNotifier,
   extensionTurn?: PiExtensionTurn
 ): AsyncGenerator<MessageChunk> {
@@ -440,10 +460,10 @@ export async function* bridgeSession(
     flushPending(true);
     queue.push({ kind: 'chunk', chunk });
   });
-  // Best-effort structured-output buffer. Only accumulates when the caller
-  // requested a JSON schema; otherwise stays empty and the terminal chunk
-  // passes through untouched.
-  const wantsStructured = jsonSchema !== undefined;
+  // Reply-text buffer for the structured-output fallback. Only accumulates when
+  // the node declared output_format; otherwise stays empty and the terminal
+  // chunk passes through untouched. Thinking never enters it.
+  const wantsStructured = structuredToolOutput !== undefined;
   let assistantBuffer = '';
   // Track text streamed via text_delta for the current assistant turn.
   // Reset at each turn_start so only a run's final turn is compared against
@@ -629,21 +649,11 @@ export async function* bridgeSession(
         // The chunk was built for this turn by buildResultChunk; annotate it in place.
         const terminal = item.chunk;
         if (session.sessionId) terminal.sessionId = session.sessionId;
-        // Best-effort structured output: parse the accumulated assistant
-        // transcript as JSON and attach. On parse failure, leave it off —
-        // the dag-executor's existing dag.structured_output_missing path
-        // warns and downstream $node.output.field refs degrade to '' instead
-        // of propagating bogus data.
-        if (wantsStructured) {
-          const parsed = tryParseStructuredOutput(assistantBuffer);
-          if (parsed !== undefined) {
-            terminal.structuredOutput = parsed;
-          } else {
-            getLog().warn(
-              { bufferLength: assistantBuffer.length },
-              'pi.event-bridge.structured_output_parse_failed'
-            );
-          }
+        // Structured output: a valid structured_output tool call wins; without
+        // one, parse the reply text. With neither, leave it off and the
+        // dag-executor reasks or fails the node.
+        if (structuredToolOutput) {
+          attachStructuredOutput(terminal, structuredToolOutput(), assistantBuffer);
         }
         yield terminal;
       } else {

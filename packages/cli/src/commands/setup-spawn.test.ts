@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { spawnTerminalWithSetup } from './setup-spawn';
 import { setupCommand } from './setup';
 
@@ -11,6 +15,8 @@ const spawner: {
   ): childProcess.ChildProcess;
 } = childProcess;
 
+const nativePlatform = process.platform;
+const tempRoots = trackTempRoots();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
 
 afterEach(() => {
@@ -63,7 +69,7 @@ const platforms = [
       [`--working-directory=${repoPath}`, '-e', `bash -c "${shellSetup}"`],
       [`--working-directory=${repoPath}`, '--', 'bash', '-c', shellSetup],
       ['--workdir', repoPath, '-e', 'bash', '-c', shellSetup],
-      ['-e', `cd "${repoPath}" && ${shellSetup}`],
+      ['-e', 'bash', '-c', `cd -- "$1" && ${shellSetup}`, 'archon-setup', repoPath],
     ],
   },
 ] as const;
@@ -124,6 +130,81 @@ describe('setup terminal spawning', () => {
         expect(children[successAt]?.unref).toHaveBeenCalledTimes(1);
       });
     }
+  }
+
+  it('macOS encodes the shell command as an AppleScript string', async () => {
+    usePlatform('darwin');
+    const { spawn } = terminalSpawns(0);
+    await spawnTerminalWithSetup({ repoPath: String.raw`/tmp/repo's "quoted" \ path` });
+    expect(spawn.mock.calls[0]?.[1]).toEqual([
+      '-e',
+      String.raw`tell application "Terminal" to do script "cd '/tmp/repo'\"'\"'s \"quoted\" \\ path' && archon setup"`,
+    ]);
+  });
+
+  for (const platform of ['darwin', 'linux'] as const) {
+    it.skipIf(nativePlatform === 'win32' || (platform === 'darwin' && nativePlatform !== 'darwin'))(
+      `${platform}: executes setup in the requested directory with paths kept as data`,
+      async () => {
+        const root = realpathSync(tempRoots(mkdtempSync(join(tmpdir(), 'setup-launch-'))));
+        const repoPath = join(root, 'repo\'s "quoted" \\ $(exit 23) `exit 24`');
+        const bin = join(root, 'bin');
+        const resultPath = join(root, 'result');
+        mkdirSync(repoPath);
+        mkdirSync(bin);
+        writeFileSync(
+          join(bin, 'archon'),
+          '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$SETUP_RESULT"\n',
+          { mode: 0o755 }
+        );
+        usePlatform(platform);
+        const { spawn } = terminalSpawns(platform === 'darwin' ? 0 : 3);
+        expect(
+          await spawnTerminalWithSetup({
+            repoPath,
+            providers: ['claude', 'codex'],
+            scope: 'project',
+            force: true,
+          })
+        ).toEqual({ success: true });
+        const args = spawn.mock.calls.at(-1)![1];
+        let program: string;
+        let programArgs: readonly string[];
+        if (platform === 'darwin') {
+          const prefix = 'tell application "Terminal" to do script ';
+          expect(args[1]).toStartWith(prefix);
+          // Evaluate only the string expression, without opening Terminal.app.
+          const decoded = childProcess.spawnSync(
+            'osascript',
+            ['-e', `return ${args[1]!.slice(prefix.length)}`],
+            { encoding: 'utf8' }
+          );
+          expect(decoded.status, decoded.stderr).toBe(0);
+          program = 'bash';
+          programArgs = ['-c', decoded.stdout.trimEnd()];
+        } else {
+          expect(args.slice(0, 3)).toEqual(['-e', 'bash', '-c']);
+          program = args[1]!;
+          programArgs = args.slice(2);
+        }
+        const executed = childProcess.spawnSync(program, programArgs, {
+          cwd: root,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SETUP_RESULT: resultPath },
+          encoding: 'utf8',
+          timeout: 5000,
+        });
+        expect(executed.error).toBeUndefined();
+        expect(executed.status, executed.stderr).toBe(0);
+        expect(readFileSync(resultPath, 'utf8').split('\n')).toEqual([
+          repoPath,
+          'setup',
+          '--providers=claude,codex',
+          '--scope=project',
+          '--force',
+          '',
+        ]);
+      }
+    );
   }
 
   it('setup passes the inherited environment to the terminal child', async () => {

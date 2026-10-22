@@ -8,10 +8,12 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { writeNodeArtifact } from './artifacts-index';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  buildRunNodeStates,
   buildTerminalRecord,
   getTerminalRecord,
   type TerminalRecordEvent,
 } from './terminal-record';
+import { fanOutOutcome } from './schemas/fan-out-outcome';
 import {
   RUN_GRAPH_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
@@ -341,6 +343,36 @@ describe('durable terminal projection', () => {
       node_id: 'discover',
       reason: 'node_not_completed',
     });
+  });
+
+  it("carries a fan-out node's slot record through a replay, and drops it when the node restarts", () => {
+    const fanOut = fanOutOutcome([
+      { index: 0, outcome: 'completed', child_run_id: 'c0' },
+      { index: 1, outcome: 'not_started', error: 'refused' },
+    ]);
+    const states = (events: TerminalRecordEvent[]) =>
+      buildRunNodeStates(run, events).find(n => n.node_id === 'build');
+    const completed = node('node_completed', 'build', {
+      node_output: '[]',
+      fan_out_outcome: fanOut,
+    });
+    expect(states([completed])).toEqual({
+      node_id: 'build',
+      state: 'completed',
+      fan_out_outcome: fanOut,
+    });
+    expect(states([completed, node('node_skipped_prior_success', 'build')])).toEqual({
+      node_id: 'build',
+      state: 'completed',
+      fan_out_outcome: fanOut,
+    });
+    expect(states([completed, node('node_started', 'build')])).toEqual({
+      node_id: 'build',
+      state: 'running',
+    });
+    expect(
+      states([node('node_failed', 'build', { error: 'refused all', fan_out_outcome: fanOut })])
+    ).toEqual({ node_id: 'build', state: 'failed', error: 'refused all', fan_out_outcome: fanOut });
   });
 
   it('keeps spilled outputs as explicit pointers and distinguishes absent from empty output', async () => {

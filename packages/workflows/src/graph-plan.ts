@@ -1,5 +1,6 @@
-import { isIncludeDirective } from './schemas/dag-node';
-import type { DagNode, IncludeDirective, LoopGroupNodeConfig } from './schemas/dag-node';
+import { isIncludeDirective } from './schemas/node-guards';
+import type { DagNode, LoopGroupNodeConfig } from './schemas/dag-node';
+import type { IncludeDirective } from './schemas/include-node';
 import type { GraphPlan, ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
 
 function requireResolvedNodes(nodes: readonly (DagNode | IncludeDirective)[]): DagNode[] {

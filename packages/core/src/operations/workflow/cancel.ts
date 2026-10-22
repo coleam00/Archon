@@ -1,3 +1,6 @@
+import { releaseRunScratch } from '@archon/workflows/run-scratch';
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
 import type { OperationContext } from './context';
@@ -42,7 +45,7 @@ export class CancelRefusedError extends Error {
  * before the run was recorded `cancelled`.
  */
 export type CancelWorkflowResult =
-  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean }
+  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean; cleanupWarnings?: string[] }
   | ({ kind: 'stopped'; pid: number } & Omit<AbandonWorkflowResult, 'cancelled'>);
 
 /**
@@ -126,6 +129,8 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
+  // An output holder the stop left running may still write scratch.
+  if (!owner.cleanupWarnings?.length) await releaseRunScratch(run);
   return { kind: 'stopped', pid: owner.pid, ...recorded };
 }
 
@@ -165,6 +170,28 @@ async function cooperativeCancel(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<CancelWorkflowResult> {
-  const { cancelled } = await cancelByOperator(ctx, run.id);
-  return { kind: 'cooperative', run, cancelled };
+  const warnings = process.platform !== 'win32' ? await hostCommandWarnings(ctx, run) : [];
+  const { cancelled } = await cancelByOperator(ctx, run.id, warnings);
+  return {
+    kind: 'cooperative',
+    run,
+    cancelled,
+    ...(cancelled && warnings.length ? { cleanupWarnings: warnings } : {}),
+  };
+}
+
+async function hostCommandWarnings(ctx: OperationContext, run: WorkflowRun): Promise<string[]> {
+  const warnings: string[] = [];
+  if (!isContainerRun(run)) {
+    // History reads cannot exclude commands admitted before the cancellation commits.
+    warnings.push(
+      `Run ${run.id} checkout ${JSON.stringify(run.working_path)}: ${COMPLETED_HOST_COMMAND_WARNING} ` +
+        'Cooperative cancellation cannot rule out host commands starting during cancellation, ' +
+        'including in new descendant runs. Inspect descendant checkouts too.'
+    );
+  }
+  for (const child of await ctx.store.findChildRuns(run.id)) {
+    warnings.push(...(await hostCommandWarnings(ctx, child)));
+  }
+  return warnings;
 }

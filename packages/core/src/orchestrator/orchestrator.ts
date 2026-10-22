@@ -593,8 +593,8 @@ async function dispatchBackgroundWorkflowOwned(
             );
           });
       } else {
-        // A checkout-branch adoption lane materializes the adopted run's exact
-        // branch; 'task' is the workflow type whose request carries that selection.
+        // The worker id is unique to this run: a task checkout on its generated branch,
+        // which completion removes. An adoption lane checks out the adopted exact branch.
         const hints: IsolationHints =
           ctx.adoptionLane?.kind === 'checkout-branch'
             ? {
@@ -602,7 +602,7 @@ async function dispatchBackgroundWorkflowOwned(
                 workflowId: workerPlatformId,
                 taskBranch: ctx.adoptionLane.taskBranch,
               }
-            : { workflowType: 'thread', workflowId: workerPlatformId };
+            : { workflowType: 'task', workflowId: workerPlatformId };
         const result = await validateAndResolveIsolation(
           workerConv,
           codebase,

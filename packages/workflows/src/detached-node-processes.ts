@@ -1,6 +1,8 @@
 import type { ChildProcess } from 'node:child_process';
 import { confirmProcessGroupsGone, type ProcessGroupStop } from '@archon/paths/plugin-process';
 
+import { COMPLETED_HOST_COMMAND_WARNING } from './host-command-cleanup';
+
 interface RecordedCommand {
   reaped: boolean;
   child: ChildProcess;
@@ -17,6 +19,7 @@ export class DetachedNodeProcesses {
   readonly mode = 'detached-posix';
   ended = false;
   private readonly commands = new Map<number, RecordedCommand>();
+  private hasStartedCommands = false;
   private preparation: { result: PreparedNodeTermination; settled: Promise<void> } | undefined;
 
   get held(): boolean {
@@ -25,6 +28,7 @@ export class DetachedNodeProcesses {
 
   record(child: ChildProcess): void {
     if (child.pid === undefined) return;
+    this.hasStartedCommands = true;
     const pid = child.pid;
     const command: RecordedCommand = { reaped: false, child };
     this.commands.set(pid, command);
@@ -76,13 +80,17 @@ export class DetachedNodeProcesses {
       groups: this.signalCommands(),
       ready: Promise.all(
         [...this.commands.values()].map(command => this.waitForOutput(command.child))
-      ).then(closed =>
-        closed.every(Boolean)
+      ).then(closed => {
+        const warnings = closed.every(Boolean)
           ? []
           : [
               "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
-            ]
-      ),
+            ];
+        if (this.hasStartedCommands) {
+          warnings.push(COMPLETED_HOST_COMMAND_WARNING);
+        }
+        return warnings;
+      }),
       release: () => {
         if (this.preparation?.result !== result) return;
         this.preparation = undefined;

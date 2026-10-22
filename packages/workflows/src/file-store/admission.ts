@@ -1,19 +1,31 @@
-import { createHash } from 'node:crypto';
+import {
+  slotMembershipSchema,
+  hasReadableSlotMembership,
+  slotSchema,
+  requestSchema,
+  queuedRequestSchema,
+  requestEnvelopeSchema,
+  bindingSchema,
+  bindingInspectionSchema,
+  receiptSchema,
+  receiptFieldsSchema,
+  pathFor,
+  deliveryPathFor,
+  type Request,
+  type Slot,
+  type Receipt,
+  type Binding,
+} from './admission-documents';
+import { holdsWorkflowPath } from '../workflow-path-lock';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
-import { isOwnerProvablyGone, parseProcessOwner } from '@archon/paths/process-owner';
+import { createLogger } from '@archon/paths/logger';
+import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
-  resourceStartOverlapSchema,
-  resourceStartRequestStatusSchema,
-  startBindingPreparationStatusSchema,
-  sourceReceiptOutcomeSchema,
-  resourceStartBindingIntentSchema,
-  resourceStartDispositionSchema,
-  sourceReceiptInputSchema,
   sourceReceiptAcceptanceSchema,
   type ResourceStartIntent,
   type ResourceStartDisposition,
@@ -24,6 +36,7 @@ import {
   capacityWaiters,
   drainableStarts,
   heldCheckouts,
+  type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
   type QueuedStart,
@@ -35,6 +48,8 @@ import {
   type IResourceStartStore,
   type StartBindingInspection,
   type ResourceStartRequestInspection,
+  type QueuedResourceStartInspection,
+  type DamagedStartReceipt,
 } from '../resource-start-store';
 import { WorkflowNotResumableError } from '../store';
 import {
@@ -47,56 +62,19 @@ import {
 } from './commit';
 import { createTransactionView } from './transaction-view';
 
-/** `source` names the slot document in a malformed attempt owner's error. */
-const slotSchema = (source: string) =>
-  z.object({
-    capacity: z.number().int().positive(),
-    holders: z.array(
-      z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('run'), id: z.string() }),
-        z.object({
-          kind: z.literal('attempt'),
-          id: z.string(),
-          owner: z.unknown().transform(owner => parseProcessOwner(owner, source)),
-        }),
-      ])
-    ),
-    queue: z.array(z.string()),
-  });
-const requestSchema = z.object({
-  id: z.string(),
-  resource: z.string(),
-  hostId: z.string(),
-  overlap: resourceStartOverlapSchema,
-  status: resourceStartRequestStatusSchema,
-  blocker: resourceStartDispositionSchema.options[1].shape.blocker.nullable(),
-  launch: preparedWorkflowLaunchSchema,
-  position: z.number().int().nonnegative(),
-});
-const bindingSchema = z.object({
-  receiptId: z.string(),
-  bindingId: z.string(),
-  bindingRevision: z.string().nullable(),
-  hostId: z.string().nullable(),
-  status: startBindingPreparationStatusSchema,
-  ownerId: z.string().nullable(),
-  error: z.string().nullable(),
-  intent: resourceStartBindingIntentSchema.nullable(),
-  requestIds: z.array(z.string()),
-});
-const bindingInspectionSchema = bindingSchema.omit({ requestIds: true });
-const receiptFieldsSchema = sourceReceiptInputSchema.strip();
-const receiptSchema = sourceReceiptInputSchema.extend({
-  outcome: sourceReceiptOutcomeSchema,
-  reason: z.string().nullable(),
-  bindings: z.array(bindingSchema),
-  createdAt: z.string(),
-});
-type Request = z.infer<typeof requestSchema>;
-const pathFor = (kind: string, key: string): string =>
-  `resource/${kind}/${createHash('sha256').update(key).digest('hex')}.json`;
-const deliveryPathFor = (sourceInstanceId: string, deliveryId: string): string =>
-  pathFor('deliveries', JSON.stringify([sourceInstanceId, deliveryId]));
+const log = createLogger('file-store.admission');
+
+async function documentPaths(root: string, kind: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await readdir(join(root, 'resource', kind));
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return names.filter(name => name.endsWith('.json')).map(name => `resource/${kind}/${name}`);
+}
+
 function disposition(row: Request): ResourceStartDisposition {
   if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
   if ((row.status === 'queued' || row.status === 'skipped') && row.blocker)
@@ -104,9 +82,6 @@ function disposition(row: Request): ResourceStartDisposition {
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
 
-type Slot = z.infer<ReturnType<typeof slotSchema>>;
-type Receipt = z.infer<typeof receiptSchema>;
-type Binding = z.infer<typeof bindingSchema>;
 interface BindingIdentity {
   receiptId: string;
   bindingId: string;
@@ -119,7 +94,7 @@ interface AdmissionTransaction {
   request(id: string): Promise<Request | null>;
   receipt(id: string): Promise<Receipt | null>;
   slot(resource: string, capacity?: number): Promise<Slot>;
-  occupancy(resource: string): Promise<ResourceSlotOccupancy>;
+  occupancy(resource: string, launch?: Request['launch']): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
     runs: Map<string, WorkflowRun>
@@ -134,8 +109,10 @@ interface AdmissionTransaction {
   release(id: string): Promise<boolean>;
 }
 
-// Used only inside commit: all holder reads and document changes share the run's lock.
-export function createAdmissionTransaction(root: string): AdmissionTransaction {
+export function createAdmissionTransaction(
+  root: string,
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => []
+): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
   const slots = new Map<string, Slot>();
   const receipts = new Map<string, z.infer<typeof receiptSchema>>();
@@ -177,31 +154,194 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     row.holders = holders;
     return row;
   }
+  async function hasSlotMembership(
+    id: string,
+    resource?: string,
+    associationKnown = false
+  ): Promise<boolean> {
+    for (const path of await documentPaths(root, 'slots')) {
+      if (resource !== undefined && path === pathFor('slots', resource)) continue;
+      let raw: unknown;
+      try {
+        raw = path in documents ? documents[path] : await readJson(join(root, path));
+        const row = slotMembershipSchema.optional().parse(raw);
+        if (hasReadableSlotMembership(row, id)) return true;
+      } catch (error) {
+        const damagedDocument = error instanceof SyntaxError || error instanceof z.ZodError;
+        // A damaged component cannot erase contradictory membership in the other component.
+        if (associationKnown && damagedDocument && !hasReadableSlotMembership(raw, id)) continue;
+        throw new Error(`Invalid resource slot membership '${path}'`, { cause: error });
+      }
+    }
+    return false;
+  }
+  async function occupancyRun(
+    run: WorkflowRun,
+    resource: string,
+    local: boolean,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ) {
+    try {
+      const path = pathFor('requests', run.id);
+      const raw = path in documents ? documents[path] : await readJson(join(root, path));
+      if (local)
+        return {
+          kind: 'local' as const,
+          run: {
+            ...run,
+            launch: requestSchema
+              .extend({ resource: z.literal(resource), status: z.literal('admitted') })
+              .parse(raw).launch,
+          },
+        };
+      return await nonlocalOccupancyRun(run, resource, raw, checkouts, reusable);
+    } catch (error) {
+      if (local || !(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      return corruptForeignOccupancy(run, await hasSlotMembership(run.id, resource), error);
+    }
+  }
+  function independentCheckout(
+    run: WorkflowRun,
+    resource: string,
+    raw: unknown,
+    envelope: z.infer<typeof requestEnvelopeSchema> | null,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ): boolean {
+    if (!envelope && run.working_path) {
+      const held = heldCheckouts([run], reusable);
+      if (![...held.keys()].some(key => checkouts.has(key))) return true;
+    }
+    if (envelope && (envelope.resource !== resource || capacityWaiters([run]).length === 0)) {
+      const row = requestSchema.safeParse(raw);
+      if (row.success && row.data.id === run.id && row.data.launch.run.id === run.id) {
+        const held = heldCheckouts([{ ...run, launch: row.data.launch }], reusable);
+        if (held.size > 0 && ![...held.keys()].some(key => checkouts.has(key))) return true;
+      }
+    }
+    return false;
+  }
+  async function nonlocalOccupancyRun(
+    run: WorkflowRun,
+    resource: string,
+    raw: unknown,
+    checkouts: ReadonlyMap<string, string>,
+    reusable: readonly ReusableCheckout[]
+  ) {
+    const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
+    if (independentCheckout(run, resource, raw, envelope, checkouts, reusable)) return null;
+    const knownForeign = await hasSlotMembership(run.id, resource);
+    if (!knownForeign && envelope?.resource === resource && capacityWaiters([run]).length > 0) {
+      const row = requestSchema
+        .refine(row => row.id === run.id && row.launch.run.id === run.id, {
+          message: `Admitted resource request '${run.id}' does not identify the waiting run`,
+        })
+        .parse(raw);
+      return { kind: 'local' as const, run: { ...run, launch: row.launch } };
+    }
+    // Without a capacity refusal, old released slots have no independent membership.
+    // A readable envelope alone cannot establish capacity membership.
+    if (!knownForeign && envelope)
+      return {
+        kind: 'unknown' as const,
+        run: { ...run, launch: preparedWorkflowLaunchSchema.parse(envelope.launch) },
+      };
+    if (!holdsWorkflowPath(run)) return null;
+    const launch = envelope ? preparedWorkflowLaunchSchema.parse(envelope.launch) : undefined;
+    return {
+      kind: 'foreign' as const,
+      run: { ...run, launch },
+      unknown: knownForeign && !launch && !run.working_path,
+    };
+  }
+  function corruptForeignOccupancy(
+    run: WorkflowRun,
+    knownForeign: boolean,
+    error: z.ZodError | SyntaxError
+  ) {
+    if (!holdsWorkflowPath(run)) return null;
+    // A released paused run may still be local. Only proven foreign membership
+    // permits the corruption fallback, which allows read-only concurrency.
+    if (!knownForeign) throw error;
+    // Corrupt foreign requests still hold their recorded path and registered aliases.
+    // Without a path, guarded starts must wait for the holder to end.
+    log.error(
+      { runId: run.id },
+      run.working_path
+        ? 'foreign_request_invalid_using_working_path'
+        : 'foreign_request_invalid_checkout_unknown'
+    );
+    return { kind: 'foreign' as const, run, unknown: !run.working_path };
+  }
+
+  async function queuedStarts(resource: string, ids: string[]) {
+    const queue: QueuedStart[] = [];
+    for (const id of ids) {
+      try {
+        queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id)));
+      } catch (error) {
+        if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+        const queueError = new Error(`Queued resource request '${id}' is invalid`, {
+          cause: error,
+        });
+        log.error({ requestId: id, err: queueError }, 'queued_request_invalid_drain_prefix_only');
+        return { queue, queueError };
+      }
+    }
+    return { queue };
+  }
   // Paused runs, and so waiters, live only on run rows: finding them scans every run, as
   // the due scan does.
-  async function occupancy(resource: string): Promise<ResourceSlotOccupancy> {
+  async function occupancy(
+    resource: string,
+    launch?: Request['launch']
+  ): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
+    const queued = await queuedStarts(resource, row.queue);
+    const { queue } = queued;
+    const reusable = await listReusableCheckouts();
+    const checkouts = heldCheckouts(
+      launch ? [...queue, { id: launch.run.id, launch }] : queue,
+      reusable
+    );
     const admittedRuns: (WorkflowRun & { launch: Request['launch'] })[] = [];
-    for (const run of await listRunSnapshots(root)) {
+    const foreign: (WorkflowRun & { launch?: Request['launch'] })[] = [];
+    const possiblyLocal: (WorkflowRun & { launch: Request['launch'] })[] = [];
+    const runs = (await listRunSnapshots(root)).sort(
+      (a, b) => a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
+    );
+    let unknownForeignCheckoutHolder: string | undefined;
+    for (const run of runs) {
       if (isTerminalRunStatus(run.status)) continue;
-      const admitted = await request(run.id);
-      if (admitted?.status === 'admitted' && admitted.resource === resource)
-        admittedRuns.push({ ...run, launch: admitted.launch });
-    }
-    const queue: QueuedStart[] = [];
-    for (const id of row.queue) {
-      const queued = await request(id);
-      if (!queued) throw new Error('Queued resource request missing');
-      queue.push(queued);
+      const holder = await occupancyRun(
+        run,
+        resource,
+        row.admitted.includes(run.id) ||
+          row.holders.some(holder => holder.kind === 'run' && holder.id === run.id),
+        checkouts,
+        reusable
+      );
+      if (holder?.kind === 'local') {
+        admittedRuns.push(holder.run);
+        possiblyLocal.push(holder.run);
+      } else if (holder?.kind === 'unknown') possiblyLocal.push(holder.run);
+      else if (holder) {
+        foreign.push(holder.run);
+        if (holder.unknown) unknownForeignCheckoutHolder ??= run.id;
+      }
     }
     return {
       capacity: row.capacity,
+      reusableCheckouts: reusable,
       holders: row.holders,
       waiters: capacityWaiters(
         admittedRuns.filter(run => !row.holders.some(h => h.kind === 'run' && h.id === run.id))
       ),
-      queue,
-      heldCheckouts: heldCheckouts(admittedRuns),
+      ...queued,
+      heldCheckouts: heldCheckouts(possiblyLocal, reusable),
+      foreignHeldCheckouts: heldCheckouts(foreign, reusable),
+      unknownForeignCheckoutHolder,
     };
   }
   async function admitExisting(
@@ -221,6 +361,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     const resource = await slot(row.resource);
     resource.queue = resource.queue.filter(id => id !== row.id);
     resource.holders.push({ kind: 'run', id: row.id });
+    if (!resource.admitted.includes(row.id)) resource.admitted.push(row.id);
     documents[pathFor('requests', row.id)] = row;
     return disposition(row);
   }
@@ -232,7 +373,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
+    const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -274,15 +415,24 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   }
   async function resume(run: WorkflowRun): Promise<ResourceBlocker | null> {
     const row = await request(run.id);
-    if (row?.status !== 'admitted') return null;
+    if (row?.status !== 'admitted') {
+      if (await hasSlotMembership(run.id))
+        throw new Error(`Run '${run.id}' has slot membership but no matching admitted request`);
+      return null;
+    }
+    if (row.id !== run.id || row.launch.run.id !== run.id)
+      throw new Error(`Admitted resource request '${run.id}' does not identify the resumed run`);
+    const resource = await slot(row.resource);
+    if (await hasSlotMembership(run.id, row.resource, true))
+      throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
-    const blocker = resourceResumeBlocker(await occupancy(row.resource), {
+    if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);
+    const blocker = resourceResumeBlocker(await occupancy(row.resource, row.launch), {
       ...run,
       status: run.status,
     });
     if (blocker) return blocker;
-    const resource = await slot(row.resource);
     if (!resource.holders.some(h => h.kind === 'run' && h.id === run.id))
       resource.holders.push({ kind: 'run', id: run.id });
     return null;
@@ -293,6 +443,7 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
     const resource = await slot(row.resource);
     const holders = resource.holders.filter(h => h.kind !== 'run' || h.id !== id);
     if (holders.length === resource.holders.length) return false;
+    if (!resource.admitted.includes(id)) resource.admitted.push(id);
     resource.holders = holders;
     return true;
   }
@@ -322,13 +473,16 @@ export function createAdmissionTransaction(root: string): AdmissionTransaction {
   };
 }
 
-export function createFileAdmissionStore(root: string): IResourceStartStore {
+export function createFileAdmissionStore(
+  root: string,
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+): IResourceStartStore {
   type Transaction = ReturnType<typeof createAdmissionTransaction>;
   const write = <T>(
     call: (tx: Transaction, runs: Map<string, WorkflowRun>) => Promise<T>
   ): Promise<T> =>
     commit(root, [], async runs => {
-      const tx = createAdmissionTransaction(root);
+      const tx = createAdmissionTransaction(root, listReusableCheckouts);
       const result = await call(tx, runs);
       return {
         result,
@@ -340,20 +494,67 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
     });
   async function query<T>(call: (tx: Transaction) => Promise<T>): Promise<T> {
     await recoverBeforeRead(root);
-    return call(createAdmissionTransaction(root));
+    return call(createAdmissionTransaction(root, listReusableCheckouts));
   }
   async function list<S extends z.ZodType>(kind: string, schema: S): Promise<z.output<S>[]> {
-    let names: string[];
-    try {
-      names = await readdir(join(root, 'resource', kind));
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
-      throw error;
-    }
     const rows: z.output<S>[] = [];
-    for (const name of names.filter(name => name.endsWith('.json')))
-      rows.push(schema.parse(await readJson(join(root, 'resource', kind, name))));
+    for (const path of await documentPaths(root, kind))
+      rows.push(schema.parse(await readJson(join(root, path))));
     return rows;
+  }
+  async function queueCandidate<S extends z.ZodType>(
+    path: string,
+    schema: S
+  ): Promise<{ data: z.output<S> } | { error: Error }> {
+    try {
+      return { data: schema.parse(await readJson(join(root, path))) };
+    } catch (error) {
+      if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      return { error: new Error(`Invalid queued document '${path}'`, { cause: error }) };
+    }
+  }
+  async function receiptIdForRequest(id: string): Promise<string | undefined> {
+    const schema = receiptSchema
+      .pick({ id: true })
+      .strip()
+      .extend({
+        bindings: z.array(bindingSchema.pick({ requestIds: true })),
+      });
+    for (const path of await documentPaths(root, 'receipts')) {
+      const receipt = await queueCandidate(path, schema);
+      if ('error' in receipt) {
+        log.error({ document: path }, 'queued_start_receipt_invalid_attribution_unknown');
+        continue;
+      }
+      if (receipt.data.bindings.some(binding => binding.requestIds.includes(id)))
+        return receipt.data.id;
+    }
+    return undefined;
+  }
+  async function inspectQueuedRequest(
+    slotPath: string,
+    id: string,
+    resource: unknown,
+    position: number
+  ) {
+    const path = pathFor('requests', id);
+    try {
+      const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
+      return { inspection: await inspect(row), position: row.position };
+    } catch (error) {
+      return {
+        inspection: {
+          id,
+          receiptId: await receiptIdForRequest(id),
+          resource:
+            typeof resource === 'string' && pathFor('slots', resource) === slotPath
+              ? resource
+              : undefined,
+          error: new Error(`Invalid queued request document '${path}'`, { cause: error }),
+        },
+        position,
+      };
+    }
   }
   async function inspect(row: Request): Promise<ResourceStartRequestInspection> {
     return {
@@ -490,10 +691,25 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
       ),
     listPendingStartBindings: options =>
       query(async tx => {
-        const rows = (await list('receipts', receiptSchema)).flatMap(receipt =>
-          receipt.bindings.map(binding => ({ binding, createdAt: receipt.createdAt }))
-        );
-        return Promise.all(
+        // Each receipt is read on its own: one damaged document must not hide every host's
+        // pending bindings.
+        const damaged: DamagedStartReceipt[] = [];
+        const rows: { binding: Binding; createdAt: string }[] = [];
+        for (const path of await documentPaths(root, 'receipts')) {
+          let receipt: z.output<typeof receiptSchema>;
+          try {
+            receipt = receiptSchema.parse(await readJson(join(root, path)));
+          } catch (error) {
+            damaged.push({
+              document: path,
+              error: new Error(`Invalid start receipt document '${path}'`, { cause: error }),
+            });
+            continue;
+          }
+          for (const binding of receipt.bindings)
+            rows.push({ binding, createdAt: receipt.createdAt });
+        }
+        const bindings = await Promise.all(
           rows
             .filter(
               ({ binding }) =>
@@ -508,6 +724,7 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
             .slice(0, options.limit ?? 100)
             .map(({ binding }) => inspectBinding(tx, binding))
         );
+        return [...damaged, ...bindings];
       }),
     getResourceStartRequest: id =>
       query(async tx => {
@@ -515,14 +732,34 @@ export function createFileAdmissionStore(root: string): IResourceStartStore {
         return row ? inspect(row) : null;
       }),
     listQueuedResourceStartsForHost: hostId =>
-      query(async () =>
-        Promise.all(
-          (await list('requests', requestSchema))
-            .filter(row => row.hostId === hostId && row.status === 'queued')
-            .sort((a, b) => compareCodeUnits(a.resource, b.resource) || a.position - b.position)
-            .map(inspect)
-        )
-      ),
+      query(async () => {
+        const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];
+        for (const path of await documentPaths(root, 'slots')) {
+          const slot = await queueCandidate(path, slotSchema(path).pick({ queue: true }));
+          if ('error' in slot) {
+            queued.push({ inspection: { id: path, error: slot.error }, position: 0 });
+            continue;
+          }
+          for (const [position, id] of slot.data.queue.entries()) {
+            const envelope = await queueCandidate(
+              pathFor('requests', id),
+              requestSchema.pick({ hostId: true }).extend({ resource: z.unknown().optional() })
+            );
+            if ('error' in envelope) {
+              queued.push({ inspection: { id, error: envelope.error }, position });
+              continue;
+            }
+            if (envelope.data.hostId !== hostId) continue;
+            queued.push(await inspectQueuedRequest(path, id, envelope.data.resource, position));
+          }
+        }
+        queued.sort(
+          (a, b) =>
+            compareCodeUnits(a.inspection.resource ?? '', b.inspection.resource ?? '') ||
+            a.position - b.position
+        );
+        return queued.map(row => row.inspection);
+      }),
     withdrawQueuedResourceStart: id =>
       write(async tx => {
         const row = await tx.request(id);

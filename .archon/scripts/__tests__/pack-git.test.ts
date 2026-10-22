@@ -5,11 +5,12 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
+import { scratchDir } from '../../workflows/sdlc/.shared/scratch';
 import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -37,6 +38,102 @@ describe('remote identity', () => {
     expect(urlRepo('/srv/git/repo.git')).toBeUndefined();
     expect(urlRepo('C:\\repos\\repo')).toBeUndefined();
   });
+});
+
+describe('the default branch snapshot', () => {
+  it('returns no maintainers for a confirmed absent policy file', () => {
+    const cwd = gitCheckout({}, track);
+    const run = spawnSync(process.execPath, ['-e', `
+      import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
+      console.log(JSON.stringify([...readMaintainers(${JSON.stringify(PR.repo)})]));
+    `], { cwd, encoding: 'utf8' });
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(JSON.parse(run.stdout)).toEqual([]);
+  });
+
+  it.each(['before fetch', 'at fetch'])('fetches fresh objects when the remote advances %s without changing tracking refs or FETCH_HEAD', timing => {
+    const cwd = gitCheckout({}, track);
+    const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
+    git(cwd, 'fetch', '-q', 'upstream', 'dev');
+    const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-default-writer-')));
+    git(writer, 'clone', '-q', git(cwd, 'remote', 'get-url', 'upstream'), '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    mkdirSync(join(writer, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(writer, '.archon/sdlc/policy/maintainers.json'), '["NewMaintainer"]');
+    git(writer, 'add', '.archon/sdlc/policy/maintainers.json');
+    git(writer, 'commit', '-q', '-m', 'new maintainer');
+    if (timing === 'before fetch') git(writer, 'push', '-q', 'origin', 'dev');
+    const fresh = git(writer, 'rev-parse', 'HEAD');
+
+    const run = spawnSync(process.execPath, ['-e', `
+      import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
+      import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
+      const nativeGit = Bun.spawnSync.bind(Bun);
+      let advance = ${JSON.stringify(timing === 'at fetch')};
+      Bun.spawnSync = (argv, options) => {
+        if (advance && argv[0] === 'git' && argv[1] === 'fetch') {
+          advance = false;
+          const pushed = nativeGit(['git', '-C', ${JSON.stringify(writer)}, 'push', '-q', 'origin', 'dev']);
+          if (pushed.exitCode !== 0) throw new Error(pushed.stderr.toString());
+        }
+        return nativeGit(argv, options);
+      };
+      const repo = ${JSON.stringify(PR.repo)};
+      console.log(JSON.stringify({ base: fetchDefaultBranch(repo), maintainers: [...readMaintainers(repo)] }));
+    `], { cwd, encoding: 'utf8' });
+    expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(JSON.parse(run.stdout)).toEqual({ base: { branch: 'dev', sha: fresh }, maintainers: ['newmaintainer'] });
+    expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);
+    expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
+    expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
+  });
+
+  it.each(['switch before fetch', 'switch after fetch', 'advance after fetch', 'missing default after fetch'])(
+    'binds the default branch identity to the fetched snapshot: %s', change => {
+      const cwd = gitCheckout({}, track);
+      const remote = git(cwd, 'remote', 'get-url', 'upstream');
+      const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
+      const fresh = git(cwd, 'rev-parse', 'HEAD');
+      git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/heads/main');
+      git(cwd, 'fetch', '-q', 'upstream', 'dev');
+      const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
+      const run = spawnSync(process.execPath, ['-e', `
+        import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
+        const nativeGit = Bun.spawnSync.bind(Bun);
+        const change = ${JSON.stringify(change)};
+        const mutate = () => {
+          const argv = change === 'advance after fetch'
+            ? ['git', 'push', '-q', ${JSON.stringify(remote)}, 'HEAD:refs/heads/dev']
+            : ['git', '--git-dir', ${JSON.stringify(remote)}, 'symbolic-ref', 'HEAD',
+                change === 'missing default after fetch' ? 'refs/heads/missing' : 'refs/heads/main'];
+          const changed = nativeGit(argv);
+          if (changed.exitCode !== 0) throw new Error(changed.stderr.toString());
+        };
+        Bun.spawnSync = (argv, options) => {
+          if (argv[0] === 'git' && argv[1] === 'fetch' && change === 'switch before fetch') mutate();
+          const result = nativeGit(argv, options);
+          if (argv[0] === 'git' && argv[1] === 'fetch' && change !== 'switch before fetch') mutate();
+          return result;
+        };
+        console.log(JSON.stringify(fetchDefaultBranch(${JSON.stringify(PR.repo)})));
+      `], { cwd, encoding: 'utf8' });
+      if (change === 'switch before fetch') {
+        expect({ status: run.status, stderr: run.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(JSON.parse(run.stdout)).toEqual({ branch: 'main', sha: fresh });
+        expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/dev')).toContain(stale);
+      } else {
+        expect(run.status).not.toBe(0);
+        expect(run.stderr).toContain(change === 'missing default after fetch'
+          ? 'reports no default branch' : 'default branch changed during fetch');
+        expect(run.stdout).toBe('');
+      }
+      expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);
+      expect(readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8')).toBe(fetchHead);
+      expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
+    }
+  );
 });
 
 // pushHead is publish-pr's push; a driver runs it alone against real git remotes.
@@ -79,7 +176,8 @@ describe('prune-scratch', () => {
     const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
     writeFileSync(join(target, 'keep.txt'), 'kept');
     // A junction needs no privilege on Windows; elsewhere the type is ignored.
-    symlinkSync(target, join(artifacts, 'scratch'), 'junction');
+    mkdirSync(join(artifacts, '.archon'));
+    symlinkSync(target, scratchDir(artifacts, ''), 'junction');
 
     const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
@@ -87,14 +185,14 @@ describe('prune-scratch', () => {
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
-    expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
+    expect(existsSync(scratchDir(artifacts, ''))).toBe(false);
     expect(existsSync(join(target, 'keep.txt'))).toBe(true);
   });
 
   it("removes the run's scratch worktrees and nothing else", () => {
     const cwd = gitCheckout({}, track);
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const scratch = join(artifacts, 'scratch', 'code');
+    const scratch = scratchDir(artifacts, 'code');
     mkdirSync(scratch, { recursive: true });
     git(cwd, 'worktree', 'add', '-q', '--detach', join(scratch, 'one'), 'HEAD');
     const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
@@ -120,7 +218,7 @@ describe('prune-scratch', () => {
       .map(line => slashes(line.slice('worktree '.length)));
     expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
     expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
-    expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
+    expect(existsSync(scratchDir(artifacts, ''))).toBe(false);
     expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });
 });

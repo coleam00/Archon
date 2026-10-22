@@ -11,7 +11,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 | Workflow | One run |
 |---|---|
 | `archon-intake` | Records an issue event and triages the best waiting issue. The verdict becomes the item's stage and a route label. |
-| `archon-build-queue` | Claims the best waiting triaged item and takes it to a pull request whose review says Ready, one round per run. |
+| `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
@@ -28,6 +28,14 @@ reference covers launching and tending the queues by hand.
   maintainer's own open pull requests through the merge queue. Without the file every
   author is an outsider: intake labels their issues `archon-needs-maintainer` and runs
   no agent.
+- The forge account the pack's review runs post as must also be on
+  `maintainers.json`. The merge queue counts only a review comment a listed
+  maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
+- The merge gate requires green CI at the pull request's head. A repository with no
+  CI checks reads as `none`, not green, so nothing merges there.
+- Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
+  rather than replacing them. Where a line in the project's file conflicts with the
+  default, the project's line wins.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
   adds one. The README shows a binding per queue; until then, launch by hand.
 
@@ -52,16 +60,22 @@ Optional inputs, with their defaults in each workflow's YAML:
   `created`.
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
   for a label), `label` and `label_actor` for a label event.
-- `archon-build-queue`: `round_limit` (default `3`), the rounds after which a run
-  that wants another also judges whether the rounds converge.
+- `archon-build-queue`: `number` (the issue to build; empty claims the first in
+  order), `retriage_as` (a maintainer login; set, a run that names no item also
+  re-triages blocked items that no longer look blocked) and `round_limit` (default
+  `3`), the rounds after which a run that wants another also judges whether the rounds
+  converge.
 - `archon-merge-queue`: `limit` (default `10` items claimed) and `merge_method`
   (`squash` or `merge`).
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
-The build queue changes its checkout, so each run needs its own worktree. A plain
-launch from a git checkout gets one. The merge queue never changes its checkout and
-needs none.
+Intake, the merge queue and the discoveries drain never change their checkout. They
+create no worktree and run in the launch checkout as it stands, so launch them from a
+checkout that tracks the default branch. The build queue changes its checkout, so each
+run gets its own worktree on a run-named branch. A completed round removes that
+worktree when it is clean and every commit is on a remote, and keeps the branch;
+otherwise the run names the path and what removing it would lose.
 
 ## Intake
 
@@ -92,21 +106,40 @@ Read the result from the issue's labels:
 
 ## Build queue
 
-A run claims the waiting item that sorts first and works it for one round. You cannot
-point a run at a chosen item; ranking decides. Launch one run per item you want
-worked at the same time.
+A run claims the waiting item that sorts first and works it for one round. To build
+a chosen issue, name it:
+
+```bash
+archon workflow run archon-build-queue $R --input number=<issue> --detach
+```
+
+A named issue that cannot be claimed refuses the run before any agent, with the
+reason: it has no work item, another run holds it, or it does not wait for the build
+queue. Launch one run per item you want worked at the same time; the launch's
+`--config` decides which provider builds it.
 
 A round ends one of three ways, recorded on the item:
 
 - `done`: the pull request's latest review says Ready at its head. The merge queue
-  takes it from there.
-- `continue`: the issue already answers what stopped the round. The next run starts
-  the next round from the recorded brief.
+  takes it from there. A pull request already reviewed Ready at its head is marked
+  ready without another round.
+- `continue`: the issue already answers what stopped the round. The run starts the
+  item's next round at once, as a detached `archon-build-queue --input number=<n>`
+  run on the same run config and the same `order`, `retriage_as` and `round_limit`.
+  If that launch fails, the item waits for the next queue run.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
-An answered `ask` starts its next round by itself. Launch another build-queue run to
-work the next item.
+An item the merge queue returns waits for a new build round, with the merge queue's
+brief. A re-triage after the queue's last decision starts the item over.
+
+Do not resume a failed build-queue run once a later build-queue run has released its
+claim. A run that names no item releases every finished run's claim, whichever item it
+then picks. A run named for the same `number` releases it too; one named for a
+different `number` leaves it alone. A resume skips the completed `facts` node that
+claimed the item, so the resumed run works the whole round, then its `apply` refuses
+because the item is no longer claimed by it. Launch a fresh run with
+`--input number=<issue>` instead.
 
 ## Merge queue
 
@@ -118,22 +151,35 @@ never pushes or waits for CI: a conflict goes back to the build queue, and the d
 branch's CI on a merge is the next sweep's first fact. Claims keep two sweeps off the
 same item.
 
+A verdict counts only at the head it reviewed: after a push, the pull request goes
+back to the build queue for a new round. A maintainer's own pull request
+(`merge_queue: "own-prs"`) has no build round to return to, so where another would go
+back, the sweep asks instead and offers no `return`.
+
+A pull request whose read fails twice in a row is parked with the read error until
+the build queue readies the item again. A maintainer's own pull request has no build
+record, so nothing readies it again: once parked, it stays parked, and you merge it by
+hand.
+
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `merge: base` and holds
-every merge until it is green.
+`return`, `park` and `other`. A red default branch pauses as `merge: base` with the
+one choice `hold`, and the gate refuses every merge until it is green. A run raises at
+most one attention item: the red default branch first, otherwise the first pull
+request the sweep asked about. A later sweep decides the rest again.
 
-A maintainer's own pull request enrolled through `merge_queue: "own-prs"` has no
-build round to return to, so its question offers no `return`. Answering `park` or
-`other` stops queue work until a later sweep observes a head different from the
-head asked about. At the same head it stays parked, even after green CI or a new
-review. The `other` text is recorded as the ruling on the work item; it starts no
-build round. Recovery preserves the approval's original head and every merge gate.
+A `merge` answer approves the pull request at the head it asked about, and a sweep
+the answer starts, on the answered run's `order`, `limit` and `merge_method`, merges
+it once the gate passes. The approval carries to a later head only when the sweep
+judges that everything since is merges of the default branch and their conflict
+resolutions, and the verdict is Ready at the later head. A `return` hands the item
+back to the build queue, whose next round starts at once on the build queue's own
+input defaults. A `park` stops work on the item until the build queue readies it again.
 
-A build item parked by an answer waits for renewed build readiness. A pull request
-whose read fails twice consecutively is also parked: renewed build readiness can
-bring a build item back, but an unreadable own-PR park stays parked. Changed-head
-recovery applies only to answered own-PR parks, never merged or superseded items.
+For an own pull request, `park` and `other` stop queue work until a later sweep
+observes a head different from the head asked about. At the same head it stays
+parked, even after green CI or a new review. The `other` text is recorded as the
+ruling on the work item; it starts no build round.
 
 ## Discoveries drain
 
@@ -162,7 +208,7 @@ section. Write the reason as a ruling a later round can act on: what is in scope
 what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
 run at once, on the run config the answered run started with, so you don't relaunch. A
-build round that decides `continue` on its own starts its next round the same way.
+follow-up in the same queue also keeps the answered run's input selections.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to

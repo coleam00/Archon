@@ -10,6 +10,8 @@ import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
   providerFailureClassSchema,
+  providerLifecycleEventSchema,
+  providerLifecycleWaitedMsSchema,
   type IAgentProvider,
   type CredentialStatus,
   type ProviderChunk,
@@ -40,6 +42,29 @@ export class ProviderPluginExitedError extends Error {
     );
     this.name = 'ProviderPluginExitedError';
   }
+}
+
+// detail and evidence hold no text from the plugin's line; cause can, so it stays unread.
+function protocolFailure(
+  descriptor: ProviderPluginDescriptor,
+  log: ReturnType<typeof createLogger>,
+  { line, reason, detail, evidence }: PluginProtocolError
+): Error {
+  log.error(
+    {
+      provider: descriptor.id,
+      line,
+      reason,
+      detail,
+      ...(evidence ? { messageBytes: evidence.bytes, message: evidence.message } : {}),
+      pluginVersion: descriptor.version,
+    },
+    'provider.plugin.protocol_failed'
+  );
+  const read = evidence ? `message ${evidence.message}, ${String(evidence.bytes)} bytes, ` : '';
+  return new Error(
+    `Provider plugin ${descriptor.id} protocol failed at line ${String(line)} (${reason}): ${detail} [${read}plugin version ${descriptor.version}]`
+  );
 }
 
 function startProcess(
@@ -179,14 +204,23 @@ function startProcess(
         {
           onLog(record): void {
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
-            // Only the severity and a failure class from the contract's closed enum cross
-            // this boundary. An open plugin-chosen token would let a credential-shaped
-            // word through, so no other plugin field is forwarded. A record without a
-            // valid class would reach the log as severity alone, which no operator can
-            // act on, so it is dropped.
+            // Only the severity, a failure class and a lifecycle event from the contract's
+            // closed enums, and a lifecycle event's numeric `waitedMs`, cross this boundary.
+            // An open plugin-chosen token would let a credential-shaped word through, so no
+            // other plugin field is forwarded. A record with neither enum value would reach
+            // the log as severity alone, which no operator can act on, so it is dropped.
             const failureClass = providerFailureClassSchema.safeParse(record.bindings.failureClass);
-            if (!failureClass.success) return;
-            providerLog[record.level]({ failureClass: failureClass.data }, 'provider.plugin.log');
+            const lifecycle = providerLifecycleEventSchema.safeParse(record.bindings.lifecycle);
+            if (!failureClass.success && !lifecycle.success) return;
+            const waitedMs = providerLifecycleWaitedMsSchema.safeParse(record.bindings.waitedMs);
+            providerLog[record.level](
+              {
+                ...(failureClass.success ? { failureClass: failureClass.data } : {}),
+                ...(lifecycle.success ? { lifecycle: lifecycle.data } : {}),
+                ...(lifecycle.success && waitedMs.success ? { waitedMs: waitedMs.data } : {}),
+              },
+              'provider.plugin.log'
+            );
           },
         }
       );
@@ -215,6 +249,10 @@ function startProcess(
       if (spawnError) return spawnError;
       // Carries only validated protocol values; the exit report would lose both versions.
       if (error instanceof PluginProtocolMismatchError) return error;
+      // A plugin that exits after an invalid line still failed on that line; its exit
+      // report would drop the protocol evidence.
+      if (error instanceof PluginProtocolError && error.reason === 'invalid_message')
+        return protocolFailure(descriptor, log, error);
       if (exited)
         return new ProviderPluginExitedError(
           descriptor.id,
@@ -227,10 +265,7 @@ function startProcess(
           error.code,
           `Provider plugin ${descriptor.id} request failed (RPC ${String(error.code)})`
         );
-      if (error instanceof PluginProtocolError)
-        return new Error(
-          `Provider plugin ${descriptor.id} protocol failed at line ${String(error.line)} (${error.reason})`
-        );
+      if (error instanceof PluginProtocolError) return protocolFailure(descriptor, log, error);
       return new Error(redact(error instanceof Error ? error.message : String(error)));
     },
     dispose,

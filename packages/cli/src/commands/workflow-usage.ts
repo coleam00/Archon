@@ -1,4 +1,5 @@
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { hasUnknownTokenTotal } from '@archon/workflows/schemas/run-usage';
 
 function recordedCost(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -13,8 +14,7 @@ function recordedTokens(value: unknown): string {
 }
 
 export function formatRunUsage(metadata: WorkflowRun['metadata']): string[] {
-  const tokensUnknown =
-    Object.hasOwn(metadata, 'total_tokens_unknown') && metadata.total_tokens_unknown !== false;
+  const tokensUnknown = hasUnknownTokenTotal(metadata);
   return [
     '  Usage (recorded totals; completeness unknown):',
     `    Cost: ${recordedCost(metadata.total_cost_usd)}`,

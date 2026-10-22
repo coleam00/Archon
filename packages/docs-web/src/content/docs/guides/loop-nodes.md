@@ -205,9 +205,10 @@ declared completion channel, the node **fails** (not succeeds). This prevents ru
 loops from burning tokens indefinitely.
 
 Only an explicit answer runs an iteration past the bound: a comment on a legacy
-[interactive gate](#interactive-and-gate_message), or an answer to a `loop_group`'s
-[terminal attention wait](#pausing-to-ask-inside-the-body). Each answer permits one more
-iteration, and each further iteration needs another answer.
+[interactive gate](#interactive-and-gate_message), or an accepted answer to a `loop_group`'s
+[terminal attention wait](#pausing-to-ask-inside-the-body).
+Each accepted answer permits one more iteration, and each further iteration needs
+another accepted answer. A changed question can pause again in the same iteration.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -283,7 +284,7 @@ references `prompt` does (`$ARTIFACTS_DIR`, `$nodeId.output`, etc.), but it read
 declared input from the environment as `$INPUTS_<UPPER_SNAKE>`, not as `$INPUTS.<name>`.
 Inside an included block `$INPUTS.<name>` is shorthand for that variable; a directly run
 workflow leaves it literal (see
-[Passing values into an included block](/guides/authoring-workflows/#passing-values-into-an-included-block)).
+[Passing values into an included block](/reference/workflow-language/#passing-values-into-an-included-block)).
 In `until_bash`, small output references are single-quoted inline; large outputs use
 an unquoted file-read substitution. Assign each reference to a variable, then quote
 that variable when using it. See the
@@ -291,7 +292,7 @@ that variable when using it. See the
 
 ### `until_field`
 
-Names a property in this node's [`output_format`](/guides/authoring-workflows/) schema.
+Names a property in this node's [`output_format`](/reference/workflow-language/) schema.
 The loop ends on the first iteration whose **validated** payload has that property
 set to exactly `true`.
 
@@ -334,9 +335,9 @@ carries the same value.
 
 **Per-provider behavior is the same as any other node.** On a provider with
 *enforced* structured output (Claude, Codex, OpenCode) the schema constrains
-decoding. On a *best-effort* provider (Pi, Copilot) the schema is appended to the
-prompt, and a payload that fails validation is re-asked up to three times **within
-the same iteration** — a reask does not consume a loop iteration. If those are
+decoding. On a *best-effort* provider the model is asked for the schema (Pi through
+a `structured_output` tool call, Copilot through the prompt), and a payload that fails
+validation is re-asked up to three times **within the same iteration** — a reask does not consume a loop iteration. If those are
 exhausted, the node **fails** with the validation errors; it is never treated as an
 incomplete iteration. See
 [provider capabilities](/reference/provider-capabilities/).
@@ -543,7 +544,7 @@ nodes:
 
 Only `on_error: transient` or omission is supported on loops; `all` is a load error. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
 
-Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/guides/authoring-workflows/#retry-configuration).
+Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/reference/workflow-language/#retry-configuration).
 
 ## Cross-Node Loops with `loop_group`
 
@@ -618,8 +619,13 @@ warning.
 ### Pausing to ask inside the body
 
 To ask for an answer after each pass, end the body in a
-[`wait: attention`](/guides/authoring-workflows/#attention-waits) node. The run pauses
-there until someone answers. Then the group checks `until_bash`; if it does not pass,
+[`wait: attention`](/reference/workflow-language/#attention-waits) node. The run pauses
+there until someone answers. On resume with the first answer, the engine compares the
+current message, form, and options against the paused question. If they changed, it
+discards the stale answer and asks again in the same iteration. This re-ask happens
+at most once per occurrence chain: the next answer is accepted even if the question
+changes again. See [attention waits](/reference/workflow-language/#attention-waits).
+Once an answer is accepted, the group checks `until_bash`; if it does not pass,
 the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.output`.
 
 ```yaml
@@ -640,7 +646,8 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
           form: approval
 ```
 
-- `until_bash` reads the answer as `$review.output.decision`. Approving ends the group;
+- Once an answer is accepted, `until_bash` reads it as
+  `$review.output.decision`. Approving ends the group;
   rejecting runs another draft, which reads any text sent with the answer through
   `$LOOP_PREV.review.output.text`. A reject is an answer, so it never cancels the run.
 - Assign the reference, then quote the shell variable, as above. Archon already
@@ -648,11 +655,11 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
   `'approve'` with the quotes included and never matches. See
   [Shell Quoting in `bash:` vs `script:`](/reference/variables#shell-quoting-in-bash-vs-script).
 - `$group.output` is the draft, not the answer (see below).
-- Any [form](/guides/authoring-workflows/#attention-waits) works. A `message` wait
+- Any [form](/reference/workflow-language/#attention-waits) works. A `message` wait
   produces only `{ text }`, so with it decide completion from the work instead of the answer.
-- `max_iterations` bounds autonomous iterations. Each answer to the terminal attention
-  wait permits one more iteration even past that bound, so this loop runs until
-  someone approves.
+- `max_iterations` bounds autonomous iterations. Each accepted answer to the terminal
+  attention wait permits one more iteration even past that bound, so this loop runs
+  until someone approves.
 - The loader warns when the terminal attention wait has no `when:` and `until_bash`
   does not reference its `$<wait-id>.output`: the answers would be recorded but never
   end the loop.
@@ -660,8 +667,11 @@ the next iteration runs with the answer available as `$LOOP_PREV.<wait-id>.outpu
 A wait pauses the group only as the body's **sole terminal sink**: nothing depends on
 it, and every other body node leads to it. Any other placement is a load error, because
 resuming in the middle of an iteration would replay or skip sibling work. The group
-resumes at the iteration boundary, so the next iteration starts with the answer
-available. A deprecated `approval:` gate is accepted in the same place; see
+compares the question on the first answer, with the one-reask bound described above.
+If it asks again, the iteration stays paused; otherwise, if `until_bash` does not
+pass, the next iteration
+starts with the accepted answer available. A deprecated `approval:` gate is accepted
+in the same place; see
 [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates).
 
 A pause asks about the work; it is not the work. When the sink is an attention wait,
@@ -758,6 +768,12 @@ string. Field access uses the same strict semantics as `$nodeId.output.field`
 (a field not in the producer's declared schema fails the consuming node rather
 than silently degrading).
 
+The group's `until_bash` sees current outputs through `$nodeId.output` and the
+preceding iteration through `$LOOP_PREV.*`, including after a terminal pause is
+answered. `LOOP_PREV_OUTPUT` contains the preceding iteration's chosen output with
+completion tags removed. The next body iteration instead receives the answered
+iteration's outputs as its previous snapshot.
+
 A `command:` body node's command file gets the same `$LOOP_PREV.*` substitution as
 the same text written as an inline `prompt:`.
 
@@ -771,7 +787,7 @@ A body node can also gate on the previous iteration's typed output with `when:`:
 ```
 
 This is a condition reference, not text substitution. On iteration 1 it resolves to
-`''`, so the non-empty equality is false. See [Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
+`''`, so the non-empty equality is false. See [Condition Syntax](/reference/workflow-language/#when-condition-syntax).
 
 An `include:` inside the body can use the same `$LOOP_PREV` condition to gate its
 entire block. A false gate skips the whole block; when true, each node still follows
@@ -889,8 +905,15 @@ the workflow loads.
 Suspension and failure have different recovery rules:
 
 - **Resume after a terminal pause** (the body's terminal attention wait is
-  answered): the group rechecks `until_bash` against the answer and, if it does not
-  pass, continues with the **next** iteration's whole body. With
+  answered): the engine compares the question on the first answer and may ask again
+  in the same iteration. After one re-ask, it accepts the next answer even if the
+  question changes again, as described [above](#pausing-to-ask-inside-the-body). Once an
+  answer is accepted, the group rechecks `until_bash` against the answered iteration's
+  current outputs and its own preceding snapshot. If historical ownership or full
+  output bytes cannot be restored, the group fails restoration rather than treating
+  the history as empty. Only iteration one has a known empty preceding snapshot;
+  explicitly skipped nodes have no output. If the check does not pass, the group
+  continues with the **next** iteration's whole body. With
   `fresh_context: false`, the body's AI session continues from where it paused (the
   session cursor is persisted across the pause). `$LOOP_PREV.*` refs on the first resumed
   iteration resolve to the prior iteration's real body outputs, restored from
@@ -933,7 +956,7 @@ a `loop_group` whose body ends in a `wait: attention` node:
 
 | Legacy | Replacement |
 |---|---|
-| `interactive: true` + `gate_message` | a terminal `wait: { attention: <message>, form: approval }` in the body (or another [form](/guides/authoring-workflows/#attention-waits)) |
+| `interactive: true` + `gate_message` | a terminal `wait: { attention: <message>, form: approval }` in the body (or another [form](/reference/workflow-language/#attention-waits)) |
 | `$LOOP_USER_INPUT` | `$LOOP_PREV.<wait-id>.output.text` |
 | approve with no comment to finalize | `until_bash` that checks the answer, e.g. `decision=$ask.output.decision; [ "$decision" = "approve" ]` |
 | `signal_completes: true` | a `when:` on the wait so it pauses only when the work needs an answer, with `until_bash` deciding completion from the work |
@@ -982,7 +1005,7 @@ wait whose `when:` skips it on success, as in the second example under
 
 ## See Also
 
-- [Authoring Workflows](/guides/authoring-workflows/) — full workflow reference
+- [Workflow language](/reference/workflow-language/): the full workflow reference
 - [Per-Node Hooks](/guides/hooks/) — SDK hooks for command/prompt nodes
 - [Per-Node MCP Servers](/guides/mcp-servers/) — external tool integration
 - [Per-Node Skills](/guides/skills/) — skill preloading

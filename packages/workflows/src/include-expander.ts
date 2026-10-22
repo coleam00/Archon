@@ -72,7 +72,7 @@ import { collapseWorkflowScope, warnDroppedWorkflowLevelFields } from './include
  * deeper chain is a load error (guards against accidental deep/runaway recursion). Depth 1
  * (an includer → a building block) is the common case; the cap leaves generous room. The
  * depth check below uses `>` (not `>=`) so exactly INCLUDE_MAX_DEPTH levels are permitted,
- * matching the "up to 3 levels deep" contract in authoring-workflows.md.
+ * matching the "up to 3 levels deep" contract in the workflow language reference.
  */
 export const INCLUDE_MAX_DEPTH = 3;
 

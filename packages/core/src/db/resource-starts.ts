@@ -9,6 +9,7 @@ import type {
   StartBindingInspection,
   StartReceiptInspection,
   ResourceStartRequestInspection,
+  QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
@@ -29,14 +30,16 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDialect } from './connection';
+import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
   resourceStartOccupancy,
+  parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
 import { insertWorkflowRun } from './workflows';
+import { WorkflowStatusReadError } from './workflow-run-reads';
 
 interface RequestRow {
   id: string;
@@ -47,6 +50,12 @@ interface RequestRow {
   blocker_run_id: string | null;
   blocker_kind: NonNullable<ResourceStartRequestInspection['blocker']>['kind'] | null;
   launch: unknown;
+}
+
+// Different resource rows can reserve the same checkout. Hold one transaction lock
+// across occupancy and publication; SQLite already serializes writers.
+async function lockCheckoutReservations(query: Query): Promise<void> {
+  if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
@@ -89,6 +98,7 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
+  await lockCheckoutReservations(query);
   const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
@@ -144,6 +154,7 @@ export async function drainResourceStarts(options: {
   hostId: string;
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
     const { capacity } = await lockResourceSlot(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
@@ -400,22 +411,34 @@ export async function listPendingStartBindings(options: {
   return result.rows.map(inspectBinding);
 }
 
-function inspectRequest(row: Record<string, unknown>): ResourceStartRequestInspection {
-  const runStatus = workflowRunStatusSchema.safeParse(row.run_status);
-  const blockerRunStatus = workflowRunStatusSchema.safeParse(row.blocker_run_status);
+function inspectJoinedRunStatus(runId: string, storedStatus: string | null) {
+  if (storedStatus === null) return null;
+  const status = workflowRunStatusSchema.safeParse(storedStatus);
+  if (!status.success) {
+    throw new WorkflowStatusReadError(runId, storedStatus);
+  }
+  return status.data;
+}
+
+interface RequestInspectionRow extends Record<string, unknown> {
+  run_status: string | null;
+  blocker_run_status: string | null;
+}
+
+function inspectRequest(row: RequestInspectionRow): ResourceStartRequestInspection {
   return {
     id: String(row.id),
     resource: String(row.resource_key),
     hostId: String(row.host_id),
     overlap: row.overlap_policy as ResourceStartRequestInspection['overlap'],
     status: row.status as ResourceStartRequestInspection['status'],
-    runStatus: runStatus.success ? runStatus.data : null,
+    runStatus: inspectJoinedRunStatus(String(row.id), row.run_status),
     blocker:
       (row.blocker_kind === 'run' || row.blocker_kind === 'request') &&
       typeof row.blocker_run_id === 'string'
         ? { kind: row.blocker_kind, id: row.blocker_run_id }
         : null,
-    blockerRunStatus: blockerRunStatus.success ? blockerRunStatus.data : null,
+    blockerRunStatus: inspectJoinedRunStatus(String(row.blocker_run_id), row.blocker_run_status),
     launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(row.launch)),
   };
 }
@@ -429,7 +452,7 @@ const requestInspectionSelect = `SELECT r.*, own.status AS run_status, w.status 
 export async function getResourceStartRequest(
   id: string
 ): Promise<ResourceStartRequestInspection | null> {
-  const result = await getDatabase().query<Record<string, unknown>>(
+  const result = await getDatabase().query<RequestInspectionRow>(
     `${requestInspectionSelect} WHERE r.id = $1`,
     [id]
   );
@@ -438,14 +461,26 @@ export async function getResourceStartRequest(
 
 export async function listQueuedResourceStartsForHost(
   hostId: string
-): Promise<ResourceStartRequestInspection[]> {
-  const result = await getDatabase().query<Record<string, unknown>>(
+): Promise<QueuedResourceStartInspection[]> {
+  const result = await getDatabase().query<RequestInspectionRow>(
     `${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
       ORDER BY r.resource_key, r.queue_position`,
     [hostId]
   );
-  return result.rows.map(inspectRequest);
+  return result.rows.map(row => {
+    try {
+      parseQueuedResourceStart(row);
+      return inspectRequest(row);
+    } catch (error) {
+      return {
+        id: String(row.id),
+        resource: String(row.resource_key),
+        receiptId: typeof row.receipt_id === 'string' ? row.receipt_id : undefined,
+        error,
+      };
+    }
+  });
 }
 
 export async function withdrawQueuedResourceStart(

@@ -1,0 +1,20 @@
+# A refused item pickup must not suppress an unrelated blocked item's revisit.
+# Malformed facts output stands in for the script's refusal at the DAG boundary.
+facts: {}
+blocked:
+  blocked: [{ number: 8, summary: "Waiting for a dependency that has merged." }]
+  blocked_count: 1
+revisit:
+  retriage: [{ number: 8, reason: "The dependency merged." }]
+retriage:
+  retriaged: [8]
+  summary: "Sent issue 8 back to intake."
+fixture:
+  inputs:
+    repo_host: github.com
+    repo_path: example/repo
+    retriage_as: maintainer
+  expect: failed
+  fail-node: facts
+  reached: [blocked, revisit, retriage]
+exec-code: true

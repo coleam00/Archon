@@ -289,7 +289,7 @@ filesystem:
 Built-in and plugin skills are therefore declarable on a Claude node, exactly like an
 installed one. A plugin's skill loads only when the node also names that plugin under
 `plugins:`, because a workflow node loads no plugin it does not name (see
-[Plugins](/guides/authoring-workflows/#plugins)).
+[Plugins](/reference/workflow-language/#plugins)).
 
 ## Troubleshooting
 
@@ -304,7 +304,7 @@ installed one. A plugin's skill loads only when the node also names that plugin 
 
 ## Related
 
-- [Inline sub-agents](/guides/authoring-workflows/#inline-sub-agents) — `agents:` field for workflow-scoped sub-agents (composes independently with native per-node skill selection)
+- [Inline sub-agents](/reference/workflow-language/#inline-sub-agents) — `agents:` field for workflow-scoped sub-agents (composes independently with native per-node skill selection)
 - [Per-Node MCP Servers](/guides/mcp-servers/) — `mcp:` field for external tool access
 - [Hooks](/guides/hooks/) — `hooks:` field for tool permission control
 - [skills.sh](https://skills.sh) — marketplace for discovering skills

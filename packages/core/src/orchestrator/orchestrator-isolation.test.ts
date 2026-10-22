@@ -1010,8 +1010,10 @@ describe('dispatchBackgroundWorkflow', () => {
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
 
-    // Without an explicit opt-out, the worker gets its own isolation environment.
+    // Without an explicit opt-out, the worker gets its own per-run task checkout.
     expect(mockResolve).toHaveBeenCalledTimes(1);
+    const { hints } = mockResolve.mock.calls[0]?.[0] as { hints: { workflowType: string } };
+    expect(hints.workflowType).toBe('task');
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
     expect(runRow?.working_path).toBeUndefined();

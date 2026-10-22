@@ -11,6 +11,7 @@ import {
 } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import {
+  isTerminalRunStatus,
   readSubrunMetadata,
   readRunDispatchMetadata,
   RUN_DISPATCH_METADATA_KEY,
@@ -29,6 +30,23 @@ import type { IWorkflowStore } from './store';
 import { type WorkflowRun } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { ChildIsolationRequest, ChildIsolationResult } from './child-isolation';
+import type { InMemoryStoreEvent } from './test-utils';
+import { buildRunNodeStates } from './terminal-record';
+
+/** The slot record on the latest `work` event of this type. */
+function workFanOutOutcome(
+  events: readonly InMemoryStoreEvent[],
+  eventType: 'node_completed' | 'node_failed'
+): unknown {
+  return events.filter(e => e.event_type === eventType && e.step_name === 'work').at(-1)?.data
+    ?.fan_out_outcome;
+}
+
+function sentMessages(platform: ReturnType<typeof makePlatform>): string {
+  return (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+    .map(c => String(c[1]))
+    .join('\n');
+}
 
 /** A fan-out `workflow:` node runs one child per item and joins their outcomes. */
 describe('workflow: sub-run fan-out (#2121 slice 2)', () => {
@@ -584,6 +602,18 @@ nodes:
       run => run.parent_run_id === first.workflowRunId && run.status === 'cancelled'
     );
     expect(blocked?.metadata.cancelled_reason).toBe('fan_out_checkout_check');
+    expect(workFanOutOutcome(store.events, 'node_failed')).toMatchObject({
+      tally: { total: 2, completed: 1, cancelled_by_engine: 1 },
+      slots: [
+        { index: 0, outcome: 'completed' },
+        {
+          index: 1,
+          outcome: 'cancelled_by_engine',
+          child_run_id: blocked!.id,
+          cancel_reason: 'fan_out',
+        },
+      ],
+    });
 
     failSharing = false;
     const parentRun = (await store.getWorkflowRun(first.workflowRunId!))!;
@@ -982,7 +1012,8 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-default-join');
-    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+    const platform = makePlatform();
+    const result = await executeWorkflow(deps, platform, 'conv-plat', cwd, parent, 'goal', {
       conversationId: 'conv-db',
     });
 
@@ -1003,6 +1034,213 @@ nodes:
     expect(aggregate).toHaveLength(2);
     expect(aggregate[0]).toBe('ok:a');
     expect(aggregate[1]).toMatchObject({ status: 'failed' });
+
+    // The node completed, but its record says which child work did not.
+    const [childA, childBoom] = [...children].sort((a, b) =>
+      a.user_message.localeCompare(b.user_message)
+    );
+    expect(workFanOutOutcome(store.events, 'node_completed')).toMatchObject({
+      tally: { total: 2, completed: 1, failed: 1 },
+      slots: [
+        { index: 0, outcome: 'completed', child_run_id: childA.id },
+        { index: 1, outcome: 'failed', child_run_id: childBoom.id },
+      ],
+    });
+    expect(sentMessages(platform)).toContain(
+      '**Fan-out completed with unfinished children** (node `work`): ' +
+        `1 of 2 children did not complete (1 failed). Each slot's outcome is in the console run view and \`archon workflow get ${String(parentRun?.id)}\`.`
+    );
+  });
+
+  it('classifies slots the same under any max_parallel, and a failing notifier cannot fail the node', async () => {
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    const strippedOutcome = async (maxParallel: string): Promise<unknown> => {
+      const name = `fan-width-${maxParallel}`;
+      await writeWorkflow(
+        name,
+        `
+name: ${name}
+description: same items, different window
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["boom","a","boom"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: ${maxParallel}
+`
+      );
+      const store = new InMemoryStore();
+      const platform = makePlatform();
+      platform.sendMessage = mock(() => Promise.reject(new Error('platform down')));
+      const result = await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-plat',
+        cwd,
+        await discover(name),
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      expect(result.success).toBe(true);
+      expect(platform.sendMessage).toHaveBeenCalled();
+      const outcome = workFanOutOutcome(store.events, 'node_completed') as {
+        slots: { child_run_id?: string }[];
+      };
+      return {
+        ...outcome,
+        slots: outcome.slots.map(({ child_run_id: _id, ...slot }) => slot),
+      };
+    };
+    const serial = await strippedOutcome('1');
+    expect(serial).toMatchObject({ tally: { total: 3, completed: 1, failed: 2 } });
+    expect(await strippedOutcome('all')).toEqual(serial);
+  });
+
+  it('a failed read of settled children fails the node without completing it or touching a child', async () => {
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    await writeWorkflow(
+      'fan-read-fails',
+      `
+name: fan-read-fails
+description: the post-settle child read fails
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","boom"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+`
+    );
+    const store = new InMemoryStore();
+    const findChildRuns = store.findChildRuns;
+    // Fail only the read that sees both children settled: the post-settle classification.
+    store.findChildRuns = async parentRunId => {
+      const rows = await findChildRuns(parentRunId);
+      if (rows.length === 2 && rows.every(r => isTerminalRunStatus(r.status))) {
+        throw new Error('db read timed out');
+      }
+      return rows;
+    };
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-read-fails'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    const failed = store.events.filter(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(failed).toHaveLength(1);
+    expect(String(failed[0].data?.error)).toBe(
+      "Failed to look up settled fan-out child runs for node 'work': db read timed out"
+    );
+    expect(failed[0].data?.fan_out_outcome).toBeUndefined();
+    expect(
+      store.events.some(e => e.event_type === 'node_completed' && e.step_name === 'work')
+    ).toBe(false);
+    const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
+    expect(children.map(c => c.status).sort()).toEqual(['completed', 'failed']);
+    expect(store.events.some(e => e.event_type === 'workflow_cancelled')).toBe(false);
+  });
+
+  it('under all_success, a failed read of settled children keeps the failing child as the cause', async () => {
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    await writeWorkflow(
+      'fan-read-fails-strict',
+      `
+name: fan-read-fails-strict
+description: the post-settle child read fails under all_success
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","boom"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      join: all_success
+`
+    );
+    const store = new InMemoryStore();
+    const findChildRuns = store.findChildRuns;
+    store.findChildRuns = async parentRunId => {
+      const rows = await findChildRuns(parentRunId);
+      if (rows.length === 2 && rows.every(r => isTerminalRunStatus(r.status))) {
+        throw new Error('db read timed out');
+      }
+      return rows;
+    };
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-read-fails-strict'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    const failed = store.events.filter(
+      e => e.event_type === 'node_failed' && e.step_name === 'work'
+    );
+    expect(failed).toHaveLength(1);
+    const error = String(failed[0].data?.error);
+    expect(error).toMatch(
+      /^fan_out node 'work' \(join: all_success\): child 1 \(run [^)]+\) failed/
+    );
+    expect(error).toContain(
+      "Failed to look up settled fan-out child runs for node 'work': db read timed out"
+    );
+    expect(failed[0].data?.failure_kind).toBe('child_failed');
+    expect(failed[0].data?.fan_out_outcome).toBeUndefined();
+  });
+
+  it('an unknown static workflow target records every slot as not started', async () => {
+    await writeWorkflow(
+      'fan-unknown-target',
+      `
+name: fan-unknown-target
+description: fans out to a workflow that does not exist
+nodes:
+  - id: work
+    workflow: does-not-exist
+    fan_out:
+      items: '[1,2,3]'
+`
+    );
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('fan-unknown-target'),
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(result.success).toBe(false);
+    expect(store.runs.size).toBe(1);
+    const outcome = workFanOutOutcome(store.events, 'node_failed') as {
+      tally: { total: number; not_started: number };
+      slots: { outcome: string; error: string }[];
+    };
+    expect(outcome.tally).toMatchObject({ total: 3, not_started: 3 });
+    for (const slot of outcome.slots) {
+      expect(slot.outcome).toBe('not_started');
+      expect(slot.error).toContain('does-not-exist');
+    }
   });
 
   it('all_success runs EVERY child to terminal after one fails, then fails the node', async () => {
@@ -1259,6 +1497,19 @@ nodes:
           "Failed to create isolated worktree for sub-run 'partial-child': resource unavailable",
       }))
     );
+    const refused = {
+      outcome: 'not_started',
+      error: "Failed to create isolated worktree for sub-run 'partial-child': resource unavailable",
+    };
+    const recorded = {
+      tally: { total: 3, completed: 0, failed: 1, not_started: 2 },
+      slots: [
+        { index: 0, outcome: 'failed', child_run_id: children[0].id },
+        { index: 1, ...refused },
+        { index: 2, ...refused },
+      ],
+    };
+    expect(workFanOutOutcome(store.events, 'node_completed')).toMatchObject(recorded);
 
     const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
     expect(resume?.priorCompletedNodes.has('work')).toBe(true);
@@ -1288,6 +1539,14 @@ nodes:
     expect(messages).toContain(
       "Skipping fan_out node 'work': fan-out previously refused 2 of 3 children"
     );
+    // The replay keeps the slot record its earlier completion wrote.
+    const work = buildRunNodeStates(
+      (await store.getWorkflowRun(parent.id))!,
+      store.events
+        .filter(e => e.workflow_run_id === parent.id)
+        .map(e => ({ ...e, data: e.data ?? {} }))
+    ).find(n => n.node_id === 'work');
+    expect(work?.fan_out_outcome).toMatchObject(recorded);
   });
 
   it('all_done: a partial failure still completes the node; the failed entry is represented', async () => {

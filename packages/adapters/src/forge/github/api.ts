@@ -2,8 +2,8 @@
 
 import { z } from 'zod';
 import type { ForgeError } from '@archon/forge/operations';
-import type { RepoRef } from '@archon/forge';
-import { parseGitHubHost, type GitHubHost } from '@archon/git';
+import { parseRemoteUrl, type RepoRef } from '@archon/forge';
+import { parseGitHubHost, resolveGitHubHost, type GitHubHost } from '@archon/git';
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -24,12 +24,11 @@ export class GitHubError extends Error {
 
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
-  if (parts.length !== 2 || parts.some(part => part === '' || part === '.' || part === '..')) {
-    return null;
-  }
+  if (parts.length !== 2) return null;
   const owner = parts[0];
   const repo = parts[1].endsWith('.git') ? parts[1].slice(0, -4) : parts[1];
-  return owner && repo ? { owner, repo } : null;
+  if ([owner, repo].some(part => part === '' || part === '.' || part === '..')) return null;
+  return { owner, repo };
 }
 
 function githubHost(host: string): GitHubHost {
@@ -40,7 +39,10 @@ function githubHost(host: string): GitHubHost {
       true
     );
   }
-  return github;
+  const configured = resolveGitHubHost();
+  const protocol = new URL(configured.webUrl).protocol;
+  const requested = parseGitHubHost(`${protocol}//${host}`);
+  return configured.host === requested?.host ? configured : github;
 }
 
 /** The REST and GraphQL roots and encoded `owner/repo` segment for one qualified repository. */
@@ -143,41 +145,47 @@ export async function githubPages<T>(
   }
 }
 
-export function parseRemote(remote: string | null): RepoRef | null {
-  if (remote === null || remote.trim() === '') return null;
-  const value = remote.trim();
-
-  if (value.includes('://')) {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch (cause) {
-      throw new GitHubError(
-        { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
-        true,
-        { cause }
-      );
-    }
-    if (!['https:', 'ssh:'].includes(url.protocol)) return null;
-    if (url.password !== '' || (url.protocol === 'https:' && url.username !== '')) {
-      throw new GitHubError(
-        { kind: 'invalid_request', message: 'GitHub remote must not contain credentials' },
-        true
-      );
-    }
-    if (url.search !== '' || url.hash !== '') {
-      throw new GitHubError(
-        {
-          kind: 'invalid_request',
-          message: 'GitHub remote must not contain a query or fragment',
-        },
-        true
-      );
-    }
-    const repository = repositoryPath(decodeURIComponent(url.pathname));
-    if (!repository) return null;
-    return { host: url.host.toLowerCase(), path: `${repository.owner}/${repository.repo}` };
+function parseUrlRemote(value: string): RepoRef | null {
+  let parsed: ReturnType<typeof parseRemoteUrl>;
+  try {
+    parsed = parseRemoteUrl(value);
+  } catch (cause) {
+    throw new GitHubError(
+      { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
+      true,
+      { cause }
+    );
   }
+  const { url, host, pathname } = parsed;
+  if (!['http:', 'https:', 'ssh:'].includes(url.protocol)) return null;
+  if (url.password !== '' || (url.protocol !== 'ssh:' && url.username !== '')) {
+    throw new GitHubError(
+      { kind: 'invalid_request', message: 'GitHub remote must not contain credentials' },
+      true
+    );
+  }
+  if (value.includes('?') || value.includes('#')) {
+    throw new GitHubError(
+      {
+        kind: 'invalid_request',
+        message: 'GitHub remote must not contain a query or fragment',
+      },
+      true
+    );
+  }
+  const decodedPath = decodeURIComponent(pathname);
+  const repository =
+    (url.protocol === 'ssh:' || !decodedPath.includes('\\')) &&
+    repositoryPath(decodedPath) &&
+    repositoryPath(decodeURIComponent(url.pathname));
+  if (!repository) return null;
+  return { host, path: `${repository.owner}/${repository.repo}` };
+}
+
+export function parseRemote(remote: string | null): RepoRef | null {
+  if (!remote?.trim()) return null;
+  const value = remote.trim();
+  if (value.includes('://')) return parseUrlRemote(value);
 
   // Git's SCP-like SSH form has no URL scheme. Its optional user is transport identity,
   // not an HTTP credential, and is deliberately discarded at this normalization boundary.

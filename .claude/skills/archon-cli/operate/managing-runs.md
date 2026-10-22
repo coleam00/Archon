@@ -65,6 +65,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
+| End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
@@ -135,15 +136,33 @@ by its `runId` and `occurrence` exactly as above. Labels are the user's routing 
 `--label ci=other` selects one class, and `attention label` writes a classification
 without answering. Archon never routes by them.
 
+An item of kind `usage_limit` asks nothing. Its run hit a provider usage limit that
+reported a reset time, and waits until then. A node that failed only downstream of the
+limited one, such as an `all_done` node reading its output, does not turn the wait into a
+failure. At the reset, a continuation host (`archon serve`, `archon workflow wake`, or
+the CLI process that started the run) runs the failed nodes again. Cancel or abandon the
+run to stop it.
+
+A workflow can ask several independent questions at once by fanning out one child run
+per question. Each child is its own item, with its own `runId` and `occurrence`, and
+its `fanOut.parentRunId` names the parent. `attention <parent-run-id>` returns only the
+first open child, so list the queue to find them all, and answer each child by its own
+`runId`. Answers can arrive in any order; the parent stays paused until every child
+finishes.
+
 `workflow wait` follows one run whose id you hold. To follow every run in scope,
 including runs started later by triggers, schedules or other sessions, run
 `archon workflow attention --watch --json --all` as a background task. It prints one
 JSON line per change: each `attention` line is an item that needs attention, carrying
 the same item the list returns, so treat it as a wake and answer by its `runId` and
 `occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
-lines before `ready` are the whole open set. Keep the `cursor` of the last line you
-handled; after a restart, `--after <cursor>` replays what you missed. Exit `4` means the
-store cannot read the stream's cursor: rerun without `--after`.
+lines before `ready` are the whole open set. After a restart, `--after <cursor>`
+replays what came after that cursor. A cursor names a feed event, not a line, and one
+event can emit two lines with the same cursor (a `resolved` and the `attention` that
+replaces it, or a `resolved` and a `terminal`). `--after` skips the whole event, so
+checkpoint on a `bookmark` line you handled, or on the cursor before an event you
+handled only partly, and accept duplicate lines on replay. Exit `4` means the store
+cannot read the stream's cursor: rerun without `--after`.
 
 Or deliberately in two steps:
 
@@ -186,11 +205,46 @@ Choose deliberately after reading what the gate produced — not by reflex.
   cancelling server executes itself, and a `workflow:` sub-run with no owner of
   its own (it runs inside its root), is marked `cancelled` and stops at its
   executor's next status check. Otherwise it refuses and changes nothing when no
-  owner answers. Use this to kill real work.
+  owner answers. Use this to kill real work. Cancel still ends the run, and prints a
+  warning (`cleanupWarnings` in `--json`), when a process outside the run's process
+  group still holds a node's output, and on macOS and Linux when a host `bash:` or
+  `script:` command started or completed, because it may have left background work
+  running. The warning confirms neither a survivor nor cleanup, and Archon does not
+  signal or name such a process. Find it with `lsof` on the run's checkout, check whose
+  it is, and stop it before you reuse or remove the checkout.
 - `abandon` is for paused or failed runs, or a "running" row whose owner is gone
   (crashed host). If an owner still answers on this host, it stops it first, like
   `cancel`. If none answers, it records `cancelled` and prints the host and pid the
   run recorded; when that host is another machine, check there before abandoning.
+  It also removes the worktree the run created, uncommitted files included, and keeps
+  the branch. Commit or copy anything you need from the worktree first. When stopping
+  the owner produced one of cancel's warnings, abandon keeps the checkout for you to
+  inspect instead.
+
+## A stalled turn: end-turn, cancel or resume
+
+An agent or loop node can sit open on a provider tool call or reported background
+command that never finishes, such as a `while true; do ...; sleep 30; done` poll. The
+idle watchdog does not fire while that work is open. After
+`workflows.toolCallAttentionMs` without progress (30 minutes by default), the run raises
+`stalled_tool_calls` attention. The run stays `running`, so it is not an attention-queue
+item and the `--watch` stream does not report it. `workflow wait <run-id>`
+returns it as `attention.kind: "stalled_tool_calls"`, and `workflow status` prints it
+under the run.
+
+- **`archon workflow end-turn <run-id>`** when the stalled work is done or useless and
+  the rest of the run is worth keeping. It records a request; the live owner checks
+  about every ten seconds and ends that turn if the same stall is still there. The
+  attempt fails as `timeout`, and the node's retry policy decides what happens next.
+  By default that is a fresh attempt, which can stall the same way. Exit `0` means the
+  request was recorded, not acted on: follow with `workflow wait <run-id>`. It refuses
+  a run that is not `running` or has nothing stalled.
+- **`cancel`** when the whole run should stop.
+- **`resume`** refuses a running run. Use it once the run has failed or paused, for
+  example after an ended turn exhausts its retries.
+
+A silent turn with no open tool or background work is a different case: its node's
+`idle_timeout` fails it as before, with no request needed.
 
 ## Respond: gates beyond approve/reject
 
@@ -213,6 +267,13 @@ the normalized top-level outcome. It does not expose the authored field name
 (`green`, `ready`, or `rooted`) as another top-level property. Locate the report
 through `leave_behind.artifactFiles`, then read the artifact before reporting to
 the user.
+
+A completed `workflow:` fan-out node is not completed child work: under the default
+`join: all_done` it completes once every child is terminal, whatever each child's
+result. When some slots did not complete, `workflow get <run-id>` prints a
+`Fan-out work:` line with the tally and those slots' outcomes. The full per-slot record (`completed`, `failed`,
+`not_started`, or a `cancelled_*` outcome naming who cancelled it) is
+`terminal_record.nodes[].fan_out_outcome` with `--json`.
 
 Report outcomes with their evidence: "completed, review verdict ready:false —
 2 findings remain, report at <path>" beats "done".

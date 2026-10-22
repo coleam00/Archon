@@ -45,6 +45,7 @@ layout below. Existing projects keep their names and storage.
 │       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
 │       │   │   ├── .archon/        #     engine-owned bookkeeping, never listed as artifacts
 │       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
+│       │   │   │   ├── scratch/             # throwaway checkouts and installs; removed when the run ends
 │       │   │   │   └── typed-artifacts/     # typed-artifact observation files
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
 │       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
@@ -82,7 +83,15 @@ layout below. Existing projects keep their names and storage.
   engine-owned `.archon/` child so concurrent runs never share the deferred read and
   workflow-authored root files remain untouched. That child is the engine's own bookkeeping:
   `archon workflow get` and the console run page list a run's artifacts without it. Archon
-  currently retains filesystem run artifacts until the operator removes them;
+  retains filesystem run artifacts until the operator removes them, with one exception:
+  `.archon/scratch/`, where a workflow puts throwaway checkouts and dependency installs, is
+  removed once the run is completed, failed or cancelled (including a failed run that is
+  resumed later) and its nodes have stopped. A container run's scratch is removed when its
+  container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
+  host, or its owner process is still alive) keeps its scratch until the operator removes it.
+  A CLI run stopped by a signal (Ctrl-C, SIGTERM) is marked failed without stopping its nodes
+  through Archon, so it keeps its scratch until it is abandoned or its conversation is reset.
+  Everything else in `$ARTIFACTS_DIR` is kept.
   `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
@@ -131,13 +140,18 @@ The repo directory holds **source** only. Everything a run produces lives under
 path is the *worktree*, so the "cross-run memory" was destroyed at cleanup; and Archon
 never writes a `.gitignore`, so in a user's repository the directory was fully stageable.
 
-It is replaced by [`$STATE_DIR`](/reference/variables/). If Archon finds a legacy
-directory when a run starts it logs one warning with the exact move command and **moves
-nothing**:
+It is replaced by [`$STATE_DIR`](/reference/variables/). Archon no longer checks this
+legacy directory or warns about it, and does not read or move its contents. To migrate
+state, set `STATE_DIR` in your shell to the destination used by your workflow, then run
+from the repository:
 
 ```bash
-mv <repo>/.archon/state/* ~/.archon/workspaces/<project>/state/
+mkdir -p "$STATE_DIR"
+mv .archon/state/* "$STATE_DIR"/
 ```
+
+The glob moves non-hidden entries. Inspect hidden entries and destination conflicts
+before moving them.
 
 Then replace `.archon/state/` with `$STATE_DIR/` in the workflow's prompts and scripts, and
 delete any `mkdir -p .archon/state` — the executor pre-creates `$STATE_DIR`.
