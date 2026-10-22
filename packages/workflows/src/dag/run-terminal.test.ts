@@ -409,13 +409,16 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ step: 'config' });
   });
 
-  it.each([1, 2])(
-    'a rejected loop-group status read at check %i interrupts without failing work',
-    async check => {
+  it.each(['before', 'after'] as const)(
+    'a rejected loop-group status read %s the body interrupts without failing work',
+    async phase => {
       const store = createMockStore();
       const cause = new Error('database is locked');
-      if (check === 2) store.getWorkflowRunStatus.mockResolvedValueOnce('running');
-      store.getWorkflowRunStatus.mockImplementationOnce(async () => {
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        const bodyCompleted = persistedEvents(store).some(
+          event => event.event_type === 'node_completed' && event.step_name === 'group.body'
+        );
+        if (phase === 'after' && !bodyCompleted) return 'running';
         throw cause;
       });
       const error = await executeDagWorkflow(
@@ -453,7 +456,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
         events.some(
           event => event.event_type === 'node_completed' && event.step_name === 'group.body'
         )
-      ).toBe(check === 2);
+      ).toBe(phase === 'after');
       expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
       expect(
         events.some(event => event.event_type === 'node_completed' && event.step_name === 'group')
