@@ -6,6 +6,8 @@ import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
+import { COMPOSED_NODE } from '../packages/workflows/src/compiled-command';
+import { buildNodeShellEnvironment } from '../packages/workflows/src/dag/references';
 import { inputEnvKey } from '../packages/workflows/src/schemas/dag-node';
 import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
 import { getRunScratchDir } from '../packages/paths/src/run-paths';
@@ -34,7 +36,12 @@ function checkout(): { cwd: string; artifacts: string } {
 }
 
 function env(artifacts: string, bindings: Record<string, string>): Record<string, string> {
-  return { ...(process.env as Record<string, string>), ARTIFACTS_DIR: artifacts, ...bindings };
+  return {
+    ...(process.env as Record<string, string>),
+    ARTIFACTS_DIR: artifacts,
+    ARCHON_INPUT_ENV_KEYS: JSON.stringify(['INPUTS_DISCOVERY']),
+    ...bindings,
+  };
 }
 
 function run(
@@ -239,51 +246,117 @@ describe("the gate's environment", () => {
     expect([...NODE_CONTRACT_ENV].sort()).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES].sort());
   });
 
+  it.each(['', 'null', '{}', '["INPUTS_DISCOVERY", 42]', 'invalid-json'])(
+    'refuses a gate with an invalid generated-key list: %s',
+    manifest => {
+      const f = checkout();
+      mkdirSync(f.artifacts, { recursive: true });
+      const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
+        cwd: f.cwd,
+        env: env(f.artifacts, {
+          ARCHON_INPUT_ENV_KEYS: manifest,
+          INPUTS_DISCOVERY: JSON.stringify({
+            checks: declared([{ name: 'gate', argv: sh('touch ran') }]),
+            notes: '',
+          }),
+        }),
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).not.toBe('');
+      expect(existsSync(join(f.cwd, 'ran'))).toBe(false);
+    }
+  );
+
   it("runs the checks without the run's identity or the node's bindings", () => {
     const f = checkout();
     mkdirSync(f.artifacts, { recursive: true });
     const seen = join(f.artifacts, 'seen.json');
-    const bindings = Object.fromEntries(
-      ['plan', 'base-branch', 'foo_bar', 'MixedCase', 'revision2'].map(name => [
-        inputEnvKey(name),
-        'bound value',
-      ])
+    const names = ['plan', 'base-branch', 'foo_bar', 'MixedCase', 'revision2'];
+    const bindings = Object.fromEntries(names.map(name => [name, 'bound value']));
+    const discovery = JSON.stringify({
+      checks: [
+        {
+          name: 'env',
+          argv: [
+            process.execPath,
+            '-e',
+            `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
+          ],
+          group: 'gate',
+        },
+      ],
+      notes: '',
+    });
+    const node = {
+      id: 'gate',
+      kind: 'exec' as const,
+      runtime: 'bun' as const,
+      script: 'run-checks',
+      with: { ...bindings, discovery },
+      [COMPOSED_NODE]: { origin: 'block', inputs: { composed: 'composed value' } },
+    };
+    const nodeEnv = buildNodeShellEnvironment(
+      node,
+      {
+        workflowRun: {
+          id: 'run-123',
+          user_message: '',
+          metadata: { inputs_values: { run: 'run value' } },
+        },
+        artifactsDir: f.artifacts,
+        stateDir: '',
+        baseBranch: 'dev',
+        docsDir: '',
+        nodeOutputs: new Map(),
+        loopBodyScopes: [],
+      },
+      {
+        PROJECT_SETTING: 'kept',
+        INPUTS_PROJECT_SETTING: 'kept too',
+        INPUTS_PLAN: 'project value shadowed by binding',
+        ARCHON_INPUT_ENV_KEYS: '["INPUTS_PROJECT_SETTING"]',
+        INPUTS: 'project setting without the binding prefix',
+        PROJECT_INPUTS_SETTING: 'project setting containing the binding prefix',
+      },
+      {
+        artifactsDir: f.artifacts,
+        stateDir: '',
+        logDir: '',
+        workflowId: 'run-123',
+        baseBranch: 'dev',
+        userMessage: '',
+        loopUserInput: '',
+        loopPrevOutput: '',
+        rejectionReason: '',
+        typedArtifactsFile: '',
+        nodeExecution: null,
+      }
+    );
+    expect(nodeEnv.INPUTS_PLAN).toBe('bound value');
+    expect(JSON.parse(nodeEnv.ARCHON_INPUT_ENV_KEYS ?? 'null').sort()).toEqual(
+      [...names, 'discovery', 'run', 'composed'].map(inputEnvKey).sort()
     );
     const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
       cwd: f.cwd,
-      env: env(f.artifacts, {
-        ...bindings,
-        WORKFLOW_ID: 'run-123',
-        PROJECT_SETTING: 'kept',
-        INPUTS: 'project setting without the binding prefix',
-        PROJECT_INPUTS_SETTING: 'project setting containing the binding prefix',
-        INPUTS_DISCOVERY: JSON.stringify({
-          checks: [
-            {
-              name: 'env',
-              argv: [
-                process.execPath,
-                '-e',
-                `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
-              ],
-              group: 'gate',
-            },
-          ],
-          notes: '',
-        }),
-      }),
+      env: { ...process.env, INPUTS_HOST_SETTING: 'host value', ...nodeEnv },
       stdout: 'pipe',
       stderr: 'pipe',
     });
     expect(result.exitCode).toBe(0);
     const gate = JSON.parse(readFileSync(seen, 'utf8')) as Record<string, string>;
     expect(gate.PROJECT_SETTING).toBe('kept');
+    expect(gate.INPUTS_PROJECT_SETTING).toBe('kept too');
+    expect(gate.INPUTS_HOST_SETTING).toBe('host value');
     expect(gate.INPUTS).toBe('project setting without the binding prefix');
     expect(gate.PROJECT_INPUTS_SETTING).toBe('project setting containing the binding prefix');
     expect(gate.WORKFLOW_ID).toBeUndefined();
     expect(gate.ARTIFACTS_DIR).toBeUndefined();
     expect(gate.INPUTS_DISCOVERY).toBeUndefined();
-    for (const key of Object.keys(bindings)) expect(gate[key]).toBeUndefined();
+    expect(gate.ARCHON_INPUT_ENV_KEYS).toBeUndefined();
+    for (const name of [...names, 'run', 'composed'])
+      expect(gate[inputEnvKey(name)]).toBeUndefined();
   });
 });
 

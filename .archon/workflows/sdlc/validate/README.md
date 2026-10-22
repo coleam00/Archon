@@ -15,7 +15,11 @@ checkout. Its `scope` input narrows them. It has three steps:
    how long it took, and the output tail of a failure. Full output stays in
    `validation/`.
    The checks run without the node's run contract (`WORKFLOW_ID`, `ARTIFACTS_DIR`,
-   `INPUTS_*` and the rest): they are the project's gate, not part of the run.
+   generated input keys and the rest): they are the project's gate, not part of the run.
+   The engine supplies the exact generated keys in `ARCHON_INPUT_ENV_KEYS`; an
+   independently configured `INPUTS_*` setting survives. A generated binding wins a
+   same-key project setting and is removed from the gate. The runner requires a valid
+   key list and fails before starting checks if it is missing or malformed.
 3. `classify` (agent) runs only when a check failed, and judges every failure the
    record names. It decides whether the change caused it (`introduced`), the base already had it (`inherited`) or the machine
    did (`environment`).

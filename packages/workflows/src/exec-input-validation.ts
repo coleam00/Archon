@@ -97,7 +97,7 @@ export function validateExecInputTargets(
       if (availableEnv.has(read.name)) continue;
       const isInputsRead = read.name.startsWith(INPUT_ENV_PREFIX);
       if (isInputsRead && workflow.inputs === undefined) continue;
-      if (!isInputsRead && configuredEnvNames.has(read.name)) continue;
+      if (configuredEnvNames.has(read.name)) continue;
       const location = `${source.label} line ${String(read.line)}`;
       const available =
         availableNames.length === 0 ? 'none' : availableNames.map(name => `'${name}'`).join(', ');

@@ -72,6 +72,7 @@ export async function executeCodeNode(
           // No artifacts are written in a dry run, so there is no listing to point at.
           typedArtifactsFile: '',
           nodeExecution: execution ?? null,
+          inputEnvKeys: Object.keys(inputEnv),
         }),
       },
     });

@@ -1197,6 +1197,13 @@ Two guarantees the loader enforces: every bound producer must be reachable throu
 the same `INPUTS_*` env key. At runtime, node-local bindings are the **nearest** input
 layer: they win over a composed block's inputs, which win over the run's `$INPUTS`.
 
+Exec nodes also receive `ARCHON_INPUT_ENV_KEYS`, a JSON array of the exact generated
+input environment keys (from run inputs, composed inputs, and node-local bindings).
+Project commands launched outside the run can use this list to remove generated
+bindings without stripping independently configured `INPUTS_*` settings. Generated
+bindings override same-key project settings; removing a generated key does not
+restore the shadowed project value.
+
 Bindings carry *values*. For documents (a plan, a findings report, a diff), keep using the
 artifact chain below; a path in a binding plus a file on disk is still the right shape for
 anything big enough to have structure of its own.

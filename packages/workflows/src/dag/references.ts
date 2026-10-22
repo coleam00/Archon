@@ -126,12 +126,13 @@ export function buildNodeShellEnvironment(
   node: DagNode,
   ctx: ShellInputContext,
   envVars: NodeJS.ProcessEnv | undefined,
-  executionContext: ExecNodeEnvironmentContext
+  executionContext: Omit<ExecNodeEnvironmentContext, 'inputEnvKeys'>
 ): NodeJS.ProcessEnv {
+  const inputs = inputEnvVars(node, ctx);
   return {
     ...envVars,
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment(executionContext),
+    ...inputs,
+    ...buildExecNodeEnvironment({ ...executionContext, inputEnvKeys: Object.keys(inputs) }),
   };
 }
 

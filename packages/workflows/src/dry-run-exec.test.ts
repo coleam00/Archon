@@ -139,7 +139,7 @@ describe('dry-run code execution', () => {
       nodes: [
         {
           id: 'code',
-          bash: `printf '%s|%s|%s|%s|%s|%s' "$WORKFLOW_ID" "$BASE_BRANCH" "$ARGUMENTS" "$LOG_DIR" "$LOOP_PREV_OUTPUT" "$REJECTION_REASON"`,
+          bash: `printf '%s|%s|%s|%s|%s|%s|%s' "$WORKFLOW_ID" "$BASE_BRANCH" "$ARGUMENTS" "$LOG_DIR" "$LOOP_PREV_OUTPUT" "$REJECTION_REASON" "$ARCHON_INPUT_ENV_KEYS"`,
         },
       ],
     });
@@ -154,7 +154,7 @@ describe('dry-run code execution', () => {
     expect(fields.slice(0, 3)).toEqual(['dry-run', 'dry-run-base', 'hello']);
     expect(fields[3]).toContain(`${sep}dry-run-`);
     expect(fields[3]).toEndWith(`${sep}logs`);
-    expect(fields.slice(4)).toEqual(['', '']);
+    expect(fields.slice(4)).toEqual(['', '', '[]']);
   });
 
   test('a dry run that executes nothing creates no temp directory', async () => {

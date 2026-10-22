@@ -26,15 +26,17 @@ export const NODE_CONTRACT_ENV: readonly string[] = [
   'ISSUE_CONTEXT',
   'TYPED_ARTIFACTS_FILE',
   'ARCHON_NODE_EXECUTION',
+  'ARCHON_INPUT_ENV_KEYS',
 ];
-
-/** A node's `with:` bindings arrive with this prefix. */
-const BINDING_PREFIX = 'INPUTS_';
 
 /** The node's environment without the run contract: what a project command should see. */
 export function projectEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const contract = new Set(NODE_CONTRACT_ENV);
+  const inputKeys: unknown = JSON.parse(env.ARCHON_INPUT_ENV_KEYS ?? 'null');
+  if (!Array.isArray(inputKeys) || !inputKeys.every((key: unknown) => typeof key === 'string')) {
+    throw new Error('ARCHON_INPUT_ENV_KEYS must be a JSON array of generated input environment keys');
+  }
+  const contract = new Set([...NODE_CONTRACT_ENV, ...inputKeys]);
   return Object.fromEntries(
-    Object.entries(env).filter(([key]) => !contract.has(key) && !key.startsWith(BINDING_PREFIX))
+    Object.entries(env).filter(([key]) => !contract.has(key))
   );
 }

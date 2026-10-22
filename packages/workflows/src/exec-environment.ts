@@ -33,6 +33,7 @@ export interface ExecNodeEnvironmentContext {
    * caller with no execution record passes `null`, which delivers an empty value.
    */
   nodeExecution: NodeExecutionIdentity | null;
+  inputEnvKeys: readonly string[];
 }
 
 export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): NodeJS.ProcessEnv {
@@ -54,6 +55,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // The listing path, delivered like the other engine-reserved keys: configured
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
+    ARCHON_INPUT_ENV_KEYS: JSON.stringify(context.inputEnvKeys),
     ARCHON_NODE_EXECUTION:
       context.nodeExecution === null ? '' : nodeExecutionEnvValue(context.nodeExecution),
   };
@@ -100,6 +102,7 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       rejectionReason: '',
       typedArtifactsFile: '',
       nodeExecution: null,
+      inputEnvKeys: [],
     })
   )
 );
