@@ -12,9 +12,9 @@ import { note, nullableJson } from './io.ts';
  * The inputs a same-queue follow-up keeps: the launching run's own values. Identity and
  * the item targeted come from the item, so these name neither.
  */
-export const BUILD_QUEUE_SELECTIONS = ['order', 'retriage_as', 'round_limit'] as const;
+export const BUILD_QUEUE_SELECTIONS = ['retriage_as', 'round_limit'] as const;
 export type BuildQueueSelections = Record<(typeof BUILD_QUEUE_SELECTIONS)[number], string>;
-export const MERGE_QUEUE_SELECTIONS = ['order', 'limit', 'merge_method', 'retriage_as'] as const;
+export const MERGE_QUEUE_SELECTIONS = ['limit', 'merge_method', 'retriage_as'] as const;
 export type MergeQueueSelections = Record<(typeof MERGE_QUEUE_SELECTIONS)[number], string>;
 
 export interface LaunchOptions {

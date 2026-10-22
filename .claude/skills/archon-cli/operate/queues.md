@@ -56,9 +56,6 @@ archon workflow run archon-discoveries $R --detach
 
 Optional inputs, with their defaults in each workflow's YAML:
 
-- `order` (intake, build queue and merge queue): the pickup order, a JSON array of
-  `"<key> <asc|desc>"` over `urgency`, `importance`, `size`, `complexity` and
-  `created`.
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
   for a label), `label` and `label_actor` for a label event.
 - `archon-build-queue`: `number` (the issue to build; empty claims the first in
@@ -127,7 +124,7 @@ A round ends one of three ways, recorded on the item:
   ready without another round.
 - `continue`: the issue already answers what stopped the round. The run starts the
   item's next round at once, as a detached `archon-build-queue --input number=<n>`
-  run on the same run config and the same `order`, `retriage_as` and `round_limit`.
+  run on the same run config and the same `retriage_as` and `round_limit`.
   If that launch fails, the item waits for the next queue run.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
@@ -171,7 +168,7 @@ most one attention item: the red default branch first, otherwise the first pull
 request the sweep asked about. A later sweep decides the rest again.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
-the answer starts, on the answered run's `order`, `limit`, `merge_method` and
+the answer starts, on the answered run's `limit`, `merge_method` and
 `retriage_as`, merges it once the gate passes. The approval carries to a later head only when the sweep
 judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item

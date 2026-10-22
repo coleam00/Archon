@@ -17,8 +17,8 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseOrder,
   parseWorkItem,
+  PICKUP_ORDER,
   RANKS,
   sortCandidates,
   TRUSTS,
@@ -238,17 +238,6 @@ describe('the intake decision', () => {
 });
 
 describe('pickup', () => {
-  test('order accepts the default and refuses unknown keys and directions', () => {
-    expect(parseOrder('')).toEqual([
-      { key: 'urgency', direction: 'desc' },
-      { key: 'importance', direction: 'desc' },
-      { key: 'size', direction: 'asc' },
-      { key: 'created', direction: 'asc' },
-    ]);
-    expect(() => parseOrder('["age desc"]')).toThrow('is not');
-    expect(() => parseOrder('["size up"]')).toThrow('is not');
-  });
-
   test('candidates sort by the keys, untriaged after triaged and oldest first, then by number', () => {
     const at = (number: number, created: string, triage?: TriageFacts) => ({
       doc: { ...newWorkItem({ repo: PR.repo, number }, created), facts: triage ? { triage } : {} },
@@ -266,7 +255,7 @@ describe('pickup', () => {
         ),
         at(0, '2026-01-01', undefined),
       ],
-      parseOrder('')
+      PICKUP_ORDER
     );
     expect(sorted.map(entry => entry.doc.subject.number)).toEqual([4, 5, 3, 0, 2, 1]);
   });
@@ -335,7 +324,7 @@ describe('pickup', () => {
     const order = (docs: WorkItem[]) =>
       sortCandidates(
         docs.map(doc => ({ doc })),
-        parseOrder('')
+        PICKUP_ORDER
       ).map(entry => entry.doc.subject.number);
     expect(order([released, fresh])).toEqual([2, 1]);
     // A decision recorded after the release means the item's last attempt finished.
@@ -449,7 +438,6 @@ function run(
       INPUTS_ACTION: event.action ?? 'opened',
       INPUTS_LABEL: event.label ?? '',
       INPUTS_LABEL_ACTOR: event.actor ?? '',
-      INPUTS_ORDER: '',
       ...inputs,
     },
   });

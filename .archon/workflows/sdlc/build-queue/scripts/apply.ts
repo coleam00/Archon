@@ -14,7 +14,7 @@
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
- * INPUTS_ORDER, INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
+ * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
@@ -249,7 +249,6 @@ function main(): void {
     })
   );
   const selections: BuildQueueSelections = {
-    order: text(process.env.INPUTS_ORDER),
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
     round_limit: text(process.env.INPUTS_ROUND_LIMIT),
   };

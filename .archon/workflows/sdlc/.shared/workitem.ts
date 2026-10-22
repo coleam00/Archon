@@ -263,31 +263,16 @@ export interface OrderKey {
   readonly direction: 'asc' | 'desc';
 }
 
-export const DEFAULT_ORDER = '["urgency desc","importance desc","size asc","created asc"]';
-
-/** The `order` input: a JSON array of `"<key> <asc|desc>"`. Anything else refuses. */
-export function parseOrder(text: string): OrderKey[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.trim() === '' ? DEFAULT_ORDER : text);
-  } catch {
-    throw new Error('order is not a JSON array');
-  }
-  if (!Array.isArray(parsed)) throw new Error('order is not a JSON array');
-  return parsed.map(entry => {
-    const [key, direction, ...rest] = typeof entry === 'string' ? entry.split(' ') : [];
-    if (
-      rest.length > 0 ||
-      !(key === 'created' || Object.hasOwn(RANKS, key ?? '')) ||
-      (direction !== 'asc' && direction !== 'desc')
-    ) {
-      throw new Error(
-        `order entry ${JSON.stringify(entry)} is not "<urgency|importance|size|complexity|created> <asc|desc>"`
-      );
-    }
-    return { key: key as OrderKey['key'], direction };
-  });
-}
+/**
+ * The order every queue claims items in: most urgent, then most important, then
+ * smallest, then oldest.
+ */
+export const PICKUP_ORDER: readonly OrderKey[] = [
+  { key: 'urgency', direction: 'desc' },
+  { key: 'importance', direction: 'desc' },
+  { key: 'size', direction: 'asc' },
+  { key: 'created', direction: 'asc' },
+];
 
 function sortValue(doc: WorkItem, key: OrderKey['key']): number | string | undefined {
   if (key === 'created') return doc.created_at;
@@ -708,12 +693,11 @@ export function claimable(item: Read | undefined, pickup: Pickup): item is Read 
 
 /**
  * Read every work item in one state call, release terminal claims, then claim the
- * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * first waiting item in `PICKUP_ORDER` with a conditional write. A conflict re-reads the
  * item once and claims it only if it still waits unclaimed; otherwise the next
  * candidate is tried.
  */
 export function claimNext(
-  order: readonly OrderKey[],
   at: string,
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
@@ -723,7 +707,7 @@ export function claimNext(
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));
-  for (const candidate of sortCandidates(waiting, order)) {
+  for (const candidate of sortCandidates(waiting, PICKUP_ORDER)) {
     const won = claimItem(candidate, at, runId, pickup);
     if (won !== null) return won;
   }

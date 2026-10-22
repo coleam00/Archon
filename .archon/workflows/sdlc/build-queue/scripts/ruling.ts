@@ -10,8 +10,8 @@
  * this run started with; if that launch fails, the item waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE
- * and INPUTS_TEXT, the attention answer; INPUTS_ORDER, INPUTS_RETRIAGE_AS and
- * INPUTS_ROUND_LIMIT, the workflow's inputs.
+ * and INPUTS_TEXT, the attention answer; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
+ * the workflow's inputs.
  */
 
 import { type AskedBy, type BuildAttention, withBuild } from '../../.shared/build.ts';
@@ -44,7 +44,6 @@ function main(): void {
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
   const selections: BuildQueueSelections = {
-    order: text(process.env.INPUTS_ORDER),
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
     round_limit: text(process.env.INPUTS_ROUND_LIMIT),
   };
