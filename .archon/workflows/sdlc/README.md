@@ -106,14 +106,19 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The preflight names every forge operation the pack uses, and a plugin missing any of
-them is refused before an agent spends. Keep `gh` as the default until a released
-plugin with all of them passes a real-PR check.
+The preflight names every forge operation the delivery workflows use, and a plugin
+missing any of them is refused before an agent spends. The merge queue checks its own
+operations when it starts (below). Keep `gh` as the default until a released plugin
+with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: it reads the trusted
-review comment, the default branch's head and CI, and how far a head is behind it,
-and the forge contract has no read for those yet. The gate itself doesn't refuse over
-threads; the sweep holds a merge only for a thread that raises a defect in code the
+The merge queue reads and merges through the run's source. On `forge` its facts,
+gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
+`checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
+`pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
+claims an item. Own-PR enrollment does not run on `forge`, because the contract has
+no read for a maintainer's open pull requests, and the sweep agent's failed-job
+reruns, log reads and closing-reference body edit still use `gh`. The gate itself
+doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
 `pr.thread.reply` and `pr.thread.resolve`.
@@ -392,7 +397,7 @@ request, never the state.
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
   open pull requests in the merge queue, except one a work item already names (see
-  Pickup there). No file means an empty list, so every author is outside. Any other
+  Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.

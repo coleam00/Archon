@@ -526,4 +526,52 @@ describe('review threads and issue bodies', () => {
       });
     }
   );
+
+  test('conversation comment bodies reach callers and only their digests reach the audit', async () => {
+    const result = await dispatch({
+      operationId: 'comments',
+      op: 'workitem.comments',
+      subject: { kind: 'pr', ref },
+    });
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'workitem.comments',
+        value: { comments: [{ id: '7', author: { login: 'maintainer' } }] },
+      },
+    });
+    expect(JSON.stringify(result.response)).toContain('private conversation comment');
+    expect(JSON.stringify(result.audit)).not.toContain('private conversation comment');
+    expect(JSON.stringify(result.audit)).toContain(contentDigest('private conversation comment'));
+  });
+
+  test.each([
+    {
+      operationId: 'checks-1',
+      op: 'checks.commit',
+      repo: ref.repo,
+      at: { kind: 'revision', revision: 'asked' },
+    },
+    { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+  ] satisfies ForgeRequest[])('a $op read that answers the request is accepted', async request => {
+    expect((await dispatch(request)).response).toMatchObject({ ok: true });
+  });
+
+  test.each([
+    {
+      operationId: 'checks-1',
+      op: 'checks.commit',
+      repo: ref.repo,
+      at: { kind: 'revision', revision: 'asked' },
+    },
+    { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+  ] satisfies ForgeRequest[])(
+    'a $op read about another commit or pull request is an invalid response',
+    async request => {
+      expect((await dispatch(request, 'mismatch')).response).toMatchObject({
+        ok: false,
+        error: { kind: 'invalid_response' },
+      });
+    }
+  );
 });

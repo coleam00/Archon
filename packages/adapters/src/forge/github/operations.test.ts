@@ -58,7 +58,9 @@ describe('GitHub outbound producer', () => {
       capabilities: [
         'resolve',
         'checks.state',
+        'checks.commit',
         'workitem.view',
+        'workitem.comments',
         'workitem.create',
         'workitem.labels.set',
         'workitem.label.add',
@@ -79,6 +81,7 @@ describe('GitHub outbound producer', () => {
         'checks.rerun',
         'pr.reviews',
         'pr.threads',
+        'pr.merge-state',
         'pr.thread.reply',
         'pr.thread.resolve',
       ],
