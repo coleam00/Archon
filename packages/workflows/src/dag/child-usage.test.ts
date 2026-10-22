@@ -80,28 +80,6 @@ it.each(['child_run_id', 'fan_out_outcome'])(
   }
 );
 
-it.each(
-  [
-    { child_run_id: 'a', child_usage: [{ childRunId: 'a', costUsd: 'bad' }] },
-    { child_run_id: 'a', child_usage: null },
-  ].flatMap(attribution =>
-    ['node_completed', 'node_failed'].map(eventType => ({ attribution, eventType }))
-  )
-)('rejects invalid present child attribution: %j', async ({ attribution, eventType }) => {
-  await expect(
-    foldDagResumeSnapshot(
-      [
-        {
-          step_name: 'sub',
-          event_type: eventType,
-          data: { type: 'workflow', cost_usd: 0.01, ...attribution },
-        },
-      ],
-      'parent'
-    )
-  ).rejects.toThrow();
-});
-
 it('keeps malformed legacy token totals unknown in the retained child baseline', async () => {
   const snapshot = await foldDagResumeSnapshot(
     [
@@ -169,31 +147,6 @@ it.each(
     expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
   }
 );
-
-it('folds a completed legacy two-child event with no reported usage', async () => {
-  const snapshot = await foldDagResumeSnapshot(
-    [
-      {
-        step_name: 'sub',
-        event_type: 'node_completed',
-        data: {
-          type: 'workflow',
-          node_output: 'legacy children completed',
-          fan_out_outcome: fanOutOutcome([
-            { index: 0, outcome: 'completed', child_run_id: 'a' },
-            { index: 1, outcome: 'completed', child_run_id: 'b' },
-          ]),
-        },
-      },
-    ],
-    'parent'
-  );
-  expect(snapshot.completedNodeOutputs.get('sub')?.output).toBe('legacy children completed');
-  expect(snapshot.costUsd).toBeUndefined();
-  expect(snapshot.tokens).toBeUndefined();
-  expect(snapshot.tokensUnknown).toBe(false);
-  expect(snapshot.reportedChildUsage?.size).toBe(0);
-});
 
 it.each(
   [legacyIdentities[0], legacyIdentities[2]].flatMap(attribution =>

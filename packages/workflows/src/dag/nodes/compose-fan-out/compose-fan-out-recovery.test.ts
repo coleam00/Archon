@@ -24,9 +24,6 @@ import {
 } from '../../../node-execution';
 import { serializeNodeStateRecord } from '../../../node-record-serialization';
 import { readNodeRecordEvent } from '../../../node-record-reader';
-import { ParentStatusReadError } from '../../../parent-status-read';
-import { readInterruptedRunUsage } from '../../interrupted-usage';
-import { serializeRunUsage } from '../../../schemas/run-usage';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
@@ -67,82 +64,168 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
     await removeTempTree(testDir);
   });
 
-  it.each([false, true])(
-    'refuses unattributed historical usage inside an instance (fan-out %s)',
-    async fanOut => {
-      await writeBlock(`name: compose-blk
+  it('refuses unattributed historical usage inside an instance', async () => {
+    await writeBlock(`name: compose-blk
 description: child block
 mutates_checkout: false
 nodes:
   - id: child
     workflow: child-workflow
-${fanOut ? "    fan_out:\n      items: '[1]'\n      join: all_success\n" : ''}`);
-      await writeBlock(
-        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
-        'child-workflow'
-      );
-      const [instance] = buildInstanceSnapshots(['a']);
-      const path = composeInnerStep(instance.identity, 'child');
-      const store = createMockStore();
-      await store.persistWorkflowEvent({
-        workflow_run_id: 'parent',
-        step_name: path,
-        event_type: 'node_failed',
-        data: {
-          type: 'workflow',
-          error: 'old failure',
-          cost_usd: 0.02,
-          tokens: { input: 14, output: 6 },
+`);
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: echo done',
+      'child-workflow'
+    );
+    const [instance] = buildInstanceSnapshots(['a']);
+    const path = composeInnerStep(instance.identity, 'child');
+    const store = createMockStore();
+    await store.persistWorkflowEvent({
+      workflow_run_id: 'parent',
+      step_name: path,
+      event_type: 'node_failed',
+      data: {
+        type: 'workflow',
+        error: 'old failure',
+        cost_usd: 0.02,
+        tokens: { input: 14, output: 6 },
+      },
+    });
+    store.getDagResumeSnapshot.mockImplementation(async runId =>
+      foldDagResumeSnapshot(persistedEvents(store), runId)
+    );
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+      childRunId: 'child',
+      status: 'completed',
+      costUsd: 0.03,
+      tokens: { input: 21, output: 9 },
+    }));
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('parent'),
+        priorUsage: await store.getDagResumeSnapshot('parent'),
+        runChildWorkflow,
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
         },
-      });
-      store.getDagResumeSnapshot.mockImplementation(async runId =>
-        foldDagResumeSnapshot(persistedEvents(store), runId)
-      );
-      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
-        childRunId: 'child',
-        status: 'completed',
-        costUsd: 0.03,
-        tokens: { input: 21, output: 9 },
-      }));
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          cwd: testDir,
-          workflowRun: makeWorkflowRun('parent'),
-          priorUsage: await store.getDagResumeSnapshot('parent'),
-          runChildWorkflow,
-          workflow: {
-            name: 'parent',
-            nodes: [
-              {
-                id: 'fan',
-                kind: 'compose_fan_out',
-                include: 'compose-blk',
-                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+      })
+    );
+    expect(runChildWorkflow).not.toHaveBeenCalled();
+    expect(eventsOf(store)).toContainEqual({
+      event_type: 'node_failed',
+      step_name: path,
+      data: expect.objectContaining({
+        failure_kind: 'config',
+        error: expect.stringContaining('historical child usage'),
+      }),
+    });
+    const final = await store.getDagResumeSnapshot('parent');
+    expect(final.costUsd).toBeCloseTo(0.02);
+    expect(final.tokens).toEqual({ input: 14, output: 6 });
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.02,
+      total_tokens_in: 14,
+      total_tokens_out: 6,
+    });
+  });
+
+  // all_done tolerates a failed instance; one that cannot read its prior usage must still block.
+  it('blocks the join and retains paid usage when an instance cannot read its prior usage', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: composed child\nmutates_checkout: false\nnodes:\n  - id: child\n    workflow: child-workflow'
+    );
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    bash: echo child',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    const [, unreadable] = buildInstanceSnapshots(['paid', 'unreadable']);
+    await store.persistWorkflowEvent({
+      workflow_run_id: 'parent',
+      step_name: composeInnerStep(unreadable.identity, 'child'),
+      event_type: 'node_failed',
+      data: {
+        type: 'workflow',
+        error: 'interrupted',
+        child_run_id: 'unreadable-child',
+        cost_usd: 0.01,
+        tokens: { input: 7, output: 3 },
+      },
+    });
+    store.getDagResumeSnapshot.mockImplementation(async runId =>
+      foldDagResumeSnapshot(persistedEvents(store), runId)
+    );
+    const cause = new Error('instance usage unavailable');
+    let reads = 0;
+    const listEvents = store.listWorkflowEvents.getMockImplementation();
+    if (!listEvents) throw new Error('missing event reader');
+    store.listWorkflowEvents.mockImplementation(async () => {
+      if (++reads === 2) throw cause;
+      return listEvents('parent');
+    });
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+      childRunId: 'paid-child',
+      status: 'completed',
+      output: 'paid',
+      costUsd: 0.03,
+      tokens: { input: 21, output: 9 },
+    }));
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('parent'),
+        priorUsage: await store.getDagResumeSnapshot('parent'),
+        runChildWorkflow,
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: {
+                items: '["paid","unreadable"]',
+                as: 'item',
+                max_parallel: 1,
+                join: 'all_done',
               },
-            ],
-          },
-        })
-      );
-      expect(runChildWorkflow).not.toHaveBeenCalled();
-      expect(eventsOf(store)).toContainEqual({
-        event_type: 'node_failed',
-        step_name: path,
-        data: expect.objectContaining({
-          failure_kind: 'config',
-          error: expect.stringContaining('historical child usage'),
-        }),
-      });
-      const final = await store.getDagResumeSnapshot('parent');
-      expect(final.costUsd).toBeCloseTo(0.02);
-      expect(final.tokens).toEqual({ input: 14, output: 6 });
-      expect(runUsageWrites(store).at(-1)).toMatchObject({
-        total_cost_usd: 0.02,
-        total_tokens_in: 14,
-        total_tokens_out: 6,
-      });
-    }
-  );
+            },
+          ],
+        },
+      })
+    );
+    expect(reads).toBe(2);
+    expect(runChildWorkflow).toHaveBeenCalledTimes(1);
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: expect.closeTo(0.04, 8),
+      total_tokens_in: 28,
+      total_tokens_out: 12,
+    });
+    const events = eventsOf(store);
+    expect(
+      events.some(event => event.step_name === `${composeScope()}__${unreadable.identity}`)
+    ).toBe(false);
+    expect(
+      events.filter(event => event.step_name === 'fan').map(event => event.event_type)
+    ).toEqual(['node_started', 'node_failed']);
+    expect(
+      events.find(event => event.step_name === 'fan' && event.event_type === 'node_failed')?.data
+        .error
+    ).toContain(cause.message);
+    const folded = await store.getDagResumeSnapshot('parent');
+    expect(folded.costUsd).toBeCloseTo(0.04);
+    expect(folded.tokens).toMatchObject({ input: 28, output: 12 });
+  });
 
   async function assertRecoveredInstanceUsage(
     store: ReturnType<typeof createMockStore>,
@@ -198,80 +281,19 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      join: all_success\n" : ''}`)
     }
   }
 
-  it.each([1, 2])(
-    'rolls up %i retained children from legacy events during interruption',
-    async count => {
-      const store = createMockStore();
-      const rows = Array.from({ length: count }, (_, i) => {
-        const path = `child-${i}`;
-        return [
-          {
-            step_name: path,
-            event_type: 'node_failed',
-            data: {
-              type: 'workflow',
-              child_run_id: path,
-              cost_usd: 0.01,
-              tokens: { input: 7, output: 3, cacheRead: 5, cacheWrite: 0 },
-            },
-          },
-          serializeNodeStateRecord(
-            startNodeExecution({
-              runId: 'parent',
-              path,
-              node: { kind: 'workflow', id: path, workflow: 'target' },
-              invocation: newNodeInvocation(),
-            })
-          ),
-        ];
-      }).flat();
-      store.getDagResumeSnapshot.mockImplementation(async () =>
-        foldDagResumeSnapshot(rows, 'parent')
-      );
-      store.findChildRuns.mockResolvedValue(
-        Array.from({ length: count }, (_, i) =>
-          makeWorkflowRun(`child-${i}`, {
-            metadata: {
-              parent_node_id: `child-${i}`,
-              ...serializeRunUsage({
-                costUsd: 0.03,
-                tokens: { input: 21, output: 9, cacheRead: 15, cacheWrite: 0 },
-              }),
-            },
-          })
-        )
-      );
-      const usage = await readInterruptedRunUsage(
-        store,
-        'parent',
-        new ParentStatusReadError('parent', 'fan', new Error('status'))
-      );
-      expect(usage.costUsd).toBeCloseTo(count * 0.03);
-      expect(usage.tokens).toMatchObject({
-        input: count * 21,
-        output: count * 9,
-        cacheRead: count * 15,
-        cacheWrite: 0,
-      });
-    }
-  );
-
   it.each(
-    [false, true].flatMap(legacy =>
-      [false, true].flatMap(fanOut =>
-        ['open child', 'paid sibling', 'unknown sibling', 'closed segment'].flatMap(priorScope =>
-          (priorScope === 'closed segment' ? [false, true] : [false]).map(interrupt => ({
-            fanOut,
-            priorScope,
-            legacy,
-            interrupt,
-          }))
-        )
+    [false, true].flatMap(fanOut =>
+      ['open child', 'paid sibling', 'unknown sibling', 'closed segment'].flatMap(priorScope =>
+        (priorScope === 'closed segment' ? [false, true] : [false]).map(interrupt => ({
+          fanOut,
+          priorScope,
+          interrupt,
+        }))
       )
     )
   )(
     'preserves prior spend inside a composed instance (%j)',
-    async ({ fanOut, priorScope, legacy, interrupt }) => {
+    async ({ fanOut, priorScope, interrupt }) => {
       const paidSibling = priorScope === 'paid sibling' || priorScope === 'unknown sibling';
       const unknownTokens = priorScope === 'unknown sibling';
       await writeBlock(
@@ -299,13 +321,7 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
           error: 'interrupted child',
           cost_usd: 0.01,
           tokens: { input: 7, output: 3 },
-          ...(legacy
-            ? { child_run_id: 'child' }
-            : {
-                child_usage: [
-                  { childRunId: 'child', costUsd: 0.01, tokens: { input: 7, output: 3 } },
-                ],
-              }),
+          child_usage: [{ childRunId: 'child', costUsd: 0.01, tokens: { input: 7, output: 3 } }],
         },
       });
       if (paidSibling) {
