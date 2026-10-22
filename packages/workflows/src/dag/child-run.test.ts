@@ -147,7 +147,13 @@ for (const status of [
           { ...settledRun({ total_cost_usd: cost, total_cost_incomplete: marker }), status }
         );
         expect(outcome.costUsd).toBe(
-          typeof cost === 'number' && Number.isFinite(cost) ? cost : 0.2
+          status !== 'paused' &&
+            status !== 'running' &&
+            status !== 'pending' &&
+            typeof cost === 'number' &&
+            Number.isFinite(cost)
+            ? cost
+            : 0.2
         );
         expect(outcome.costIncomplete).toBe(marker);
       }

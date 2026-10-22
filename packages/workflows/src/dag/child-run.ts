@@ -173,11 +173,17 @@ export async function readChildOutcome(
   const outcome = childOutcomeFromRun(
     run.status === 'running' || run.status === 'pending' ? { ...run, status: 'paused' } : run
   );
-  // Older runs have no positive marker, so their events still own evidence of unpriced work.
-  if (!outcome.costIncomplete || outcome.costUsd === undefined) {
+  const held = run.status === 'paused' || run.status === 'running' || run.status === 'pending';
+  // Held children can write new events before their next run-tail metadata update.
+  // Terminal legacy rows still need their events to establish cost completeness.
+  if (held || !outcome.costIncomplete || outcome.costUsd === undefined) {
     const usage = await store.getDagResumeSnapshot(run.id);
     if (usage.costIncomplete) outcome.costIncomplete = true;
-    outcome.costUsd ??= usage.costUsd;
+    // A signed contribution can reduce the newer cumulative total; taking the maximum
+    // of the two snapshots would discard that reported amount.
+    outcome.costUsd = held
+      ? (usage.costUsd ?? outcome.costUsd)
+      : (outcome.costUsd ?? usage.costUsd);
   }
   return outcome;
 }

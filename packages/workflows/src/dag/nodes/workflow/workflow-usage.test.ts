@@ -186,7 +186,10 @@ it.each([
     const store = createMockStore();
     const run = makeWorkflowRun('parent');
     store.getDagResumeSnapshot.mockImplementation(async id =>
-      foldDagResumeSnapshot(persistedEvents(store), id)
+      foldDagResumeSnapshot(
+        persistedEvents(store).filter(event => event.workflow_run_id === id),
+        id
+      )
     );
     let ran = false;
     if (refused) {
@@ -313,6 +316,7 @@ it.each(['paused', 'running', 'pending'] as const)(
   'retains existing %s child usage when pausing its parent',
   async status => {
     const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id => foldDagResumeSnapshot([], id));
     store.findChildRuns.mockResolvedValue([
       makeWorkflowRun('held', {
         status,
@@ -361,7 +365,7 @@ for (const fanOut of [false, true]) {
       ];
       const prior = await foldDagResumeSnapshot(history, run.id);
       store.getDagResumeSnapshot.mockImplementation(async id =>
-        foldDagResumeSnapshot([...history, ...persistedEvents(store)], id)
+        foldDagResumeSnapshot(id === run.id ? [...history, ...persistedEvents(store)] : [], id)
       );
       store.findChildRuns.mockResolvedValue([
         makeWorkflowRun('child', {
@@ -425,4 +429,79 @@ for (const fanOut of [false, true]) {
       expect(recovered.tokens).toEqual({ input: 30, output: 6 });
     }
   );
+}
+
+for (const fanOut of [false, true]) {
+  for (const marker of [undefined, true]) {
+    it.each([0.3, 0, -0.2, -0.3])(
+      `reads newer held child events (${fanOut ? 'fan-out' : 'single'}, marker ${String(marker)}, later cost %s)`,
+      async laterCost => {
+        const store = createMockStore();
+        store.findChildRuns.mockResolvedValue([
+          makeWorkflowRun('held', {
+            status: 'paused',
+            metadata: {
+              parent_node_id: 'sub',
+              child_index: 0,
+              total_cost_usd: 0.2,
+              ...(marker ? { total_cost_incomplete: marker } : {}),
+            },
+          }),
+        ]);
+        store.getDagResumeSnapshot.mockImplementation(async id =>
+          foldDagResumeSnapshot(
+            [
+              {
+                step_name: 'old',
+                event_type: 'node_completed',
+                data: { type: 'agent', cost_usd: 0.2 },
+              },
+              {
+                step_name: 'new',
+                event_type: 'node_completed',
+                data: { type: 'agent', cost_usd: laterCost },
+              },
+            ],
+            id
+          )
+        );
+        const runChildWorkflow = mock<RunChildWorkflowFn>(async () => {
+          throw new Error('Existing child must remain held');
+        });
+        await executeDagWorkflow(
+          dagOptions({
+            cwd,
+            deps: createMockDeps(store),
+            workflowRun: makeWorkflowRun(),
+            runChildWorkflow,
+            workflow: {
+              name: 'parent',
+              nodes: [
+                {
+                  id: 'sub',
+                  kind: 'workflow',
+                  workflow: 'child',
+                  ...(fanOut
+                    ? {
+                        fan_out: {
+                          items: '[1]',
+                          as: 'item',
+                          max_parallel: 1,
+                          join: 'all_done',
+                        } as const,
+                      }
+                    : {}),
+                },
+              ],
+            },
+          })
+        );
+        expect(runChildWorkflow).not.toHaveBeenCalled();
+        expect(store.pauseWorkflowRun).toHaveBeenCalled();
+        const usage = runUsageWrites(store).at(-1);
+        expect(usage?.total_cost_usd).toBeCloseTo(0.2 + laterCost);
+        expect(usage?.total_cost_incomplete).toBe(marker);
+      }
+    );
+  }
 }
