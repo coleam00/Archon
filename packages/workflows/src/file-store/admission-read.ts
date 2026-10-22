@@ -97,10 +97,16 @@ async function readReceiptMemberships(root: string, id: string) {
   return { bindings, errors };
 }
 
-export async function readRequestReceiptAttribution(root: string, id: string) {
-  const row = requestSchema
-    .pick({ id: true, launch: true })
-    .parse(await readJson(join(root, pathFor('requests', id))));
+export async function readRequestReceiptAttribution(
+  root: string,
+  id: string,
+  request?: Pick<Request, 'id' | 'launch'>
+) {
+  const row =
+    request ??
+    requestSchema
+      .pick({ id: true, launch: true })
+      .parse(await readJson(join(root, pathFor('requests', id))));
   const origin = requestBindingIdentity(row.launch);
   const { bindings, errors } = await readReceiptMemberships(root, id);
   const { owners, conflicts } = requestReceiptOwners(row, id, bindings);

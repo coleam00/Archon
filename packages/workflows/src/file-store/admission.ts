@@ -268,7 +268,7 @@ export function createAdmissionTransaction(
     for (const id of ids) {
       try {
         const row = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
-        const { conflicts } = await readRequestReceiptAttribution(root, id);
+        const { conflicts } = await readRequestReceiptAttribution(root, id, row);
         if (conflicts.length)
           throw new AggregateError(conflicts, 'Untrustworthy receipt membership');
         queue.push(row);
@@ -523,7 +523,7 @@ export function createFileAdmissionStore(
     let attribution: Awaited<ReturnType<typeof readRequestReceiptAttribution>> | undefined;
     try {
       const row = queuedRequestSchema(id, slotPath).parse(await readJson(join(root, path)));
-      attribution = await readRequestReceiptAttribution(root, id);
+      attribution = await readRequestReceiptAttribution(root, id, row);
       if (attribution.conflicts.length)
         throw new AggregateError(attribution.conflicts, 'Untrustworthy receipt membership');
       return { inspection: await inspect(row), position: row.position };
