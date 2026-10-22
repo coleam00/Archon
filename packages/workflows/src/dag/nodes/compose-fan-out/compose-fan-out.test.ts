@@ -189,10 +189,10 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     });
   }
 
-  // A cancel after the instance's paid query either stops the instance between its nodes
+  // A cancel after the instance's unpriced query either stops the instance between its nodes
   // (no terminal state) or lands after it completed; both exits must keep its usage.
   for (const instanceStop of ['mid-instance', 'after-instance'] as const) {
-    it(`keeps paid unknown-token work when a composed fan-out is cancelled (${instanceStop})`, async () => {
+    it(`keeps priced and unpriced work when a composed fan-out is cancelled (${instanceStop})`, async () => {
       await writeBlock(
         [
           'name: compose-blk',
@@ -213,7 +213,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
         yield {
           type: 'result',
           sessionId: 's',
-          cost: calls === 1 ? 0.1 : 0.2,
+          ...(calls === 1 ? { cost: 0.1 } : {}),
           ...(calls === 1
             ? { tokens: { input: 170, output: 20, cacheRead: 30, cacheWrite: 40 } }
             : { tokensUnknown: true }),
@@ -247,7 +247,8 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
 
       expect(calls).toBe(2);
       const usage = runUsageWrites(store).at(-1);
-      expect(usage?.total_cost_usd).toBeCloseTo(0.3);
+      expect(usage?.total_cost_usd).toBeCloseTo(0.1);
+      expect(usage?.total_cost_incomplete).toBe(true);
       expect(usage?.total_tokens_unknown).toBe(true);
       expect(usage?.total_tokens_in).toBeNull();
     });
