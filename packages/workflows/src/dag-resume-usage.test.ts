@@ -341,7 +341,7 @@ for (const status of ['completed', 'failed'] as const) {
       const started = startNodeExecution({
         runId: 'run',
         path: 'work',
-        node: { id: 'work', kind: 'agent', source: { kind: 'inline' } },
+        node: { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
         invocation: newNodeInvocation([]),
       });
       const finished = finishNodeExecution(
