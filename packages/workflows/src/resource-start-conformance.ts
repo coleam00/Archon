@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import type { PreparedWorkflowLaunch, ResourceStartIntent } from './schemas/resource-start';
+import type {
+  PreparedWorkflowLaunch,
+  ResourceStartIntent,
+  ResourceStartBindingIntent,
+  SourceReceiptAcceptance,
+} from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 import type { WorkflowStoreHarness } from './store-conformance';
 
@@ -39,12 +44,13 @@ export function resourceStartFixtures(codebaseId: string, conversationId: string
   return { launch, start };
 }
 
-export function describeForeignCheckoutAdmission(
+export function describeResourceStartAdmission(
   label: string,
   makeHarness: () => Promise<WorkflowStoreHarness>,
   codebaseId: string,
   conversationId: string
 ): void {
+  describeReceiptAdmission(label, makeHarness, codebaseId, conversationId);
   describe(`foreign checkout admission: ${label}`, () => {
     let harness: WorkflowStoreHarness;
     let store: IWorkflowStore;
@@ -225,6 +231,120 @@ export function describeForeignCheckoutAdmission(
         expect(
           await store.admitResourceStart(start('queue', 'host', 4, { isolation }))
         ).toMatchObject({ status: 'admitted' });
+    });
+  });
+}
+
+function describeReceiptAdmission(
+  label: string,
+  makeHarness: () => Promise<WorkflowStoreHarness>,
+  codebaseId: string,
+  conversationId: string
+): void {
+  describe(`receipt admission: ${label}`, () => {
+    let harness: WorkflowStoreHarness;
+    let store: IWorkflowStore;
+    beforeEach(async () => {
+      harness = await makeHarness();
+      store = harness.store;
+    });
+    afterEach(async () => {
+      await harness?.close();
+    });
+    const { launch, start } = resourceStartFixtures(codebaseId, conversationId);
+    const binding: ResourceStartBindingIntent = {
+      bindingId: 'binding',
+      bindingRevision: 'v1',
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'resource',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/conformance',
+        workflowName: 'conformance',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    };
+    const acceptance = (): SourceReceiptAcceptance => ({
+      receipt: {
+        id: crypto.randomUUID(),
+        sourceInstanceId: 'source',
+        deliveryId: 'delivery',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched' as const,
+      bindings: [binding] as [ResourceStartBindingIntent],
+    });
+    for (const origin of ['explicit', 'metadata'] as const) {
+      for (const overlap of ['queue', 'skip'] as const) {
+        for (const status of ['pending', 'failed', 'preparing', 'complete', 'missing'] as const) {
+          test(`direct ${origin} ${overlap} admission refuses a ${status} receipt binding without changing it`, async () => {
+            await store.admitResourceStart(start());
+            const input = acceptance();
+            const identity = { receiptId: input.receipt.id, bindingId: binding.bindingId };
+            const owner = { ...identity, ownerId: 'owner' };
+            if (status !== 'missing') await store.acceptStartReceipt(input);
+            if (status !== 'pending' && status !== 'missing') {
+              expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+              if (status === 'failed')
+                await store.failStartBindingPreparation({
+                  ...owner,
+                  retryable: true,
+                  error: 'retry',
+                });
+              if (status === 'complete')
+                await store.completeStartBindingPreparation({ ...owner, launch: launch() });
+            }
+            const before = await store.getStartReceipt(identity.receiptId);
+            const incoming = start(overlap);
+            if (origin === 'explicit') incoming.receipt = identity;
+            else incoming.launch.run.metadata.resource_start = identity;
+            for (let pass = 0; pass < 2; pass++) {
+              await expect(store.admitResourceStart(incoming)).rejects.toThrow();
+              expect(await store.getWorkflowRun(incoming.launch.run.id)).toBeNull();
+              expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+              expect(await store.getStartReceipt(identity.receiptId)).toEqual(before);
+            }
+          });
+        }
+      }
+    }
+    test('owned preparation rejects contradictory metadata and persists its resolved receipt origin', async () => {
+      const input = acceptance();
+      await store.acceptStartReceipt(input);
+      const owner = { receiptId: input.receipt.id, bindingId: binding.bindingId, ownerId: 'owner' };
+      expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+      const prepared = launch();
+      prepared.run.metadata.resource_start = {
+        receiptId: crypto.randomUUID(),
+        bindingId: binding.bindingId,
+      };
+      await expect(
+        store.completeStartBindingPreparation({ ...owner, launch: prepared })
+      ).rejects.toThrow('inconsistent membership');
+      expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+      expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+      expect(await store.getStartReceipt(owner.receiptId)).toMatchObject({
+        bindings: [{ status: 'preparing' }],
+      });
+      delete prepared.run.metadata.resource_start;
+      const result = await store.completeStartBindingPreparation({ ...owner, launch: prepared });
+      const identity = { receiptId: owner.receiptId, bindingId: owner.bindingId };
+      expect(
+        (await store.getResourceStartRequest(prepared.run.id))?.launch.run.metadata.resource_start
+      ).toEqual(identity);
+      expect((await store.getWorkflowRun(prepared.run.id))?.metadata.resource_start).toEqual(
+        identity
+      );
+      expect(await store.getStartReceipt(owner.receiptId)).toMatchObject({
+        bindings: [{ status: 'complete', disposition: result }],
+      });
+      expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
     });
   });
 }

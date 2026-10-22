@@ -231,10 +231,20 @@ test.each(['none', 'id', 'launch-id'])(
         },
       ],
     });
-    await store.admitResourceStart(first);
-    const second = { ...intent(), capacity: 2, receipt: first.receipt };
+    const owner = { ...first.receipt, ownerId: 'owner' };
+    expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+    await store.completeStartBindingPreparation({ ...owner, launch: first.launch });
+    const second = { ...intent(), capacity: 2 };
     second.launch.execution.cwd = '/second';
     await store.admitResourceStart(second);
+    const firstPath = join(
+      root,
+      'resource/requests',
+      `${createHash('sha256').update(first.launch.run.id).digest('hex')}.json`
+    );
+    const legacy = JSON.parse(await readFile(firstPath, 'utf8'));
+    delete legacy.launch.run.metadata.resource_start;
+    await writeFile(firstPath, JSON.stringify(legacy));
     if (damage !== 'none') {
       const path = join(
         root,
@@ -253,12 +263,11 @@ test.each(['none', 'id', 'launch-id'])(
     const receipt = await store.getStartReceipt(receiptId);
     expect(receipt?.bindings.map(item => item.disposition?.requestId)).toEqual([
       first.launch.run.id,
-      second.launch.run.id,
     ]);
     expect(receipt).not.toHaveProperty('createdAt');
     expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
     expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
-    const queued = { ...intent(), capacity: 2, receipt: first.receipt };
+    const queued = { ...intent(), capacity: 2 };
     expect(await store.admitResourceStart(queued)).toMatchObject({ status: 'queued' });
     await store.cancelWorkflowRun(first.launch.run.id);
     expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([

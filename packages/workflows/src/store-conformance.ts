@@ -1,7 +1,7 @@
 export { resourceStartFixtures } from './resource-start-conformance';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import {
-  describeForeignCheckoutAdmission,
+  describeResourceStartAdmission,
   resourceStartFixtures,
 } from './resource-start-conformance';
 import {
@@ -272,7 +272,7 @@ export function describeWorkflowStoreConformance(
   label: string,
   makeHarness: () => Promise<WorkflowStoreHarness>
 ): void {
-  describeForeignCheckoutAdmission(
+  describeResourceStartAdmission(
     label,
     makeHarness,
     CONFORMANCE_CODEBASE_ID,

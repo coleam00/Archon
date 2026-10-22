@@ -3,6 +3,7 @@ import {
   SourceReceiptDigestConflictError,
   drainableStarts,
   resourceStartBlocker,
+  resolveResourceStartReceipt,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
@@ -25,6 +26,7 @@ import type {
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
+  RESOURCE_START_METADATA_KEY,
   sourceReceiptInputSchema,
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
@@ -98,6 +100,9 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
+  const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+  const identity = resolveResourceStartReceipt({ ...intent, launch });
+  if (identity) launch.run.metadata[RESOURCE_START_METADATA_KEY] = identity;
   await lockCheckoutReservations(query);
   const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
@@ -106,7 +111,6 @@ async function admitResourceStartWithQuery(
   );
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
-  const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity),
     launch
@@ -124,9 +128,9 @@ async function admitResourceStartWithQuery(
       status,
       blocker?.id ?? null,
       blocker?.kind ?? null,
-      JSON.stringify(intent.launch),
-      intent.receipt?.receiptId ?? null,
-      intent.receipt?.bindingId ?? null,
+      JSON.stringify(launch),
+      identity?.receiptId ?? null,
+      identity?.bindingId ?? null,
     ]
   );
   const row: RequestRow = {
@@ -137,7 +141,7 @@ async function admitResourceStartWithQuery(
     status,
     blocker_run_id: blocker?.id ?? null,
     blocker_kind: blocker?.kind ?? null,
-    launch: intent.launch,
+    launch,
   };
   return blocker ? disposition(row) : admitExisting(query, intent.resource, { id: row.id, launch });
 }
@@ -145,6 +149,8 @@ async function admitResourceStartWithQuery(
 export async function admitResourceStart(
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
+  if (resolveResourceStartReceipt(intent))
+    throw new Error('Receipt-linked admission requires owned binding preparation');
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
 }
 

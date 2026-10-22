@@ -517,17 +517,28 @@ test('receipt preparation and real engine execution use supplied ports without S
       )
     ).toEqual([]);
     if (!prepared) throw new Error('Missing prepared launch');
-    const queuedLaunch = { ...prepared.launch, run: { ...prepared.launch.run, id: randomUUID() } };
+    const queuedReceipt = acceptance(receipt.bindings[0], 'queued');
+    await host.deps.store.acceptStartReceipt(queuedReceipt);
+    const owner = {
+      receiptId: queuedReceipt.receipt.id,
+      bindingId: receipt.bindings[0].bindingId,
+      ownerId: 'queued-owner',
+    };
+    const queuedLaunch = {
+      ...prepared.launch,
+      run: {
+        ...prepared.launch.run,
+        id: randomUUID(),
+        metadata: {
+          ...prepared.launch.run.metadata,
+          resource_start: { receiptId: owner.receiptId, bindingId: owner.bindingId },
+        },
+      },
+    };
+    expect(await host.deps.store.claimStartBindingPreparation(owner)).toBe(true);
     expect(
-      (
-        await host.deps.store.admitResourceStart({
-          resource: 'portable',
-          capacity: 1,
-          hostId: 'host',
-          overlap: 'queue',
-          launch: queuedLaunch,
-        })
-      ).status
+      (await host.deps.store.completeStartBindingPreparation({ ...owner, launch: queuedLaunch }))
+        ?.status
     ).toBe('queued');
     await host.deps.store.completeWorkflowRun(delayedId, { duration_ms: 1 });
     await triggerCommand(host, 'drain', [], { host: 'host' });
@@ -976,7 +987,27 @@ test('a queued start that fails is attributed to the receipt that requested it',
   });
   const holder = launch(codebase.id);
   const queued = launch(codebase.id);
-  queued.run.metadata = { resource_start: { receiptId: 'receipt-of-queued', bindingId: 'b' } };
+  const input = acceptance(
+    {
+      bindingId: 'b',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'one',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'queued'
+  );
+  await store.acceptStartReceipt(input);
+  const owner = { receiptId: input.receipt.id, bindingId: 'b', ownerId: 'owner' };
+  expect(await store.claimStartBindingPreparation(owner)).toBe(true);
   const intent = (prepared: PreparedWorkflowLaunch): ResourceStartIntent => ({
     resource: 'one',
     capacity: 1,
@@ -985,7 +1016,9 @@ test('a queued start that fails is attributed to the receipt that requested it',
     launch: prepared,
   });
   expect((await store.admitResourceStart(intent(holder))).status).toBe('admitted');
-  expect((await store.admitResourceStart(intent(queued))).status).toBe('queued');
+  expect((await store.completeStartBindingPreparation({ ...owner, launch: queued }))?.status).toBe(
+    'queued'
+  );
   await store.claimPendingWorkflowRun(holder.run.id);
   await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
 
@@ -1002,7 +1035,7 @@ test('a queued start that fails is attributed to the receipt that requested it',
 
   expect(error).toBeInstanceOf(ResourceStartDrainError);
   expect((error as ResourceStartDrainError).failures).toMatchObject([
-    { receiptId: 'receipt-of-queued' },
+    { receiptId: input.receipt.id },
   ]);
 });
 

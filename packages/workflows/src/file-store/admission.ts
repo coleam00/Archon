@@ -23,7 +23,6 @@ import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
-  resourceStartIntentSchema,
   RESOURCE_START_METADATA_KEY,
   sourceReceiptAcceptanceSchema,
   type ResourceStartIntent,
@@ -38,6 +37,7 @@ import {
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
+  resolveResourceStartReceipt,
   type QueuedStart,
   type ResourceBlocker,
   type ResourceSlotOccupancy,
@@ -84,7 +84,8 @@ interface AdmissionTransaction {
   occupancy(resource: string, launch?: Request['launch']): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
-    runs: Map<string, WorkflowRun>
+    runs: Map<string, WorkflowRun>,
+    ownerId?: string
   ): Promise<ResourceStartDisposition>;
   admitExisting(row: Request, runs: Map<string, WorkflowRun>): Promise<ResourceStartDisposition>;
   binding(input: BindingIdentity): Promise<Binding | undefined>;
@@ -365,17 +366,21 @@ export function createAdmissionTransaction(
   }
   async function admit(
     intent: ResourceStartIntent,
-    runs: Map<string, WorkflowRun>
+    runs: Map<string, WorkflowRun>,
+    ownerId?: string
   ): Promise<ResourceStartDisposition> {
     const resource = await slot(intent.resource, intent.capacity);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const origin = resourceStartIntentSchema.shape.receipt.parse(
-      launch.run.metadata[RESOURCE_START_METADATA_KEY]
-    );
-    if (intent.receipt && origin && !isDeepStrictEqual(origin, intent.receipt))
-      throw new Error(`Resource start has inconsistent membership for request '${launch.run.id}'`);
-    const identity = intent.receipt ?? origin;
-    if (identity) launch.run.metadata[RESOURCE_START_METADATA_KEY] = identity;
+    const identity = resolveResourceStartReceipt({ ...intent, launch });
+    let item: Binding | undefined;
+    if (identity) {
+      launch.run.metadata[RESOURCE_START_METADATA_KEY] = identity;
+      item = await binding(identity);
+      if (!item?.intent)
+        throw new Error('Resource start receipt binding missing preparation intent');
+      if (ownerId === undefined || item.status !== 'preparing' || item.ownerId !== ownerId)
+        throw new Error('Receipt-linked admission requires owned binding preparation');
+    }
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
@@ -391,14 +396,7 @@ export function createAdmissionTransaction(
       position: head.seq + 1,
     };
     documents[pathFor('requests', row.id)] = row;
-    if (identity) {
-      const item = await binding(identity);
-      if (!item?.intent)
-        throw new Error('Resource start receipt binding missing preparation intent');
-      item.requestIds.push(row.id);
-      item.status = 'complete';
-      item.error = null;
-    }
+    if (item) item.requestIds.push(row.id);
     if (!blocker) return admitExisting(row, runs);
     if (row.status === 'queued') resource.queue.push(row.id);
     return disposition(row);
@@ -768,7 +766,8 @@ export function createFileAdmissionStore(
             launch: input.launch,
             receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
           },
-          runs
+          runs,
+          input.ownerId
         );
         item.status = 'complete';
         item.error = null;

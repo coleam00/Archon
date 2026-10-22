@@ -1,5 +1,10 @@
 import { createLogger } from '@archon/paths';
-import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
+import {
+  AdmissionCheckoutGuardError,
+  readAdmissionCheckoutGuard,
+  resourceStartIntentSchema,
+  RESOURCE_START_METADATA_KEY,
+} from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
@@ -20,6 +25,24 @@ import {
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+
+export function resolveResourceStartReceipt(
+  intent: ResourceStartIntent
+): ResourceStartIntent['receipt'] {
+  const explicit = resourceStartIntentSchema.shape.receipt.parse(intent.receipt);
+  const origin = resourceStartIntentSchema.shape.receipt.parse(
+    intent.launch.run.metadata[RESOURCE_START_METADATA_KEY]
+  );
+  if (
+    explicit &&
+    origin &&
+    (explicit.receiptId !== origin.receiptId || explicit.bindingId !== origin.bindingId)
+  )
+    throw new Error(
+      `Resource start has inconsistent membership for request '${intent.launch.run.id}'`
+    );
+  return explicit ?? origin;
+}
 
 export class SourceReceiptDigestConflictError extends Error {}
 
@@ -366,6 +389,7 @@ export type QueuedResourceStartInspection =
   | { id: string; resource?: string; receiptId?: string; error: unknown };
 
 export interface IResourceStartStore {
+  /** Receipt-linked starts must use owned completeStartBindingPreparation. */
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
     resource: string;

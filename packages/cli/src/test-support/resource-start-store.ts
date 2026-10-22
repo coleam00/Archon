@@ -9,6 +9,7 @@ import {
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
+  resolveResourceStartReceipt,
   ResourceSlotCapacityConflictError,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
@@ -22,6 +23,7 @@ import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflow
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
+  RESOURCE_START_METADATA_KEY,
   type PreparedWorkflowLaunch,
   type ResourceStartDisposition,
   type ResourceStartIntent,
@@ -112,6 +114,8 @@ export function createInMemoryResourceStartStore(
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+    const identity = resolveResourceStartReceipt({ ...intent, launch });
+    if (identity) launch.run.metadata[RESOURCE_START_METADATA_KEY] = identity;
     const blocker = resourceStartBlocker(
       { ...(await occupancy(intent.resource)), capacity: intent.capacity },
       launch
@@ -176,7 +180,11 @@ export function createInMemoryResourceStartStore(
       released.add(id);
       return true;
     },
-    admitResourceStart: admit,
+    admitResourceStart: async intent => {
+      if (resolveResourceStartReceipt(intent))
+        throw new Error('Receipt-linked admission requires owned binding preparation');
+      return admit(intent);
+    },
     drainResourceStarts: async ({
       resource,
       hostId,
@@ -306,7 +314,11 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({ ...item.intent, launch: input.launch });
+      const result = await admit({
+        ...item.intent,
+        launch: input.launch,
+        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
+      });
       item.status = 'complete';
       item.error = null;
       item.disposition = result;
