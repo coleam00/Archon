@@ -219,7 +219,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     conformanceTest: CONFORMANCE,
   },
   {
-    file: 'packages/workflows/src/schemas/workflow-run.ts',
+    file: 'packages/workflows/src/schemas/run-status.ts',
     name: 'WorkflowRunStatus',
     kind: 'independent',
     reason: 'Persisted Archon run-state schema, not Copilot workflow status.',
