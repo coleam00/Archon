@@ -61,14 +61,14 @@ export function providerLimitResumeAt(
 }
 
 /**
- * The failed nodes of one scope whose failure is their own. A failed node is excused only when
- * a node it transitively depends on failed and none of its own dependencies succeeded: its
- * trigger rule (`all_done`) ran it on nothing but the failure's poisoned inputs, so
- * continuation runs it again with its upstream and it cannot hold a run in a provider-limit
- * wait. A node that also had a successful dependency (`one_success`, or `all_done` beside a
- * healthy branch) could have failed for its own reason, so it still counts.
+ * The failed nodes of one scope that no failure lies upstream of: none of the nodes they
+ * transitively depend on failed, whatever state lies between. A failure downstream of
+ * another is deferred, whatever caused it: the node may have failed only on its upstream's
+ * poisoned output, and nothing typed tells that from a failure of its own. Continuation runs
+ * it again with its upstream, so it cannot hold a run in a provider-limit wait: once the
+ * upstream succeeds, a failure of its own fails the run.
  */
-export function ownFailures(
+export function rootFailures(
   nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
   outputs: ReadonlyMap<string, NodeOutput>
 ): { nodeId: string; output: Extract<NodeOutput, { state: 'failed' }> }[] {
@@ -83,12 +83,9 @@ export function ownFailures(
     downstreamOfFailure.set(id, result);
     return result;
   };
-  const ranOnlyOnFailure = (node: Pick<DagNode, 'id' | 'depends_on'>): boolean =>
-    hasFailedAncestor(node.id) &&
-    !(node.depends_on ?? []).some(dep => outputs.get(dep)?.state === 'completed');
   return nodes.flatMap(node => {
     const output = outputs.get(node.id);
-    return output?.state === 'failed' && !ranOnlyOnFailure(node)
+    return output?.state === 'failed' && !hasFailedAncestor(node.id)
       ? [{ nodeId: node.id, output }]
       : [];
   });
@@ -97,10 +94,10 @@ export function ownFailures(
 /**
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
- * the aggregate's. Callers pass the {@link ownFailures} of a scope, or the fan-out's sibling
+ * the aggregate's. Callers pass the {@link rootFailures} of a scope, or the fan-out's sibling
  * instances. A lone failure is the aggregate's, unchanged. Several are reported only when
- * every one is a provider limit, so the wait never pauses a run beside an unrelated failure
- * that each continuation would repeat. Among limits, a usage limit without a reported
+ * every one is a provider limit, so the wait never pauses a run beside an unrelated root
+ * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
  * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
  */

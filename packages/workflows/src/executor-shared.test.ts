@@ -16,7 +16,7 @@ import {
   RATE_LIMIT_PAUSE_DELAY_MS,
   rateLimitResumeAt,
   aggregateProviderFailure,
-  ownFailures,
+  rootFailures,
   nodeFailureKindOf,
   retryClassOf,
 } from './executor-shared';
@@ -393,8 +393,8 @@ describe('aggregateProviderFailure', () => {
   });
 });
 
-describe('ownFailures', () => {
-  it('drops failures that ran only on another failure, and keeps independent ones and ones with a healthy dependency', () => {
+describe('rootFailures', () => {
+  it('drops failures downstream of another failure, through skipped nodes and beside a healthy dependency, and keeps independent ones', () => {
     const failed = (error: string): NodeOutput => ({ state: 'failed', output: '', error });
     const outputs = new Map<string, NodeOutput>([
       ['a', failed('limit')],
@@ -402,7 +402,7 @@ describe('ownFailures', () => {
       ['c', failed('reads $b.output')],
       ['d', failed('own bug')],
       ['h', { state: 'completed', output: 'ok' }],
-      ['e', failed('own bug beside a healthy branch')],
+      ['e', failed('reads $a.output beside a healthy branch')],
     ]);
     const nodes = [
       { id: 'a' },
@@ -412,7 +412,7 @@ describe('ownFailures', () => {
       { id: 'h' },
       { id: 'e', depends_on: ['a', 'h'] },
     ];
-    expect(ownFailures(nodes, outputs).map(f => f.nodeId)).toEqual(['a', 'd', 'e']);
+    expect(rootFailures(nodes, outputs).map(f => f.nodeId)).toEqual(['a', 'd']);
   });
 });
 

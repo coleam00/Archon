@@ -1973,13 +1973,19 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
                 until: 'DONE',
                 max_iterations: 3,
                 nodes: [
-                  { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } },
+                  { id: 'prep', kind: 'exec', runtime: 'sh', script: 'echo ready' },
+                  {
+                    id: 'work',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'draft' },
+                    depends_on: ['prep'],
+                  },
                   {
                     id: 'join',
                     kind: 'exec',
                     runtime: 'sh',
                     script: 'echo $work.output',
-                    depends_on: ['work'],
+                    depends_on: ['prep', 'work'],
                     trigger_rule: 'all_done',
                   },
                 ],
