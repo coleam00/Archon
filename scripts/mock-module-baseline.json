@@ -97,7 +97,6 @@
       "@archon/isolation",
       "@archon/paths"
     ],
-    "packages/cli/src/commands/provider.test.ts": ["./plugin"],
     "packages/cli/src/commands/setup-exit.test.ts": ["@clack/prompts"],
     "packages/cli/src/commands/validate.test.ts": [
       "@archon/core",
@@ -2212,13 +2211,6 @@
       "writeFile"
     ],
     "packages/cli/src/commands/auth.ts": ["authGithubCommand"],
-    "packages/cli/src/commands/plugin.ts": [
-      "installBinaryPlugin",
-      "installPinnedPlugin",
-      "parsePluginRef",
-      "pluginCommand",
-      "stagingName"
-    ],
     "packages/cli/src/routes/route-loader.ts": [
       "closeDb",
       "markDatabaseRouteLoaded",

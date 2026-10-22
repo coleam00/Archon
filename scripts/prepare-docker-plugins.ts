@@ -1,4 +1,4 @@
-import { installPinnedPlugin } from '../packages/cli/src/commands/plugin';
+import { installPinnedPlugin } from '../packages/cli/src/commands/plugin-install';
 import { IMAGE_SLACK_PLUGIN } from '../packages/cli/src/commands/image-chat-plugin';
 import { version } from '../package.json';
 

@@ -8,7 +8,8 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { chatReceiptSchema, type ChatReceipt } from '@archon/plugin-manifest';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { IMAGE_SLACK_PLUGIN, provisionImageSlack } from './image-chat-plugin';
-import { pluginCommand, type PluginEnvironment } from './plugin';
+import { pluginCommand } from './plugin';
+import type { PluginEnvironment } from './plugin-common';
 
 const dockerTest = process.platform === 'win32' ? test.skip : test;
 const trackRoot = trackTempRoots();
