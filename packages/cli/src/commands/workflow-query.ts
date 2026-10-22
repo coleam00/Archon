@@ -640,103 +640,120 @@ export async function workflowGetCommand(
 export async function workflowRunsCommand(
   host: WorkflowHost,
   cwd: string,
-  opts: {
-    json?: boolean;
-    all?: boolean;
-    status?: string;
-    limit?: number;
-    open?: boolean;
-    verbose?: boolean;
-  } = {}
+  opts: RunsOptions = {}
 ): Promise<number> {
   if (opts.open && opts.status) {
-    const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
-    if (opts.json) {
-      await writeJsonLine({ ok: false, error: msg });
-      return 1;
-    }
-    throw new Error(msg);
+    return refuseRuns(
+      opts,
+      new Error('--open and --status are mutually exclusive: the inbox is failed runs only.')
+    );
   }
+  const statusFilter = parseRunsStatus(opts.status);
+  if (statusFilter instanceof Error) return refuseRuns(opts, statusFilter);
+  const codebase = await findRunsCodebase(host, cwd, opts);
+  if (codebase instanceof Error) return refuseRuns(opts, codebase);
+  // The open-work inbox contains terminal failed runs with no adopter or successor.
+  if (opts.open) return listOpenWorkRuns(host, opts, codebase);
+  return listRecentRuns(host, cwd, opts, codebase, statusFilter);
+}
 
-  let statusFilter: WorkflowRunStatus | undefined;
-  if (opts.status) {
-    const parsed = workflowRunStatusSchema.safeParse(opts.status);
-    if (!parsed.success) {
-      const msg = `Invalid --status '${opts.status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`;
-      // --json never throws — emit one parseable {ok:false} line (write-command contract).
-      if (opts.json) {
-        await writeJsonLine({ ok: false, error: msg });
-        return 1;
-      }
-      throw new Error(msg);
-    }
-    statusFilter = parsed.data;
-  }
+interface RunsOptions {
+  json?: boolean;
+  all?: boolean;
+  status?: string;
+  limit?: number;
+  open?: boolean;
+  verbose?: boolean;
+}
+type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
 
-  let codebase = null;
+/** --json never throws — emit one parseable {ok:false} line (write-command contract). */
+async function refuseRuns(
+  opts: RunsOptions,
+  error: Error,
+  jsonMessage = error.message
+): Promise<number> {
+  if (!opts.json) throw error;
+  await writeJsonLine({ ok: false, error: jsonMessage });
+  return 1;
+}
+
+function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefined | Error {
+  if (!status) return undefined;
+  const parsed = workflowRunStatusSchema.safeParse(status);
+  if (parsed.success) return parsed.data;
+  return new Error(
+    `Invalid --status '${status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`
+  );
+}
+
+async function findRunsCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions
+): Promise<RunsCodebase | Error> {
   try {
-    codebase = await inheritedWorkflowCodebase(host, opts.all);
-    if (codebase === undefined && !opts.all) {
-      codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    }
+    const inherited = await inheritedWorkflowCodebase(host, opts.all);
+    if (inherited !== undefined || opts.all) return inherited;
+    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-    const message = `Failed to resolve workflow runs project: ${err.message}`;
-    if (opts.json) {
-      await writeJsonLine({ ok: false, error: message });
-      return 1;
-    }
-    throw new Error(message, { cause: err });
+    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
   }
-  // The open-work inbox contains terminal failed runs with no adopter or successor.
-  if (opts.open) {
-    const runs = await host.deps.store.findOpenWorkRuns({
-      codebaseId: codebase?.id,
-      limit: opts.limit ?? 20,
+}
+
+async function listOpenWorkRuns(
+  host: WorkflowHost,
+  opts: RunsOptions,
+  codebase: RunsCodebase
+): Promise<number> {
+  const runs = await host.deps.store.findOpenWorkRuns({
+    codebaseId: codebase?.id,
+    limit: opts.limit ?? 20,
+  });
+  if (opts.json) {
+    await writeJsonLine({
+      runs: opts.verbose ? await withRunDetail(host, runs) : runs,
+      total: runs.length,
+      scopeFallback: !opts.all && !codebase,
     });
-    if (opts.json) {
-      await writeJsonLine({
-        runs: opts.verbose ? await withRunDetail(host, runs) : runs,
-        total: runs.length,
-        scopeFallback: !opts.all && !codebase,
-      });
-      return 0;
-    }
-    if (runs.length === 0) {
-      console.log('No open workflow runs — nothing ended with work on the table.');
-      return 0;
-    }
-    console.log(`\nOpen work (${String(runs.length)}):\n`);
-    for (const run of runs) {
-      const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
-      console.log(
-        `  ${run.id.slice(0, 8)}  ${run.workflow_name}${outcome}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
-      );
-    }
-    console.log('');
     return 0;
   }
+  if (runs.length === 0) {
+    console.log('No open workflow runs — nothing ended with work on the table.');
+    return 0;
+  }
+  console.log(`\nOpen work (${String(runs.length)}):\n`);
+  for (const run of runs) {
+    console.log(
+      `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+    );
+  }
+  console.log('');
+  return 0;
+}
 
-  // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
-  // so pass codebaseId/status straight through — no conditional spread needed.
-  const codebaseId = codebase?.id;
-
+async function listRecentRuns(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions,
+  codebase: RunsCodebase,
+  statusFilter: WorkflowRunStatus | undefined
+): Promise<number> {
   let result;
   try {
+    // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
+    // so pass codebaseId/status straight through — no conditional spread needed.
     result = await host.deps.store.listWorkflowRuns({
-      codebaseId,
+      codebaseId: codebase?.id,
       status: statusFilter,
       limit: opts.limit ?? 20,
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
-    if (opts.json) {
-      await writeJsonLine({ ok: false, error: err.message });
-      return 1;
-    }
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
+    return refuseRuns(opts, new Error(`Failed to list workflow runs: ${err.message}`), err.message);
   }
 
   // True when project scoping was requested but fell back to the global list
@@ -746,20 +763,14 @@ export async function workflowRunsCommand(
   const scopeFallback = !opts.all && !codebase;
 
   if (opts.json) {
-    if (!opts.verbose) {
-      await writeJsonLine({ ...result, scopeFallback });
-      return 0;
-    }
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
-    await writeJsonLine({ ...result, runs: await withRunDetail(host, result.runs), scopeFallback });
+    const runs = opts.verbose ? await withRunDetail(host, result.runs) : result.runs;
+    await writeJsonLine({ ...result, runs, scopeFallback });
     return 0;
   }
 
-  if (scopeFallback) {
-    console.log('(not a registered project — showing all runs)');
-  }
-
+  if (scopeFallback) console.log('(not a registered project — showing all runs)');
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
     return 0;
@@ -769,11 +780,14 @@ export async function workflowRunsCommand(
   for (const run of result.runs) {
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
-    const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${outcome}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   console.log('');
   return 0;
+}
+
+function authoredOutcome(run: { outcome?: string | null }): string {
+  return run.outcome ? ` · authored outcome: ${run.outcome}` : '';
 }
