@@ -147,6 +147,7 @@ export class SlackWorkflowBridge {
       status: event.status,
       authoredOutcome: event.authoredOutcome,
       totalCostUsd: event.totalCostUsd,
+      totalCostIncomplete: event.totalCostIncomplete,
       failureReason: event.error,
     });
     await closing;
@@ -259,7 +260,10 @@ export class SlackWorkflowBridge {
   private async updateStatusMessage(
     state: RunState,
     overlay: Partial<
-      Pick<RunSnapshot, 'status' | 'authoredOutcome' | 'totalCostUsd' | 'failureReason'>
+      Pick<
+        RunSnapshot,
+        'status' | 'authoredOutcome' | 'totalCostUsd' | 'totalCostIncomplete' | 'failureReason'
+      >
     > = {}
   ): Promise<boolean> {
     if (!state.statusMessageTs) return false;

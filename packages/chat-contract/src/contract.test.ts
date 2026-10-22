@@ -229,6 +229,7 @@ test('bidirectional requests preserve messages, every action result, send, foote
           status: 'failed',
           authoredOutcome: 'failed',
           totalCostUsd: 0.5,
+          totalCostIncomplete: true,
         },
       },
     ];
@@ -435,6 +436,7 @@ test('schemas constrain actor, identity, protocol, events and structured gate re
       status: 'failed',
       authoredOutcome: 'failed',
       totalCostUsd: 0.5,
+      totalCostIncomplete: true,
     },
   ] satisfies ChatRunEvent[])
     expect(chatRunEventSchema.parse(event)).toEqual(event);

@@ -31,6 +31,7 @@ export const chatAttentionNoticeSchema = z.discriminatedUnion('type', [
     status: z.enum(['completed', 'failed', 'cancelled']),
     authoredOutcome: chatAuthoredOutcomeSchema.optional(),
     totalCostUsd: z.number().nonnegative().optional(),
+    totalCostIncomplete: z.literal(true).optional(),
   }),
 ]);
 export type ChatAttentionNotice = z.infer<typeof chatAttentionNoticeSchema>;

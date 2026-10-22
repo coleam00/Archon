@@ -9,7 +9,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
 import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatRunCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { isRunLive, runElapsedLabel, statusTextClass, runStatusLabel } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -163,9 +163,9 @@ export function ActiveRunCard({
             {typeof run.costUsd === 'number' ? (
               <span
                 className="font-mono text-[11px] tabular-nums text-text-secondary"
-                title="Total agent cost"
+                title="Reported agent cost"
               >
-                {formatCost(run.costUsd)}
+                {formatRunCost(run)}
               </span>
             ) : null}
             <span className="font-mono text-[11px] tabular-nums text-text-tertiary">

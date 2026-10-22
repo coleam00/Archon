@@ -269,7 +269,7 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
     },
   });
   expect(slack.posts[1]).toMatchObject({ channel: 'C9', thread_ts: '100.1' });
-  expect(JSON.stringify(blocksOf(1))).toContain('total cost: $0.5000');
+  expect(JSON.stringify(blocksOf(1))).toContain('reported cost: $0.5000 (completeness unknown)');
   expect(slack.updates).toEqual([
     expect.objectContaining({
       channel: 'C9',
@@ -317,4 +317,19 @@ test('options beyond Slack limits render the notice without controls', async () 
   );
   expect(buttons()).toEqual([]);
   expect(JSON.stringify(blocksOf(0))).toContain('answer in Archon');
+});
+
+test('terminal attention notice labels an incomplete cost floor', async () => {
+  await plugin.attentionNotice({
+    destination: 'C9',
+    notice: {
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'deploy',
+      status: 'completed',
+      totalCostUsd: 0,
+      totalCostIncomplete: true,
+    },
+  });
+  expect(JSON.stringify(blocksOf(0))).toContain('reported cost: ≥$0.0000 (incomplete)');
 });

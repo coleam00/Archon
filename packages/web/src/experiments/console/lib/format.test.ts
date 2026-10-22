@@ -1,3 +1,4 @@
+import { formatRunCost } from './format';
 // Pin a non-UTC timezone: under TZ=UTC the buggy pre-ensureUtc behavior
 // (browser-local parsing of naive strings) is indistinguishable from correct
 // UTC parsing, so the suite must run non-UTC to discriminate. UTC+14, no DST.
@@ -76,3 +77,13 @@ describe('formatRelativeToBaseline', () => {
     expect(formatRelativeToBaseline('2026-06-13 23:22:54', NAIVE)).toBe('+00:01');
   });
 });
+
+test.each([undefined, true] as const)(
+  'run cost retains zero and qualifies completeness %s',
+  marker => {
+    expect(formatRunCost({ costUsd: 0, costIncomplete: marker })).toBe(
+      marker ? '≥$0.0000 (incomplete)' : '$0.0000 (completeness unknown)'
+    );
+    expect(formatRunCost({ costUsd: null, costIncomplete: marker })).toBeNull();
+  }
+);

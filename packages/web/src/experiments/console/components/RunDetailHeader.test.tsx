@@ -92,3 +92,23 @@ test.each([0, undefined])('the detail header distinguishes reported cost %s', co
     expect(html).not.toContain('$');
   }
 });
+
+test.each([undefined, true] as const)(
+  'the header qualifies cost completeness %s, including reported zero',
+  marker => {
+    const run = toRun({
+      ...detailFixture.run,
+      metadata: { total_cost_usd: 0, ...(marker ? { total_cost_incomplete: true } : {}) },
+    });
+    expect(run.costUsd).toBe(0);
+    expect(run.costIncomplete).toBe(marker);
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
+      </MemoryRouter>
+    );
+    expect(html).toContain(marker ? '(incomplete)' : '(completeness unknown)');
+    expect(html.includes('≥')).toBe(marker === true);
+    expect(html).not.toContain('Total agent cost');
+  }
+);

@@ -1,3 +1,4 @@
+import { hasIncompleteCostTotal } from '@archon/workflows/schemas/run-usage';
 import { ChildRunRedirectError } from '@archon/core/operations/workflow-operations';
 import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowCommandSurface } from '@archon/workflows/deps';
@@ -19,10 +20,16 @@ type ProjectedRunEvent =
   | Exclude<ChatRunEvent, WorkflowStarted>
   | Omit<WorkflowStarted, 'conversationId'>;
 
-/** The run's recorded total cost, when it is a usable amount. */
-export function runTotalCostUsd(run: WorkflowRun): number | undefined {
+export function runCost(
+  run: WorkflowRun
+): Pick<Extract<ChatRunEvent, { type: 'terminal' }>, 'totalCostUsd' | 'totalCostIncomplete'> {
   const cost = run.metadata.total_cost_usd;
-  return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
+  return {
+    ...(typeof cost === 'number' && Number.isFinite(cost) && cost >= 0
+      ? { totalCostUsd: cost }
+      : {}),
+    ...(hasIncompleteCostTotal(run.metadata) ? { totalCostIncomplete: true } : {}),
+  };
 }
 
 export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent | undefined {
@@ -157,8 +164,7 @@ export function subscribeChatRunEvents(
           ).messageFor(surface);
         }
         if (routed.type === 'terminal') {
-          const cost = runTotalCostUsd(run);
-          if (cost !== undefined) routed.totalCostUsd = cost;
+          Object.assign(routed, runCost(run));
         }
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {

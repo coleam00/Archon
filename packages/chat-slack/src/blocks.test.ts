@@ -265,7 +265,7 @@ describe('buildStatusBlocks', () => {
     expect(text).toContain(':fast_forward: `cleanup`');
   });
 
-  test('terminal completed snapshot drops Cancel button and shows total cost', () => {
+  test('terminal completed snapshot drops Cancel button and qualifies cost completeness', () => {
     const { blocks } = buildStatusBlocks(
       snapshot({
         status: 'completed',
@@ -279,7 +279,14 @@ describe('buildStatusBlocks', () => {
     const ctx = blocks.find(b => (b as { type: string }).type === 'context') as {
       elements: Array<{ text: string }>;
     };
-    expect(ctx.elements[0]?.text).toContain('total cost: $0.1230');
+    expect(ctx.elements[0]?.text).toContain('reported cost: $0.1230 (completeness unknown)');
+  });
+
+  test('terminal snapshot labels an incomplete reported zero as a floor', () => {
+    const { blocks } = buildStatusBlocks(
+      snapshot({ status: 'completed', totalCostUsd: 0, totalCostIncomplete: true })
+    );
+    expect(JSON.stringify(blocks)).toContain('reported cost: ≥$0.0000 (incomplete)');
   });
 
   test('terminal snapshot labels execution and contradictory authored outcome separately', () => {

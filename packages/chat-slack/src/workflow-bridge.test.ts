@@ -165,11 +165,12 @@ for (const status of ['completed', 'failed', 'cancelled'] as const) {
       status,
       authoredOutcome: 'failed',
       totalCostUsd: 0.0234,
+      totalCostIncomplete: true,
       error: status === 'completed' ? undefined : 'reason',
     });
     expect(rendered()).toContain('approval closed');
     expect(rendered()).toContain('Authored outcome');
-    expect(rendered()).toContain('0.0234');
+    expect(rendered()).toContain('reported cost: ≥$0.0234 (incomplete)');
     expect(JSON.stringify(slack.updates.slice(-2))).not.toContain('cancel:run');
     expect(adapter.getTriggeringMessage('C1:1')).toBeUndefined();
     expect(slack.removed[0]?.name).toBe('arrows_counterclockwise');

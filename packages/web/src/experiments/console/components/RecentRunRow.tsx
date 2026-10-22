@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import { runDetailPath, type Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatRunCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -146,9 +146,9 @@ export function RecentRunRow({
       </span>
       <span
         className="text-right font-mono text-[12px] tabular-nums text-text-primary"
-        title={typeof run.costUsd === 'number' ? 'Total agent cost' : undefined}
+        title={typeof run.costUsd === 'number' ? 'Reported agent cost' : undefined}
       >
-        {typeof run.costUsd === 'number' ? formatCost(run.costUsd) : ''}
+        {typeof run.costUsd === 'number' ? formatRunCost(run) : ''}
       </span>
 
       {/* trailing: origin + hover actions + CLI */}

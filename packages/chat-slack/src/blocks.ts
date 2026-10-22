@@ -32,6 +32,7 @@ export interface RunSnapshot {
   status: 'running' | 'paused' | RunTerminalStatus;
   authoredOutcome?: TerminalEvent['authoredOutcome'];
   totalCostUsd?: number;
+  totalCostIncomplete?: TerminalEvent['totalCostIncomplete'];
   failureReason?: string;
   approvalDeliveryFailed?: boolean;
 }
@@ -296,7 +297,7 @@ export function buildStatusBlocks(
 
   const footerParts: string[] = [];
   if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
-    footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
+    footerParts.push(formatRunCost(snapshot.totalCostUsd, snapshot.totalCostIncomplete));
   }
   if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
     footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
@@ -534,7 +535,7 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
       `authored outcome: ${notice.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : notice.authoredOutcome}`
     );
   if (notice.totalCostUsd !== undefined)
-    facts.push(`total cost: $${notice.totalCostUsd.toFixed(4)}`);
+    facts.push(formatRunCost(notice.totalCostUsd, notice.totalCostIncomplete));
   const blocks: KnownBlock[] = [
     {
       type: 'section',
@@ -580,3 +581,9 @@ function truncate(s: string, max: number): string {
 export const REACTION_RUNNING = 'arrows_counterclockwise';
 export const REACTION_SUCCESS = 'white_check_mark';
 export const REACTION_FAILURE = 'x';
+
+function formatRunCost(cost: number, incomplete?: true): string {
+  return incomplete
+    ? `reported cost: ≥$${cost.toFixed(4)} (incomplete)`
+    : `reported cost: $${cost.toFixed(4)} (completeness unknown)`;
+}

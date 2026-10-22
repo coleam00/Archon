@@ -630,6 +630,10 @@
             "totalCostUsd": {
               "type": "number",
               "minimum": 0
+            },
+            "totalCostIncomplete": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [
@@ -779,6 +783,10 @@
             "totalCostUsd": {
               "type": "number",
               "minimum": 0
+            },
+            "totalCostIncomplete": {
+              "type": "boolean",
+              "const": true
             }
           },
           "required": [

@@ -50,7 +50,10 @@ async function createRun(platform: string, background = false) {
     origin: background
       ? { conversationId: workerId, parentConversationId: conversationId }
       : { conversationId },
-    metadata: { total_cost_usd: 0.25 },
+    metadata: {
+      total_cost_usd: 0.25,
+      ...(platform === 'fixture-chat' ? { total_cost_incomplete: true } : {}),
+    },
   });
 }
 
@@ -133,7 +136,9 @@ test.each([false, true])(
         type: 'terminal',
         authoredOutcome: 'succeeded',
         totalCostUsd: 0.25,
+        totalCostIncomplete: true,
       });
+      expect(second[3]).not.toHaveProperty('totalCostIncomplete');
       expect(JSON.stringify(first)).not.toContain('/private/path');
       expect(
         projectRunEvent({ type: 'container_lifecycle', runId: 'run', phase: 'created' })

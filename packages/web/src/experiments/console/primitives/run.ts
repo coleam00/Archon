@@ -22,9 +22,9 @@ export interface Run {
   id: string;
   projectId: string | null;
   projectName: string | null;
-  /** Total USD cost from the agent SDK. Populated for completed Claude runs;
-   *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
+  /** Reported cost floor; null when no amount was recorded. */
   costUsd: number | null;
+  costIncomplete?: true;
   /** DB id of the conversation this run belongs to. */
   conversationId: string | null;
   /**
@@ -174,10 +174,14 @@ export function normalizeOrigin(s: string | null | undefined): RunOrigin {
   }
 }
 
-function readCost(meta: WorkflowRunMetadata | undefined): number | null {
-  if (meta === undefined) return null;
-  const raw = meta.total_cost_usd;
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
+function readRunCost(
+  meta: WorkflowRunMetadata | undefined
+): Pick<Run, 'costUsd' | 'costIncomplete'> {
+  const raw = meta?.total_cost_usd;
+  return {
+    costUsd: typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null,
+    ...(meta?.total_cost_incomplete === true ? { costIncomplete: true } : {}),
+  };
 }
 
 /**
@@ -223,7 +227,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     id: raw.id,
     projectId: raw.codebase_id,
     projectName: raw.codebase_name ?? null,
-    costUsd: readCost(raw.metadata),
+    ...readRunCost(raw.metadata),
     conversationId: raw.conversation_id ?? null,
     conversationPlatformId: raw.conversation_platform_id ?? null,
     workerPlatformId: raw.worker_platform_id ?? null,

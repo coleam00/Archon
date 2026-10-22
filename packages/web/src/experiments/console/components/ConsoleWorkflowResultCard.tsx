@@ -6,7 +6,7 @@ import * as skill from '../skills';
 import { countTerminalNodes } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
 import { statusLabel } from '../lib/run-status';
-import { formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { formatElapsed, elapsedSince, formatRunCost } from '../lib/format';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface ConsoleWorkflowResultCardProps {
@@ -122,7 +122,7 @@ export function ConsoleWorkflowResultCard({
   const glyph = RESULT_GLYPH[run.status] ?? '•';
   const label = RESULT_LABEL[run.status] ?? `Workflow ${statusLabel[run.status].toLowerCase()}`;
   const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
-  const cost = run.costUsd !== null ? formatCost(run.costUsd) : null;
+  const cost = formatRunCost(run);
   const accent = ACCENT_BY_STATUS[run.status] ?? FALLBACK_ACCENT;
 
   return (

@@ -35,6 +35,7 @@ export const chatRunEventSchema = z.discriminatedUnion('type', [
     error: z.string().optional(),
     authoredOutcome: chatAuthoredOutcomeSchema.optional(),
     totalCostUsd: z.number().nonnegative().optional(),
+    totalCostIncomplete: z.literal(true).optional(),
   }),
 ]);
 export type ChatRunEvent = z.infer<typeof chatRunEventSchema>;

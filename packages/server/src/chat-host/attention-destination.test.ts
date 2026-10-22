@@ -153,3 +153,18 @@ test('a run that moved after selection is not projected', () => {
     'has not finished'
   );
 });
+
+test.each([undefined, true] as const)(
+  'terminal notice keeps cost completeness %s beside its floor',
+  marker => {
+    const result = chatAttentionNotice(
+      notice('terminal', 'completed', {
+        total_cost_usd: 0,
+        ...(marker ? { total_cost_incomplete: marker } : {}),
+      })
+    );
+    expect(result).toMatchObject({ totalCostUsd: 0 });
+    if (marker) expect(result).toMatchObject({ totalCostIncomplete: true });
+    else expect(result).not.toHaveProperty('totalCostIncomplete');
+  }
+);

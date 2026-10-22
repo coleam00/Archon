@@ -1,3 +1,4 @@
+import type { Run } from '../primitives/run';
 /** Formatting helpers for the console. Pure functions, no React. */
 
 export function shortRunId(id: string): string {
@@ -107,4 +108,11 @@ export function formatProjectLocator(project: {
     return project.repositoryUrl;
   }
   return '';
+}
+
+export function formatRunCost(run: Pick<Run, 'costUsd' | 'costIncomplete'>): string | null {
+  if (run.costUsd === null) return null;
+  return run.costIncomplete
+    ? `≥${formatCost(run.costUsd)} (incomplete)`
+    : `${formatCost(run.costUsd)} (completeness unknown)`;
 }

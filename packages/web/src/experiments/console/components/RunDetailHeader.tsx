@@ -5,7 +5,7 @@ import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatRunCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { isRunLive, runElapsedLabel, runStatusLabel, statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -124,9 +124,9 @@ export function RunDetailHeader({
         {typeof run.costUsd === 'number' ? (
           <span
             className="font-mono text-[12px] tabular-nums text-text-secondary"
-            title="Total agent cost"
+            title="Reported agent cost"
           >
-            {formatCost(run.costUsd)}
+            {formatRunCost(run)}
           </span>
         ) : null}
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">

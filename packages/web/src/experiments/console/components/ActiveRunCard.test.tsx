@@ -134,3 +134,12 @@ test('a running card whose owner answers stays live', () => {
   expect(html).toContain('animate-ping');
   expect(html).not.toContain('since launch');
 });
+
+test.each([undefined, true] as const)('active cards qualify cost completeness %s', marker => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={{ ...parallelRun, costUsd: 0.2, costIncomplete: marker }} />
+    </MemoryRouter>
+  );
+  expect(html).toContain(marker ? '≥$0.200 (incomplete)' : '$0.200 (completeness unknown)');
+});

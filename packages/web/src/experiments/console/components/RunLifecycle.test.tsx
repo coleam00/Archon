@@ -10,3 +10,12 @@ test('a completed execution with a failed authored outcome shows its explanation
   expect(html).toContain('Outcome: failed');
   expect(html).toContain('An open PR already implements this fix.');
 });
+
+test.each([undefined, true] as const)('finished lines qualify cost completeness %s', marker => {
+  const run = toRun({
+    ...detailFixture.run,
+    metadata: { total_cost_usd: 0.2, ...(marker ? { total_cost_incomplete: true } : {}) },
+  });
+  const html = renderToStaticMarkup(<RunFinishedLine run={run} />);
+  expect(html).toContain(marker ? '≥$0.200 (incomplete)' : '$0.200 (completeness unknown)');
+});
