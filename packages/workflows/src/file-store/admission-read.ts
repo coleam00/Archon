@@ -1,8 +1,19 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { pathFor, receiptSchema, type Receipt } from './admission-documents';
+import {
+  pathFor,
+  receiptSchema,
+  requestSchema,
+  type Receipt,
+  type Request,
+  type Binding,
+} from './admission-documents';
 import { readJson } from './commit';
-import { evaluatedStartBindingStatusSchema } from '../schemas/resource-start';
+import {
+  evaluatedStartBindingStatusSchema,
+  resourceStartIntentSchema,
+  RESOURCE_START_METADATA_KEY,
+} from '../schemas/resource-start';
 
 export async function documentPaths(root: string, kind: string): Promise<string[]> {
   let names: string[];
@@ -51,4 +62,60 @@ export async function listReceiptDocuments(root: string): Promise<Receipt[]> {
     receipts.push(receipt);
   }
   return receipts;
+}
+
+function requestBindingIdentity(
+  launch: Request['launch']
+): Pick<Binding, 'receiptId' | 'bindingId'> | undefined {
+  return resourceStartIntentSchema.shape.receipt.parse(
+    launch.run.metadata[RESOURCE_START_METADATA_KEY]
+  );
+}
+function matchesBinding(
+  origin: Pick<Binding, 'receiptId' | 'bindingId'>,
+  binding: Pick<Binding, 'receiptId' | 'bindingId'>
+): boolean {
+  return origin.receiptId === binding.receiptId && origin.bindingId === binding.bindingId;
+}
+export async function readRequestReceiptAttribution(root: string, id: string) {
+  const row = requestSchema
+    .pick({ id: true, launch: true })
+    .parse(await readJson(join(root, pathFor('requests', id))));
+  const origin = requestBindingIdentity(row.launch);
+  const errors: unknown[] = [];
+  let receiptId: string | undefined;
+  for (const path of await documentPaths(root, 'receipts')) {
+    try {
+      const receipt = await readReceiptDocument(root, path);
+      for (const binding of receipt?.bindings ?? []) {
+        if (!binding.requestIds.includes(id)) continue;
+        if (
+          row.id === id &&
+          row.launch.run.id === id &&
+          origin &&
+          matchesBinding(origin, binding)
+        ) {
+          receiptId = binding.receiptId;
+        } else {
+          errors.push(
+            new Error(
+              `Start receipt document '${path}' has inconsistent membership for request '${id}'`
+            )
+          );
+        }
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return { receiptId, errors };
+}
+
+export function validateRequestBinding(request: Request, binding: Binding): void {
+  const origin = requestBindingIdentity(request.launch);
+  if (origin && !matchesBinding(origin, binding)) {
+    throw new Error(
+      `Start receipt document '${pathFor('receipts', binding.receiptId)}' has inconsistent membership for request '${request.id}'`
+    );
+  }
 }

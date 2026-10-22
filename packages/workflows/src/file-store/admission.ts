@@ -59,7 +59,13 @@ import {
   recoverBeforeRead,
 } from './commit';
 import { createTransactionView } from './transaction-view';
-import { documentPaths, listReceiptDocuments, readReceiptDocument } from './admission-read';
+import {
+  documentPaths,
+  listReceiptDocuments,
+  readReceiptDocument,
+  readRequestReceiptAttribution,
+  validateRequestBinding,
+} from './admission-read';
 
 const log = createLogger('file-store.admission');
 
@@ -495,13 +501,6 @@ export function createFileAdmissionStore(
       return { error: new Error(`Invalid queued document '${path}'`, { cause: error }) };
     }
   }
-  async function receiptIdForRequest(id: string): Promise<string | undefined> {
-    for (const path of await documentPaths(root, 'receipts')) {
-      const receipt = await readReceiptDocument(root, path);
-      if (receipt?.bindings.some(binding => binding.requestIds.includes(id))) return receipt.id;
-    }
-    return undefined;
-  }
   async function inspectQueuedRequest(
     slotPath: string,
     id: string,
@@ -516,7 +515,14 @@ export function createFileAdmissionStore(
       let inspectionError = error;
       let receiptId: string | undefined;
       try {
-        receiptId = await receiptIdForRequest(id);
+        const attribution = await readRequestReceiptAttribution(root, id);
+        receiptId = attribution.receiptId;
+        if (attribution.errors.length) {
+          inspectionError = new AggregateError(
+            [error, ...attribution.errors],
+            'Queued request inspection and receipt attribution failed'
+          );
+        }
       } catch (attributionError) {
         inspectionError = new AggregateError(
           [error, attributionError],
@@ -560,6 +566,7 @@ export function createFileAdmissionStore(
   ): Promise<StartBindingInspection> {
     const inspection = bindingInspectionSchema.parse(item);
     const request = requestId ? await tx.request(requestId) : null;
+    if (request) validateRequestBinding(request, item);
     return {
       ...inspection,
       requestStatus: request?.status ?? null,

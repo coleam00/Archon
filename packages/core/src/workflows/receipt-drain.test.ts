@@ -13,7 +13,7 @@ import { drainResourceStartHost, ResourceStartDrainError } from './resource-star
 
 const roots = trackTempRoots();
 
-async function fixture(receiptHost: string) {
+async function fixture(receiptHost: string, damagedReceiptId?: string) {
   const root = await fs.realpath(roots(await fs.mkdtemp(join(tmpdir(), 'receipt-drain-'))));
   const host = await createFileWorkflowHost(root);
   const store = host.deps.store;
@@ -32,8 +32,12 @@ async function fixture(receiptHost: string) {
       isolation: { kind: 'in-place' },
     },
   });
-  const accept = async (hostId: string, resource: string, userId = 'operator') => {
-    const receiptId = crypto.randomUUID();
+  const accept = async (
+    hostId: string,
+    resource: string,
+    userId = 'operator',
+    receiptId: string = crypto.randomUUID()
+  ) => {
     await store.acceptStartReceipt({
       receipt: {
         id: receiptId,
@@ -100,7 +104,7 @@ async function fixture(receiptHost: string) {
   ).toMatchObject({ status: 'queued' });
   await store.cancelWorkflowRun(holder.run.id);
   await store.cancelWorkflowRun(foreignHolder.run.id);
-  const receiptId = await accept(receiptHost, 'damaged');
+  const receiptId = await accept(receiptHost, 'damaged', 'operator', damagedReceiptId);
   const path = join(
     root,
     'resource/receipts',
@@ -373,6 +377,47 @@ test('receipt read failure after listing contains the claim without failing unow
   });
 });
 
+async function queuedReceiptRequest(
+  context: Awaited<ReturnType<typeof fixture>>,
+  ownerReceiptId: string = crypto.randomUUID()
+) {
+  const { store, launch, accept, root } = context;
+  const holder = launch('broken');
+  await store.admitResourceStart({
+    resource: 'broken',
+    capacity: 1,
+    hostId: 'host',
+    overlap: 'queue',
+    launch: holder,
+  });
+  const receiptId = await accept('host', 'broken', 'operator', ownerReceiptId);
+  const idle = JSON.parse(await fs.readFile(context.path, 'utf8'));
+  idle.bindings[0].status = 'complete';
+  await fs.writeFile(context.path, JSON.stringify(idle));
+  const owner = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+  const broken = launch('broken');
+  broken.run.metadata.resource_start = { receiptId, bindingId: 'binding' };
+  expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+  expect(await store.completeStartBindingPreparation({ ...owner, launch: broken })).toMatchObject({
+    status: 'queued',
+  });
+  await store.cancelWorkflowRun(holder.run.id);
+  return {
+    broken,
+    receiptId,
+    path: join(
+      root,
+      'resource/receipts',
+      createHash('sha256').update(receiptId).digest('hex') + '.json'
+    ),
+    requestPath: join(
+      root,
+      'resource/requests',
+      createHash('sha256').update(broken.run.id).digest('hex') + '.json'
+    ),
+  };
+}
+
 function expectReceiptAttributionError(combined: unknown, path: string, readError?: Error): Error {
   expect(combined).toBeInstanceOf(AggregateError);
   if (!(combined instanceof AggregateError)) throw new Error('expected combined evidence');
@@ -388,38 +433,14 @@ function expectReceiptAttributionError(combined: unknown, path: string, readErro
 test.each(['healthy', ...receiptDamages] as const)(
   '%s receipt attribution retains queue evidence and drains an independent resource',
   async damage => {
-    const { host, store, healthy, path, launch, root, receiptId } = await fixture('host');
+    const context = await fixture('host');
+    const { host, store, healthy } = context;
+    const { broken, receiptId, path, requestPath } = await queuedReceiptRequest(context);
     const expectedReceiptId = damage === 'healthy' ? receiptId : undefined;
     const expectedFailureCount = damage === 'healthy' ? 1 : 2;
-    const holder = launch('broken');
-    await store.admitResourceStart({
-      resource: 'broken',
-      capacity: 1,
-      hostId: 'host',
-      overlap: 'queue',
-      launch: holder,
-    });
-    const broken = launch('broken');
-    await store.admitResourceStart({
-      resource: 'broken',
-      capacity: 1,
-      hostId: 'host',
-      overlap: 'queue',
-      launch: broken,
-    });
-    await store.cancelWorkflowRun(holder.run.id);
-    const requestPath = join(
-      root,
-      'resource/requests',
-      createHash('sha256').update(broken.run.id).digest('hex') + '.json'
-    );
     const row = JSON.parse(await fs.readFile(requestPath, 'utf8'));
-    row.launch = {};
+    row.position = -1;
     await fs.writeFile(requestPath, JSON.stringify(row));
-    const receipt = JSON.parse(await fs.readFile(path, 'utf8'));
-    receipt.bindings[0].requestIds = [broken.run.id];
-    receipt.bindings[0].status = 'complete';
-    await fs.writeFile(path, JSON.stringify(receipt));
     if (damage !== 'healthy') await damageReceipt(path, damage);
     const receiptBytes = await fs.readFile(path, 'utf8');
     const receiptError = Object.assign(new Error('receipt unreadable'), { code: 'EACCES' });
@@ -494,3 +515,140 @@ test('queue listing failure preserves the preceding receipt scan diagnostic', as
     fault.mockRestore();
   }
 });
+
+function combinedQueueFailure(error: unknown): AggregateError {
+  if (!(error instanceof Error) || !(error.cause instanceof Error))
+    throw new Error('expected queue error');
+  const combined = error.cause.cause;
+  expect(combined).toBeInstanceOf(AggregateError);
+  if (!(combined instanceof AggregateError)) throw new Error('expected combined evidence');
+  expect(combined.errors[0]).toBeInstanceOf(Error);
+  return combined;
+}
+
+test.each(['wrong-receipt', 'wrong-binding', 'duplicate-membership', 'unreadable-origin'])(
+  '%s cannot invent receipt ownership or display another binding request',
+  async damage => {
+    const context = await fixture('host');
+    const { store, host, healthy, path: claimantPath, receiptId: claimantId } = context;
+    const { broken, receiptId, requestPath } = await queuedReceiptRequest(context);
+    const claimant = JSON.parse(await fs.readFile(claimantPath, 'utf8'));
+    claimant.bindings[0].status = 'complete';
+    claimant.bindings[0].requestIds = [broken.run.id];
+    await fs.writeFile(claimantPath, JSON.stringify(claimant));
+    const row = JSON.parse(await fs.readFile(requestPath, 'utf8'));
+    if (damage === 'wrong-receipt')
+      row.launch.run.metadata.resource_start.receiptId = crypto.randomUUID();
+    if (damage === 'wrong-binding') row.launch.run.metadata.resource_start.bindingId = 'other';
+    if (damage === 'unreadable-origin') row.launch = {};
+    await fs.writeFile(requestPath, JSON.stringify(row));
+    await expect(store.getStartReceipt(claimantId)).rejects.toThrow();
+    if (damage === 'duplicate-membership') {
+      expect(await store.getStartReceipt(receiptId)).toMatchObject({
+        bindings: [{ disposition: { requestId: broken.run.id } }],
+      });
+    } else await expect(store.getStartReceipt(receiptId)).rejects.toThrow();
+    row.position = -1;
+    await fs.writeFile(requestPath, JSON.stringify(row));
+    const started: string[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const error = await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async id => {
+          started.push(id);
+        },
+      }).catch((caught: unknown) => caught);
+      if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+      const failure = error.failures.find(
+        f => f.error instanceof Error && f.error.message.includes(broken.run.id)
+      );
+      expect(failure?.receiptId).toBe(damage === 'duplicate-membership' ? receiptId : undefined);
+      const combined = combinedQueueFailure(failure?.error);
+      if (damage !== 'unreadable-origin') {
+        expect(combined.errors).toContainEqual(
+          expect.objectContaining({
+            message: expect.stringContaining(basename(claimantPath)),
+          })
+        );
+      }
+      expect(started).toEqual([healthy.run.id]);
+      expect(await store.getWorkflowRun(broken.run.id)).toBeNull();
+    }
+    expect(await fs.readFile(requestPath, 'utf8')).toBe(JSON.stringify(row));
+    expect(await fs.readFile(claimantPath, 'utf8')).toBe(JSON.stringify(claimant));
+  }
+);
+
+test.each([
+  ['json', true],
+  ['json', false],
+  ['unreadable', true],
+  ['unreadable', false],
+] as const)(
+  '%s receipt (owner follows: %s) retains diagnostics and valid ownership',
+  async (damage, ownerAfterDamage) => {
+    const ids = [
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000002',
+    ].sort((a, b) =>
+      createHash('sha256')
+        .update(a)
+        .digest('hex')
+        .localeCompare(createHash('sha256').update(b).digest('hex'))
+    );
+    const context = await fixture('host', ids[ownerAfterDamage ? 0 : 1]);
+    const { path: damagedPath, host } = context;
+    const { broken, receiptId, path, requestPath } = await queuedReceiptRequest(
+      context,
+      ids[ownerAfterDamage ? 1 : 0]
+    );
+    const row = JSON.parse(await fs.readFile(requestPath, 'utf8'));
+    row.position = -1;
+    await fs.writeFile(requestPath, JSON.stringify(row));
+    await fs.writeFile(damagedPath, '{');
+    const read = fileStore.readJson;
+    const ioError = new Error('receipt read refused');
+    const scanOrder = await fs.readdir(join(context.root, 'resource/receipts'));
+    expect(scanOrder.indexOf(basename(damagedPath)) < scanOrder.indexOf(basename(path))).toBe(
+      ownerAfterDamage
+    );
+    const ownerBytes = await fs.readFile(path, 'utf8');
+    const damagedBytes = await fs.readFile(damagedPath, 'utf8');
+    const reader = spyOn(fileStore, 'readJson').mockImplementation(file =>
+      damage === 'unreadable' && file === damagedPath ? Promise.reject(ioError) : read(file)
+    );
+    const started: string[] = [];
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        const error = await drainResourceStartHost({
+          ...host,
+          hostId: 'host',
+          startAdmitted: async id => {
+            started.push(id);
+          },
+        }).catch((caught: unknown) => caught);
+        if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+        const failure = error.failures.find(
+          f => f.error instanceof Error && f.error.message.includes(broken.run.id)
+        );
+        expect(failure?.receiptId).toBe(receiptId);
+        if (!(failure?.error instanceof Error) || !(failure.error.cause instanceof Error))
+          throw new Error('expected queue error');
+        expectReceiptAttributionError(
+          failure.error.cause.cause,
+          damagedPath,
+          damage === 'unreadable' ? ioError : undefined
+        );
+        expect(started).toEqual([context.healthy.run.id]);
+        expect(error.failures[0]?.error).toMatchObject({
+          message: expect.stringContaining(basename(damagedPath)),
+        });
+      }
+    } finally {
+      reader.mockRestore();
+    }
+    expect(await fs.readFile(path, 'utf8')).toBe(ownerBytes);
+    expect(await fs.readFile(damagedPath, 'utf8')).toBe(damagedBytes);
+  }
+);

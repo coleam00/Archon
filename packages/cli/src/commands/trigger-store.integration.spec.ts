@@ -864,7 +864,7 @@ test.each([true, false])(
         join(stateRoot, 'resource', kind, `${createHash('sha256').update(id).digest('hex')}.json`);
       const path = documentPath('requests', request.id);
       const row = JSON.parse(await readFile(path, 'utf8'));
-      row.launch = {};
+      row.position = -1;
       await writeFile(path, JSON.stringify(row));
       if (!attributed) await unlink(documentPath('receipts', older.id));
       const [inspection] = await store.listQueuedResourceStartsForHost('host');
