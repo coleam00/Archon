@@ -313,7 +313,11 @@ export class AppServerConnection {
     if (this.endedWith) return;
     let message: Record<string, unknown>;
     try {
-      message = JSON.parse(line) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(line);
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Expected a JSON object frame');
+      }
+      message = parsed as Record<string, unknown>;
     } catch {
       // The line can carry model or user text, so only its length is logged.
       getLog().warn({ bytes: Buffer.byteLength(line) }, 'codex.app_server_unparseable_line');
