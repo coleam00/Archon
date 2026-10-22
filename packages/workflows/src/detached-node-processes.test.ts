@@ -109,6 +109,40 @@ posixOnly('direct execution preserves numeric exit 143 versus SIGTERM', async ()
 });
 
 posixOnly(
+  'completed commands preserve success and report uncertainty across preparations',
+  async () => {
+    const trees = recordNodeProcessTrees({ mode: 'detached-posix' });
+    try {
+      const fresh = trees.prepareTermination();
+      expect(await fresh.ready).toEqual([]);
+      fresh.release();
+      expect(await body('/bin/echo', ['ordinary success'])).toMatchObject({
+        stdout: 'ordinary success\n',
+        stderr: '',
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const prepared = trees.prepareTermination();
+        expect(prepared.groups).toEqual([]);
+        expect(await prepared.ready).toEqual([
+          expect.stringContaining('may have left untracked background work'),
+        ]);
+        prepared.release();
+      }
+    } finally {
+      trees.prepareTermination().release();
+      trees.release();
+    }
+    const fresh = recordNodeProcessTrees({ mode: 'detached-posix' });
+    try {
+      expect(await fresh.prepareTermination().ready).toEqual([]);
+    } finally {
+      fresh.prepareTermination().release();
+      fresh.release();
+    }
+  }
+);
+
+posixOnly(
   'termination preparation signals live groups once and holds results until release',
   async () => {
     const dir = fixtureDir();
@@ -132,6 +166,9 @@ posixOnly(
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
       expect(settled).toBe(false);
+      expect(await prepared.ready).toEqual([
+        expect.stringContaining('may have left untracked background work'),
+      ]);
       for (const options of [{ endTreeOnTimeout: true }, {}, { ownProcessGroup: true }] as const) {
         await expect(
           runSubprocess({ kind: 'host' }, '/bin/echo', ['blocked'], {
@@ -209,6 +246,11 @@ posixOnly.each(['end', 'timeout', 'abort'] as const)(
           expect(
             processes.split('\n').some(line => line.trim().endsWith(`archon-node-lifeline ${root}`))
           ).toBe(false);
+          const warnings = await prepared.ready;
+          expect(warnings).toEqual([
+            expect.stringContaining("still holds the node's output"),
+            expect.stringContaining('may have left untracked background work'),
+          ]);
           await expect(trees.end()).rejects.toThrow('still running');
           prepared.release();
         } else {
@@ -388,6 +430,40 @@ posixOnly.each(['timeout', 'abort', 'maxBuffer'] as const)(
       trees.release();
       await result;
       if (existsSync(ready)) killFixture(Number(readFileSync(ready, 'utf8')));
+    }
+  }
+);
+
+posixOnly(
+  'a live command with redirected escaped work reports uncertainty without signalling it',
+  async () => {
+    const dir = fixtureDir();
+    const ready = join(dir, 'child');
+    const wrapper = `const child = Bun.spawn(['/bin/sleep', '30'], {detached: true, stdio: ['ignore', 'ignore', 'ignore']}); require('fs').writeFileSync(${JSON.stringify(ready)}, String(child.pid)); await child.exited;`;
+    const trees = recordNodeProcessTrees({ mode: 'detached-posix' });
+    const node = failure(body(process.execPath, ['-e', wrapper]));
+    let survivor: number | undefined;
+    try {
+      await waitUntil(() => existsSync(ready) && readFileSync(ready, 'utf8').trim() !== '');
+      survivor = Number(readFileSync(ready, 'utf8'));
+      const signals = spyOn(process, 'kill');
+      try {
+        const prepared = trees.prepareTermination();
+        expect(await prepared.ready).toEqual([
+          expect.stringContaining('may have left untracked background work'),
+        ]);
+        expect(signals.mock.calls.filter(([pid]) => Math.abs(pid) === survivor)).toEqual([]);
+        expect(alive(survivor)).toBe(true);
+        prepared.release();
+      } finally {
+        signals.mockRestore();
+      }
+      expect(await node).toMatchObject({ signal: 'SIGKILL' });
+    } finally {
+      trees.prepareTermination().release();
+      trees.release();
+      if (survivor !== undefined) killFixture(survivor);
+      await node;
     }
   }
 );

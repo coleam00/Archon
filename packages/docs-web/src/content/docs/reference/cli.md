@@ -1156,7 +1156,13 @@ who owns the run:
 
 - **The process handling the cancel executes the run** (a run the server started, cancelled
   from that server): the run is marked `cancelled` and its executor stops at its next
-  status check.
+  status check. On macOS and Linux, cooperative cancellation reports possible
+  background work for every host run, even when no command appears in its history.
+  Commands can start or complete while cancellation is in progress, so history cannot
+  establish their absence. The warning appears in `cleanupWarnings` and the cancellation
+  event and identifies each known host run and its recorded checkout, including isolated
+  child and grandchild checkouts. Inspect descendant checkouts too: new sub-runs can
+  appear during cancellation. This warning confirms neither command execution nor survivors.
 - **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
   contacts that process and stops its owner before recording the run as `cancelled`.
   On macOS and Linux it first stops unfinished node groups whose leaders remain unreaped,
@@ -1165,7 +1171,12 @@ who owns the run:
   the run and reports in `cleanupWarnings` and the run's cancellation event that some
   process outside the run's process group holds the output and was not signalled.
   Archon does not identify it; use `lsof` on the run's checkout before reusing or removing
-  that checkout. Background jobs left by completed nodes are excluded. Windows uses
+  that checkout. Background jobs left by completed nodes are outside automatic cleanup.
+  If an earlier host bash or script command exited, cancellation warns that it may have
+  left untracked background work. This warning does not establish that any process
+  survived or confirm cleanup; even an ordinary command with no background jobs can
+  trigger it. Inspect processes using the checkout (for example with `lsof`), verify
+  ownership, and stop any leftovers before reusing or removing it. Windows uses
   the owner's Job Object, including descendants whose parent exited.
 - **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
   unchanged. When no owner answers, it prints what the run recorded (host, pid, last
@@ -1228,8 +1239,11 @@ the run stays `cancelled`, but container resources may remain allocated. Every c
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
 `cleanupWarnings` array for container reclamation failures, owner-stop cleanup failures,
-and output pipes still held by an unsignalled process; the field is omitted
-when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
+output pipes still held by an unsignalled process, and possible untracked background
+work from started or completed host commands; the field is omitted when there are no
+cleanup warnings. Owner-stop warnings retain run scratch and owned checkouts for
+inspection. Inspect processes using the checkout, verify ownership, and stop any
+leftovers before reusing or removing it. A cleanup warning does not change `ok: true`.
 
 ### `workflow abandon`
 
@@ -1239,11 +1253,12 @@ this host:
 
 - **An owner answers:** abandon stops it through the same path as `workflow cancel`
   (proves the owner, stops safely targetable groups, waits), then records `cancelled`.
-  The output-holder warning and `lsof` action described above apply here too; inspect
-  warnings before reusing or removing the checkout. Abandon retains owned checkouts
-  when owner-stop warnings report held output, including descendant checkouts and
-  their root. Warnings learned after cancellation during descendant cleanup or
-  conversation reset are appended to that run as `workflow_cleanup_warning` events.
+  The output-holder and possible-leftovers warnings and inspection steps described
+  above apply here too; inspect warnings before reusing or removing the checkout.
+  Abandon retains owned checkouts
+  when owner-stop warnings report held output or possible leftovers, including
+  descendant checkouts and their root. Warnings learned after cancellation during
+  descendant cleanup or conversation reset are appended to that run as `workflow_cleanup_warning` events.
   If writing a warning event fails, cleanup continues and the command reports the
   persistence failure with the cleanup warnings. Keep that command result: those
   warnings may be missing from the run history.

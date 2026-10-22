@@ -1,6 +1,9 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
+import { isExecNodeRecord, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
@@ -10,7 +13,14 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
-  store: Pick<IWorkflowStore, 'getWorkflowRunStatus' | 'failWorkflowRun'>;
+  store: Pick<
+    IWorkflowStore,
+    | 'getWorkflowRunStatus'
+    | 'failWorkflowRun'
+    | 'getWorkflowRun'
+    | 'listWorkflowEvents'
+    | 'findChildRuns'
+  >;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
   /** Logger module of the command that owns the run, so its lines name that command. */
@@ -41,8 +51,36 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   const nodeTrees =
     detachedTrees ?? (input.detachedProcessOwner ? undefined : recordNodeProcessTrees());
   const unregisterPreparation = detachedTrees
-    ? liveOwner.registerTerminationPreparation(() => detachedTrees.prepareTermination())
+    ? liveOwner.registerTerminationPreparation(() => {
+        const prepared = detachedTrees.prepareTermination();
+        return {
+          ...prepared,
+          ready: Promise.all([prepared.ready, priorHostCommands(runId)]).then(
+            ([warnings, hasPriorCommands]) =>
+              hasPriorCommands && !warnings.includes(COMPLETED_HOST_COMMAND_WARNING)
+                ? [...warnings, COMPLETED_HOST_COMMAND_WARNING]
+                : warnings
+          ),
+        };
+      })
     : undefined;
+  async function priorHostCommands(id: string): Promise<boolean> {
+    const run = await input.store.getWorkflowRun(id);
+    if (run && !isContainerRun(run)) {
+      const events = await input.store.listWorkflowEvents(id);
+      if (
+        events.some(event => {
+          const record = readNodeRecordEvent(event);
+          return record?.eventType === 'node_started' && isExecNodeRecord(record);
+        })
+      )
+        return true;
+    }
+    for (const child of await input.store.findChildRuns(id)) {
+      if (await priorHostCommands(child.id)) return true;
+    }
+    return false;
+  }
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
     if (terminating) return;

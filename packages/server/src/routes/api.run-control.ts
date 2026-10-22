@@ -207,12 +207,12 @@ export function registerRunControlRoutes(
         return c.json({
           success: true,
           message: result.cancelled
-            ? `Cancelled workflow: ${run.workflow_name}`
+            ? `Cancelled workflow: ${run.workflow_name}${cancelCleanupWarnings(result.cleanupWarnings)}`
             : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
         });
       }
       let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
-      for (const warning of result.cleanupWarnings ?? []) message += ` — warning: ${warning}`;
+      message += cancelCleanupWarnings(result.cleanupWarnings);
       if (result.cascadeFailures > 0) {
         message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -449,4 +449,8 @@ export function registerRunCleanupRoutes(
       return apiError(c, 500, 'Failed to reset workflow node sessions');
     }
   });
+}
+
+function cancelCleanupWarnings(warnings: readonly string[] = []): string {
+  return warnings.map(warning => ` — warning: ${warning}`).join('');
 }
