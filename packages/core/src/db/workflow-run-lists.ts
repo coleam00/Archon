@@ -181,7 +181,7 @@ export async function listDashboardRuns(
                 (SELECT ${jsonIntExtract('e.data', 'totalAgents')}
                  FROM remote_agent_workflow_events e
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
-                 ORDER BY e.created_at DESC LIMIT 1) AS agents_total
+                 ORDER BY COALESCE(e.event_order, 0) DESC, e.created_at DESC, e.id DESC LIMIT 1) AS agents_total
          FROM remote_agent_workflow_runs r
          LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id

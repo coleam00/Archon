@@ -258,7 +258,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+       ORDER BY COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
         ['run-456']
       );
     });
@@ -315,7 +315,7 @@ describe('workflow-events', () => {
       );
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining(
-          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+          'ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC'
         ),
         [
           'run-a',
@@ -388,7 +388,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining(
-          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+          'ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC'
         ),
         ['run-a', 'run-b', 'run-c', 'node_started', 'node_completed', 'node_failed']
       );

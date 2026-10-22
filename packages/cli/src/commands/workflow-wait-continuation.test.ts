@@ -3,7 +3,32 @@ import { describe, it, expect, spyOn, mock } from 'bun:test';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
-import { pendingDurableWait } from './workflow-wait-continuation';
+import { RunLiveOwnerAlreadyOwnedError } from '@archon/core/services/run-live-owner';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
+import { isResumeSuperseded, pendingDurableWait } from './workflow-wait-continuation';
+
+describe('isResumeSuperseded', () => {
+  it('recognizes a lease collision, directly or as a cause', () => {
+    const collision = new RunLiveOwnerAlreadyOwnedError('/run.sock');
+    expect(isResumeSuperseded(collision)).toBe(true);
+    expect(isResumeSuperseded(new Error('Cannot resume workflow', { cause: collision }))).toBe(
+      true
+    );
+  });
+
+  it.each(['running', 'cancelled', 'failed', 'completed'] as const)(
+    'only treats refused admission as superseded when the run is running (%s)',
+    status => {
+      expect(
+        isResumeSuperseded(
+          new Error('Cannot resume workflow', {
+            cause: new WorkflowNotResumableError('run', status),
+          })
+        )
+      ).toBe(status === 'running');
+    }
+  );
+});
 
 describe('workflowRunCommand — durable wait occurrence ownership', () => {
   for (const owner of ['node', 'loop_group'] as const) {
