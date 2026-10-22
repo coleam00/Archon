@@ -136,7 +136,7 @@ export async function runHelp({ positionals }: CliRouteContext): Promise<number>
   // Mirror `archon <command> [--subcommand] --help`: bare `archon help`
   // is the global index; `archon help <cmd>` scopes to one command;
   // `archon help <cmd> <subcmd>` scopes further to one subcommand.
-  await printUsageFor(positionals[1], positionals[2]);
+  await printUsageFor(positionals.slice(1));
   return 0;
 }
 

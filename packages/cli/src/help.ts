@@ -396,10 +396,6 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'cleanup',
     spec: 'isolation cleanup --merged',
     description: 'Remove environments with branches merged into the base branch',
-    // `--merged` and `--include-closed` are documented via the Commands-block
-    // alias above in the legacy template literal; they live here so scoped
-    // `isolation cleanup --help` can list them without changing the global
-    // Options block.
     scopedFlags: [
       {
         spec: '--merged',
@@ -737,6 +733,9 @@ const scopedOnlyHelp: HelpEntry[] = [
   },
 ];
 
+// Every command entry in display order: the global entries, then the scoped-only ones.
+export const helpEntries: readonly HelpEntry[] = [...commandHelp, ...scopedOnlyHelp];
+
 const orderedFlags: FlagHelp[] = [
   {
     spec: `--${CHAT_PROJECT_ID_ARG} <id>`,
@@ -1070,7 +1069,7 @@ const orderedExamples: ExampleHelp[] = [
 const HELP_DESC_COLUMN = 29;
 const HELP_SPEC_WRAP_THRESHOLD = 35;
 
-function formatSpecLine(spec: string, description: string): string {
+export function formatSpecLine(spec: string, description: string): string {
   const parts = description.split('\n');
   const first = parts[0] ?? '';
   const rest = parts.slice(1);
@@ -1121,11 +1120,23 @@ function selectExamplesFor(selected: HelpEntry[]): ExampleHelp[] {
 
 function selectEntries(command: string | undefined, subcommand: string | undefined): HelpEntry[] {
   if (command === undefined) return commandHelp;
-  const sameCommand = commandHelp.filter(e => e.command === command);
-  const scopedExtra = scopedOnlyHelp.filter(e => e.command === command);
-  const merged = [...sameCommand, ...scopedExtra];
-  if (subcommand === undefined) return merged;
-  return merged.filter(e => e.subcommand === subcommand);
+  return helpEntries.filter(
+    e => e.command === command && (subcommand === undefined || e.subcommand === subcommand)
+  );
+}
+
+/**
+ * Render help for CLI positionals. A multi-word subcommand such as
+ * `attention label` spans its words; otherwise the second positional is it.
+ */
+export function renderHelpFor(positionals: readonly string[]): string {
+  const [command, ...rest] = positionals;
+  const words = `${rest.join(' ')} `;
+  const spanned = helpEntries.find(
+    e =>
+      e.command === command && e.subcommand?.includes(' ') && words.startsWith(`${e.subcommand} `)
+  );
+  return renderHelp(command, spanned?.subcommand ?? rest[0]);
 }
 
 /**
