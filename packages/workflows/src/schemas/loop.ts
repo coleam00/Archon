@@ -141,6 +141,7 @@ export const LOOP_COMPLETION_CHANNELS = [
   { field: 'until_field', describe: 'a declared boolean in output_format' },
 ] as const;
 
+export type BaseCompletionChannel = (typeof BASE_COMPLETION_CHANNELS)[number]['field'];
 export type LoopCompletionChannel = (typeof LOOP_COMPLETION_CHANNELS)[number]['field'];
 
 /**

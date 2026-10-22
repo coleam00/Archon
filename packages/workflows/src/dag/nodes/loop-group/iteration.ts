@@ -1,4 +1,4 @@
-import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
+import { BASE_COMPLETION_CHANNELS, type BaseCompletionChannel } from '../../../schemas/loop';
 import { loopBodyAdmission } from '../../../interaction-admission';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -484,16 +484,17 @@ async function checkCompletion(
 ): Promise<LoopCompletionCheck[] | LoopGroupBodyResult> {
   const group = run.node.loop_group;
   const completionChecks: LoopCompletionCheck[] = [];
-  for (const { field } of BASE_COMPLETION_CHANNELS) {
+  async function evaluateChannel(
+    field: BaseCompletionChannel
+  ): Promise<LoopCompletionCheck | LoopGroupBodyResult | undefined> {
     switch (field) {
       case 'until':
         if (group.until === undefined) break;
-        completionChecks.push({
+        return {
           channel: field,
           signal: group.until,
           completed: detectCompletionSignal(iteration.iterationOutput, group.until),
-        });
-        break;
+        };
       case 'until_bash': {
         if (group.until_bash === undefined) break;
         let completed = false;
@@ -502,14 +503,20 @@ async function checkCompletion(
           if (typeof bash !== 'boolean') return bash;
           completed = bash;
         }
-        completionChecks.push({ channel: field, completed });
-        break;
+        return { channel: field, completed };
       }
       default: {
         const unhandled: never = field;
         return unhandled;
       }
     }
+    return undefined;
+  }
+  for (const { field } of BASE_COMPLETION_CHANNELS) {
+    const check = await evaluateChannel(field);
+    if (check === undefined) continue;
+    if ('state' in check) return check;
+    completionChecks.push(check);
   }
   return completionChecks;
 }

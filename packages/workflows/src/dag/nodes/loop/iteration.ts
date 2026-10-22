@@ -1,4 +1,4 @@
-import { LOOP_COMPLETION_CHANNELS } from '../../../schemas/loop';
+import { LOOP_COMPLETION_CHANNELS, type LoopCompletionChannel } from '../../../schemas/loop';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
@@ -251,31 +251,31 @@ async function checkCompletion(
     ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field === 'until_field'),
     ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field !== 'until_field'),
   ];
-  for (const { field } of channels) {
+  async function evaluateChannel(
+    field: LoopCompletionChannel
+  ): Promise<LoopCompletionCheck | IterationFailed | undefined> {
     switch (field) {
       case 'until_field':
         if (loop.until_field === undefined) break;
-        completionChecks.push({
+        return {
           channel: field,
           field: loop.until_field,
           completed:
             payload !== null &&
             typeof payload === 'object' &&
             (payload as Record<string, unknown>)[loop.until_field] === true,
-        });
-        break;
+        };
       case 'until':
         if (loop.until === undefined) break;
         // Separate haystacks preserve detection of a signal on the final prose
         // line even when grammar-constrained output also supplies a payload.
-        completionChecks.push({
+        return {
           channel: field,
           signal: loop.until,
           completed:
             detectCompletionSignal(reply.fullOutput, loop.until) ||
             (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)),
-        });
-        break;
+        };
       case 'until_bash': {
         if (loop.until_bash === undefined) break;
         let completed = false;
@@ -284,14 +284,20 @@ async function checkCompletion(
           if (typeof bash !== 'boolean') return bash;
           completed = bash;
         }
-        completionChecks.push({ channel: field, completed });
-        break;
+        return { channel: field, completed };
       }
       default: {
         const unhandled: never = field;
         return unhandled;
       }
     }
+    return undefined;
+  }
+  for (const { field } of channels) {
+    const check = await evaluateChannel(field);
+    if (check === undefined) continue;
+    if ('kind' in check) return check;
+    completionChecks.push(check);
   }
   return completionChecks;
 }

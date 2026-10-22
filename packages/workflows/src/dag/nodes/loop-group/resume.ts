@@ -409,28 +409,31 @@ export async function completeEscalatedResume(
   if (currentBodyOutputs === undefined) return undefined;
   const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   if (terminalNode === undefined || !currentBodyOutputs.has(terminalNode.id)) return undefined;
-  const group = run.node.loop_group;
   const resumedResult = loopGroupIterationOutput(bodyNodes, currentBodyOutputs);
   const rawIterationOutput = resumedResult?.output ?? '';
-  let completed = false;
+  const completed = await resumedCompletion(run, currentBodyOutputs, rawIterationOutput);
+  if (typeof completed !== 'boolean') return completed;
+  if (!completed) return undefined;
+  return completeResumedIteration(run, resumedResult, rawIterationOutput);
+}
+
+async function resumedCompletion(
+  run: LoopGroupRun,
+  currentBodyOutputs: Map<string, NodeOutput>,
+  rawIterationOutput: string
+): Promise<boolean | LoopGroupBodyResult> {
+  const group = run.node.loop_group;
   for (const { field } of BASE_COMPLETION_CHANNELS) {
     switch (field) {
       case 'until':
-        completed =
-          group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
+        if (group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until)) {
+          return true;
+        }
         break;
       case 'until_bash': {
-        if (group.until_bash === undefined || completed) break;
+        if (group.until_bash === undefined) break;
         const previousBodyOutputs = await restorePreviousIteration(run);
-        const bash = await resumedUntilBash(
-          run,
-          group.until_bash,
-          currentBodyOutputs,
-          previousBodyOutputs
-        );
-        if (typeof bash !== 'boolean') return bash;
-        completed = bash;
-        break;
+        return resumedUntilBash(run, group.until_bash, currentBodyOutputs, previousBodyOutputs);
       }
       default: {
         const unhandled: never = field;
@@ -438,8 +441,7 @@ export async function completeEscalatedResume(
       }
     }
   }
-  if (!completed) return undefined;
-  return completeResumedIteration(run, resumedResult, rawIterationOutput);
+  return false;
 }
 
 async function completeResumedIteration(
