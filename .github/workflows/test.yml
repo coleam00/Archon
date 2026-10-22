@@ -612,6 +612,9 @@ jobs:
         run: |
           VERSION=$(bun -e 'console.log((await Bun.file("package.json").json()).version)')
           bun packages/core/src/test/provider-plugin-smoke.ts initialize "$VERSION" dist/archon-provider-*
+      - name: Smoke-test Pi Bedrock in the compiled plugin
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-*
 
   test-suite:
     name: Test Suite

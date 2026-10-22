@@ -313,6 +313,10 @@ jobs:
           fi
           CLAUDE_BIN_PATH="$CLI_PATH" bun packages/core/src/test/provider-plugin-smoke.ts claude-code installed dist/archon-provider-claude-linux-x64
 
+      - name: Smoke-test Pi Bedrock in the compiled plugin
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-linux-x64
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
