@@ -683,9 +683,7 @@ async function executionResult(
   finalStatus: WorkflowRun | null,
   summary: string | undefined
 ): Promise<WorkflowExecutionResult> {
-  if (finalStatus?.status === 'completed') {
-    return { success: true, workflowRunId, summary };
-  } else if (finalStatus?.status === 'paused') {
+  if (finalStatus?.status === 'paused') {
     const wait = pendingWorkflowWaitDeadline(finalStatus);
     const waitCursor = wait ? deadlineWaitCursor(wait) : undefined;
     await releaseContinuablePauseSlot(deps, finalStatus);
@@ -695,13 +693,10 @@ async function executionResult(
       workflowRunId,
       ...(waitCursor ? { waitCursor } : {}),
     };
-  } else {
-    return {
-      success: false,
-      workflowRunId,
-      error: 'Workflow did not complete successfully',
-    };
   }
+  return finalStatus?.status === 'completed'
+    ? { success: true, workflowRunId, summary }
+    : { success: false, workflowRunId, error: 'Workflow did not complete successfully' };
 }
 
 // A child can finish between the parent's child lookup and its pause publication.
