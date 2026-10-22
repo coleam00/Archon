@@ -774,6 +774,8 @@ describe('workflowTestCommand', () => {
     (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       commands: { folder: '.archon/prompts' },
       defaults: { loadDefaultCommands: false },
+      protectedEnvKeys: ['ACCOUNT'],
+      protectedCredentialValues: ['synthetic-cli-value'],
     });
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
       results: [],
@@ -785,6 +787,10 @@ describe('workflowTestCommand', () => {
 
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({
+        config: expect.objectContaining({
+          protectedEnvKeys: ['ACCOUNT'],
+          protectedCredentialValues: ['synthetic-cli-value'],
+        }),
         sourceConfig: {
           load_default_workflows: true,
           load_default_commands: false,

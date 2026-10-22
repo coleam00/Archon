@@ -1,4 +1,5 @@
 /** The state one dry-run simulation threads through every node, and the helpers each node kind shares. */
+import type { WorkflowConfig } from '../deps';
 import type { InteractionAdmission } from '../interaction-admission';
 import { join } from 'node:path';
 import {
@@ -51,7 +52,8 @@ export function nodeType(node: DagNode): DryRunNodeType {
   return 'prompt';
 }
 
-export interface DryRunContext {
+export interface DryRunContext
+  extends Pick<WorkflowConfig, 'protectedEnvKeys' | 'protectedCredentialValues'> {
   workflow: ResolvedWorkflow;
   userMessage: string;
   cwd: string;

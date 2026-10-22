@@ -172,6 +172,75 @@ process.exit(9);`,
     expect(result.summary).toBe(value + value);
   });
 
+  test('redacts declared token inputs from failed subprocess diagnostics', async () => {
+    const secret = 'synthetic-input-credential-4353';
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'input-credential',
+        inputs: { token: { required: true } },
+        nodes: [{ id: 'code', bash: 'printf "%s" "$INPUTS_TOKEN"; exit 7' }],
+      }),
+      inputs: { token: secret },
+      execCode: true,
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]).toMatchObject({ state: 'failed' });
+    expect(result.trace[0]?.reason).toContain('[exit 7]');
+    expect(result.trace[0]?.reason).toContain('[REDACTED]');
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  test.each(['bash', 'script'] as const)(
+    'redacts configured protected credentials from failed %s diagnostics',
+    async kind => {
+      const protectedValue = 'synthetic-protected-env-4353';
+      const explicitValue = 'synthetic-explicit-value-4353';
+      const previous = process.env.ARCHON_DIAGNOSTIC_ACCOUNT;
+      process.env.ARCHON_DIAGNOSTIC_ACCOUNT = protectedValue;
+      try {
+        const result = await dryRunWorkflow({
+          workflow: makeTestWorkflow({
+            name: 'protected-credentials',
+            inputs: { value: { required: true } },
+            nodes: [
+              {
+                id: 'code',
+                ...(kind === 'bash'
+                  ? {
+                      bash: 'printf "stdout: %s %s" "$ARCHON_DIAGNOSTIC_ACCOUNT" "$INPUTS_VALUE"; printf "stderr: %s %s" "$ARCHON_DIAGNOSTIC_ACCOUNT" "$INPUTS_VALUE" >&2; exit 7',
+                    }
+                  : {
+                      runtime: 'bun',
+                      script:
+                        'console.log("stdout:", process.env.ARCHON_DIAGNOSTIC_ACCOUNT, process.env.INPUTS_VALUE); console.error("stderr:", process.env.ARCHON_DIAGNOSTIC_ACCOUNT, process.env.INPUTS_VALUE); process.exit(7);',
+                    }),
+              },
+            ],
+          }),
+          inputs: { value: explicitValue },
+          config: {
+            assistant: undefined,
+            assistants: { claude: {}, codex: {} },
+            commands: {},
+            protectedEnvKeys: ['ARCHON_DIAGNOSTIC_ACCOUNT'],
+            protectedCredentialValues: [explicitValue],
+          },
+          execCode: true,
+        });
+        expect(result.outcome).toBe('failed');
+        expect(result.trace[0]).toMatchObject({ state: 'failed' });
+        expect(result.trace[0]?.reason).toContain('[exit 7]');
+        expect(result.trace[0]?.reason).toContain('stdout: [REDACTED] [REDACTED]');
+        expect(result.trace[0]?.reason).toContain('stderr: [REDACTED] [REDACTED]');
+        expect(JSON.stringify(result)).not.toContain(protectedValue);
+        expect(JSON.stringify(result)).not.toContain(explicitValue);
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_DIAGNOSTIC_ACCOUNT;
+        else process.env.ARCHON_DIAGNOSTIC_ACCOUNT = previous;
+      }
+    }
+  );
+
   test('redacts inherited credentials from output-contract diagnostics', async () => {
     const secret = 'synthetic-contract-credential-4353';
     const previous = process.env.ARCHON_DRY_RUN_TEST_SECRET;

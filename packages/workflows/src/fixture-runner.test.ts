@@ -1338,6 +1338,67 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     }
   );
 
+  it.each(['bash', 'script'] as const)(
+    'redacts configured protected credentials from executable %s fixture diagnostics',
+    async kind => {
+      const secret = 'synthetic-protected-fixture-4353';
+      const explicitValue = 'synthetic-explicit-fixture-4353';
+      const previous = process.env.ARCHON_FIXTURE_ACCOUNT;
+      process.env.ARCHON_FIXTURE_ACCOUNT = secret;
+      try {
+        const { cwd } = writeTempProject({
+          workflowYaml: [
+            'name: test-wf',
+            'description: credential diagnostic',
+            'inputs:',
+            '  value:',
+            '    required: true',
+            'nodes:',
+            '  - id: code',
+            ...(kind === 'bash'
+              ? [
+                  '    bash: |',
+                  '      printf "stdout: %s %s" "$ARCHON_FIXTURE_ACCOUNT" "$INPUTS_VALUE"',
+                  '      printf "stderr: %s %s" "$ARCHON_FIXTURE_ACCOUNT" "$INPUTS_VALUE" >&2',
+                  '      exit 7',
+                ]
+              : [
+                  '    runtime: bun',
+                  '    script: |',
+                  '      console.log("stdout:", process.env.ARCHON_FIXTURE_ACCOUNT, process.env.INPUTS_VALUE);',
+                  '      console.error("stderr:", process.env.ARCHON_FIXTURE_ACCOUNT, process.env.INPUTS_VALUE);',
+                  '      process.exit(7);',
+                ]),
+          ].join('\n'),
+          body: `fixture:\n  expect: failed\n  fail-node: code\n  inputs:\n    value: ${explicitValue}\nexec-code: true`,
+        });
+        callerFrom(trackedOnlyRepo, cwd);
+        const report = await runFixtures({
+          workflows: workflowsOnDisk(cwd, ['test-wf']),
+          cwd,
+          config: {
+            assistant: undefined,
+            assistants: { claude: {}, codex: {} },
+            commands: {},
+            protectedEnvKeys: ['ARCHON_FIXTURE_ACCOUNT'],
+            protectedCredentialValues: [explicitValue],
+          },
+        });
+        expect(report.results[0].pass).toBe(true);
+        expect(report.results[0].nodeFailures?.[0].reason).toContain('[exit 7]');
+        for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+          expect(output).not.toContain(secret);
+          expect(output).not.toContain(explicitValue);
+          expect(output).toContain('stdout: [REDACTED] [REDACTED]');
+          expect(output).toContain('stderr: [REDACTED] [REDACTED]');
+        }
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_FIXTURE_ACCOUNT;
+        else process.env.ARCHON_FIXTURE_ACCOUNT = previous;
+      }
+    }
+  );
+
   it('keeps executed writes out of the caller checkout (#2851)', async () => {
     const { cwd } = writeTempProject({
       workflowName: 'writer-wf',

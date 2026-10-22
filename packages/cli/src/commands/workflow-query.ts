@@ -102,6 +102,7 @@ export async function workflowTestCommand(
       cwd,
       targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
+      config,
       ...(target !== undefined ? { target } : {}),
     });
   } catch (error) {

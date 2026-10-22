@@ -53,7 +53,11 @@ export async function executeCodeNode(
         nodeExecution: execution ?? null,
       }),
     };
-    const credentialValues = collectCredentialValues(env);
+    const credentialValues = collectCredentialValues(
+      env,
+      ctx.protectedEnvKeys,
+      ctx.protectedCredentialValues
+    );
     let result: Awaited<ReturnType<typeof execFileAsync>>;
     try {
       result = await execFileAsync(command, args, {
