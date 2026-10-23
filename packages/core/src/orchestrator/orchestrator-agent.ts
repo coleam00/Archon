@@ -82,15 +82,8 @@ export async function handleMessage(
   message: string,
   context: HandleMessageContext
 ): Promise<void> {
-  const {
-    issueContext,
-    threadContext,
-    parentConversationId,
-    isolationHints,
-    attachedFiles,
-    actor,
-    workflowName,
-  } = context;
+  const { issueContext, threadContext, parentConversationId, attachedFiles, actor, workflowName } =
+    context;
   const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
@@ -222,22 +215,7 @@ export async function handleMessage(
       workflowContext,
       pausedGateContext
     );
-    const scopedCodebase =
-      conversation.codebase_id !== null
-        ? codebases.find(c => c.id === conversation.codebase_id)
-        : undefined;
-    let cwd: string;
-    if (scopedCodebase !== undefined) {
-      cwd = conversation.cwd ?? scopedCodebase.default_cwd;
-    } else {
-      if (conversation.codebase_id !== null) {
-        getLog().warn(
-          { codebaseId: conversation.codebase_id },
-          'orchestrator.scoped_codebase_not_found'
-        );
-      }
-      cwd = await ensureArchonWorkspacesPath();
-    }
+    const cwd = await resolveChatCwd(conversation, codebases);
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);
@@ -275,128 +253,32 @@ export async function handleMessage(
       requestOptions
     );
 
-    const mode = platform.getStreamingMode();
-    // The one line that ties a chat turn to both conversation ids, so grepping the
-    // URL id finds the provider and model of every turn. `model` is read from the
-    // options handed to the provider, never re-resolved, so it cannot disagree.
-    getLog().info(
+    const turn = await runChatTurn(
       {
-        conversationId: conversation.id,
-        platformConversationId: conversationId,
-        provider: providerKey,
-        model: requestOptions.model,
-      },
-      'orchestrator.chat_dispatch_started'
-    );
-    // `finally`, not straight-line code: the gate resolution is committed to the
-    // DB the moment the tool call returns, so once the agent has resolved a gate
-    // the continuation must run even if the rest of the turn throws — a provider
-    // subprocess crash after a successful tool call would otherwise leave the run
-    // resolved and parked with only a generic error to show for it. The outer
-    // catch cannot cover this: it does not know about the resolution.
-    // continueResolvedGateRun never throws, so this cannot mask the real error.
-    const turn: ChatTurn = {
-      startedAt: Date.now(),
-      reported: false,
-      failed: false,
-    };
-    const turnInput: ChatTurnInput = {
-      turn,
-      platform,
-      conversationId,
-      aiClient,
-      fullPrompt,
-      cwd,
-      session,
-      conversation,
-      requestOptions,
-    };
-    try {
-      if (mode === 'stream') {
-        await handleStreamMode(turnInput);
-      } else {
-        await handleBatchMode(turnInput);
-      }
-    } catch (error) {
-      // A provider that throws mid-turn never reaches the handler's own report. Count
-      // the turn as failed here, once, then let the outer catch tell the user.
-      if (!turn.reported) {
-        reportChatTurn(turn, {
-          platform: platform.getPlatformType(),
-          provider: aiClient.getType(),
-          model: requestOptions?.model,
-          durationMs: Date.now() - turn.startedAt,
-          outcome: 'failed',
-        });
-      }
-      throw error;
-    } finally {
-      if (gateResolution.resolved !== null) {
-        await continueResolvedGateRun(
-          platform,
-          conversationId,
-          conversation,
-          discoveredCodebase ?? null,
-          gateResolution.resolved.run,
-          gateResolution.resolved.action,
-          actor,
-          isolationHints
-        );
-      }
-    }
-
-    // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-    // gate it is dropped when the turn throws or ends in an error result, and the user sees
-    // the error instead. The command scan launches nothing in either case.
-    if (pendingLaunch.launch !== null && turn.failed) {
-      getLog().info(
-        { conversationId, workflowName: pendingLaunch.launch.entry.workflow.name },
-        'orchestrator.invoke_workflow_dropped_failed_turn'
-      );
-    } else if (pendingLaunch.launch !== null) {
-      const { entry, codebase, prompt, inputs } = pendingLaunch.launch;
-      getLog().info(
-        {
-          conversationId,
-          workflowName: entry.workflow.name,
-          codebaseId: codebase.id,
-          inputNames: Object.keys(inputs),
-        },
-        'orchestrator.invoke_workflow_dispatching'
-      );
-      await dispatchOrchestratorWorkflow(
         platform,
         conversationId,
+        aiClient,
+        fullPrompt,
+        cwd,
+        session,
         conversation,
-        codebase,
-        {
-          kind: 'start',
-          definition: entry.workflow,
-          args: prompt,
-          parseWarnings: entry.parseWarnings,
-        },
-        actor,
-        isolationHints,
-        entry.source,
-        { inputs }
-      );
-    }
+        requestOptions,
+      },
+      gateResolution,
+      discoveredCodebase ?? null,
+      context,
+      providerKey
+    );
 
-    // Direct-chat turns may have written to source/. If there is local-only state
-    // (uncommitted edits, unpushed commits), surface a one-line reminder so the
-    // user can push or commit + push before the next worktree creation or
-    // re-clone reclaims that work. No-op when no codebase is attached.
-    // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
-    if (discoveredCodebase) {
-      try {
-        await reportUnpushedWorkInSource(conversationId, discoveredCodebase, platform);
-      } catch (err) {
-        getLog().warn(
-          { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
-          'orchestrator.post_message_reminder_failed'
-        );
-      }
-    }
+    await dispatchPendingLaunch(
+      platform,
+      conversationId,
+      conversation,
+      pendingLaunch.launch,
+      turn.failed,
+      context
+    );
+    await reportSourceWork(platform, conversationId, conversation, discoveredCodebase);
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
   } catch (error) {
@@ -409,6 +291,168 @@ export async function handleMessage(
       getLog().error({ err: toError(sendError), conversationId }, 'error_notification_failed');
     }
   }
+}
+
+async function dispatchPendingLaunch(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  launch: ChatLaunch | null,
+  failed: boolean,
+  context: HandleMessageContext
+): Promise<void> {
+  // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
+  // gate it is dropped when the turn throws or ends in an error result, and the user sees
+  // the error instead.
+  if (launch !== null && failed) {
+    getLog().info(
+      { conversationId, workflowName: launch.entry.workflow.name },
+      'orchestrator.invoke_workflow_dropped_failed_turn'
+    );
+  } else if (launch !== null) {
+    const { entry, codebase, prompt, inputs } = launch;
+    getLog().info(
+      {
+        conversationId,
+        workflowName: entry.workflow.name,
+        codebaseId: codebase.id,
+        inputNames: Object.keys(inputs),
+      },
+      'orchestrator.invoke_workflow_dispatching'
+    );
+    await dispatchOrchestratorWorkflow(
+      platform,
+      conversationId,
+      conversation,
+      codebase,
+      {
+        kind: 'start',
+        definition: entry.workflow,
+        args: prompt,
+        parseWarnings: entry.parseWarnings,
+      },
+      context.actor,
+      context.isolationHints,
+      entry.source,
+      { inputs }
+    );
+  }
+}
+
+async function reportSourceWork(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  codebase: Codebase | null | undefined
+): Promise<void> {
+  // Direct-chat turns may have written to source/. If there is local-only state
+  // (uncommitted edits, unpushed commits), surface a one-line reminder so the
+  // user can push or commit + push before the next worktree creation or
+  // re-clone reclaims that work. No-op when no codebase is attached.
+  // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
+  if (codebase) {
+    try {
+      await reportUnpushedWorkInSource(conversationId, codebase, platform);
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
+        'orchestrator.post_message_reminder_failed'
+      );
+    }
+  }
+}
+
+async function runChatTurn(
+  input: Omit<ChatTurnInput, 'turn'>,
+  gateResolution: { resolved: ResolvedGate | null },
+  codebase: Codebase | null,
+  context: HandleMessageContext,
+  providerKey: string
+): Promise<ChatTurn> {
+  const { platform, conversationId, conversation, aiClient, requestOptions } = input;
+  const mode = platform.getStreamingMode();
+  // The one line that ties a chat turn to both conversation ids, so grepping the
+  // URL id finds the provider and model of every turn. `model` is read from the
+  // options handed to the provider, never re-resolved, so it cannot disagree.
+  getLog().info(
+    {
+      conversationId: conversation.id,
+      platformConversationId: conversationId,
+      provider: providerKey,
+      model: requestOptions.model,
+    },
+    'orchestrator.chat_dispatch_started'
+  );
+  // `finally`, not straight-line code: the gate resolution is committed to the
+  // DB the moment the tool call returns, so once the agent has resolved a gate
+  // the continuation must run even if the rest of the turn throws — a provider
+  // subprocess crash after a successful tool call would otherwise leave the run
+  // resolved and parked with only a generic error to show for it. The outer
+  // catch cannot cover this: it does not know about the resolution.
+  // continueResolvedGateRun never throws, so this cannot mask the real error.
+  const turn: ChatTurn = {
+    startedAt: Date.now(),
+    reported: false,
+    failed: false,
+  };
+  const turnInput = { ...input, turn };
+  try {
+    if (mode === 'stream') {
+      await handleStreamMode(turnInput);
+    } else {
+      await handleBatchMode(turnInput);
+    }
+  } catch (error) {
+    // A provider that throws mid-turn never reaches the handler's own report. Count
+    // the turn as failed here, once, then let the outer catch tell the user.
+    if (!turn.reported) {
+      reportChatTurn(turn, {
+        platform: platform.getPlatformType(),
+        provider: aiClient.getType(),
+        model: requestOptions?.model,
+        durationMs: Date.now() - turn.startedAt,
+        outcome: 'failed',
+      });
+    }
+    throw error;
+  } finally {
+    if (gateResolution.resolved !== null) {
+      await continueResolvedGateRun(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        gateResolution.resolved.run,
+        gateResolution.resolved.action,
+        context.actor,
+        context.isolationHints
+      );
+    }
+  }
+  return turn;
+}
+
+async function resolveChatCwd(
+  conversation: Conversation,
+  codebases: readonly Codebase[]
+): Promise<string> {
+  const scopedCodebase =
+    conversation.codebase_id !== null
+      ? codebases.find(c => c.id === conversation.codebase_id)
+      : undefined;
+  let cwd: string;
+  if (scopedCodebase !== undefined) {
+    cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+  } else {
+    if (conversation.codebase_id !== null) {
+      getLog().warn(
+        { codebaseId: conversation.codebase_id },
+        'orchestrator.scoped_codebase_not_found'
+      );
+    }
+    cwd = await ensureArchonWorkspacesPath();
+  }
+  return cwd;
 }
 
 /**

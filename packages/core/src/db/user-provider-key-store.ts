@@ -236,12 +236,49 @@ async function resolveOAuthCredential(
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_provider');
     return UNREADABLE;
   }
+  const creds = readOAuthCredentials(userId, provider, ciphertext, key);
+  if (!creds) return UNREADABLE;
+  let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
+  try {
+    result = oauthProvider
+      ? await mintOAuthApiKey(oauthProvider, creds)
+      : // Assertion to the narrow openai shape: rows under vendor 'openai' are
+        // minted exclusively by openai-oauth.ts, which validates every field at
+        // write time; mint's runtime guards still tolerate legacy/corrupt rows.
+        await mintOpenAiOAuthApiKey(creds as OpenAiOAuthCredentials);
+  } catch (err) {
+    return oauthRefreshFailure(userId, provider, err);
+  }
+
+  if (!result) {
+    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_api_key');
+    return {
+      state: 'unusable',
+      source: 'archon',
+      evidence: 'The stored credential produced no access token.',
+    };
+  }
+  const rawCreds = result.newCredentials;
+  await saveRotatedOAuthCredentials(userId, provider, creds, rawCreds);
+  return {
+    state: 'usable',
+    source: 'archon',
+    credential: { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds },
+  };
+}
+
+function readOAuthCredentials(
+  userId: string,
+  provider: string,
+  ciphertext: string,
+  key: Buffer
+): OAuthCredentials | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(decryptToken(ciphertext, key));
   } catch {
     getLog().error({ userId, provider }, 'user_provider_key.oauth_decrypt_failed');
-    return UNREADABLE;
+    return null;
   }
   const creds = typeof parsed === 'object' && parsed !== null ? (parsed as OAuthCredentials) : null;
   // Both mint paths decide refresh from `creds.expires`. A missing or
@@ -253,53 +290,46 @@ async function resolveOAuthCredential(
       { userId, provider, expiresType: typeof creds?.expires },
       'user_provider_key.oauth_malformed_expires'
     );
-    return UNREADABLE;
+    return null;
   }
-  let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
-  try {
-    result = oauthProvider
-      ? await mintOAuthApiKey(oauthProvider, creds)
-      : // Assertion to the narrow openai shape: rows under vendor 'openai' are
-        // minted exclusively by openai-oauth.ts, which validates every field at
-        // write time; mint's runtime guards still tolerate legacy/corrupt rows.
-        await mintOpenAiOAuthApiKey(creds as OpenAiOAuthCredentials);
-  } catch (err) {
-    getLog().error(
-      {
-        userId,
-        provider,
-        status:
-          err instanceof OpenAiTokenError || err instanceof SubscriptionTokenError
-            ? err.status
-            : undefined,
-      },
-      'user_provider_key.oauth_refresh_failed'
-    );
-    if (!(err instanceof OpenAiTokenError) && !(err instanceof SubscriptionTokenError)) {
-      return {
-        state: 'check_failed',
-        source: 'archon',
-        evidence: "The vendor's token refresh failed.",
-      };
-    }
-    // Core's token flows report an HTTP status and a body-free message. Only
-    // 400 and 401 mean the token endpoint rejected the grant; any other status (a WAF
-    // challenge, a moved endpoint, rate limiting, an outage) or no status at all (network,
-    // timeout) leaves the credential's health unknown.
-    if (err.status === 400 || err.status === 401) {
-      return { state: 'unusable', source: 'archon', evidence: err.message };
-    }
-    return { state: 'check_failed', source: 'archon', evidence: err.message };
-  }
-  if (!result) {
-    getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_api_key');
+  return creds;
+}
+
+function oauthRefreshFailure(userId: string, provider: string, err: unknown): StoredCredential {
+  getLog().error(
+    {
+      userId,
+      provider,
+      status:
+        err instanceof OpenAiTokenError || err instanceof SubscriptionTokenError
+          ? err.status
+          : undefined,
+    },
+    'user_provider_key.oauth_refresh_failed'
+  );
+  if (!(err instanceof OpenAiTokenError) && !(err instanceof SubscriptionTokenError)) {
     return {
-      state: 'unusable',
+      state: 'check_failed',
       source: 'archon',
-      evidence: 'The stored credential produced no access token.',
+      evidence: "The vendor's token refresh failed.",
     };
   }
-  const rawCreds = result.newCredentials;
+  // Core's token flows report an HTTP status and a body-free message. Only
+  // 400 and 401 mean the token endpoint rejected the grant; any other status (a WAF
+  // challenge, a moved endpoint, rate limiting, an outage) or no status at all (network,
+  // timeout) leaves the credential's health unknown.
+  if (err.status === 400 || err.status === 401) {
+    return { state: 'unusable', source: 'archon', evidence: err.message };
+  }
+  return { state: 'check_failed', source: 'archon', evidence: err.message };
+}
+
+async function saveRotatedOAuthCredentials(
+  userId: string,
+  provider: string,
+  creds: OAuthCredentials,
+  rawCreds: OAuthCredentials
+): Promise<void> {
   // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
   // writes on a reordered-but-equal blob).
   const rotated =
@@ -328,9 +358,4 @@ async function resolveOAuthCredential(
       }
     }
   }
-  return {
-    state: 'usable',
-    source: 'archon',
-    credential: { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds },
-  };
 }

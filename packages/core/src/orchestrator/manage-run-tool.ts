@@ -328,15 +328,24 @@ function formatTimestamp(val: Date | string): string {
 }
 
 function formatRunDetail(run: WorkflowRun): string {
+  const parts = formatRunSummary(run);
+  parts.push(...formatRunAttention(run), ...formatRunGate(run));
+  log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
+  return parts.join('\n');
+}
+
+function formatRunSummary(run: WorkflowRun): string[] {
   const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
   if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
   parts.push(`started: ${formatTimestamp(run.started_at)}`);
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
   if (typeof error === 'string' && error.length > 0) parts.push(`error: ${error.slice(0, 300)}`);
-  // Paused interactive-loop gate: surface the structured gate state (#2074) so an
-  // AI approver can decide finalize-vs-iterate without parsing prose.
-  const rawApproval = run.metadata.approval;
+  return parts;
+}
+
+function formatRunAttention(run: WorkflowRun): string[] {
+  const parts: string[] = [];
   const attention = runAttention(run);
   if (attention?.kind === 'awaiting_response' || attention?.kind === 'attention')
     parts.push(`occurrence: ${attention.occurrence}`);
@@ -362,6 +371,12 @@ function formatRunDetail(run: WorkflowRun): string {
     }
     parts.push(`-> ${attentionAnswerAdvice(attention)}`);
   }
+  return parts;
+}
+
+function formatRunGate(run: WorkflowRun): string[] {
+  const parts: string[] = [];
+  const rawApproval = run.metadata.approval;
   if (
     run.status === 'paused' &&
     isApprovalContext(rawApproval) &&
@@ -379,9 +394,6 @@ function formatRunDetail(run: WorkflowRun): string {
     const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
     if (excerpt) parts.push(`output: ${excerpt}`);
   }
-  // Paused gate with an author-declared decision vocabulary beyond approve/reject
-  // (#2707 step 2) — surface it so the agent knows what action=respond accepts,
-  // instead of guessing at a decision id.
   if (
     run.status === 'paused' &&
     isApprovalContext(rawApproval) &&
@@ -392,8 +404,7 @@ function formatRunDetail(run: WorkflowRun): string {
     const ids = rawApproval.decisions.map(d => d.id).join(', ');
     parts.push(`gate: decisions: ${ids} (use action=respond with one of these)`);
   }
-  log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
-  return parts.join('\n');
+  return parts;
 }
 
 // ─── Write handlers ─────────────────────────────────────────────────────────
