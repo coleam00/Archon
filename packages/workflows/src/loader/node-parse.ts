@@ -20,6 +20,51 @@ function formatNodeIssue(id: string, issue: z.ZodIssue): string {
   return `Node '${nodeId}': ${pathStr}${issue.message}`;
 }
 
+function composedCheckoutError(
+  node: DagNode | IncludeDirective,
+  raw: Record<string, unknown>,
+  id: string
+): string | undefined {
+  // `mutates_checkout:` is workflow-level, so Zod strips a misplaced node-level value
+  // before superRefine runs. A composed block, fanned out or not, runs inside the
+  // composing run and shares its checkout, so the declaration belongs to that run.
+  if (isIncludeDirective(node) && raw.mutates_checkout !== undefined) {
+    return `Node '${id}': 'mutates_checkout' is not supported on an include node: a composed block shares the run's single checkout, so concurrency safety is the composing workflow's to declare. Set it at workflow level, or use a 'workflow:' node when you want a separate governed run.`;
+  }
+  if (isComposeFanOutNode(node) && raw.mutates_checkout !== undefined) {
+    return `Node '${id}': 'mutates_checkout' is not supported on a composed fan-out node: its instances run inside this run and share its checkout. Set 'fan_out.max_parallel: 1' to run them one at a time, or use a 'workflow:' fan-out for separate governed runs.`;
+  }
+  return undefined;
+}
+
+function collectIgnoredFieldWarnings(
+  node: DagNode | IncludeDirective,
+  raw: Record<string, unknown>,
+  id: string,
+  warnings: string[]
+): void {
+  // parseWarnings owns author-facing diagnostics; the structured log observes the
+  // same message for operators without becoming a second classification path.
+  const nonAiNode = ignoredFieldsForNode(node);
+  if (!nonAiNode) return;
+  const presentAiFields = nonAiNode.fields.filter(f => raw[f] !== undefined);
+  if (presentAiFields.length === 0) return;
+  const quoted = presentAiFields.map(f => `'${f}'`).join(', ');
+  const plural = presentAiFields.length > 1;
+  const message =
+    nonAiNode.type === 'include'
+      ? `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} ignored and will have no effect ` +
+        '(an include attaches a sub-graph and does not reconfigure it; declare the ' +
+        `${plural ? 'fields' : 'field'} on the included nodes instead)`
+      : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
+        `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
+  warnings.push(message);
+  getLog().debug(
+    { id: node.id, fields: presentAiFields, warning: message },
+    `${nonAiNode.type}_node_ai_fields_ignored`
+  );
+}
+
 /**
  * Validate and parse a single DAG node from raw YAML, recording schema errors
  * and author-facing warnings.
@@ -43,51 +88,15 @@ function parseDagNode(
 
   const node = result.data;
 
-  // `mutates_checkout:` is workflow-level, so Zod strips a misplaced node-level value
-  // before superRefine runs. A composed block, fanned out or not, runs inside the
-  // composing run and shares its checkout, so the declaration belongs to that run.
-  if (isIncludeDirective(node) && (raw as Record<string, unknown>).mutates_checkout !== undefined) {
-    errors.push(
-      `Node '${id}': 'mutates_checkout' is not supported on an include node: a composed block shares the run's single checkout, so concurrency safety is the composing workflow's to declare. Set it at workflow level, or use a 'workflow:' node when you want a separate governed run.`
-    );
-    return null;
-  }
-  if (
-    isComposeFanOutNode(node) &&
-    (raw as Record<string, unknown>).mutates_checkout !== undefined
-  ) {
-    errors.push(
-      `Node '${id}': 'mutates_checkout' is not supported on a composed fan-out node: its instances run inside this run and share its checkout. Set 'fan_out.max_parallel: 1' to run them one at a time, or use a 'workflow:' fan-out for separate governed runs.`
-    );
+  const checkoutError = composedCheckoutError(node, raw as Record<string, unknown>, id);
+  if (checkoutError !== undefined) {
+    errors.push(checkoutError);
     return null;
   }
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
   collectLoopUntilDeprecationWarnings(node, id, warnings);
 
-  // parseWarnings owns author-facing diagnostics; the structured log observes the
-  // same message for operators without becoming a second classification path.
-  const nonAiNode = ignoredFieldsForNode(node);
-  if (nonAiNode) {
-    const presentAiFields = nonAiNode.fields.filter(
-      f => (raw as Record<string, unknown>)[f] !== undefined
-    );
-    if (presentAiFields.length > 0) {
-      const quoted = presentAiFields.map(f => `'${f}'`).join(', ');
-      const plural = presentAiFields.length > 1;
-      const message =
-        nonAiNode.type === 'include'
-          ? `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} ignored and will have no effect ` +
-            '(an include attaches a sub-graph and does not reconfigure it; declare the ' +
-            `${plural ? 'fields' : 'field'} on the included nodes instead)`
-          : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
-            `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
-      warnings.push(message);
-      getLog().debug(
-        { id: node.id, fields: presentAiFields, warning: message },
-        `${nonAiNode.type}_node_ai_fields_ignored`
-      );
-    }
-  }
+  collectIgnoredFieldWarnings(node, raw as Record<string, unknown>, id, warnings);
 
   return node;
 }
