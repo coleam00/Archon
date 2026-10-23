@@ -51,17 +51,11 @@ const BUILD_INPUTS = [
  * `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1` (`test:install`), the web assets that feed the Docker image, and anything under
  * `.github/workflows/` — changing the gate must run the gate. `Caddyfile.example` is read by
  * `reverse-proxy.test.ts` and `caddy-recipe.test.ts`, and git applies `.gitattributes` to every
- * file a test reads from the checkout.
+ * file a test reads from the checkout. `.env.example` is read by `caddy-recipe.test.ts`.
  *
  * An entry ending in `/` matches a directory, anything else matches one file.
  */
-const INERT_PATHS = [
-  '.gitignore',
-  'LICENSE',
-  '.env.example',
-  '.archon/config.example.yaml',
-  'assets/',
-];
+const INERT_PATHS = ['.gitignore', 'LICENSE', '.archon/config.example.yaml', 'assets/'];
 
 const isInert = (file: string): boolean =>
   INERT_PATHS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
