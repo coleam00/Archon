@@ -114,29 +114,26 @@ function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: 
   const cwdKeys = new Set<string>();
   const strippedFiles: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
-    const parsedKeys = readCwdEnvKeys(resolve(cwd, filename));
+    const filepath = resolve(cwd, filename);
+    // dotenv.config with processEnv:{} parses without writing to process.env.
+    // quiet:true suppresses dotenv's `[dotenv@...] injecting env …` tip line —
+    // which always reports (0) here because processEnv:{} is a throwaway object
+    // and would mislead operators into thinking the file was empty (see #1302).
+    const result = config({ path: filepath, processEnv: {}, quiet: true });
+    if (result.error) {
+      // ENOENT is expected (file simply doesn't exist) — all others are unexpected
+      const code = (result.error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        process.stderr.write(
+          `[archon] Warning: could not parse ${filepath} for CWD env stripping: ${result.error.message}\n`
+        );
+      }
+      continue;
+    }
+    const parsedKeys = Object.keys(result.parsed ?? {});
     if (parsedKeys.length === 0) continue;
     strippedFiles.push(filename);
     for (const key of parsedKeys) cwdKeys.add(key);
   }
   return { cwdKeys, strippedFiles };
-}
-
-function readCwdEnvKeys(filepath: string): string[] {
-  // dotenv.config with processEnv:{} parses without writing to process.env.
-  // quiet:true suppresses dotenv's `[dotenv@...] injecting env …` tip line —
-  // which always reports (0) here because processEnv:{} is a throwaway object
-  // and would mislead operators into thinking the file was empty (see #1302).
-  const result = config({ path: filepath, processEnv: {}, quiet: true });
-  if (result.error) {
-    // ENOENT is expected (file simply doesn't exist) — all others are unexpected
-    const code = (result.error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') {
-      process.stderr.write(
-        `[archon] Warning: could not parse ${filepath} for CWD env stripping: ${result.error.message}\n`
-      );
-    }
-    return [];
-  }
-  return Object.keys(result.parsed ?? {});
 }
