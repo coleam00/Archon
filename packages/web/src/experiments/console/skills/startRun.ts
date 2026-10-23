@@ -36,6 +36,12 @@ export interface StartRunArgs {
 
 type WorkflowRunLaunchJson =
   paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
+type WorkflowRunLaunchMultipart =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
+type WorkflowRunFormFields = Pick<
+  WorkflowRunLaunchJson,
+  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
+>;
 
 interface CreateConversationResponse {
   conversationId: string;
@@ -82,7 +88,7 @@ export async function startRun({
   if (!res.ok) await throwRunError(res, url);
 }
 
-function buildRunForm(body: WorkflowRunLaunchJson, files: File[]): FormData {
+function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
   for (const [key, value] of Object.entries(body)) {
