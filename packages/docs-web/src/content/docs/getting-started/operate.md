@@ -212,6 +212,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
   "runId": "7c1e…",
   "workflow": "deliver",
   "project": { "key": "acme/web", "codebaseId": "c41f…", "name": "acme/web" },
+  "parentRunId": null,
   "fanOut": null,
   "revision": 1,
   "labels": { "ci": "other" },
@@ -234,6 +235,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 - **`occurrence`** identifies an answerable pause. Pass it back with `--occurrence`. If a refusal does not name the current occurrence, read the item again before retrying.
 - **`revision`** starts at 1 and grows by one with every label write on an attention wait. It stays 1 for other kinds, so it does not identify every change to an item.
 - **`project`** is the project the run belongs to, never a label. `key` is the storage key [state documents](/reference/cli/#state) scope by, so `archon state --project <item.project.key>` reaches the same project. Copy it exactly when you pass `--project`. `codebaseId` is null for a project with no codebase row, such as a run in an unregistered directory (`@cwd/<basename>-<digest>`). A run started before its codebase was renamed keeps the key it started with. `project` is null only for a run with no trusted storage root.
+- **`parentRunId`** is the run's direct parent for any child run, such as a `workflow:` sub-run or a fan-out child, and null for a top-level run.
 - **`fanOut`** is `{ parentRunId, nodeId, index }` for a child of a `fan_out:` node, and null otherwise.
 - **`pausedAt`** is when the pause opened. Gates do not record it, so it is null for them and they sort after timed items.
 - **`context`** holds pointers, never pasted content.
@@ -257,12 +259,12 @@ A stream starts with one `attention` line per open item, with `snapshot: true`, 
 
 | `type` | When | Fields |
 |---|---|---|
-| `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `item` |
-| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
-| `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `occurrence`, `revision` |
-| `terminal` | A run ended | `cursor`, `project`, `runId`, `status`, `outcome` |
-| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `status: "running"` |
-| `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `observedStatus` |
+| `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `workflow`, `parentRunId`, `item` |
+| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
+| `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
+| `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause` |
+| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
+| `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
 | `ready` | The snapshot is complete | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
 | `degraded` | Repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
@@ -273,6 +275,8 @@ A stream starts with one `attention` line per open item, with `snapshot: true`, 
 - **Reconnect from a cursor before any event you did not finish.** A cursor names a feed event, and one event can emit two lines with the same cursor (`resolved` then `attention`, or `resolved` then `terminal`). `--after <cursor>` skips the whole event, so checkpoint only on a handled `bookmark` or from before the partly handled event. The new stream sends the snapshot and `ready`, then replays readable changes after the cursor. If the cursor is rejected, reconnect without `--after`.
 - **A silent stream is not reading.** A stream that cannot read the store sends no `bookmark`, so no line for well over 30 seconds means it is stuck.
 - **`degraded` means gaps.** The operator log names the run that failed to project; the warning does not. Repair the read failure, reconnect to refresh the open set, and replay from a cursor before the gap to recover missed transitions. The stream sends no recovered signal.
+- **Filter by parent.** Every run line carries the run's `workflow` and `parentRunId`, the same values as the queue item's. Keep top-level runs with `parentRunId == null`, or one parent's direct children with `parentRunId == "<run-id>"`, for example `jq 'select(.parentRunId == null)'`. A `workflow` of null means the stream could not read the run's row, because it was deleted, so that line's `parentRunId` says nothing.
+- **A failed run says where it failed.** On a `terminal` line with `status: "failed"`, `cause` is `{ node, errorClass }`: the first failed node from the run's terminal record, and the failure kind that node's failure recorded, such as `exec_failed` or `timeout`. `errorClass` is null when the failure recorded no kind, as older runs did. `cause` is null for other statuses, for a run that failed outside a node, and for a run that ended before terminal records existed. A replayed line keeps the cause it had, even after the run resumed and failed again. The line never carries error text; read it with `archon workflow get <run-id>`.
 - **`--label` filters `attention` and `resolved` only.** `terminal`, `resumed` and `owner_lost` arrive for every run in scope. A label write that leaves an item outside the filter sends `unmatched`.
 - **Items report the row when the stream read it.** The stream reads about once a second, and PostgreSQL wakes it on each commit. A pause opened and answered between two reads may never appear.
 

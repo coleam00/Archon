@@ -2,7 +2,7 @@ import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@arc
 import type { WorkflowTerminalProperties } from '@archon/paths';
 import type { DagResumeSnapshot } from './store';
 import { readNodeRecordData } from './node-record-reader';
-import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
+import { nodeDescriptorSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
 import { terminalStatusSchema } from './schemas/terminal-record';
 import {
@@ -12,7 +12,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { telemetryNodeType } from './telemetry-node-type';
-import { getTerminalRecord } from './terminal-record';
+import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
 
 /**
  * The event types {@link buildRunTerminalTelemetry} reads, so a caller can load only
@@ -60,16 +60,10 @@ export function buildRunTerminalTelemetry(input: {
   const startedData = started ? readNodeRecordData(started.data) : {};
   const record = getTerminalRecord(run.status, events);
 
-  const firstFailed =
-    record?.first_failed_node == null
-      ? undefined
-      : lastEvent(
-          events,
-          e => e.event_type === 'node_failed' && e.step_name === record.first_failed_node
-        );
-  const failedData = firstFailed ? readNodeRecordData(firstFailed.data) : {};
-  const failedNode = nodeDescriptorSchema.safeParse(failedData.node);
-  const failureKind = nodeFailureKindSchema.safeParse(failedData.failure_kind);
+  const firstFailed = firstFailedNodeEvent(record, events);
+  const failedNode = nodeDescriptorSchema.safeParse(
+    firstFailed ? readNodeRecordData(firstFailed.data).node : undefined
+  );
   const exitReason = runExitReasonSchema.safeParse(terminalData.exit_reason);
   const cancelReason = runCancelReasonSchema.safeParse(terminalData.cancel_reason);
   const nodeStates = record?.nodes.map(node => node.state) ?? [];
@@ -103,7 +97,7 @@ export function buildRunTerminalTelemetry(input: {
     ...(status.data === 'cancelled' && cancelReason.success
       ? { cancelReason: cancelReason.data }
       : {}),
-    ...(firstFailed ? { errorClass: failureKind.success ? failureKind.data : 'unknown' } : {}),
+    ...(firstFailed ? { errorClass: recordedFailureKind(firstFailed) ?? 'unknown' } : {}),
     ...(failedNode.success ? { failedNodeType: telemetryNodeType(failedNode.data) } : {}),
     // Absent when no provider reported spend, so absence never reads as "free".
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),

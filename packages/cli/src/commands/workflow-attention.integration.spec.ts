@@ -468,6 +468,8 @@ test.each([true, false])(
         type: 'resumed',
         runId: 'healthy',
         project: null,
+        workflow: 'wf',
+        parentRunId: null,
         status: 'running',
         cursor: workflowEventCursor('fixture:2'),
       },
