@@ -175,22 +175,7 @@ export function scopedConfigSchema(
       const branch = selectedBranch(original, set, root);
       if (branch !== undefined) value = project(value, branch, root, output, owners);
     }
-    if (conjuncts.length > 0) {
-      if (output) {
-        for (const conjunct of conjuncts) value = project(value, conjunct, root, true, owners);
-      } else {
-        const members: z.ZodType[] = conjuncts.map(conjunct =>
-          z.preprocess(
-            input => project(input, conjunct, root, false, owners),
-            branchValidator(conjunct)
-          )
-        );
-        const parsed = members
-          .reduce((left, right) => z.intersection(left, right))
-          .safeParse(value);
-        if (parsed.success) value = parsed.data;
-      }
-    }
+    value = projectConjuncts(value, conjuncts, root, output, owners);
     const normalization = node[CONFIG_STRING_NORMALIZATION_KEY];
     if (output && typeof value === 'string' && normalization !== undefined) {
       return normalizeConfigString(value, configStringNormalizationSchema.parse(normalization));
@@ -204,6 +189,37 @@ export function scopedConfigSchema(
       });
     }
     if (value === null || typeof value !== 'object') return value;
+    return projectObject(value, node, root, output, owners);
+  };
+  const projectConjuncts = (
+    value: unknown,
+    conjuncts: JsonSchema[],
+    root: boolean,
+    output: boolean,
+    owners: z.core.JSONSchema.BaseSchema[]
+  ): unknown => {
+    if (conjuncts.length === 0) return value;
+    if (output) {
+      for (const conjunct of conjuncts) value = project(value, conjunct, root, true, owners);
+    } else {
+      const members: z.ZodType[] = conjuncts.map(conjunct =>
+        z.preprocess(
+          input => project(input, conjunct, root, false, owners),
+          branchValidator(conjunct)
+        )
+      );
+      const parsed = members.reduce((left, right) => z.intersection(left, right)).safeParse(value);
+      if (parsed.success) value = parsed.data;
+    }
+    return value;
+  };
+  const projectObject = (
+    value: object,
+    node: z.core.JSONSchema.BaseSchema,
+    root: boolean,
+    output: boolean,
+    owners: z.core.JSONSchema.BaseSchema[]
+  ): unknown => {
     const properties = node.properties ?? {};
     const patterns = Object.entries(node.patternProperties ?? {}).map(([pattern, child]) => ({
       pattern: new RegExp(pattern),
