@@ -21,7 +21,7 @@ import {
   type WorkflowRunOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
-import { dryRunResultSchema, type DryRunResult } from './dry-run/schemas';
+import { dryRunResultSchema, type DryRunResult, type DryRunResolution } from './dry-run/schemas';
 import { isRecord, type DryRunStubs } from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
@@ -237,21 +237,7 @@ export function formatDryRunTrace(result: DryRunResult): string {
     lines.push(
       `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
     );
-    if (entry.resolution) {
-      const r = entry.resolution;
-      const authored = r.authoredIn ? ` [from ${r.authoredIn}]` : '';
-      const model = r.model ?? '(provider default)';
-      lines.push(
-        `  runs on: ${r.provider} (${r.providerFrom}) / ${model} (${r.modelFrom})${authored}`
-      );
-      if (r.effort) lines.push(`  effort: ${r.effort} (${r.effortFrom})`);
-      if (r.providerConflict) {
-        const c = r.providerConflict;
-        lines.push(
-          `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
-        );
-      }
-    }
+    if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
     if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
     if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
   }
@@ -265,4 +251,21 @@ export function formatDryRunTrace(result: DryRunResult): string {
   if (result.unusedStubs.length > 0) lines.push(`Unused stubs: ${result.unusedStubs.join(', ')}`);
   if (result.summary) lines.push(`Summary: ${result.summary}`);
   return lines.join('\n');
+}
+
+function formatDryRunResolution(resolution: DryRunResolution): string[] {
+  const lines: string[] = [];
+  const authored = resolution.authoredIn ? ` [from ${resolution.authoredIn}]` : '';
+  const model = resolution.model ?? '(provider default)';
+  lines.push(
+    `  runs on: ${resolution.provider} (${resolution.providerFrom}) / ${model} (${resolution.modelFrom})${authored}`
+  );
+  if (resolution.effort) lines.push(`  effort: ${resolution.effort} (${resolution.effortFrom})`);
+  if (resolution.providerConflict) {
+    const c = resolution.providerConflict;
+    lines.push(
+      `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
+    );
+  }
+  return lines;
 }
