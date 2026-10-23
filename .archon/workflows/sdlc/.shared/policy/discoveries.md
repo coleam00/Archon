@@ -19,7 +19,8 @@ wins.
   - already fixed at the base;
   - fixed by an open pull request;
   - a decision about one run's or one pull request's own scope;
-  - too minor for an issue of its own and with nothing in its area to batch it with;
+  - too minor for an issue of its own, with no user- or operator-visible effect and
+    nothing in its area to batch it with;
   - speculative, with no failure shown;
   - impossible to verify by reading the code.
 - **A drop stays dropped** unless new evidence changes the reason it was dropped.
