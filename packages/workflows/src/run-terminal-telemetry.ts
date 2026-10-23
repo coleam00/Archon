@@ -2,7 +2,7 @@ import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@arc
 import type { WorkflowTerminalProperties } from '@archon/paths';
 import type { DagResumeSnapshot } from './store';
 import { readNodeRecordData } from './node-record-reader';
-import { nodeDescriptorSchema, nodeFailureKindSchema } from './schemas/node-execution';
+import { nodeDescriptorSchema } from './schemas/node-execution';
 import { runCancelReasonSchema, runExitReasonSchema } from './schemas/run-terminal-reason';
 import { terminalStatusSchema } from './schemas/terminal-record';
 import {
@@ -12,7 +12,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { telemetryNodeType } from './telemetry-node-type';
-import { getTerminalRecord } from './terminal-record';
+import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
 
 /**
  * The event types {@link buildRunTerminalTelemetry} reads, so a caller can load only
@@ -115,20 +115,11 @@ function failedNodeTelemetry(
   record: ReturnType<typeof getTerminalRecord>,
   events: readonly RunTelemetryEvent[]
 ) {
-  const firstFailed =
-    record?.first_failed_node == null
-      ? undefined
-      : lastEvent(
-          events,
-          e => e.event_type === 'node_failed' && e.step_name === record.first_failed_node
-        );
+  const firstFailed = firstFailedNodeEvent(record, events);
   const failedData = firstFailed ? readNodeRecordData(firstFailed.data) : {};
   const failedNode = nodeDescriptorSchema.safeParse(failedData.node);
-  const failureKind = nodeFailureKindSchema.safeParse(failedData.failure_kind);
   return {
-    ...(firstFailed
-      ? { errorClass: failureKind.success ? failureKind.data : ('unknown' as const) }
-      : {}),
+    ...(firstFailed ? { errorClass: recordedFailureKind(firstFailed) ?? 'unknown' } : {}),
     ...(failedNode.success ? { failedNodeType: telemetryNodeType(failedNode.data) } : {}),
   };
 }

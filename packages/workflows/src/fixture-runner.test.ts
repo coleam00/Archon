@@ -71,6 +71,7 @@ import {
   formatFixtureReport,
   parseFixtureFile,
   runFixtures as runFixturesFromSource,
+  type FixtureDeclaration,
   type FixtureReport,
   type RunFixturesOptions,
 } from './fixture-runner';
@@ -164,6 +165,41 @@ describe('parseFixtureFile', () => {
     expect(parsed.declaration.reached).toBeUndefined();
     expect(parsed.execCode).toBe(false);
     expect(parsed.stubs).toEqual({ 'node-a': 'stub' });
+  });
+
+  it('accepts authored verdict expectations and rejects invalid values', () => {
+    for (const authored of ['succeeded', 'failed']) {
+      expect(parseFixtureFile(`fixture:\n  authored: ${authored}`, 'x').declaration).toMatchObject({
+        expect: 'completed',
+        authored,
+      });
+    }
+    expect(() => parseFixtureFile('fixture:\n  authored: completed', 'x')).toThrow(
+      "'fixture' block"
+    );
+  });
+
+  it.each(['authoredOutcome', 'expected', 'failNode', 'reachd', 'input', 'resolvedTextContains'])(
+    'rejects unknown fixture declaration key %s',
+    key => {
+      expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
+        `Unrecognized key: "${key}"`
+      );
+    }
+  );
+
+  it('preserves every supported fixture declaration key', () => {
+    const declaration: FixtureDeclaration = {
+      expect: 'failed',
+      authored: 'failed',
+      'fail-node': 'node-a',
+      reached: ['node-a'],
+      inputs: { branch: 'task-123' },
+      'resolved-text-contains': { 'node-a': 'task-123' },
+    };
+    expect(parseFixtureFile(Bun.YAML.stringify({ fixture: declaration }), 'x').declaration).toEqual(
+      declaration
+    );
   });
 
   it('requires fail-node when expect is failed', () => {
@@ -261,6 +297,71 @@ describe('runFixtures', () => {
     expect(formatFixtureReport(report)).toContain('Simulation outcome: completed');
     expect(formatFixtureReport(report)).toContain('Authored outcome: failed');
   });
+
+  it.each([
+    ['agent', '    prompt: verdict'],
+    ['exec', '    bash: echo verdict'],
+    ['loop-assumed', '    loop: { prompt: verdict, until_bash: "true", max_iterations: 1 }'],
+    ['loop-field', '    loop: { prompt: verdict, until_field: done, max_iterations: 1 }'],
+  ])('checks object and JSON-string authored stubs equivalently for %s', async (_kind, node) => {
+    for (const green of [true, false]) {
+      const authored = green ? 'succeeded' : 'failed';
+      const value = { green, done: true };
+      const workflowYaml = [
+        'name: test-wf',
+        'description: stubbed verdict',
+        'returns: node-a',
+        'outcome_field: green',
+        'nodes:',
+        '  - id: node-a',
+        node,
+        '    output_format:',
+        '      type: object',
+        '      properties:',
+        '        green: { type: boolean }',
+        '        done: { type: boolean }',
+        '      required: [green, done]',
+      ].join('\n');
+      const { cwd } = writeTempProject({
+        workflowYaml,
+        fixtureName: 'object',
+        body: Bun.YAML.stringify({ fixture: { authored }, 'node-a': value }),
+      });
+      writeTempProject({
+        cwd,
+        workflowYaml,
+        fixtureName: 'string',
+        body: Bun.YAML.stringify({ fixture: { authored }, 'node-a': JSON.stringify(value) }),
+      });
+      const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+      expect(report).toMatchObject({
+        passed: 2,
+        failed: 0,
+        results: [
+          { outcome: 'completed', authoredOutcome: authored, pass: true },
+          { outcome: 'completed', authoredOutcome: authored, pass: true },
+        ],
+      });
+    }
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'fails an authored expectation without a verdict under expect: %s',
+    async outcome => {
+      const { cwd } = writeTempProject({
+        body: `fixture:\n  expect: ${outcome}\n  authored: succeeded\n${
+          outcome === 'failed' ? '  fail-node: node-a' : 'node-a: stub'
+        }`,
+      });
+      const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+      expect(report.results[0]).toMatchObject({
+        outcome,
+        pass: false,
+        authoredOutcome: null,
+        failureReason: 'expected authored outcome succeeded, dry-run reported undeclared',
+      });
+    }
+  );
 
   it('requires declared nodes to complete or be stubbed', async () => {
     const { cwd } = writeTempProject({
@@ -1235,6 +1336,50 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     cpSync(template, cwd, { recursive: true });
     return cwd;
   }
+
+  it('checks authored expectations against an executed return script', async () => {
+    const { cwd } = writeTempProject({
+      cwd: callerFrom(trackedOnlyRepo),
+      workflowYaml: [
+        'name: test-wf',
+        'description: executed verdict',
+        'returns: verdict',
+        'outcome_field: succeeded',
+        'nodes:',
+        '  - id: verdict',
+        '    runtime: bun',
+        '    script: |',
+        '      console.log(JSON.stringify({ succeeded: false }));',
+        '    output_format:',
+        '      type: object',
+        '      properties:',
+        '        succeeded: { type: boolean }',
+        '      required: [succeeded]',
+      ].join('\n'),
+      body: 'fixture:\n  authored: succeeded\nexec-code: true',
+    });
+    writeTempProject({
+      cwd,
+      fixtureName: 'matching',
+      workflowYaml: readFileSync(join(cwd, '.archon/workflows/pack/test-wf.yaml'), 'utf8'),
+      body: 'fixture:\n  authored: failed\nexec-code: true',
+    });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+    expect(report).toMatchObject({
+      passed: 1,
+      failed: 1,
+      results: [
+        {
+          outcome: 'completed',
+          authoredOutcome: 'failed',
+          pass: false,
+          failureReason: 'expected authored outcome succeeded, dry-run reported failed',
+        },
+        { outcome: 'completed', authoredOutcome: 'failed', pass: true },
+      ],
+    });
+    expect(formatFixtureReport(report)).toContain('Authored outcome: failed');
+  });
 
   it('gives clean and pre-dirtied callers the same verdict (#2851)', async () => {
     // One caller, invoked twice: the dirt is then the ONLY difference between the two

@@ -97,6 +97,7 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
   ];
   if (item.fanOut !== null)
     lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
+  else if (item.parentRunId !== null) lines.push(`    child of run ${item.parentRunId}`);
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
@@ -129,6 +130,25 @@ export function printAttentionItem(item: AttentionQueueItem): void {
   for (const line of attentionItemLines(item)) console.log(line);
 }
 
+type RunLine = Extract<AttentionStreamLine, { runId: string }>;
+
+/** What the run is part of, as a trailing sentence; empty when the stream could not read it. */
+function runContextText(line: RunLine): string {
+  if (line.workflow === null) return '';
+  return line.parentRunId === null
+    ? ` Workflow ${line.workflow}.`
+    : ` Workflow ${line.workflow}, child of run ${line.parentRunId}.`;
+}
+
+function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>): string {
+  const outcome = line.outcome === null ? '' : ` (${line.outcome})`;
+  const cause =
+    line.cause === null
+      ? ''
+      : `: node ${line.cause.node} (${line.cause.errorClass ?? 'error class not recorded'})`;
+  return `Run ${line.runId} ${line.status}${outcome}${cause}.`;
+}
+
 /** The text for one stream line; none for a bookmark. */
 function attentionStreamText(
   line: Exclude<AttentionStreamLine, { type: 'error' }>,
@@ -142,22 +162,21 @@ function attentionStreamText(
       ];
     case 'resolved':
       return [
-        line.reason === 'answered'
+        (line.reason === 'answered'
           ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
-          : `Run ${line.runId} no longer needs attention.`,
+          : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
       ];
     case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.`];
+      return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
     case 'terminal':
-      return [
-        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
-      ];
+      return [terminalText(line) + runContextText(line)];
     case 'resumed':
-      return [`Run ${line.runId} resumed (${line.status}).`];
+      return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'owner_lost':
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`,
+          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.` +
+          runContextText(line),
       ];
     case 'ready':
       return [

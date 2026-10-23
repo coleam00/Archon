@@ -76,17 +76,24 @@ function collectCheckoutProducers(
 function resolveDryRunAuthoredOutcome(
   workflow: ResolvedWorkflow,
   outputs: ReadonlyMap<string, NodeOutput>,
-  consumedStubs: ReadonlySet<string>
+  consumedStubs: ReadonlySet<string>,
+  execCode: boolean
 ): WorkflowRunOutcome | null {
   const field = workflow.outcome_field;
   const returns = workflow.returns;
-  if (field === undefined || returns === undefined || !consumedStubs.has(returns)) return null;
+  if (field === undefined || returns === undefined) return null;
+
+  const selectedNode = workflow.nodes.find(node => node.id === returns);
+  if (
+    !consumedStubs.has(returns) &&
+    !(execCode && selectedNode !== undefined && isExecNode(selectedNode))
+  )
+    return null;
 
   const selectedOutput = outputs.get(returns);
   if (selectedOutput?.state !== 'completed' || !('structuredOutput' in selectedOutput)) return null;
 
   const structured = selectedOutput.structuredOutput;
-  const selectedNode = workflow.nodes.find(node => node.id === returns);
   if (
     selectedNode?.output_format === undefined ||
     !validateStructuredOutput(structured, selectedNode.output_format).valid
@@ -206,7 +213,12 @@ export async function dryRunWorkflow(options: {
   return dryRunResultSchema.parse({
     workflow: options.workflow.name,
     outcome,
-    authoredOutcome: resolveDryRunAuthoredOutcome(options.workflow, outputs, ctx.consumedStubs),
+    authoredOutcome: resolveDryRunAuthoredOutcome(
+      options.workflow,
+      outputs,
+      ctx.consumedStubs,
+      ctx.execCode
+    ),
     trace: ctx.trace,
     missingStubs: [...ctx.missingStubs].sort(),
     toleratedMissingStubs: [...ctx.toleratedMissingStubs].sort(),
