@@ -317,8 +317,8 @@ for (const launch of ['workflow', 'fire', 'drain'] as const) {
     const outer = fixture();
     const f = fixture();
     const nodePid = join(f.project, 'node.pid');
-    // writeFileSync truncates before it writes; a poll between the two reads PID 0,
-    // and process.kill(0, 0) succeeds against the test's own process group.
+    // writeFileSync truncates before it writes; a poll in that gap reads an empty file,
+    // Number('') is PID 0, and process.kill(0, 0) succeeds against the test's own process group.
     writeFileSync(
       join(f.project, 'hold.ts'),
       `import { renameSync, writeFileSync } from 'node:fs';
