@@ -113,23 +113,7 @@ export function generateEnvContent(config: SetupConfig): string {
   // AI Assistants
   lines.push('# AI Assistants');
 
-  if (config.ai.claude) {
-    if (config.ai.claudeAuthType === 'global') {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
-    } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
-    } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
-    }
-    if (config.ai.claudeBinaryPath) {
-      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
-    }
-  } else {
-    lines.push('# Claude not configured');
-  }
-  lines.push('');
+  appendClaudeEnv(lines, config.ai);
 
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
@@ -236,6 +220,26 @@ export function generateEnvContent(config: SetupConfig): string {
   lines.push(['MAX_CONCURRENT_CONVERSATIONS', '10']);
 
   return serializeEnvDocument(lines);
+}
+
+function appendClaudeEnv(lines: EnvLine[], ai: SetupConfig['ai']): void {
+  if (ai.claude) {
+    if (ai.claudeAuthType === 'global') {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
+    } else if (ai.claudeAuthType === 'apiKey' && ai.claudeApiKey) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_API_KEY', ai.claudeApiKey]);
+    } else if (ai.claudeAuthType === 'oauthToken' && ai.claudeOauthToken) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', ai.claudeOauthToken]);
+    }
+    if (ai.claudeBinaryPath) {
+      lines.push(['CLAUDE_BIN_PATH', ai.claudeBinaryPath]);
+    }
+  } else {
+    lines.push('# Claude not configured');
+  }
+  lines.push('');
 }
 
 /**
