@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { confirmProcessGroupsGone, terminateTree } from '@archon/paths/plugin-process';
+import { isPidProvablyGone } from '@archon/paths/process-owner';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 export class CliTestScope {
@@ -76,12 +77,7 @@ async function stopDetachedTree(pid: number): Promise<void> {
 async function waitForDetachedProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + 2000;
   while (true) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
-      throw error;
-    }
+    if (isPidProvablyGone(pid)) return;
     if (Date.now() >= deadline) throw new Error(`Detached test process tree ${pid} is still alive`);
     await Bun.sleep(10);
   }
