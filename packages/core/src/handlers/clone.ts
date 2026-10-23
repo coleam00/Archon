@@ -503,17 +503,48 @@ export async function registerRepository(
     rejectExistingChoice(options);
     if (existing.repository_url)
       await assertCheckoutRemote(existing.default_cwd, existing.repository_url);
-    return {
-      codebaseId: existing.id,
-      name: existing.name,
-      repositoryUrl: existing.repository_url,
-      defaultCwd: existing.default_cwd,
-      defaultBranch: existing.default_branch ?? null,
-      commandCount: 0,
-      alreadyExisted: true,
-    };
+    return existingRegistration(existing);
   }
 
+  const remoteUrl = await unclaimedRegistrationRemote(codebases, localPath);
+  await validateRegistrationChoice(localPath, options);
+  const name = await claimProjectName(codebases, {
+    kind: 'repo',
+    name: options.name?.trim() || registrationName(localPath, remoteUrl),
+    default_cwd: localPath,
+  });
+  await createRegisteredProjectStorage(name, localPath);
+
+  // default_cwd is the real local path (not the symlink)
+  const codebase = await codebases.createCodebase({
+    name,
+    repository_url: remoteUrl ?? undefined,
+    default_cwd: localPath,
+    default_branch: options.baseBranch ?? null,
+  });
+  return loadRepositoryCommands(codebases, codebase, localPath, remoteUrl, false);
+}
+
+function existingRegistration(existing: Codebase): RegisterResult {
+  return {
+    codebaseId: existing.id,
+    name: existing.name,
+    repositoryUrl: existing.repository_url,
+    defaultCwd: existing.default_cwd,
+    defaultBranch: existing.default_branch ?? null,
+    commandCount: 0,
+    alreadyExisted: true,
+  };
+}
+
+/**
+ * The checkout's selected remote URL, or null when none is selected. Refuses a
+ * remote another project already owns.
+ */
+async function unclaimedRegistrationRemote(
+  codebases: IWorkflowHostStore['codebases'],
+  localPath: string
+): Promise<string | null> {
   const { selected, names } = await registrationRemotes(localPath);
   // With several remotes and none selected, the checkout registers without a
   // URL, as before remote selection existed. It is refused when another project
@@ -529,28 +560,8 @@ export async function registerRepository(
       );
     }
   }
-  const remoteUrl = selected ? await effectiveRegistrationUrl(localPath, selected) : null;
-
-  // Extract repo name from directory name
-  const repoName = basename(localPath);
-
-  // Try to build owner/repo name from remote URL
-  let name = repoName;
-  if (remoteUrl) {
-    const cleaned = remoteUrl.replace(/\/+$/, '').replace(/\.git$/, '');
-    let workingRemote = cleaned;
-    const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
-    if (sshRemoteMatch) {
-      workingRemote = `https://${sshRemoteMatch[1]}/${sshRemoteMatch[2]}`;
-    }
-    const parts = workingRemote.split('/');
-    const r = parts.pop();
-    const o = parts.pop();
-    if (o && r) {
-      name = `${o}/${r}`;
-    }
-  }
-
+  if (!selected) return null;
+  const remoteUrl = await effectiveRegistrationUrl(localPath, selected);
   const registeredRemote = remoteUrl ? await findRegisteredRemote(codebases, remoteUrl) : null;
   if (registeredRemote) {
     throw new ProjectRegistrationError(
@@ -562,15 +573,25 @@ export async function registerRepository(
         quoteCommandArg(localPath)
     );
   }
+  return remoteUrl;
+}
 
-  await validateRegistrationChoice(localPath, options);
-  name = await claimProjectName(codebases, {
-    kind: 'repo',
-    name: options.name?.trim() || name,
-    default_cwd: localPath,
-  });
+/** `owner/repo` from the remote URL, else the checkout's directory name. */
+function registrationName(localPath: string, remoteUrl: string | null): string {
+  if (!remoteUrl) return basename(localPath);
+  const cleaned = remoteUrl.replace(/\/+$/, '').replace(/\.git$/, '');
+  const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
+  const workingRemote = sshRemoteMatch
+    ? `https://${sshRemoteMatch[1]}/${sshRemoteMatch[2]}`
+    : cleaned;
+  const parts = workingRemote.split('/');
+  const r = parts.pop();
+  const o = parts.pop();
+  return o && r ? `${o}/${r}` : basename(localPath);
+}
 
-  // Create project structure and source symlink
+/** Create the project structure and its source symlink to the real checkout. */
+async function createRegisteredProjectStorage(name: string, localPath: string): Promise<void> {
   const identity = resolveRepoProjectIdentity(name, localPath);
   if (!identity)
     throw new ProjectRegistrationError(`Cannot derive project storage for ${localPath}`);
@@ -581,15 +602,6 @@ export async function registerRepository(
     { owner: projOwner, repo: projRepo, path: getProjectSourcePath(projOwner, projRepo) },
     'project_structure_created'
   );
-
-  // default_cwd is the real local path (not the symlink)
-  const codebase = await codebases.createCodebase({
-    name,
-    repository_url: remoteUrl ?? undefined,
-    default_cwd: localPath,
-    default_branch: options.baseBranch ?? null,
-  });
-  return loadRepositoryCommands(codebases, codebase, localPath, remoteUrl, false);
 }
 
 /**
@@ -657,15 +669,7 @@ export async function registerFolder(
       );
     }
     rejectExistingChoice(options);
-    return {
-      codebaseId: existing.id,
-      name: existing.name,
-      repositoryUrl: existing.repository_url,
-      defaultCwd: existing.default_cwd,
-      defaultBranch: existing.default_branch ?? null,
-      commandCount: 0,
-      alreadyExisted: true,
-    };
+    return existingRegistration(existing);
   }
 
   const projectName = await claimProjectName(codebases, {
