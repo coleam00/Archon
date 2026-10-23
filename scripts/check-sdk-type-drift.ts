@@ -22,48 +22,63 @@ function typeTargets(value: unknown): string[] {
   );
 }
 
-export function installedSdkTypes(root = REPO_ROOT): SdkTypeNames {
+function sdkDeclarationPaths(root: string, sdk: string): string[] {
+  const directory = [
+    join(root, 'packages/providers/node_modules', sdk),
+    join(root, 'node_modules', sdk),
+  ].find(path => existsSync(join(path, 'package.json')));
+  if (directory === undefined)
+    throw new Error(`Missing installed SDK ${sdk}; run bun install --frozen-lockfile`);
+  const manifest: { exports?: unknown; types?: unknown } = JSON.parse(
+    readFileSync(join(directory, 'package.json'), 'utf8')
+  );
+  const targets = typeTargets(manifest.exports);
+  if (typeof manifest.types === 'string') targets.push(manifest.types);
+  const paths = targets.flatMap(target =>
+    target.includes('*')
+      ? [...new Bun.Glob(target).scanSync({ cwd: directory, absolute: true })]
+      : [join(directory, target)]
+  );
+  if (paths.length === 0) throw new Error(`No type declarations found for ${sdk}`);
+  return paths;
+}
+
+function sdkDeclarationOwners(root: string): Map<string, string[]> {
   const entries = new Map<string, string[]>();
   for (const sdk of SDK_PACKAGES) {
-    const directory = [
-      join(root, 'packages/providers/node_modules', sdk),
-      join(root, 'node_modules', sdk),
-    ].find(path => existsSync(join(path, 'package.json')));
-    if (directory === undefined)
-      throw new Error(`Missing installed SDK ${sdk}; run bun install --frozen-lockfile`);
-    const manifest: { exports?: unknown; types?: unknown } = JSON.parse(
-      readFileSync(join(directory, 'package.json'), 'utf8')
-    );
-    const targets = typeTargets(manifest.exports);
-    if (typeof manifest.types === 'string') targets.push(manifest.types);
-    const paths = targets.flatMap(target =>
-      target.includes('*')
-        ? [...new Bun.Glob(target).scanSync({ cwd: directory, absolute: true })]
-        : [join(directory, target)]
-    );
-    if (paths.length === 0) throw new Error(`No type declarations found for ${sdk}`);
-    for (const path of new Set(paths)) {
+    for (const path of new Set(sdkDeclarationPaths(root, sdk))) {
       if (!existsSync(path)) throw new Error(`Missing SDK type declaration: ${path}`);
       entries.set(path, [...(entries.get(path) ?? []), sdk]);
     }
   }
+  return entries;
+}
+
+function exportedTypeNames(program: ts.Program, path: string): string[] {
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(path);
+  const module = source === undefined ? undefined : checker.getSymbolAtLocation(source);
+  if (module === undefined) throw new Error(`Cannot read SDK exports: ${path}`);
+  const names: string[] = [];
+  for (const exported of checker.getExportsOfModule(module)) {
+    const symbol =
+      exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+    if (symbol.flags & ts.SymbolFlags.Type) names.push(exported.name);
+  }
+  return names;
+}
+
+export function installedSdkTypes(root = REPO_ROOT): SdkTypeNames {
+  const entries = sdkDeclarationOwners(root);
   const program = ts.createProgram([...entries.keys()], {
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     skipLibCheck: true,
     noEmit: true,
   });
-  const checker = program.getTypeChecker();
   const names = new Map<string, string[]>();
   for (const [path, sdks] of entries) {
-    const source = program.getSourceFile(path);
-    const module = source === undefined ? undefined : checker.getSymbolAtLocation(source);
-    if (module === undefined) throw new Error(`Cannot read SDK exports: ${path}`);
-    for (const exported of checker.getExportsOfModule(module)) {
-      const symbol =
-        exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
-      if (!(symbol.flags & ts.SymbolFlags.Type)) continue;
-      const name = exported.name;
+    for (const name of exportedTypeNames(program, path)) {
       names.set(name, [...new Set([...(names.get(name) ?? []), ...sdks])]);
     }
   }

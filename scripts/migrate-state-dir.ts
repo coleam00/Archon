@@ -188,23 +188,106 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function migrate(argv: readonly string[]): Promise<number> {
-  const args = parseArgs(argv);
-  if (!args) return 1;
-  const APPLY = args.apply;
+async function validateWorkingDirectory(cwd: string): Promise<boolean> {
   // The cwd must exist before anything else: `--cwd /typo` otherwise resolves to
   // the @cwd fallback, finds no legacy state, and reports a confident success
   // for a project directory nobody asked for.
   try {
-    if (!(await stat(args.cwd)).isDirectory()) {
-      console.error(`Not a directory: ${args.cwd}`);
-      return 1;
+    if (!(await stat(cwd)).isDirectory()) {
+      console.error(`Not a directory: ${cwd}`);
+      return false;
     }
   } catch {
-    console.error(`Directory does not exist: ${args.cwd}`);
+    console.error(`Directory does not exist: ${cwd}`);
     console.error('Pass an existing project directory with --cwd, or omit it to use the cwd.');
-    return 1;
+    return false;
   }
+  return true;
+}
+
+async function legacyEntries(legacyDir: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(legacyDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.log('Nothing to migrate — no legacy .archon/state/ directory.');
+      return [];
+    }
+    throw error;
+  }
+  if (entries.length === 0) {
+    console.log('Nothing to migrate — legacy .archon/state/ is empty.');
+    return [];
+  }
+
+  return entries;
+}
+
+async function preflightMigration(
+  entries: readonly string[],
+  legacyDir: string,
+  stateRoot: string
+): Promise<boolean> {
+  // Pre-flight: decide the ENTIRE migration before moving a single byte, so
+  // every refusal leaves the source untouched and no partial move can be
+  // reported as success. Two blocking conditions, reported together:
+  //   - a destination file already exists (never clobber)
+  //   - a nested directory (state files are flat JSON; recursing or flattening
+  //     would be a guess, and skipping it would leave state behind)
+  const conflicts: string[] = [];
+  const directories: string[] = [];
+  for (const name of entries) {
+    if (await exists(join(stateRoot, name))) conflicts.push(name);
+    const info = await stat(join(legacyDir, name));
+    if (info.isDirectory()) directories.push(name);
+  }
+
+  if (conflicts.length === 0 && directories.length === 0) return true;
+
+  console.error('Refusing to migrate — nothing was moved.');
+  if (conflicts.length > 0) {
+    console.error('');
+    console.error('Already present in $STATE_DIR (resolve by hand, keep the newer copy):');
+    for (const name of conflicts) console.error(`  ${join(stateRoot, name)}`);
+  }
+  if (directories.length > 0) {
+    console.error('');
+    console.error('Nested directories (move these by hand, then re-run):');
+    for (const name of directories) console.error(`  ${join(legacyDir, name)}`);
+  }
+  console.error('');
+  console.error('Re-run after resolving.');
+  return false;
+}
+
+async function moveEntries(
+  entries: readonly string[],
+  legacyDir: string,
+  stateRoot: string
+): Promise<void> {
+  await mkdir(stateRoot, { recursive: true });
+  let moved = 0;
+  for (const name of entries) {
+    // Copy first, then remove — an interrupted run leaves the source intact.
+    await copyFile(join(legacyDir, name), join(stateRoot, name));
+    await rm(join(legacyDir, name));
+    moved++;
+    // Reported AFTER the move, so a run that dies partway through has not
+    // already claimed entries it never got to.
+    console.log(`moved  ${name}`);
+  }
+
+  console.log('');
+  console.log(`Migrated ${plural(moved)} to ${stateRoot}`);
+  console.log('Remaining step: confirm the legacy directory is empty, then remove it:');
+  console.log(`  rmdir "${legacyDir}"`);
+}
+
+async function migrate(argv: readonly string[]): Promise<number> {
+  const args = parseArgs(argv);
+  if (!args) return 1;
+  if (!(await validateWorkingDirectory(args.cwd))) return 1;
   // The CLI and registration key on this canonical path; an unregistered
   // directory's $STATE_DIR digest only matches theirs when this one does too.
   const CWD = await canonicalizeProjectPath(args.cwd);
@@ -234,53 +317,11 @@ async function migrate(argv: readonly string[]): Promise<number> {
     return 2;
   }
 
-  let entries: string[];
-  try {
-    entries = await readdir(legacyDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.log('Nothing to migrate — no legacy .archon/state/ directory.');
-      return 0;
-    }
-    throw error;
-  }
-  if (entries.length === 0) {
-    console.log('Nothing to migrate — legacy .archon/state/ is empty.');
-    return 0;
-  }
+  const entries = await legacyEntries(legacyDir);
+  if (entries.length === 0) return 0;
+  if (!(await preflightMigration(entries, legacyDir, stateRoot))) return 2;
 
-  // Pre-flight: decide the ENTIRE migration before moving a single byte, so
-  // every refusal leaves the source untouched and no partial move can be
-  // reported as success. Two blocking conditions, reported together:
-  //   - a destination file already exists (never clobber)
-  //   - a nested directory (state files are flat JSON; recursing or flattening
-  //     would be a guess, and skipping it would leave state behind)
-  const conflicts: string[] = [];
-  const directories: string[] = [];
-  for (const name of entries) {
-    if (await exists(join(stateRoot, name))) conflicts.push(name);
-    const info = await stat(join(legacyDir, name));
-    if (info.isDirectory()) directories.push(name);
-  }
-
-  if (conflicts.length > 0 || directories.length > 0) {
-    console.error('Refusing to migrate — nothing was moved.');
-    if (conflicts.length > 0) {
-      console.error('');
-      console.error('Already present in $STATE_DIR (resolve by hand, keep the newer copy):');
-      for (const name of conflicts) console.error(`  ${join(stateRoot, name)}`);
-    }
-    if (directories.length > 0) {
-      console.error('');
-      console.error('Nested directories (move these by hand, then re-run):');
-      for (const name of directories) console.error(`  ${join(legacyDir, name)}`);
-    }
-    console.error('');
-    console.error('Re-run after resolving.');
-    return 2;
-  }
-
-  if (!APPLY) {
+  if (!args.apply) {
     for (const name of entries) {
       console.log(`would move  ${name}`);
     }
@@ -291,22 +332,7 @@ async function migrate(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  await mkdir(stateRoot, { recursive: true });
-  let moved = 0;
-  for (const name of entries) {
-    // Copy first, then remove — an interrupted run leaves the source intact.
-    await copyFile(join(legacyDir, name), join(stateRoot, name));
-    await rm(join(legacyDir, name));
-    moved++;
-    // Reported AFTER the move, so a run that dies partway through has not
-    // already claimed entries it never got to.
-    console.log(`moved  ${name}`);
-  }
-
-  console.log('');
-  console.log(`Migrated ${plural(moved)} to ${stateRoot}`);
-  console.log('Remaining step: confirm the legacy directory is empty, then remove it:');
-  console.log(`  rmdir "${legacyDir}"`);
+  await moveEntries(entries, legacyDir, stateRoot);
   return 0;
 }
 
