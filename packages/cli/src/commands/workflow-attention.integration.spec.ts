@@ -515,6 +515,72 @@ test.each([true, false])(
   }
 );
 
+test("watch text names a child run's parent and a failure with no recorded error class", async () => {
+  const host = createHost();
+  const terminal = (runId: string, parentRunId: string | null): AttentionStreamLine => ({
+    type: 'terminal',
+    runId,
+    project: null,
+    workflow: 'w',
+    parentRunId,
+    status: 'failed',
+    outcome: null,
+    cause: { node: 'build', errorClass: null },
+    cursor: workflowEventCursor('fixture:1'),
+  });
+  const attention: AttentionStreamLine = {
+    type: 'attention',
+    cursor: workflowEventCursor('fixture:0'),
+    snapshot: true,
+    project: null,
+    workflow: 'w',
+    parentRunId: 'p1',
+    item: {
+      kind: 'unreadable',
+      runId: 'child',
+      workflow: 'w',
+      project: null,
+      parentRunId: 'p1',
+      fanOut: null,
+      revision: 1,
+      labels: {},
+      pausedAt: null,
+      context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      reason: 'malformed_gate',
+      detail: 'gate unreadable',
+    },
+  };
+  const watch = spyOn(host.engine, 'watchAttention').mockImplementation(async listener => {
+    await listener(attention);
+    await listener(terminal('child', 'p1'));
+    await listener(terminal('top', null));
+    return { close: async () => {} };
+  });
+  try {
+    const result = await streamedText(
+      () =>
+        workflowAttentionCommand(host, process.cwd(), undefined, {
+          all: true,
+          labels: [],
+          watch: true,
+        }),
+      text => text.includes('Run top failed')
+    );
+    expect(result.code).toBe(0);
+    expect(result.text).toContain(
+      '  child  w  (no project)  pause time not recorded\n    child of run p1\n'
+    );
+    expect(result.text).toContain(
+      'Run child failed: node build (error class not recorded). Workflow w, child of run p1.\n'
+    );
+    expect(result.text).toContain(
+      'Run top failed: node build (error class not recorded). Workflow w.\n'
+    );
+  } finally {
+    watch.mockRestore();
+  }
+});
+
 test.each([
   { phase: 'startup', json: true, type: 'degraded' },
   { phase: 'tail', json: true, type: 'degraded' },
