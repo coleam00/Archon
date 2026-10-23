@@ -575,38 +575,58 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    if (!verbose) {
-      await writeJsonLine({
-        ...run,
-        transcript_path: transcriptPath,
-        terminal_record: terminalRecord,
-        ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
-      });
-      return 0;
-    }
-
-    const parseWarnings = readParseWarningEvents(events);
-    const output = rawEvents
-      ? {
-          ...run,
-          transcript_path: transcriptPath,
-          terminal_record: terminalRecord,
-          events,
-        }
-      : {
-          ...run,
-          transcript_path: transcriptPath,
-          terminal_record: terminalRecord,
-          nodes: buildNodeSummaries(events),
-          // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
-          // named field rather than leaving the caller to scan raw events.
-          ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
-        };
-    await writeJsonLine(output);
-    return 0;
+    return writeWorkflowGetJson(
+      run,
+      transcriptPath,
+      terminalRecord,
+      leaveBehind,
+      events,
+      verbose,
+      rawEvents
+    );
   }
 
   printRunDetail(run, { transcriptPath, terminalRecord, leaveBehind, events, verbose });
+  return 0;
+}
+
+async function writeWorkflowGetJson(
+  run: WorkflowRun,
+  transcriptPath: string | null,
+  terminalRecord: ReturnType<typeof getTerminalRecord>,
+  leaveBehind: LeaveBehind | undefined,
+  events: WorkflowEventRow[],
+  verbose?: boolean,
+  rawEvents?: boolean
+): Promise<number> {
+  if (!verbose) {
+    await writeJsonLine({
+      ...run,
+      transcript_path: transcriptPath,
+      terminal_record: terminalRecord,
+      ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
+    });
+    return 0;
+  }
+
+  const parseWarnings = readParseWarningEvents(events);
+  const output = rawEvents
+    ? {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        events,
+      }
+    : {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        nodes: buildNodeSummaries(events),
+        // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
+        // named field rather than leaving the caller to scan raw events.
+        ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+      };
+  await writeJsonLine(output);
   return 0;
 }
 
