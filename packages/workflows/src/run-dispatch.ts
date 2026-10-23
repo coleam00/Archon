@@ -19,7 +19,6 @@ import type {
   WorkflowSource,
 } from './schemas';
 import {
-  isContainerRun,
   isIncludeDirective,
   isLoopGroupNode,
   isWaitNode,
@@ -27,7 +26,7 @@ import {
   readRunDispatchMetadata,
   type RunDispatchMetadata,
 } from './schemas';
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
