@@ -171,10 +171,10 @@ export async function workflowTestCommand(
 }
 
 function selectWorkflowEntries(
-  workflowEntries: WorkflowWithSource[],
-  errors: WorkflowLoadError[],
+  workflowEntries: readonly WorkflowWithSource[],
+  errors: readonly WorkflowLoadError[],
   name: string | undefined
-): WorkflowWithSource[] {
+): readonly WorkflowWithSource[] {
   if (name !== undefined) {
     let workflow: WorkflowWithSource['workflow'] | undefined;
     try {
