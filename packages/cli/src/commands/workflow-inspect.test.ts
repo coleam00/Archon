@@ -876,7 +876,7 @@ describe('workflowGetCommand', () => {
 
       expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id)).toBe(0);
 
-      const lines = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      const lines: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
       expect(lines).toContain(`    Artifacts observed: ${fileCount + internalPaths.length}`);
       expect(lines).toContain('    Engine-internal artifact files (not listed): 2');
       expect(lines.filter(line => line.startsWith('      - '))).toEqual(
