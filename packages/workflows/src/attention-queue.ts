@@ -67,13 +67,19 @@ export const attentionQueueContextSchema = z.object({
   branch: z.string().nullable(),
 });
 
-const itemBase = {
-  runId: z.string(),
+/** What an item's run is part of; attention stream lines carry the same two fields. */
+export const attentionItemRunContextFields = {
   workflow: z.string(),
-  /** Null only when the run has no trusted storage root, so there is no key to give. */
-  project: projectRefSchema.nullable(),
   /** The run's direct parent run, for every child run; null for a top-level run. */
   parentRunId: z.string().nullable(),
+};
+
+const itemBase = {
+  runId: z.string(),
+  workflow: attentionItemRunContextFields.workflow,
+  /** Null only when the run has no trusted storage root, so there is no key to give. */
+  project: projectRefSchema.nullable(),
+  parentRunId: attentionItemRunContextFields.parentRunId,
   /** Set when the run is a `fan_out:` child; null for every other run. */
   fanOut: fanOutPositionSchema.nullable(),
   /** 1, plus one for every label write since the pause opened. */

@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
+  attentionItemRunContextFields,
   attentionQueueItemForRun,
   attentionQueueItemSchema,
   isInAttentionScope,
@@ -90,8 +91,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     /** True for the open items sent before `ready`. */
     snapshot: z.boolean(),
     project: projectRefSchema.nullable(),
-    workflow: z.string(),
-    parentRunId: z.string().nullable(),
+    ...attentionItemRunContextFields,
     item: attentionQueueItemSchema,
   }),
   z.discriminatedUnion('reason', [
@@ -258,7 +258,9 @@ function lifecycleFields(
   };
 }
 
-function itemContext(item: AttentionQueueItem): RunContext & { workflow: string } {
+function itemContext(
+  item: AttentionQueueItem
+): Pick<AttentionQueueItem, 'workflow' | 'parentRunId'> {
   return { workflow: item.workflow, parentRunId: item.parentRunId };
 }
 
