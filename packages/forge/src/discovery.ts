@@ -264,7 +264,12 @@ async function discoverCandidateMetadata(
     plugins.push({ ...candidate, metadata });
   }
 
-  assertNoFailedDuplicates(names, unavailableNames);
+  const failedDuplicate = [...unavailableNames].find(name => names.has(name));
+  if (failedDuplicate !== undefined)
+    throw new PluginDiscoveryError(
+      'duplicate_host',
+      `forge plugin ${failedDuplicate} has both available and failed candidates`
+    );
   return { plugins, unavailable };
 }
 
@@ -299,17 +304,4 @@ function bindPluginHosts(
     hostConfig.set(normalizeHost(host), value);
   }
   return { byHost, hostConfig };
-}
-
-function assertNoFailedDuplicates(
-  names: ReadonlySet<string>,
-  unavailableNames: ReadonlySet<string>
-): void {
-  for (const name of unavailableNames) {
-    if (names.has(name))
-      throw new PluginDiscoveryError(
-        'duplicate_host',
-        `forge plugin ${name} has both available and failed candidates`
-      );
-  }
 }
