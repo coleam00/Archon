@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   nodeInvocationKey,
+  parseNodeInvocationKey,
   readNodeRecordEvent,
   readDeferredNodeUsageEvent,
 } from './node-record-reader';
@@ -122,6 +123,15 @@ describe('readNodeRecordEvent', () => {
     expect(nodeInvocationKey('build', [{ groupId: 'loop', iteration: 2 }])).toBe(
       '["build",[{"groupId":"loop","iteration":2}]]'
     );
+  });
+
+  it('parses an invocation key back to its path and loop lineage', () => {
+    const loopPath = [{ groupId: 'outer', iteration: 2 }];
+    expect(parseNodeInvocationKey(nodeInvocationKey('outer.grp', loopPath))).toEqual({
+      path: 'outer.grp',
+      loopPath,
+    });
+    expect(() => parseNodeInvocationKey('{"path":"outer.grp"}')).toThrow();
   });
 });
 

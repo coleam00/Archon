@@ -3,6 +3,7 @@ import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
   nodeExecutionMetadataPayloadSchema,
+  nodeInvocationSchema,
   type NodeExecutionMetadata,
   type NodeInvocation,
 } from './schemas/node-execution';
@@ -156,6 +157,17 @@ export function readNodeRecordEvent(
 
 export function nodeInvocationKey(path: string, loopPath: NodeInvocation['loopPath']): string {
   return JSON.stringify([path, loopPath]);
+}
+
+const nodeInvocationKeySchema = z.tuple([z.string(), nodeInvocationSchema.shape.loopPath]);
+
+/** Inverse of {@link nodeInvocationKey}; throws on a key it did not produce. */
+export function parseNodeInvocationKey(key: string): {
+  path: string;
+  loopPath: NodeInvocation['loopPath'];
+} {
+  const [path, loopPath] = nodeInvocationKeySchema.parse(JSON.parse(key));
+  return { path, loopPath };
 }
 
 export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):
