@@ -59,7 +59,7 @@ export async function executeWorkflowNode(
   node: WorkflowNode,
   ctx: RunLayersContext
 ): Promise<NodeExecutionResult> {
-  const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
+  const { deps, platform, conversationId, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const executionNodeId = ctx.stepNamePrefix + node.id;
   const execution = beginExecution(ctx, node);
@@ -122,60 +122,7 @@ export async function executeWorkflowNode(
     return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow, execution);
   }
 
-  // This run's named inputs (#2470), resolved once — threaded identically into the
-  // `input:` string and every `with:` value below.
-  const parentInputs = resolveRunInputs(parentRun);
-
-  // Resolve the input data string (workflow vars + $node.output refs), exactly as
-  // prompt/bash nodes resolve their text surface.
-  const rawInput = node.input ?? '';
-  const { prompt: input } = substituteWorkflowVariables(
-    rawInput,
-    parentRun.id,
-    parentRun.user_message ?? '',
-    ctx.artifactsDir,
-    ctx.baseBranch,
-    ctx.docsDir,
-    ctx.issueContext,
-    undefined, // loopUserInput
-    undefined, // rejectionReason
-    undefined, // loopPrevOutput
-    // Thread the parent run's inputs so `$INPUTS.<name>` resolves in an `input:` string
-    // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
-    // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
-    // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
-    {
-      stateDir: ctx.stateDir,
-      inputs: parentInputs,
-      references: nodeTemplateReferences(rawInput, ctx),
-    }
-  );
-
-  // Resolve the node's `with:` map (#2470/#2637) into concrete JSON values: a
-  // non-string literal passes through with its logical type; a string that is exactly
-  // one whole `$INPUTS.<name>` / `$node.output[.field]` ref resolves to the LOGICAL
-  // value; any other string keeps the text-template path (workflow vars —
-  // non-shellSafe: these become the child's `$INPUTS`, not shell source — and
-  // `$node.output` refs). The result is persisted to the child's metadata at spawn
-  // and reconstituted on cold resume. Throws on a bad ref exactly as the input
-  // surface does — caught by the caller's try/catch → fail closed.
-  const withResolutionCtx: ShellInputContext = {
-    workflowRun: parentRun,
-    artifactsDir: ctx.artifactsDir,
-    stateDir: ctx.stateDir,
-    baseBranch: ctx.baseBranch,
-    docsDir: ctx.docsDir,
-    issueContext: ctx.issueContext,
-    nodeOutputs: ctx.nodeOutputs,
-    loopBodyScopes: ctx.loopBodyScopes,
-  };
-  let resolvedInputs: Record<string, JsonValue> | undefined;
-  if (node.with !== undefined) {
-    resolvedInputs = {};
-    for (const [name, rawValue] of Object.entries(node.with)) {
-      resolvedInputs[name] = resolveWorkflowValue(rawValue, withResolutionCtx, parentInputs, false);
-    }
-  }
+  const childArgs = resolveChildArguments(node, ctx);
 
   // Build the completed result AND write the node_completed event. Unlike
   // command/prompt/bash/script nodes (which write their own inside their executor)
@@ -316,31 +263,13 @@ export async function executeWorkflowNode(
   // several, the most recent wins.
   let existing: WorkflowRun | undefined;
   try {
-    const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c =>
-        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        executionNodeId
-    );
-    existing = children.length > 0 ? children[children.length - 1] : undefined;
+    existing = await findExistingChild(ctx, executionNodeId);
   } catch (err) {
     return failResult(
       `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`,
       'unknown'
     );
   }
-
-  const childArgs = {
-    parentRun,
-    nodeId: executionNodeId,
-    childWorkflowName: node.workflow,
-    input,
-    cwd,
-    conversationId,
-    userId: parentRun.user_id ?? undefined,
-    codebaseId: parentRun.codebase_id ?? undefined,
-    isolation: node.isolation,
-    ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
-  };
 
   try {
     if (existing === undefined) {
@@ -373,4 +302,87 @@ export async function executeWorkflowNode(
       'child_failed'
     );
   }
+}
+
+function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext) {
+  const parentRun = ctx.workflowRun;
+  // This run's named inputs (#2470), resolved once — threaded identically into the
+  // `input:` string and every `with:` value below.
+  const parentInputs = resolveRunInputs(parentRun);
+
+  // Resolve the input data string (workflow vars + $node.output refs), exactly as
+  // prompt/bash nodes resolve their text surface.
+  const rawInput = node.input ?? '';
+  const { prompt: input } = substituteWorkflowVariables(
+    rawInput,
+    parentRun.id,
+    parentRun.user_message ?? '',
+    ctx.artifactsDir,
+    ctx.baseBranch,
+    ctx.docsDir,
+    ctx.issueContext,
+    undefined, // loopUserInput
+    undefined, // rejectionReason
+    undefined, // loopPrevOutput
+    // Thread the parent run's inputs so `$INPUTS.<name>` resolves in an `input:` string
+    // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
+    // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
+    // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
+    {
+      stateDir: ctx.stateDir,
+      inputs: parentInputs,
+      references: nodeTemplateReferences(rawInput, ctx),
+    }
+  );
+
+  // Resolve the node's `with:` map (#2470/#2637) into concrete JSON values: a
+  // non-string literal passes through with its logical type; a string that is exactly
+  // one whole `$INPUTS.<name>` / `$node.output[.field]` ref resolves to the LOGICAL
+  // value; any other string keeps the text-template path (workflow vars —
+  // non-shellSafe: these become the child's `$INPUTS`, not shell source — and
+  // `$node.output` refs). The result is persisted to the child's metadata at spawn
+  // and reconstituted on cold resume. Throws on a bad ref exactly as the input
+  // surface does — caught by the caller's try/catch → fail closed.
+  const withResolutionCtx: ShellInputContext = {
+    workflowRun: parentRun,
+    artifactsDir: ctx.artifactsDir,
+    stateDir: ctx.stateDir,
+    baseBranch: ctx.baseBranch,
+    docsDir: ctx.docsDir,
+    issueContext: ctx.issueContext,
+    nodeOutputs: ctx.nodeOutputs,
+    loopBodyScopes: ctx.loopBodyScopes,
+  };
+  let resolvedInputs: Record<string, JsonValue> | undefined;
+  if (node.with !== undefined) {
+    resolvedInputs = {};
+    for (const [name, rawValue] of Object.entries(node.with)) {
+      resolvedInputs[name] = resolveWorkflowValue(rawValue, withResolutionCtx, parentInputs, false);
+    }
+  }
+
+  return {
+    parentRun,
+    nodeId: executionNodeId,
+    childWorkflowName: node.workflow,
+    input,
+    cwd: ctx.cwd,
+    conversationId: ctx.conversationId,
+    userId: parentRun.user_id ?? undefined,
+    codebaseId: parentRun.codebase_id ?? undefined,
+    isolation: node.isolation,
+    ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
+  };
+}
+
+async function findExistingChild(
+  ctx: RunLayersContext,
+  executionNodeId: string
+): Promise<WorkflowRun | undefined> {
+  const children = (await ctx.deps.store.findChildRuns(ctx.workflowRun.id)).filter(
+    c =>
+      readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
+      executionNodeId
+  );
+  return children.length > 0 ? children[children.length - 1] : undefined;
 }
