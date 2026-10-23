@@ -352,7 +352,14 @@ describe('loop wiring', () => {
     expect(check).toContain('never every tick, frame or combination of inputs');
     const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
     expect(pick).not.toContain('tries every user action');
-    expect(pick).toContain('A `complex` item is `light` too');
+    expect(pick).toContain('A `complex` item a user can see is `normal`');
+    expect(pick).not.toContain('A `complex` item is `light` too');
+    expect(check).toContain('a few sampled moments miss a change that lasts one to three steps');
+    for (const file of ['implement/commands/implement.md', 'loop/commands/loop-work.md']) {
+      expect(readFileSync(resolve(pack, file), 'utf8')).toContain('read the app\'s state at every step');
+    }
+    const manage = readFileSync(resolve(pack, 'manager/commands/manage.md'), 'utf8');
+    expect(manage).toContain('Run every check the repository commits on the default branch each pass');
   });
 
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {

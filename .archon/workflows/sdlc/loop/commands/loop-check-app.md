@@ -35,7 +35,10 @@ change needs is a minute another change waits.
 
 At every depth, observe each criterion at the states that decide it (the ones the work item names, the
 ones the change touches, and a few around them), never every tick, frame or combination of inputs:
-exhaustive coverage is the project's own checks' job. Use the project's checks and tools before writing
+exhaustive coverage is the project's own checks' job. Behaviour that can hold for only a moment (a
+flicker, a jump, settling, stepping aside, a timing) is the exception: read the app's state at every step
+through the window where it can happen, which is cheap, and take images only at the moments that decide
+it; a few sampled moments miss a change that lasts one to three steps. Use the project's checks and tools before writing
 your own, and run each of your own checks once; when one would take more than a few minutes, it is
 checking more than the question needs, so make it smaller before you run it.
 
