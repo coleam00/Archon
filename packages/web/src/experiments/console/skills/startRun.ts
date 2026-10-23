@@ -85,12 +85,11 @@ export async function startRun({
 function buildRunForm(body: WorkflowRunLaunchJson, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  form.append('conversationId', body.conversationId);
-  form.append('message', body.message);
-  // A form field can only be a string; the run route parses the maps as JSON.
-  if (body.inputs !== undefined) form.append('inputs', JSON.stringify(body.inputs));
-  if (body.tiers !== undefined) form.append('tiers', JSON.stringify(body.tiers));
-  if (body.aliases !== undefined) form.append('aliases', JSON.stringify(body.aliases));
+  for (const [key, value] of Object.entries(body)) {
+    if (value !== undefined) {
+      form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+    }
+  }
   for (const file of files) {
     form.append('files', file, file.name);
   }
