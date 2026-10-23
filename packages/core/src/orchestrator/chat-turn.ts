@@ -322,12 +322,15 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
 
-/**
- * Batch mode: accumulate chunks and filter tool indicators, falling back to the originals.
- * Used by Slack, GitHub, Discord (batch), and CLI.
- */
-export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
-  const { turn, platform, conversationId, session } = input;
+function appendBatchAssistantChunk(messages: ReplyChunk[], chunk: ReplyChunk): boolean {
+  messages.push(chunk);
+  if (messages.length <= MAX_BATCH_ASSISTANT_CHUNKS) return false;
+  shiftReplyChunk(messages);
+  return true;
+}
+
+async function collectBatchChunks(input: ChatTurnInput) {
+  const { turn, platform, conversationId } = input;
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: ReplyChunk[] = [];
   let assistantChunksTruncated = false;
@@ -336,30 +339,34 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   let toolFailed = false;
 
   for await (const msg of turnChunks(input)) {
-    if (msg.type === 'agent_message_chunk') {
-      if (msg.text.trim()) toolFailed = false;
-      allChunks.push({ type: 'assistant', content: msg.text });
-      assistantMessages.push(msg);
-      if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
-        shiftReplyChunk(assistantMessages);
-        assistantChunksTruncated = true;
-      }
-    } else if (msg.type === 'tool_call') {
-      const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
-      allChunks.push({ type: 'tool', content: toolMessage });
-      getLog().debug({ toolName: msg.name }, 'tool_call');
-    } else if (msg.type === 'tool_call_update') {
-      toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
-    } else if (msg.type === 'warning') {
-      // A warning surfaces as it arrives, not batched into the reply.
-      await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
-    } else if (msg.type === 'result') {
-      turn.result = {
-        ...addResultUsage(turn.result ?? {}, msg),
-        stopReason: msg.stopReason ?? turn.result?.stopReason,
-      };
-      newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
-      if (await reportFailedResult(input, msg, newSessionId)) return;
+    switch (msg.type) {
+      case 'agent_message_chunk':
+        if (msg.text.trim()) toolFailed = false;
+        allChunks.push({ type: 'assistant', content: msg.text });
+        assistantChunksTruncated =
+          appendBatchAssistantChunk(assistantMessages, msg) || assistantChunksTruncated;
+        break;
+      case 'tool_call':
+        {
+          const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
+          allChunks.push({ type: 'tool', content: toolMessage });
+          getLog().debug({ toolName: msg.name }, 'tool_call');
+        }
+        break;
+      case 'tool_call_update':
+        toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
+        break;
+      case 'warning':
+        // A warning surfaces as it arrives, not batched into the reply.
+        await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
+        break;
+      case 'result':
+        turn.result = {
+          ...addResultUsage(turn.result ?? {}, msg),
+          stopReason: msg.stopReason ?? turn.result?.stopReason,
+        };
+        newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
+        if (await reportFailedResult(input, msg, newSessionId)) return;
     }
 
     if (allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
@@ -368,6 +375,32 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
     }
   }
 
+  return {
+    allChunks,
+    assistantMessages,
+    assistantChunksTruncated,
+    totalChunksTruncated,
+    newSessionId,
+    toolFailed,
+  };
+}
+
+/**
+ * Batch mode: accumulate chunks and filter tool indicators, falling back to the originals.
+ * Used by Slack, GitHub, Discord (batch), and CLI.
+ */
+export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
+  const batch = await collectBatchChunks(input);
+  if (!batch) return;
+  const {
+    allChunks,
+    assistantMessages,
+    assistantChunksTruncated,
+    totalChunksTruncated,
+    newSessionId,
+    toolFailed,
+  } = batch;
+  const { platform, conversationId, session } = input;
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
   }

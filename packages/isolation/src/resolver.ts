@@ -70,6 +70,46 @@ export interface IsolationResolverDeps {
 
 const DEFAULT_STALE_THRESHOLD_DAYS = 14;
 
+async function resolveCanonicalPath(
+  codebase: NonNullable<ResolveRequest['codebase']>
+): Promise<RepoPath | Extract<IsolationResolution, { status: 'blocked' }>> {
+  try {
+    return await getCanonicalRepoPath(codebase.defaultCwd);
+  } catch (error) {
+    // A registered checkout backed by `--separate-git-dir` is already the
+    // authoritative path, but Git has no reverse pointer from its linked
+    // worktree metadata to a primary checkout. Git worktree operations are
+    // valid from that registered linked checkout, so retain it as the anchor.
+    if (error instanceof CanonicalRepoPathUnavailableError) {
+      return toRepoPath(codebase.defaultCwd);
+    } else {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error(
+        {
+          err,
+          errorType: err.constructor.name,
+          codebaseId: codebase.id,
+          defaultCwd: codebase.defaultCwd,
+        },
+        'isolation.canonical_repo_path_resolution_failed'
+      );
+
+      if (!isKnownIsolationError(err)) {
+        throw err;
+      }
+
+      const userMessage = classifyIsolationError(err);
+      return {
+        status: 'blocked',
+        reason: 'creation_failed',
+        userMessage:
+          userMessage +
+          ' Execution blocked to prevent changes to shared codebase. Please resolve the issue and try again.',
+      };
+    }
+  }
+}
+
 /**
  * Resolves which isolation environment to use for a conversation.
  *
@@ -106,14 +146,7 @@ export class IsolationResolver {
 
     // 1. Check existing isolation reference
     if (request.existingEnvId) {
-      const existing = await this.checkExisting(
-        request.existingEnvId,
-        request.codebase?.defaultCwd,
-        baseBranch
-      );
-      if (existing) return existing;
-      // Stale — tell caller to clear and retry
-      return { status: 'stale_cleaned', previousEnvId: request.existingEnvId };
+      return this.resolveExisting(request.existingEnvId, request.codebase?.defaultCwd, baseBranch);
     }
 
     // 2. No codebase = no isolation
@@ -152,49 +185,8 @@ export class IsolationResolver {
     const workflowType: IsolationWorkflowType = hints?.workflowType ?? 'thread';
     const workflowId = hints?.workflowId ?? '';
 
-    // Compute the Git command anchor once — paths 3-6 all need it either for
-    // ownership verification (cross-clone guard) or for worktree creation.
-    // Mirror createNewEnvironment's contract: known infrastructure failures
-    // (permission denied, ENOENT, malformed worktree pointer, etc.) become
-    // a `blocked` result with an actionable user message; unknown failures
-    // propagate so they surface as crashes rather than silent isolation
-    // failures.
-    let canonicalPath: RepoPath;
-    try {
-      canonicalPath = await getCanonicalRepoPath(codebase.defaultCwd);
-    } catch (error) {
-      // A registered checkout backed by `--separate-git-dir` is already the
-      // authoritative path, but Git has no reverse pointer from its linked
-      // worktree metadata to a primary checkout. Git worktree operations are
-      // valid from that registered linked checkout, so retain it as the anchor.
-      if (error instanceof CanonicalRepoPathUnavailableError) {
-        canonicalPath = toRepoPath(codebase.defaultCwd);
-      } else {
-        const err = error instanceof Error ? error : new Error(String(error));
-        getLog().error(
-          {
-            err,
-            errorType: err.constructor.name,
-            codebaseId: codebase.id,
-            defaultCwd: codebase.defaultCwd,
-          },
-          'isolation.canonical_repo_path_resolution_failed'
-        );
-
-        if (!isKnownIsolationError(err)) {
-          throw err;
-        }
-
-        const userMessage = classifyIsolationError(err);
-        return {
-          status: 'blocked',
-          reason: 'creation_failed',
-          userMessage:
-            userMessage +
-            ' Execution blocked to prevent changes to shared codebase. Please resolve the issue and try again.',
-        };
-      }
-    }
+    const canonicalPath = await resolveCanonicalPath(codebase);
+    if (typeof canonicalPath !== 'string') return canonicalPath;
 
     // 3. Check for existing environment with same workflow
     const reusable = await this.findReusable(
@@ -245,6 +237,15 @@ export class IsolationResolver {
       request.userId,
       request.setupExecutor
     );
+  }
+
+  private async resolveExisting(
+    envId: string,
+    defaultCwd: string | undefined,
+    baseBranch: BranchName | undefined
+  ): Promise<IsolationResolution> {
+    const existing = await this.checkExisting(envId, defaultCwd, baseBranch);
+    return existing ?? { status: 'stale_cleaned', previousEnvId: envId };
   }
 
   /**
