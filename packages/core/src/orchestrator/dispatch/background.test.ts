@@ -16,6 +16,11 @@ mock.module('../../workflows/branch-launch-source', () => ({
   ) => prepare('/adopted/snapshot'),
 }));
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
+import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
 import { MockPlatformAdapter } from '../../test/mocks/platform';
 import type { Conversation, Codebase, IPlatformAdapter } from '../../types';
@@ -239,6 +244,9 @@ class MockIsolationResolver {
 
 const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   worktreeRegistrationMetadata,
   IsolationResolver: MockIsolationResolver,
   IsolationBlockedError: class IsolationBlockedError extends Error {
