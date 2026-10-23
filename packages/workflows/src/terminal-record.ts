@@ -150,6 +150,10 @@ function foldNodeRecord(
       failureOrder.delete(nodeId);
       break;
     }
+    default: {
+      const exhaustiveCheck: never = record.eventType;
+      throw new Error(`Unhandled NodeStateEventType: ${String(exhaustiveCheck)}`);
+    }
   }
 }
 

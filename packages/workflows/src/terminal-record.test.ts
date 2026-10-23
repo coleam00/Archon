@@ -324,6 +324,21 @@ describe('durable terminal projection', () => {
     ).toBeNull();
   });
 
+  it('selects the first surviving failure by event order rather than graph order', async () => {
+    const record = await buildTerminalRecord({
+      run,
+      events: [
+        node('node_failed', 'build', { error: 'earlier failure' }),
+        node('node_failed', 'discover', { error: 'later failure' }),
+      ],
+    });
+    expect(record.first_failed_node).toBe('build');
+    expect(record.nodes.filter(node => node.state === 'failed').map(node => node.node_id)).toEqual([
+      'discover',
+      'build',
+    ]);
+  });
+
   it('replay replaces stale success/failure and cancellation truthfully retains running states', async () => {
     const record = await buildTerminalRecord({
       run: { ...run, status: 'cancelled' },

@@ -193,7 +193,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     );
   });
 
-  it('workflow completes without throwing when all nodes are skipped via parse error', async () => {
+  it('fails without throwing when all nodes are skipped via parse error', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('parse-err-all-skip-run');
@@ -219,5 +219,11 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
         })
       )
     ).resolves.toBeUndefined();
+    expect(mockDeps.store.failWorkflowRun).toHaveBeenCalledWith(
+      workflowRun.id,
+      expect.any(String),
+      { exitReason: 'no_nodes_completed' }
+    );
+    expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 });
