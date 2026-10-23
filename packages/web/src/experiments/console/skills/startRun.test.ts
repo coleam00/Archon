@@ -7,6 +7,7 @@
  * without its inputs.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { HttpError } from '../lib/http';
 import { startRun } from './startRun';
 
 interface Captured {
@@ -15,19 +16,23 @@ interface Captured {
 }
 
 const originalFetch = globalThis.fetch;
+const originalWindow = globalThis.window;
 let calls: Captured[] = [];
 
-function stubFetch(): void {
+function stubFetch(
+  runStatus = 200,
+  runPayload: object = { accepted: true, status: 'started' }
+): void {
   calls = [];
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     calls.push({ url, init });
     const payload = url.includes('/api/conversations')
       ? { conversationId: 'web-test-1' }
-      : { accepted: true, status: 'started' };
+      : runPayload;
     return Promise.resolve(
       new Response(JSON.stringify(payload), {
-        status: 200,
+        status: url.includes('/api/conversations') ? 200 : runStatus,
         headers: { 'Content-Type': 'application/json' },
       })
     );
@@ -44,10 +49,12 @@ function runCall(): Captured {
 describe('startRun — declared inputs (#2554)', () => {
   beforeEach(() => {
     stubFetch();
+    globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
   });
 
   test('JSON branch carries `inputs` alongside the message', async () => {
@@ -140,6 +147,24 @@ describe('startRun — declared inputs (#2554)', () => {
     expect(JSON.parse(String(form.get('tiers')))).toEqual({ large: 'openai/gpt-5.6' });
     expect(JSON.parse(String(form.get('aliases')))).toEqual({
       '@planner': 'codex/gpt-5.6-sol',
+    });
+  });
+  test('multipart launch rejects an HTTP refusal with the server message', async () => {
+    stubFetch(409, { error: 'A run is already active for this conversation' });
+
+    const launch = startRun({
+      projectId: 'p1',
+      workflow: 'review-block',
+      message: 'go',
+      files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
+    });
+
+    await expect(launch).rejects.toBeInstanceOf(HttpError);
+    await expect(launch).rejects.toMatchObject({
+      status: 409,
+      path: '/api/workflows/review-block/run',
+      bodySnippet: 'A run is already active for this conversation',
+      message: expect.stringContaining('A run is already active for this conversation'),
     });
   });
 });
