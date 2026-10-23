@@ -22,7 +22,11 @@ import {
   describeAbandonOwner,
   expectedGateForOccurrence,
 } from '../operations/workflow-operations';
-import type { GateAnswerOrigin, WorkflowOperations } from '../operations/workflow-operations';
+import type {
+  GateAnswerOrigin,
+  RejectionOperationResult,
+  WorkflowOperations,
+} from '../operations/workflow-operations';
 
 const log = createLogger('orchestrator.manage_run');
 
@@ -591,12 +595,14 @@ async function approveGate({
 async function rejectGate({ ctx, run, message, origin }: ScopedWrite): Promise<string> {
   const id = run.id;
   const result = await ctx.operations.rejectWorkflow(id, message, ctx.actor, origin);
-  if (result.cancelled) {
-    const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-    return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
-  }
+  if (result.cancelled) return cancelledRejectionMessage(id, result);
   const continues = await signalGateResolved(ctx, run, 'reject');
   return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
+}
+
+function cancelledRejectionMessage(id: string, result: RejectionOperationResult): string {
+  const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
+  return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.${cancelCleanupWarnings(result.cleanupWarnings)}`;
 }
 
 async function respondToGate(write: ScopedWrite): Promise<string> {
@@ -610,10 +616,7 @@ async function respondToGate(write: ScopedWrite): Promise<string> {
   const result = await ctx.operations.respondToWorkflow(id, decision, message, ctx.actor, origin);
   if ('cancelled' in result) {
     // decision === 'reject' resolved through the legacy cancel/rework path.
-    if (result.cancelled) {
-      const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-      return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
-    }
+    if (result.cancelled) return cancelledRejectionMessage(id, result);
     const continues = await signalGateResolved(ctx, run, 'respond');
     return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
   }

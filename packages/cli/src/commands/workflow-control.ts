@@ -635,6 +635,7 @@ export async function workflowRejectCommand(
         maxAttemptsReached: result.maxAttemptsReached,
         workflowName: result.workflowName,
         resumable: !result.cancelled,
+        cleanupWarnings: result.cleanupWarnings,
       });
       return 0;
     } catch (error) {
@@ -656,6 +657,7 @@ export async function workflowRejectCommand(
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
     console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
+    printCleanupWarnings(result.cleanupWarnings);
     return 0;
   }
 

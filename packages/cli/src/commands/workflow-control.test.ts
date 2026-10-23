@@ -1398,6 +1398,41 @@ describe('workflowRejectCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
+  for (const json of [false, true]) {
+    it(`reports a failed container reclaim after a cancelling reject in ${json ? 'JSON' : 'text'} output`, async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-plain',
+        workflow_name: 'plain-wf',
+        status: 'paused',
+        working_path: '/repo',
+        metadata: {
+          approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' },
+          isolation: 'container',
+          isolation_env_id: 'env-a',
+          execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+        },
+      });
+      mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+      const stdout = spyOnJsonStdout();
+      try {
+        await workflowRejectCommand(createTestWorkflowHost(), 'run-plain', 'not good', json);
+        const output = json
+          ? stdout.mock.calls.map((call: unknown[]) => String(call[0])).join('')
+          : consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(output).toContain('Could not reclaim container environment env-a');
+        if (json) {
+          expect(JSON.parse(output)).toMatchObject({ ok: true, cancelled: true });
+          expect(JSON.parse(output).cleanupWarnings).toHaveLength(1);
+        } else {
+          expect(output).toContain('Rejected and cancelled: plain-wf');
+        }
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  }
+
   it('plain mode: rejecting with no reason defaults structured output text to "Rejected" (#2740)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
 

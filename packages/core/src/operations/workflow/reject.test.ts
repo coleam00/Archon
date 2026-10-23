@@ -369,7 +369,22 @@ describe('rejectWorkflow', () => {
     const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
 
     expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings).toBeUndefined();
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
     expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9', isolationStore);
+  });
+
+  test('a cancelling reject whose container reclaim fails stays cancelled and reports it', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+    mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(true);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
+    expect(result.cleanupWarnings).toHaveLength(1);
+    expect(result.cleanupWarnings?.[0]).toContain('env-9');
+    expect(result.cleanupWarnings?.[0]).toContain('resources may remain allocated');
   });
 
   test('a cancelling reject leaves a live owner’s container to its executor', async () => {

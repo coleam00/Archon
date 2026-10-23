@@ -65,6 +65,11 @@ export interface RejectionOperationResult {
    * workflow's own `when:` wiring" from "a rework prompt is about to run."
    */
   newMode: boolean;
+  /**
+   * Present only when the rejection cancelled the run but could not reclaim its
+   * container. The run stays cancelled; these tell the operator what was left behind.
+   */
+  cleanupWarnings?: string[];
 }
 
 /**
@@ -347,10 +352,10 @@ async function rejectGate(
 
   const cancelled = !plan.willStageRework && !plan.willResolveNewMode;
   // The container backend removes a container run's scratch only with its container, so
-  // the container is reclaimed only once no executor can still run in it. A reclaim
-  // failure is logged there.
+  // the container is reclaimed only once no executor can still run in it.
+  const cleanupWarnings: string[] = [];
   if (cancelled && noExecutorCanWrite(run)) {
-    await reclaimCancelledRunContainer(ctx, run);
+    cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
     await releaseRunScratch(run);
   }
 
@@ -368,6 +373,7 @@ async function rejectGate(
     maxAttemptsReached: plan.maxAttemptsReached,
     writeBack: false,
     newMode: plan.willResolveNewMode,
+    ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
   };
 }
 
