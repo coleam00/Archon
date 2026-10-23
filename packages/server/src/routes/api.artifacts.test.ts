@@ -345,6 +345,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     const { app } = makeApp();
     const response = await app.request(`/api/artifacts/${runId}/plan.md`);
     expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
     expect(await response.text()).toBe('# folder plan');
   });
 
@@ -352,7 +353,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     const runId = 'run-serve-local';
     const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'plan.md'), '# local plan');
+    await writeFile(join(dir, 'plan.txt'), 'local plan');
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: runId,
@@ -364,9 +365,10 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       default_cwd: '/home/u/workspace',
     }));
     const { app } = makeApp();
-    const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+    const response = await app.request(`/api/artifacts/${runId}/plan.txt`);
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe('# local plan');
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(await response.text()).toBe('local plan');
   });
 
   test('an out-of-tree output_root falls through to re-derivation and still serves', async () => {
