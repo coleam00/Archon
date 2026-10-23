@@ -175,12 +175,7 @@ async function validateRegistrationChoice(
   options: RegistrationOptions
 ): Promise<void> {
   if (options.baseBranch === undefined) return;
-  try {
-    await validateBranchName(options.baseBranch);
-  } catch (error) {
-    if (error instanceof InvalidBaseBranchError) throw new ProjectRegistrationError(error.message);
-    throw error;
-  }
+  await validateBaseBranchSyntax(options.baseBranch);
   const { selected: remote } = await registrationRemotes(path);
   if (!remote) {
     getLog().warn({ path }, 'registration.base_branch_no_remote');
@@ -394,7 +389,7 @@ async function assertCloneDestinationAvailable(targetPath: string): Promise<void
   }
 }
 
-async function validateCloneBaseBranch(baseBranch: string | undefined): Promise<void> {
+async function validateBaseBranchSyntax(baseBranch: string | undefined): Promise<void> {
   if (baseBranch !== undefined) {
     try {
       await validateBranchName(baseBranch);
@@ -443,7 +438,7 @@ export async function cloneRepository(
   };
   const targetPath = getProjectSourcePath(ownerName, repoName);
   await assertCloneDestinationAvailable(targetPath);
-  await validateCloneBaseBranch(options.baseBranch);
+  await validateBaseBranchSyntax(options.baseBranch);
 
   const credentials = await repositoryCredentials(workingUrl, options);
   await ensureProjectStructure(ownerName, repoName).catch(refuseOccupiedSource);
