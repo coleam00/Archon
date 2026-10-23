@@ -22,6 +22,7 @@ import type {
   WorkflowValidationResult,
   ValidationConfig,
   ScriptValidationResult,
+  CommandValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
@@ -89,6 +90,37 @@ export async function validateWorkflowsCommand(
   json?: boolean
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
+  const results = await collectWorkflowResults(cwd, config);
+
+  let filteredResults = results;
+  if (name) {
+    filteredResults = results.filter(
+      r => r.workflowName === name || r.workflowName.toLowerCase() === name.toLowerCase()
+    );
+
+    if (filteredResults.length === 0) {
+      await reportMissingWorkflow(name, results, json);
+      return 1;
+    }
+  }
+
+  filteredResults.sort((a, b) => {
+    const aErrors = a.issues.filter(i => i.level === 'error').length;
+    const bErrors = b.issues.filter(i => i.level === 'error').length;
+    if (aErrors !== bErrors) return bErrors - aErrors;
+    return a.workflowName.localeCompare(b.workflowName);
+  });
+
+  const totalErrors = filteredResults.filter(r => !r.valid).length;
+  await writeWorkflowResults(cwd, filteredResults, totalErrors, json);
+
+  return totalErrors > 0 ? 1 : 0;
+}
+
+async function collectWorkflowResults(
+  cwd: string,
+  config: ValidationConfig
+): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
@@ -97,7 +129,6 @@ export async function validateWorkflowsCommand(
     providerRegistry
   );
 
-  // Build results from load errors (Level 1-2 failures)
   const results: WorkflowValidationResult[] = [];
 
   for (const loadError of loadErrors) {
@@ -110,7 +141,6 @@ export async function validateWorkflowsCommand(
     );
   }
 
-  // Validate successfully parsed workflows (Level 3)
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
@@ -123,7 +153,6 @@ export async function validateWorkflowsCommand(
       defaultProvider
     );
 
-    // Surface parse-time warnings (unknown keys, deprecations) as validation issues
     if (parseWarnings && parseWarnings.length > 0) {
       for (const warning of parseWarnings) {
         issues.push({ level: 'warning', field: 'parse_warning', message: warning });
@@ -133,56 +162,48 @@ export async function validateWorkflowsCommand(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  // Filter to specific workflow if name provided
-  let filteredResults = results;
-  if (name) {
-    filteredResults = results.filter(
-      r => r.workflowName === name || r.workflowName.toLowerCase() === name.toLowerCase()
+  return results;
+}
+
+async function reportMissingWorkflow(
+  name: string,
+  results: WorkflowValidationResult[],
+  json: boolean | undefined
+): Promise<void> {
+  const allNames = results.map(r => r.workflowName);
+  const similar = findSimilar(name, allNames);
+  if (json) {
+    await writeStdout(
+      `${JSON.stringify({
+        error: `Workflow '${name}' not found`,
+        suggestions: similar,
+        available: allNames,
+      })}\n`
     );
-
-    if (filteredResults.length === 0) {
-      const allNames = results.map(r => r.workflowName);
-      const similar = findSimilar(name, allNames);
-      if (json) {
-        await writeStdout(
-          `${JSON.stringify({
-            error: `Workflow '${name}' not found`,
-            suggestions: similar,
-            available: allNames,
-          })}\n`
-        );
-      } else {
-        console.error(`Workflow '${name}' not found.`);
-        if (similar.length > 0) {
-          console.error(`Did you mean: ${similar.map(s => `'${s}'`).join(', ')}?`);
-        }
-        console.error(`Available workflows: ${allNames.join(', ')}`);
-      }
-      return 1;
+  } else {
+    console.error(`Workflow '${name}' not found.`);
+    if (similar.length > 0) {
+      console.error(`Did you mean: ${similar.map(s => `'${s}'`).join(', ')}?`);
     }
+    console.error(`Available workflows: ${allNames.join(', ')}`);
   }
+}
 
-  // Sort: errors first, then warnings, then ok
-  filteredResults.sort((a, b) => {
-    const aErrors = a.issues.filter(i => i.level === 'error').length;
-    const bErrors = b.issues.filter(i => i.level === 'error').length;
-    if (aErrors !== bErrors) return bErrors - aErrors;
-    return a.workflowName.localeCompare(b.workflowName);
-  });
-
-  // Output
-  const totalErrors = filteredResults.filter(r => !r.valid).length;
-  const totalWarnings = filteredResults.filter(r =>
-    r.issues.some(i => i.level === 'warning')
-  ).length;
+async function writeWorkflowResults(
+  cwd: string,
+  results: WorkflowValidationResult[],
+  totalErrors: number,
+  json: boolean | undefined
+): Promise<void> {
+  const totalWarnings = results.filter(r => r.issues.some(i => i.level === 'warning')).length;
 
   if (json) {
     await writeStdout(
       `${JSON.stringify({
-        results: filteredResults,
+        results,
         summary: {
-          total: filteredResults.length,
-          valid: filteredResults.length - totalErrors,
+          total: results.length,
+          valid: results.length - totalErrors,
           errors: totalErrors,
           warnings: totalWarnings,
         },
@@ -190,15 +211,13 @@ export async function validateWorkflowsCommand(
     );
   } else {
     console.log(`\nValidating workflows in ${cwd}\n`);
-    for (const result of filteredResults) {
+    for (const result of results) {
       console.log(formatWorkflowResult(result));
     }
     console.log(
-      `\nResults: ${filteredResults.length - totalErrors} valid, ${totalErrors} with errors${totalWarnings > 0 ? `, ${totalWarnings} with warnings` : ''}`
+      `\nResults: ${results.length - totalErrors} valid, ${totalErrors} with errors${totalWarnings > 0 ? `, ${totalWarnings} with warnings` : ''}`
     );
   }
-
-  return totalErrors > 0 ? 1 : 0;
 }
 
 // =============================================================================
@@ -222,19 +241,9 @@ export async function validateCommandsCommand(
   const config = await buildValidationConfig(cwd);
 
   if (name) {
-    // Validate a single command
     const result = await validateCommand(name, cwd, config);
-
-    if (jsonOutput) {
-      await writeStdout(`${JSON.stringify(result)}\n`);
-    } else {
-      const statusLabel = result.valid ? 'ok' : 'ERRORS';
-      console.log(`\n  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
-      for (const issue of result.issues) {
-        console.log(formatIssue(issue));
-      }
-    }
-
+    if (jsonOutput) await writeStdout(`${JSON.stringify(result)}\n`);
+    else printCommandResult(result, '\n  ');
     return result.valid ? 0 : 1;
   }
 
@@ -252,6 +261,26 @@ export async function validateCommandsCommand(
   const totalScriptErrors = scriptResults.filter(r => !r.valid).length;
   const totalErrors = totalCommandErrors + totalScriptErrors;
 
+  await writeCommandResults(cwd, commandResults, scriptResults, totalErrors, jsonOutput);
+
+  return totalErrors > 0 ? 1 : 0;
+}
+
+function printCommandResult(result: CommandValidationResult, prefix = '  '): void {
+  const statusLabel = result.valid ? 'ok' : 'ERRORS';
+  console.log(`${prefix}${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
+  for (const issue of result.issues) {
+    console.log(formatIssue(issue));
+  }
+}
+
+async function writeCommandResults(
+  cwd: string,
+  commandResults: CommandValidationResult[],
+  scriptResults: ScriptValidationResult[],
+  totalErrors: number,
+  jsonOutput: boolean | undefined
+): Promise<void> {
   if (jsonOutput) {
     await writeStdout(
       `${JSON.stringify({
@@ -267,16 +296,12 @@ export async function validateCommandsCommand(
   } else {
     if (commandResults.length === 0 && scriptResults.length === 0) {
       console.log('\nNo commands or scripts found.');
-      return 0;
+      return;
     }
 
     console.log(`\nValidating commands and scripts in ${cwd}\n`);
     for (const result of commandResults) {
-      const statusLabel = result.valid ? 'ok' : 'ERRORS';
-      console.log(`  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
-      for (const issue of result.issues) {
-        console.log(formatIssue(issue));
-      }
+      printCommandResult(result);
     }
     for (const result of scriptResults) {
       console.log(formatScriptResult(result));
@@ -285,6 +310,4 @@ export async function validateCommandsCommand(
       `\nResults: ${commandResults.length + scriptResults.length - totalErrors} valid, ${totalErrors} with errors`
     );
   }
-
-  return totalErrors > 0 ? 1 : 0;
 }
