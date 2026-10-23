@@ -986,6 +986,9 @@ exits `1`. The item shape is described in the [Operate page](/getting-started/op
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
 item in scope, then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
+Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
+top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the
+failed node and its recorded error class ([fields](/getting-started/operate/#stream-the-queue)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
 readable deliveries can continue while unreadable deliveries are omitted. Store-wide
