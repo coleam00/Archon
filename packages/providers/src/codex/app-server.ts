@@ -337,7 +337,8 @@ export class AppServerConnection {
       this.receiveRequest(id, method, message.params);
       return;
     }
-    this.receiveNotification(message);
+    this.queue.push(message as unknown as ServerNotification);
+    this.wakeReader();
   }
 
   private receiveResponse(id: number, message: Record<string, unknown>): void {
@@ -390,11 +391,6 @@ export class AppServerConnection {
             { code: -32000, message: CHATGPT_TOKEN_REFRESH_DECLINED }
           : { code: -32601, message: `Archon does not handle ${method}` },
     });
-  }
-
-  private receiveNotification(message: Record<string, unknown>): void {
-    this.queue.push(message as unknown as ServerNotification);
-    this.wakeReader();
   }
 
   /** The error for work cut short by `end`, with the turn's `error` notifications. */
