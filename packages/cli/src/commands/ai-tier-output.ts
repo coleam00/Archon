@@ -28,7 +28,7 @@ export function buildTierRows(
 }
 
 export function printTierList(
-  defaultAssistant: string,
+  defaultAssistant: string | undefined,
   userDefaultAssistant: string | undefined,
   rows: ReturnType<typeof buildTierRows>
 ): void {

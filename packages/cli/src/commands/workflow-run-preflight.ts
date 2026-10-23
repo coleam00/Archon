@@ -269,7 +269,7 @@ export async function maybePrintTierNotice(
 }
 
 function formatTierNotice(
-  effectiveAssistant: string,
+  effectiveAssistant: string | undefined,
   aliases: ResolvedAiProfile['aliases']
 ): string | undefined {
   const tierLines: string[] = [];
