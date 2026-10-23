@@ -39,19 +39,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
-      return JSON.stringify({
-        type: 'workflow_status',
-        runId: event.runId,
-        workflowName: event.workflowName,
-        status:
-          event.type === 'workflow_started'
-            ? 'running'
-            : event.type === 'workflow_completed'
-              ? 'completed'
-              : 'failed',
-        error: event.type === 'workflow_failed' ? event.error : undefined,
-        timestamp: Date.now(),
-      });
+      return mapWorkflowStatusEvent(event);
 
     case 'loop_iteration_started':
       return JSON.stringify({
@@ -113,27 +101,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'node_completed':
     case 'node_failed':
     case 'node_skipped': {
-      const payload: DagNodeSseEvent = {
-        type: 'dag_node',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        name: event.nodeName,
-        status:
-          event.type === 'node_started' || event.type === 'node_suspended'
-            ? 'running'
-            : event.type === 'node_completed'
-              ? 'completed'
-              : event.type === 'node_failed'
-                ? 'failed'
-                : 'skipped',
-        duration: event.type === 'node_completed' ? event.duration : undefined,
-        error: event.type === 'node_failed' ? event.error : undefined,
-        reason: event.type === 'node_skipped' ? event.reason : undefined,
-        cause: event.type === 'node_skipped' ? event.cause : undefined,
-        execution: event.execution,
-        timestamp: Date.now(),
-      };
-      return JSON.stringify(payload);
+      return mapDagNodeEvent(event);
     }
 
     case 'node_skipped_prior_success':
@@ -192,6 +160,56 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
       return null;
     }
   }
+}
+
+function mapWorkflowStatusEvent(
+  event: Extract<
+    WorkflowEmitterEvent,
+    { type: 'workflow_started' | 'workflow_completed' | 'workflow_failed' }
+  >
+): string {
+  return JSON.stringify({
+    type: 'workflow_status',
+    runId: event.runId,
+    workflowName: event.workflowName,
+    status:
+      event.type === 'workflow_started'
+        ? 'running'
+        : event.type === 'workflow_completed'
+          ? 'completed'
+          : 'failed',
+    error: event.type === 'workflow_failed' ? event.error : undefined,
+    timestamp: Date.now(),
+  });
+}
+
+function mapDagNodeEvent(
+  event: Extract<
+    WorkflowEmitterEvent,
+    { type: 'node_started' | 'node_suspended' | 'node_completed' | 'node_failed' | 'node_skipped' }
+  >
+): string {
+  const payload: DagNodeSseEvent = {
+    type: 'dag_node',
+    runId: event.runId,
+    nodeId: event.nodeId,
+    name: event.nodeName,
+    status:
+      event.type === 'node_started' || event.type === 'node_suspended'
+        ? 'running'
+        : event.type === 'node_completed'
+          ? 'completed'
+          : event.type === 'node_failed'
+            ? 'failed'
+            : 'skipped',
+    duration: event.type === 'node_completed' ? event.duration : undefined,
+    error: event.type === 'node_failed' ? event.error : undefined,
+    reason: event.type === 'node_skipped' ? event.reason : undefined,
+    cause: event.type === 'node_skipped' ? event.cause : undefined,
+    execution: event.execution,
+    timestamp: Date.now(),
+  };
+  return JSON.stringify(payload);
 }
 
 /** Read the first present string field from a parsed event `data` object. */
