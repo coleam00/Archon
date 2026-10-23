@@ -264,7 +264,13 @@ async function readMultipartMessage(
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
 
-  const fileEntries = formEntries(body.files).filter((e): e is File => e instanceof File);
+  const fileEntries: File[] = [];
+  for (const entry of formEntries(body.files)) {
+    if (!(entry instanceof File)) {
+      return c.json({ error: 'files must contain only file parts' }, 400);
+    }
+    fileEntries.push(entry);
+  }
   if (fileEntries.length === 0) return { message, savedFiles: [] };
   const result = await persistUploadedFiles(conversationId, fileEntries);
   if (!result.ok) {
