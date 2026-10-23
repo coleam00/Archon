@@ -347,13 +347,17 @@ export async function* streamMultiAgentOpencodeSession(
           // rule (#2662): one sub-agent without cache telemetry narrows the total and
           // flags it, instead of erasing cache the others did report. A total is only
           // available when every sub-agent reported every component needed to compute it.
-          const perAgentUsage = states
-            .map(candidate => sumAssistantUsage([...candidate.assistantInfos.values()]).tokens)
+          const assistantUsages = states.map(candidate =>
+            sumAssistantUsage([...candidate.assistantInfos.values()])
+          );
+          const perAgentUsage = assistantUsages
+            .map(usage => usage.tokens)
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
-          const cost = perAgentUsage.some(usage => usage.cost !== undefined)
-            ? perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0)
-            : undefined;
+          const costs = assistantUsages.flatMap(usage =>
+            usage.cost !== undefined ? [usage.cost] : []
+          );
+          const cost = costs.length > 0 ? costs.reduce((sum, value) => sum + value, 0) : undefined;
           const totals = perAgentUsage
             .map(usage => usage.total)
             .filter((total): total is number => total !== undefined);

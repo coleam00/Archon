@@ -1141,6 +1141,53 @@ describe('OpencodeProvider', () => {
     );
   });
 
+  test('multi-agent cost includes a sub-agent whose tokens cannot normalize', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      })
+    );
+    scriptedEvents = [
+      assistantStep('scout-1', 'scout-session', 0.25, 100, 10, 'stop'),
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'reviewer-1',
+            role: 'assistant',
+            sessionID: 'reviewer-session',
+            cost: 0.5,
+            tokens: { output: 20 },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toContainEqual({
+      type: 'result',
+      cost: 0.75,
+      tokens: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.25 },
+    });
+  });
+
   test('session resume handoff falls back to a fresh session with warning', async () => {
     const runtime = makeRuntime({
       sessionGet: mock(async () => {
