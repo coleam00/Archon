@@ -602,17 +602,7 @@ mock.module(${JSON.stringify(join(repo, 'packages/core/src/db/connection.ts'))},
 const {startServer}=await import(${JSON.stringify(join(repo, 'packages/server/src/index.ts'))});
 try {await startServer();process.exit(1);}catch(error){console.log(error.name+': '+error.message);process.exit(0);}`
   );
-  const child = Bun.spawn([process.execPath, entry], {
-    cwd: f.project,
-    env: f.env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+  const { output, error, code } = await f.scope.run([process.execPath, entry], f.project, f.env);
   expect(code).toBe(0);
   expect(error).not.toContain('SQL open trap');
   expect(output).toContain('FileStoreUnsupportedError');
