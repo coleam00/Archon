@@ -394,3 +394,76 @@ for (const missingHistory of [false, true]) {
     }
   });
 }
+
+for (const terminal of ['approval', 'wait'] as const) {
+  test(`nested ${terminal} in outer iteration two resumes that iteration`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nested-loop-iteration-'));
+    try {
+      let outerCount = 0;
+      let innerCount = 0;
+      let outerValue = '';
+      mockSendQueryDag.mockImplementation(async function* (prompt) {
+        const text = prompt.includes('Outer value')
+          ? (outerValue = ++outerCount === 1 ? 'a' : 'b')
+          : `${outerValue}-${++innerCount % 2 === 1 ? 'first' : 'second'}`;
+        yield { type: 'agent_message_chunk', text };
+        yield { type: 'result', sessionId: `session-${outerCount}-${innerCount}` };
+      });
+      const store = await createFileWorkflowStore({ root });
+      const created = await store.createWorkflowRun({ workflow_name: 'nested', user_message: '' });
+      const run = await store.claimPendingWorkflowRun(created.id, root);
+      if (!run) throw new Error('Claim failed');
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: root,
+        workflowRun: run,
+        workflow: {
+          name: 'nested',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'outer',
+              loop_group: {
+                max_iterations: 3,
+                until_bash: 'test $outerWork.output = b',
+                nodes: [
+                  { id: 'outerWork', prompt: 'Outer value' },
+                  {
+                    id: 'grp',
+                    depends_on: ['outerWork'],
+                    loop_group: {
+                      max_iterations: 2,
+                      until_bash: 'case $work.output in *-second) true;; *) false;; esac',
+                      nodes: [
+                        { id: 'work', prompt: 'Inner value' },
+                        {
+                          id: 'check',
+                          depends_on: ['work'],
+                          when: "$work.output == 'b-second'",
+                          ...(terminal === 'approval'
+                            ? { approval: { message: 'Continue?', decisions: [{ id: 'approve' }] } }
+                            : { wait: { attention: 'Continue?' } }),
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            }),
+          ],
+        },
+      });
+      await executeDagWorkflow(options);
+      expect([outerCount, innerCount]).toEqual([2, 4]);
+      await answerAndResume(store, options);
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('completed');
+      // Re-entering iteration two re-runs its pre-group work once; nothing from iteration one.
+      expect([outerCount, innerCount]).toEqual([3, 4]);
+      const outerIterations = (await store.listWorkflowEvents(run.id))
+        .filter(e => e.step_name === 'outer' && e.event_type === 'loop_iteration_started')
+        .map(e => e.data.iteration);
+      expect(outerIterations).toEqual([1, 2, 2]);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+}

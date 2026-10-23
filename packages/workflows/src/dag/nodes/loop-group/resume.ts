@@ -3,7 +3,8 @@ import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { resolveBashPath } from '@archon/git';
 import { executeWaitNode } from '../wait/wait';
 import { snapshotBodySessionCursorAncestry } from '../../pause';
-import { nodeInvocationKey } from '../../../node-record-reader';
+import { nodeInvocationKey, parseNodeInvocationKey } from '../../../node-record-reader';
+import type { NodeInvocation } from '../../../schemas/node-execution';
 import type {
   ApprovalContext,
   DagNode,
@@ -168,7 +169,7 @@ function detectResumeShape(
   };
 }
 
-/** This invocation's identity, and the persisted gate and its frame for it, if any. */
+/** This invocation's identity, and the persisted gate and the gate or wait frame for it, if any. */
 function readPausedInvocation(
   ctx: RunLayersContext,
   node: LoopGroupNode,
@@ -188,21 +189,38 @@ function readPausedInvocation(
       ctx,
       node,
       stepName,
-      loopGateMeta,
+      loopGateMeta?.execution?.invocation.loopPath ??
+        waitPauseLoopPath(ctx.workflowRun.metadata?.wait),
       ownerInvocationKey
     ),
   };
 }
 
-/** The paused gate's loop-path frame for THIS group invocation, when it paused inside it. */
+/**
+ * The loop path of a loop-owned wait, from its persisted ancestry. {@link withOwnCursors}
+ * adds one key per enclosing group invocation, so the key with the longest loop path is the
+ * owner group's, and its loop path is the frames that enclose the owner. Undefined for a wait
+ * without ancestry: nothing else persisted names the iterations it paused in.
+ */
+function waitPauseLoopPath(rawWait: unknown): NodeInvocation['loopPath'] | undefined {
+  if (!isWorkflowWaitContext(rawWait) || rawWait.owner !== 'loop_group') return undefined;
+  if (rawWait.bodySessionCursorAncestry === undefined) return undefined;
+  let ownerLoopPath: NodeInvocation['loopPath'] = [];
+  for (const key of Object.keys(rawWait.bodySessionCursorAncestry)) {
+    const { loopPath } = parseNodeInvocationKey(key);
+    if (loopPath.length > ownerLoopPath.length) ownerLoopPath = loopPath;
+  }
+  return [...ownerLoopPath, { groupId: rawWait.nodeId, iteration: rawWait.iteration }];
+}
+
+/** The paused gate's or wait's loop-path frame for THIS group invocation, when it paused inside it. */
 function enclosingPauseFrameOf(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   stepName: string,
-  loopGateMeta: ApprovalContext | undefined,
+  pauseLoopPath: NodeInvocation['loopPath'] | undefined,
   ownerInvocationKey: string
 ): { groupId: string; iteration: number } | undefined {
-  const pauseLoopPath = loopGateMeta?.execution?.invocation.loopPath;
   const pauseFrame = pauseLoopPath?.[ctx.loopGroupPath.length];
   return pauseFrame?.groupId === node.id &&
     nodeInvocationKey(stepName, pauseLoopPath?.slice(0, ctx.loopGroupPath.length) ?? []) ===
