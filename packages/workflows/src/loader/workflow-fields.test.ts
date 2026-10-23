@@ -434,7 +434,7 @@ describe('container policy', () => {
     }
   );
 
-  it.each<[unknown, unknown, [unknown, string][]]>([
+  it.each<[unknown, ReturnType<typeof parseContainerPolicy>, [unknown, string][]]>([
     [undefined, undefined, []],
     [{}, undefined, []],
     [{ enabled: undefined, write_back: undefined }, undefined, []],
