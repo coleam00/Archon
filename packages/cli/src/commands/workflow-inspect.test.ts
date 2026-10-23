@@ -18,6 +18,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import { workflowGetCommand, workflowStatusCommand } from './workflow-query';
 import { buildNodeSummaries, formatFanOutOutcome } from './workflow-node-summaries';
+import type { TerminalRecord } from '@archon/workflows/schemas/terminal-record';
 import { fanOutOutcome, type FanOutSlot } from '@archon/workflows/schemas/fan-out-outcome';
 
 const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
@@ -813,6 +814,82 @@ describe('workflowGetCommand', () => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
   });
+
+  it.each([0, 20, 21])(
+    'summarizes terminal artifact inventory with %s operator files without changing JSON',
+    async fileCount => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const workflowEventsDb = await import('@archon/core/db/workflow-events');
+      const operatorPaths = [
+        `reports/${RUN_ARTIFACTS_ENGINE_SUBDIR}/report.md`,
+        '.summary.md',
+        ...Array.from({ length: 19 }, (_, index) => `report-${index}.md`),
+      ].slice(0, fileCount);
+      const internalPaths = [
+        `${RUN_ARTIFACTS_ENGINE_SUBDIR}/typed-artifacts/internal.json`,
+        `${RUN_ARTIFACTS_ENGINE_SUBDIR}/node-output-spills/output.txt`,
+      ];
+      const record: TerminalRecord = {
+        run_id: 'run-terminal-artifacts',
+        status: 'completed',
+        outcome: null,
+        error: null,
+        first_failed_node: null,
+        nodes: [],
+        returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+        artifacts: {
+          root: null,
+          files: [internalPaths[0], ...operatorPaths, internalPaths[1]].map(path => ({
+            path,
+            size: 42,
+          })),
+          limitations: [{ kind: 'unreadable', path: 'missing-report.md', code: 'EACCES' }],
+        },
+      };
+      const run = {
+        id: record.run_id,
+        workflow_name: 'implement',
+        status: record.status,
+        started_at: new Date(),
+        metadata: {},
+        output_root: null,
+        checkout_baseline: null,
+        codebase_id: null,
+      };
+      const events: WorkflowEventRow[] = [
+        {
+          id: 'terminal-event',
+          workflow_run_id: record.run_id,
+          event_type: 'workflow_completed',
+          step_name: null,
+          step_index: null,
+          created_at: '2026-10-23T00:00:00.000Z',
+          data: { terminal_record: record },
+        },
+      ];
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(run)
+        .mockResolvedValueOnce(run);
+      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(events)
+        .mockResolvedValueOnce(events);
+
+      expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id)).toBe(0);
+
+      const lines = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      expect(lines).toContain(`    Artifacts observed: ${fileCount + internalPaths.length}`);
+      expect(lines).toContain('    Engine-internal artifact files (not listed): 2');
+      expect(lines.filter(line => line.startsWith('      - '))).toEqual(
+        operatorPaths.slice(0, 20).map(path => `      - ${path}`)
+      );
+      for (const path of internalPaths) expect(lines.join('\n')).not.toContain(path);
+      expect(lines.includes('    Artifact list truncated at the display cap')).toBe(fileCount > 20);
+      expect(lines).toContain('    Inventory limitation: unreadable (missing-report.md)');
+
+      expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id, true)).toBe(0);
+      expect(JSON.parse(firstJsonPayload(stdoutSpy)).terminal_record).toEqual(record);
+    }
+  );
 
   const usageCases: [string, Record<string, unknown>, string, string, string][] = [
     [

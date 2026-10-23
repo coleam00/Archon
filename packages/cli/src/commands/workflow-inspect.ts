@@ -492,6 +492,26 @@ function terminalFanOutLines(nodes: NonNullable<TerminalRecord>['nodes']): strin
   });
 }
 
+const ARTIFACT_PREVIEW_LIMIT = 20;
+
+function printTerminalArtifacts(artifacts: NonNullable<TerminalRecord>['artifacts']): void {
+  const files = artifacts.files.filter(
+    file => !archonPaths.isRunArtifactsEngineEntry('', file.path.split('/')[0])
+  );
+  const internalFiles = artifacts.files.length - files.length;
+  console.log(`    Artifacts observed: ${String(artifacts.files.length)}`);
+  for (const file of files.slice(0, ARTIFACT_PREVIEW_LIMIT)) console.log(`      - ${file.path}`);
+  if (internalFiles > 0) {
+    console.log(`    Engine-internal artifact files (not listed): ${String(internalFiles)}`);
+  }
+  if (files.length > ARTIFACT_PREVIEW_LIMIT) {
+    console.log('    Artifact list truncated at the display cap');
+  }
+  for (const limitation of artifacts.limitations) {
+    console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+  }
+}
+
 function printTerminalRecord(terminalRecord: TerminalRecord): void {
   if (terminalRecord) {
     console.log('  Terminal record:');
@@ -500,11 +520,7 @@ function printTerminalRecord(terminalRecord: TerminalRecord): void {
     }
     terminalFanOutLines(terminalRecord.nodes).forEach(line => console.log(line));
     console.log(`    Selected return: ${terminalRecord.returns.availability}`);
-    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
-    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
-    for (const limitation of terminalRecord.artifacts.limitations) {
-      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
-    }
+    printTerminalArtifacts(terminalRecord.artifacts);
   } else {
     console.log('  Terminal record: (unavailable)');
   }
@@ -528,8 +544,9 @@ function printLeaveBehindArtifacts(leaveBehind: LeaveBehind): void {
     console.log(
       `    Artifacts (${String(leaveBehind.artifactFiles.length)} files under $ARTIFACTS_DIR):`
     );
-    for (const f of leaveBehind.artifactFiles.slice(0, 20)) console.log(`      - ${f}`);
-    if (leaveBehind.artifactFiles.length > 20) console.log('      …');
+    for (const f of leaveBehind.artifactFiles.slice(0, ARTIFACT_PREVIEW_LIMIT))
+      console.log(`      - ${f}`);
+    if (leaveBehind.artifactFiles.length > ARTIFACT_PREVIEW_LIMIT) console.log('      …');
   }
   const omitted = leaveBehind.artifactFilesOmitted;
   if (omitted.internalFiles > 0) {
