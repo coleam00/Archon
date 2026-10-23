@@ -70,22 +70,7 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
           </span>
         ) : null}
       </span>
-      {call.status === 'failed' || call.status === 'cancelled' ? (
-        <span className="shrink-0 font-mono text-[11.5px] text-error">
-          {call.status}
-          {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
-        </span>
-      ) : null}
-      {call.outcomeUnrecorded === true ? (
-        <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
-          no result recorded
-        </span>
-      ) : null}
-      {call.durationMs !== undefined ? (
-        <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
-          {call.durationMs.toString()}ms
-        </span>
-      ) : null}
+      <ToolCallOutcome call={call} />
       {hasDetails ? (
         <span
           aria-hidden
@@ -114,28 +99,60 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
       ) : (
         <div className="flex items-center gap-4">{row}</div>
       )}
-      {expanded && hasDetails ? (
-        <div className="ml-[72px] mt-2 space-y-1.5">
-          {hasInput ? (
-            <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
-              {JSON.stringify(call.input, null, 2)}
-            </pre>
-          ) : null}
-          {call.output !== undefined && call.output.length > 0 ? (
-            <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
-                Result
-              </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
-                {call.output.length > 2000
-                  ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
-                  : call.output}
-              </pre>
-              {call.outputTruncated === true ? (
-                <div className="mt-0.5 text-[10px] text-text-tertiary">
-                  Output cut short by the provider.
-                </div>
-              ) : null}
+      {expanded && hasDetails ? <ToolCallDetails call={call} hasInput={hasInput} /> : null}
+    </div>
+  );
+}
+
+function ToolCallOutcome({ call }: Pick<ToolCallItemProps, 'call'>): ReactElement {
+  return (
+    <>
+      {call.status === 'failed' || call.status === 'cancelled' ? (
+        <span className="shrink-0 font-mono text-[11.5px] text-error">
+          {call.status}
+          {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
+        </span>
+      ) : null}
+      {call.outcomeUnrecorded === true ? (
+        <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
+          no result recorded
+        </span>
+      ) : null}
+      {call.durationMs !== undefined ? (
+        <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
+          {call.durationMs.toString()}ms
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function ToolCallDetails({
+  call,
+  hasInput,
+}: Pick<ToolCallItemProps, 'call'> & {
+  hasInput: boolean;
+}): ReactElement {
+  return (
+    <div className="ml-[72px] mt-2 space-y-1.5">
+      {hasInput ? (
+        <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+          {JSON.stringify(call.input, null, 2)}
+        </pre>
+      ) : null}
+      {call.output !== undefined && call.output.length > 0 ? (
+        <div>
+          <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
+            Result
+          </div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+            {call.output.length > 2000
+              ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
+              : call.output}
+          </pre>
+          {call.outputTruncated === true ? (
+            <div className="mt-0.5 text-[10px] text-text-tertiary">
+              Output cut short by the provider.
             </div>
           ) : null}
         </div>
