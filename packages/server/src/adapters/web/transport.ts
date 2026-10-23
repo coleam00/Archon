@@ -93,28 +93,30 @@ export class SSETransport {
       this.cleanupTimers.delete(conversationId);
     }
 
-    // Replay buffered events that arrived before the stream connected
+    this.replayBufferedEvents(conversationId, stream);
+  }
+
+  private replayBufferedEvents(conversationId: string, stream: SSEWriter): void {
     const buffered = this.eventBuffer.get(conversationId);
-    if (buffered && buffered.length > 0) {
-      const now = Date.now();
-      const valid = buffered.filter(e => now - e.timestamp < EVENT_BUFFER_TTL_MS);
-      const expired = buffered.length - valid.length;
-      this.clearBuffer(conversationId);
-      if (expired > 0) {
-        // Events outlived the buffer TTL before the client reconnected.
-        // Symptom on the UI: stuck tool cards for any tool_result that was
-        // in the expired batch. If this fires in practice, bump TTL further.
-        getLog().warn(
-          { conversationId, expired, ttlMs: EVENT_BUFFER_TTL_MS },
-          'transport.buffer_ttl_expired'
-        );
-      }
-      if (valid.length > 0) {
-        getLog().debug({ conversationId, count: valid.length }, 'sse_buffer_replay');
-        for (const event of valid) {
-          if (stream.closed) break;
-          void this.writeToStream(conversationId, stream, event.data);
-        }
+    if (!buffered || buffered.length === 0) return;
+    const now = Date.now();
+    const valid = buffered.filter(e => now - e.timestamp < EVENT_BUFFER_TTL_MS);
+    const expired = buffered.length - valid.length;
+    this.clearBuffer(conversationId);
+    if (expired > 0) {
+      // Events outlived the buffer TTL before the client reconnected.
+      // Symptom on the UI: stuck tool cards for any tool_result that was
+      // in the expired batch. If this fires in practice, bump TTL further.
+      getLog().warn(
+        { conversationId, expired, ttlMs: EVENT_BUFFER_TTL_MS },
+        'transport.buffer_ttl_expired'
+      );
+    }
+    if (valid.length > 0) {
+      getLog().debug({ conversationId, count: valid.length }, 'sse_buffer_replay');
+      for (const event of valid) {
+        if (stream.closed) break;
+        void this.writeToStream(conversationId, stream, event.data);
       }
     }
   }
