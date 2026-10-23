@@ -3,6 +3,7 @@ import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { validateStructuredOutput } from '../structured-output';
 import { resolvedBodyNodes } from '../graph-plan';
+import { canonicalValueText } from '../output-ref';
 import {
   isGateNode,
   isHaltNode,
@@ -332,7 +333,7 @@ export function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutpu
       node.output_format === undefined ? undefined : JSON.parse(stub);
     return {
       state: 'completed',
-      output: stub,
+      output: node.output_format === undefined ? stub : canonicalValueText(structuredOutput),
       ...(node.output_format === undefined ? {} : { structuredOutput }),
       ...contract,
     };
