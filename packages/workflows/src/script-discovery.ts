@@ -70,6 +70,68 @@ function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
  */
 const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 
+function selectedScriptRuntime(
+  entry: string,
+  requestedNames?: ReadonlySet<string>
+): ScriptRuntime | undefined {
+  const ext = extname(entry);
+  if (requestedNames && !requestedNames.has(basename(entry, ext))) return undefined;
+  return getRuntimeForExtension(ext);
+}
+
+async function readScriptEntries(
+  dirPath: string,
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
+): Promise<string[]> {
+  try {
+    return requestedNames
+      ? (await readdir(dirPath, { withFileTypes: true }))
+          .filter(
+            entry =>
+              entry.isDirectory() ||
+              entry.isSymbolicLink() ||
+              selectedScriptRuntime(entry.name, requestedNames)
+          )
+          .map(entry => entry.name)
+      : await readdir(dirPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(dirPath, error);
+      getLog().debug({ dirPath }, 'script_directory_not_found');
+      return [];
+    }
+    getLog().warn({ err, dirPath }, 'script_directory_read_error');
+    throw error;
+  }
+}
+
+async function inspectScriptEntry(
+  entryPath: string,
+  runtime: ScriptRuntime | undefined,
+  onMissing?: (path: string, error: unknown) => void
+) {
+  try {
+    return await stat(entryPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(entryPath, error);
+      return undefined;
+    }
+    // A failure on the selected script must surface: skipping it would report the
+    // script as missing. Any other entry (an unrelated or looping link) is not this
+    // lookup's concern and must not invalidate it.
+    if (runtime) {
+      getLog().warn({ err, entryPath }, 'script_file_stat_error');
+      throw error;
+    }
+    getLog().debug({ err, entryPath }, 'script_unrelated_entry_stat_skipped');
+    return undefined;
+  }
+}
+
 /**
  * Scan a directory for script files, descending at most `MAX_SCRIPT_DISCOVERY_DEPTH`
  * folders deep. Skips files with unknown extensions. Throws on duplicate script names.
@@ -84,55 +146,14 @@ async function scanScriptDir(
   requestedNames?: ReadonlySet<string>,
   onMissing?: (path: string, error: unknown) => void
 ): Promise<void> {
-  /** The runtime of a script this scan selects; undefined for any other entry. */
-  const selectedRuntime = (entry: string): ScriptRuntime | undefined => {
-    const ext = extname(entry);
-    if (requestedNames && !requestedNames.has(basename(entry, ext))) return undefined;
-    return getRuntimeForExtension(ext);
-  };
-  let entries: string[];
-  try {
-    entries = requestedNames
-      ? (await readdir(dirPath, { withFileTypes: true }))
-          .filter(
-            entry => entry.isDirectory() || entry.isSymbolicLink() || selectedRuntime(entry.name)
-          )
-          .map(entry => entry.name)
-      : await readdir(dirPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      onMissing?.(dirPath, error);
-      getLog().debug({ dirPath }, 'script_directory_not_found');
-      return;
-    }
-    getLog().warn({ err, dirPath }, 'script_directory_read_error');
-    throw error;
-  }
+  const entries = await readScriptEntries(dirPath, requestedNames, onMissing);
 
   for (const entry of entries) {
     const entryPath = join(dirPath, entry);
-    const runtime = selectedRuntime(entry);
+    const runtime = selectedScriptRuntime(entry, requestedNames);
 
-    let entryStat;
-    try {
-      entryStat = await stat(entryPath);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        onMissing?.(entryPath, error);
-        continue;
-      }
-      // A failure on the selected script must surface: skipping it would report the
-      // script as missing. Any other entry (an unrelated or looping link) is not this
-      // lookup's concern and must not invalidate it.
-      if (runtime) {
-        getLog().warn({ err, entryPath }, 'script_file_stat_error');
-        throw error;
-      }
-      getLog().debug({ err, entryPath }, 'script_unrelated_entry_stat_skipped');
-      continue;
-    }
+    const entryStat = await inspectScriptEntry(entryPath, runtime, onMissing);
+    if (entryStat === undefined) continue;
 
     if (entryStat.isDirectory()) {
       // 1-depth cap: allow one level of grouping (e.g. `.archon/scripts/triage/foo.ts`)

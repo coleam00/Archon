@@ -407,6 +407,34 @@ describe('dryRunWorkflow — node-local with: bindings (#2637)', () => {
     expect(result.trace[1]?.output).toBe('green=true');
   });
 
+  test('resolves a stubbed producer checkoutStart for an exec consumer', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'binding-checkout-start',
+      nodes: [
+        { id: 'producer', prompt: 'Prepare the checkout' },
+        {
+          id: 'consumer',
+          script: 'console.log("unused")',
+          runtime: 'bun',
+          depends_on: ['producer'],
+          with: { checkout: '$producer.execution.checkoutStart' },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      cwd: temporaryDirectory(),
+      stubs: { producer: 'prepared', consumer: 'previewed' },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(t => t.nodeId === 'consumer')).toMatchObject({
+      state: 'stubbed',
+      output: 'previewed',
+    });
+  });
+
   test('fails the node with the executor error when a binding names an unknown producer', async () => {
     const workflow = makeTestWorkflow({
       name: 'binding-unknown',

@@ -50,6 +50,12 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+function checkoutConsumerBindings(node: DagNode) {
+  if (isExecNode(node)) return node.with;
+  if (!isAgentNode(node)) return undefined;
+  return node.source.kind === 'command' ? node.source.with : readComposedBindings(node);
+}
+
 /** Producers some node binds with `$<node>.execution.checkoutStart`, at any depth. */
 function collectCheckoutProducers(
   nodes: readonly DagNode[],
@@ -57,13 +63,7 @@ function collectCheckoutProducers(
 ): Set<string> {
   for (const node of nodes) {
     if (isLoopGroupNode(node)) collectCheckoutProducers(node.loop_group.nodes as DagNode[], into);
-    const nodeWith = isExecNode(node)
-      ? node.with
-      : isAgentNode(node)
-        ? node.source.kind === 'command'
-          ? node.source.with
-          : readComposedBindings(node)
-        : undefined;
+    const nodeWith = checkoutConsumerBindings(node);
     for (const value of Object.values(nodeWith ?? {})) {
       const producer =
         typeof value === 'string' ? parseWholeExecutionCheckoutRef(value) : undefined;
