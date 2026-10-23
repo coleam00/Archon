@@ -3,6 +3,11 @@ import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { mock, beforeEach } from 'bun:test';
+import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation/types';
 import { createMockLogger } from './mocks/logger';
 export * from './orchestrator-agent-db-mocks';
 export * from './orchestrator-agent-fixtures';
@@ -546,6 +551,9 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 mock.module('@archon/isolation', () => ({
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   IsolationBlockedError: class IsolationBlockedError extends Error {
     public reason: string;
     constructor(reason: string) {

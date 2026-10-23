@@ -1,5 +1,10 @@
 /** Fakes for the checkout a run works in: `@archon/isolation` and `@archon/git`. */
 import { mock } from 'bun:test';
+import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation/types';
 
 export const mockFolderBackendPrepare = mock(
   async (): Promise<import('@archon/isolation').PreparedEnv> => ({
@@ -19,6 +24,9 @@ export const mockResolveFolderBackend = mock(() => ({
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   worktreeRegistrationMetadata,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes

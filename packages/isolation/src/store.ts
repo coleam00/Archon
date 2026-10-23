@@ -38,7 +38,7 @@ export interface IIsolationStore {
   /** With an observation, restore only that retired worktree without replacing an active workflow. */
   updateStatus(
     id: string,
-    status: 'active' | 'destroyed',
+    status: IsolationEnvironmentRow['status'],
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
   /**

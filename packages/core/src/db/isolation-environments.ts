@@ -217,7 +217,7 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
  */
 export async function updateStatus(
   id: string,
-  status: 'active' | 'destroyed',
+  status: IsolationEnvironmentRow['status'],
   observed?: IsolationEnvironmentRow
 ): Promise<void> {
   const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;

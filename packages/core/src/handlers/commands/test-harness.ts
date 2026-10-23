@@ -12,6 +12,11 @@
  */
 import type { RunActor } from '../../operations/run-authorization';
 import { expect, mock, spyOn } from 'bun:test';
+import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -415,6 +420,9 @@ export const mockIsolationDestroy = mock(
 );
 
 mock.module('@archon/isolation', () => ({
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,

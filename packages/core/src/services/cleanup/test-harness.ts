@@ -6,6 +6,11 @@
  */
 import { setPlatformPolicies } from '../../platforms/registry';
 import { mock } from 'bun:test';
+import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
 import { toBranchName } from '@archon/git';
 import type {
@@ -201,6 +206,9 @@ export class MockContainerBackend {
   destroy = mockContainerDestroy;
 }
 mock.module('@archon/isolation', () => ({
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   getIsolationProvider: () => ({
     destroy: mockDestroy,
   }),
