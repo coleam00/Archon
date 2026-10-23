@@ -1,4 +1,5 @@
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { readFile, readdir, realpath, stat } from 'fs/promises';
 import { normalize, join } from 'path';
 import {
@@ -241,61 +242,70 @@ export function registerArtifactRoutes(app: OpenAPIHono): void {
       );
       return apiError(c, 400, 'Invalid artifact path');
     }
-    const filePath = join(artifactDir, filename);
+    return serveArtifactFile(c, runId, artifactDir, filename);
+  });
+}
 
-    // Final safety check: ensure resolved path stays within artifact directory
-    if (!isPathInside(artifactDir, filePath, { includeRoot: true, lexical: true })) {
-      getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
-      return apiError(c, 400, 'Invalid filename');
-    }
+async function serveArtifactFile(
+  c: Context,
+  runId: string,
+  artifactDir: string,
+  filename: string
+): Promise<Response> {
+  const filePath = join(artifactDir, filename);
 
-    // readFile follows symlinks, so contain the resolved target within the
-    // resolved artifact directory and read that checked path (#3160).
-    let realArtifactDir: string;
-    try {
-      realArtifactDir = await realpath(artifactDir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return apiError(c, 404, 'Artifact file not found');
-      }
-      getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
-      return apiError(c, 500, 'Failed to read artifact file');
-    }
-    let realFilePath: string;
-    try {
-      realFilePath = await realpath(filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return apiError(c, 404, 'Artifact file not found');
-      }
-      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
-      return apiError(c, 500, 'Failed to read artifact file');
-    }
-    if (!isPathInside(realArtifactDir, realFilePath, { includeRoot: true, lexical: true })) {
-      getLog().warn(
-        { runId, filename, realFilePath, realArtifactDir },
-        'artifacts.symlink_escape_blocked'
-      );
+  // Final safety check: ensure resolved path stays within artifact directory
+  if (!isPathInside(artifactDir, filePath, { includeRoot: true, lexical: true })) {
+    getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
+    return apiError(c, 400, 'Invalid filename');
+  }
+
+  // readFile follows symlinks, so contain the resolved target within the
+  // resolved artifact directory and read that checked path (#3160).
+  let realArtifactDir: string;
+  try {
+    realArtifactDir = await realpath(artifactDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return apiError(c, 404, 'Artifact file not found');
     }
-
-    let content: string;
-    try {
-      content = await readFile(realFilePath, 'utf-8');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return apiError(c, 404, 'Artifact file not found');
-      }
-      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
-      return apiError(c, 500, 'Failed to read artifact file');
+    getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
+    return apiError(c, 500, 'Failed to read artifact file');
+  }
+  let realFilePath: string;
+  try {
+    realFilePath = await realpath(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return apiError(c, 404, 'Artifact file not found');
     }
+    getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+    return apiError(c, 500, 'Failed to read artifact file');
+  }
+  if (!isPathInside(realArtifactDir, realFilePath, { includeRoot: true, lexical: true })) {
+    getLog().warn(
+      { runId, filename, realFilePath, realArtifactDir },
+      'artifacts.symlink_escape_blocked'
+    );
+    return apiError(c, 404, 'Artifact file not found');
+  }
 
-    const contentType = filename.endsWith('.md')
-      ? 'text/markdown; charset=utf-8'
-      : 'text/plain; charset=utf-8';
-    return new Response(content, {
-      status: 200,
-      headers: { 'Content-Type': contentType },
-    });
+  let content: string;
+  try {
+    content = await readFile(realFilePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return apiError(c, 404, 'Artifact file not found');
+    }
+    getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+    return apiError(c, 500, 'Failed to read artifact file');
+  }
+
+  const contentType = filename.endsWith('.md')
+    ? 'text/markdown; charset=utf-8'
+    : 'text/plain; charset=utf-8';
+  return new Response(content, {
+    status: 200,
+    headers: { 'Content-Type': contentType },
   });
 }

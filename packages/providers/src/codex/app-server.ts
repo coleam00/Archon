@@ -329,58 +329,70 @@ export class AppServerConnection {
     }
     const { id, method } = message;
     if (typeof id === 'number' && typeof method !== 'string') {
-      this.responded = true;
-      const request = this.pending.get(id);
-      if (!request) return;
-      this.pending.delete(id);
-      const error = message.error as { code?: unknown; message?: unknown } | undefined;
-      if (error) {
-        request.reject(
-          new JsonRpcError(
-            request.method,
-            typeof error.code === 'number' ? error.code : 0,
-            typeof error.message === 'string' ? error.message : JSON.stringify(error)
-          )
-        );
-      } else {
-        request.resolve(message.result);
-      }
+      this.receiveResponse(id, message);
       return;
     }
     if (typeof method !== 'string') return;
     if (id !== undefined) {
-      if (method === TOOL_CALL_METHOD && this.toolCallHandler) {
-        const handler = this.toolCallHandler;
-        const operation = Promise.resolve()
-          .then(() => handler(message.params))
-          .then(
-            result => this.send({ id, result }),
-            (error: unknown) => {
-              getLog().error({ err: error }, 'codex.tool_call_failed');
-              this.send({
-                id,
-                result: toolResponse('Archon could not execute the tool call.', false),
-              });
-            }
-          );
-        this.toolCalls.add(operation);
-        void operation.then(() => this.toolCalls.delete(operation));
-        return;
-      }
-      // A request from Codex: approval, user input, elicitation, token refresh. Archon
-      // runs with approvals off and handles none of them, and an unanswered request
-      // stalls the turn, so each gets an error reply at once.
-      getLog().warn({ method }, 'codex.app_server_request_declined');
-      this.send({
-        id,
-        error:
-          method === CHATGPT_TOKEN_REFRESH
-            ? // The method exists; Archon only has no newer token than the one it delivered.
-              { code: -32000, message: CHATGPT_TOKEN_REFRESH_DECLINED }
-            : { code: -32601, message: `Archon does not handle ${method}` },
-      });
+      this.receiveRequest(id, method, message.params);
       return;
     }
+    this.receiveNotification(message);
+  }
+
+  private receiveResponse(id: number, message: Record<string, unknown>): void {
+    this.responded = true;
+    const request = this.pending.get(id);
+    if (!request) return;
+    this.pending.delete(id);
+    const error = message.error as { code?: unknown; message?: unknown } | undefined;
+    if (error) {
+      request.reject(
+        new JsonRpcError(
+          request.method,
+          typeof error.code === 'number' ? error.code : 0,
+          typeof error.message === 'string' ? error.message : JSON.stringify(error)
+        )
+      );
+    } else {
+      request.resolve(message.result);
+    }
+  }
+
+  private receiveRequest(id: unknown, method: string, params: unknown): void {
+    if (method === TOOL_CALL_METHOD && this.toolCallHandler) {
+      const handler = this.toolCallHandler;
+      const operation = Promise.resolve()
+        .then(() => handler(params))
+        .then(
+          result => this.send({ id, result }),
+          (error: unknown) => {
+            getLog().error({ err: error }, 'codex.tool_call_failed');
+            this.send({
+              id,
+              result: toolResponse('Archon could not execute the tool call.', false),
+            });
+          }
+        );
+      this.toolCalls.add(operation);
+      void operation.then(() => this.toolCalls.delete(operation));
+      return;
+    }
+    // A request from Codex: approval, user input, elicitation, token refresh. Archon
+    // runs with approvals off and handles none of them, and an unanswered request
+    // stalls the turn, so each gets an error reply at once.
+    getLog().warn({ method }, 'codex.app_server_request_declined');
+    this.send({
+      id,
+      error:
+        method === CHATGPT_TOKEN_REFRESH
+          ? // The method exists; Archon only has no newer token than the one it delivered.
+            { code: -32000, message: CHATGPT_TOKEN_REFRESH_DECLINED }
+          : { code: -32601, message: `Archon does not handle ${method}` },
+    });
+  }
+
+  private receiveNotification(message: Record<string, unknown>): void {
     this.queue.push(message as unknown as ServerNotification);
     this.wakeReader();
   }
