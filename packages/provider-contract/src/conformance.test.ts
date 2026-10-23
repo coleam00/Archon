@@ -555,6 +555,34 @@ describe('session id conformance', () => {
 });
 
 describe('runtime-backed background settlement', () => {
+  test('checks a later live case after a conforming background case', async () => {
+    let completed = false;
+    expect(
+      await checkBackgroundSettle([
+        {
+          name: 'completed first',
+          runtimeStatus: () => (completed ? 'completed' : 'running'),
+          run: async function* () {
+            yield { type: 'subtask', taskId: 'first', status: 'started' };
+            yield { type: 'result' };
+            completed = true;
+            yield { type: 'subtask', taskId: 'first', status: 'completed' };
+            yield { type: 'settled' };
+          },
+        },
+        {
+          name: 'live second',
+          runtimeStatus: () => 'running',
+          run: turn(
+            { type: 'subtask', taskId: 'second', status: 'started' },
+            { type: 'result' },
+            { type: 'settled' }
+          ),
+        },
+      ])
+    ).toEqual(['live second: runtime still reports second live at settled']);
+  });
+
   test('reported providers must supply background evidence', async () => {
     expect(
       await runProviderConformance({

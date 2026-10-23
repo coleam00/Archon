@@ -125,38 +125,7 @@ async function findMarkdownFilesRecursiveImpl(
   const results: { commandName: string; relativePath: string }[] = [];
   const fullPath = join(rootPath, relativePath);
 
-  if (visitedRealPaths.size === 0) {
-    try {
-      visitedRealPaths.add(await realpath(fullPath));
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        options?.onMissing?.(fullPath, e);
-        return results;
-      }
-      throw err;
-    }
-  }
-
-  let entries;
-  try {
-    entries = await readdir(fullPath, { withFileTypes: true });
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      options?.onMissing?.(fullPath, e);
-      return results;
-    }
-    throw err;
-  }
-
-  // `readdir` returns entries in filesystem order, which differs between
-  // machines and can differ between calls on one machine. Every consumer of
-  // this walk inherits that order, and `GET /api/commands` renders it to an
-  // operator. Order is defined once here, at the only owner, rather than at
-  // each call site. The comparison is on code units, not `localeCompare`,
-  // so the result does not vary with the host locale.
-  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const entries = await readMarkdownDirectory(fullPath, visitedRealPaths, options?.onMissing);
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name === 'node_modules') {
@@ -173,20 +142,16 @@ async function findMarkdownFilesRecursiveImpl(
       // folders support one level of grouping like `defaults/`).
       if (currentDepth >= maxDepth) continue;
 
-      const realChild = await getReachableRealPath(entryPath, options?.onMissing);
-      if (!realChild) continue;
-      if (visitedRealPaths.has(realChild)) continue;
-
-      const childVisitedRealPaths = new Set(visitedRealPaths);
-      childVisitedRealPaths.add(realChild);
-
-      const subResults = await findMarkdownFilesRecursiveImpl(
-        rootPath,
-        join(relativePath, entry.name),
-        options,
-        childVisitedRealPaths
+      results.push(
+        ...(await findMarkdownFilesInChild(
+          rootPath,
+          relativePath,
+          entry.name,
+          entryPath,
+          options,
+          visitedRealPaths
+        ))
       );
-      results.push(...subResults);
     } else if (entryKind === 'file' && entry.name.endsWith('.md')) {
       results.push({
         commandName: basename(entry.name, '.md'),
@@ -196,4 +161,68 @@ async function findMarkdownFilesRecursiveImpl(
   }
 
   return results;
+}
+
+async function readMarkdownDirectory(
+  fullPath: string,
+  visitedRealPaths: Set<string>,
+  onMissing?: (path: string, error: unknown) => void
+) {
+  if (visitedRealPaths.size === 0) {
+    try {
+      visitedRealPaths.add(await realpath(fullPath));
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        onMissing?.(fullPath, e);
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  let entries;
+  try {
+    entries = await readdir(fullPath, { withFileTypes: true });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(fullPath, e);
+      return [];
+    }
+    throw err;
+  }
+
+  // `readdir` returns entries in filesystem order, which differs between
+  // machines and can differ between calls on one machine. Every consumer of
+  // this walk inherits that order, and `GET /api/commands` renders it to an
+  // operator. Order is defined once here, at the only owner, rather than at
+  // each call site. The comparison is on code units, not `localeCompare`,
+  // so the result does not vary with the host locale.
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+  return entries;
+}
+
+async function findMarkdownFilesInChild(
+  rootPath: string,
+  relativePath: string,
+  name: string,
+  entryPath: string,
+  options: Parameters<typeof findMarkdownFilesRecursive>[2],
+  visitedRealPaths: Set<string>
+): ReturnType<typeof findMarkdownFilesRecursive> {
+  const realChild = await getReachableRealPath(entryPath, options?.onMissing);
+  if (!realChild) return [];
+  if (visitedRealPaths.has(realChild)) return [];
+
+  const childVisitedRealPaths = new Set(visitedRealPaths);
+  childVisitedRealPaths.add(realChild);
+
+  return findMarkdownFilesRecursiveImpl(
+    rootPath,
+    join(relativePath, name),
+    options,
+    childVisitedRealPaths
+  );
 }

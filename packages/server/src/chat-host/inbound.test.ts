@@ -239,6 +239,23 @@ test('approve and declared response preserve gate occurrence and resume with hos
   });
 });
 
+test('reject cancels an approval gate without resuming the run', async () => {
+  const paused = await run(true);
+  expect(
+    await action({
+      runId: paused.id,
+      action: 'reject',
+      response: { nodeId: 'gate', pauseId: 'pause-1' },
+      sender: { platformUserId: 'starter' },
+    })
+  ).toMatchObject({
+    status: 'done',
+    result: { kind: 'rejected', cancelled: true, resumed: false },
+  });
+  expect((await getWorkflowRun(paused.id))?.status).toBe('cancelled');
+  expect(resume).not.toHaveBeenCalled();
+});
+
 async function waiting(wait: Record<string, unknown>) {
   const started = await run();
   await getDatabase().query(
