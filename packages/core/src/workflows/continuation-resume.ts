@@ -83,7 +83,6 @@ export async function resumeRunContinuation(
   cursor?: WorkflowResumeCursor,
   options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
     WorkflowResumeOptions,
-    WorkflowResumeInput,
     'deferScratchCleanup'
   > = {}
 ): Promise<ContinuationAdmission> {
