@@ -96,6 +96,9 @@
       "src/services/serve-cancel.integration.test.ts"
     ],
     [
+      "src/services/server-discovery.integration.test.ts"
+    ],
+    [
       "src/adapters/web/transport.test.ts"
     ],
     [

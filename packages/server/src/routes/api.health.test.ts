@@ -100,6 +100,10 @@ mock.module('@archon/paths', () => ({
   getWSLDistroName: mockGetWSLDistroName,
 }));
 
+const STORE_ID = '6f1c2b3a-4d5e-4f60-8a71-92b3c4d5e6f7';
+const mockReadStoreId = mock((): string | null => STORE_ID);
+mock.module('@archon/paths/server-discovery', () => ({ readStoreId: mockReadStoreId }));
+
 mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
 mock.module('@archon/workflows/loader', makeLoaderMock);
 mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
@@ -288,6 +292,27 @@ describe('GET /api/health', () => {
     };
     expect(body.schema).toBeDefined();
     expect(body.schema?.createdAppVersion).toBeNull();
+  });
+
+  test("reports its home's store id, and omits it when the home has none", async () => {
+    mockGetStats.mockImplementation(makeIdleLockStats);
+    mockGetRunningWorkflows.mockImplementation(async () => []);
+    const app = makeApp();
+
+    const withId = (await (await app.request('/api/health')).json()) as { storeId?: string };
+    expect(withId.storeId).toBe(STORE_ID);
+
+    mockReadStoreId.mockImplementationOnce(() => null);
+    const missing = await app.request('/api/health');
+    expect(missing.status).toBe(200);
+    expect(((await missing.json()) as { storeId?: string }).storeId).toBeUndefined();
+
+    mockReadStoreId.mockImplementationOnce(() => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+    const unreadable = await app.request('/api/health');
+    expect(unreadable.status).toBe(200);
+    expect(((await unreadable.json()) as { storeId?: string }).storeId).toBeUndefined();
   });
 
   test('omits schema and still answers 200 when the vintage read fails', async () => {
@@ -578,5 +603,6 @@ describe('GET /api/openapi.json', () => {
     expect(health?.properties?.['wsl_distro']).toBeDefined();
     expect(health?.required).toContain('is_wsl');
     expect(health?.required).not.toContain('wsl_distro');
+    expect(health?.properties?.['storeId']).toBeDefined();
   });
 });

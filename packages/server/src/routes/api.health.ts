@@ -1,6 +1,4 @@
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import type { ConversationLockManager, SchemaVersionInfo } from '@archon/core';
 import { getSchemaVersion } from '@archon/core';
 import {
@@ -9,29 +7,13 @@ import {
   getWSLDistroName,
   checkForUpdate,
   BUNDLED_IS_BINARY,
-  BUNDLED_VERSION,
 } from '@archon/paths';
+import { readStoreId } from '@archon/paths/server-discovery';
 import * as workflowDb from '@archon/core/db/workflows';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
+import { appVersion } from '../app-version';
 import { getLog, openApiRouteRegistrar } from './api-route-kit';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
-
-// Read app version: use build-time constant in binary, package.json in dev
-let appVersion = 'unknown';
-if (BUNDLED_IS_BINARY) {
-  appVersion = BUNDLED_VERSION;
-} else {
-  try {
-    const pkgContent = readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf-8');
-    const pkg = JSON.parse(pkgContent) as { version?: string };
-    appVersion = pkg.version ?? 'unknown';
-  } catch (err) {
-    getLog().debug(
-      { err, path: join(import.meta.dir, '../../../../package.json') },
-      'api.version_read_failed'
-    );
-  }
-}
 
 /**
  * Public aggregate view of conversation processing. Health is outside the auth
@@ -72,6 +54,12 @@ const getHealthRoute = createRoute({
               is_docker: z.boolean(),
               is_wsl: z.boolean(),
               wsl_distro: z.string().optional(),
+              storeId: z
+                .string()
+                .optional()
+                .describe(
+                  "Opaque id of the Archon home this server serves. Compare it with that home's `store-id` file to confirm the server serves the home you mean. Omitted when the home has no readable store id."
+                ),
               activePlatforms: z.array(z.string()).optional(),
               attentionDestinations: z
                 .array(z.object({ id: z.string(), state: z.enum(PUSH_DESTINATION_STATES) }))
@@ -163,6 +151,13 @@ export function registerHealthRoutes(
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
 
+    let storeId: string | null = null;
+    try {
+      storeId = readStoreId();
+    } catch (err) {
+      getLog().warn({ err }, 'api.store_id_read_failed');
+    }
+
     const concurrency: z.infer<typeof healthConcurrencySchema> = {
       active: activeIds.size,
       queuedTotal: stats.queuedTotal,
@@ -179,6 +174,7 @@ export function registerHealthRoutes(
       is_docker: isDocker(),
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
+      ...(storeId ? { storeId } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
       ...(attention ? { attentionDestinations: attention.router.health() } : {}),
       ...(schema ? { schema } : {}),
