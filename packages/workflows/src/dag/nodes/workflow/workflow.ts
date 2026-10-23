@@ -122,7 +122,7 @@ export async function executeWorkflowNode(
     return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow, execution);
   }
 
-  const childArgs = resolveChildArguments(node, ctx);
+  const childArgs = resolveChildArguments(node, ctx, executionNodeId);
 
   // Build the completed result AND write the node_completed event. Unlike
   // command/prompt/bash/script nodes (which write their own inside their executor)
@@ -304,7 +304,7 @@ export async function executeWorkflowNode(
   }
 }
 
-function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext) {
+function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, executionNodeId: string) {
   const parentRun = ctx.workflowRun;
   // This run's named inputs (#2470), resolved once — threaded identically into the
   // `input:` string and every `with:` value below.
