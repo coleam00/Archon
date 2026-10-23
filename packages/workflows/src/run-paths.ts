@@ -87,8 +87,8 @@ export interface ResolvedProjectPaths {
  *  1. A persisted `output_root` (from the run row) wins outright — a run that
  *     already recorded where its output lives must never re-derive it, or a
  *     renamed codebase (#1192) would orphan its artifacts mid-run.
- *  2. Otherwise look the codebase up (retrying once on failure) and delegate to the single shared
- *     identity→paths resolver in `@archon/paths`, which handles repo,
+ *  2. Otherwise look the codebase up (retrying once on failure) and delegate to
+ *     the shared identity→paths resolver in `@archon/paths`, which handles repo,
  *     `_local`, and folder projects.
  *  3. With no codebase (or a lookup failure, or an unresolvable identity) the
  *     run falls back to the `@cwd/<basename>-<digest>` pseudo-project — still UNDER
@@ -147,18 +147,11 @@ async function lookupProjectIdentity(
 ) {
   let key: archonPaths.ProjectStorageKey | undefined;
   let identityResolution: ResolvedProjectPaths['identityResolution'];
-  // Retried once (#2304). A failing lookup drops the run onto the `@cwd/<basename>-<digest>`
-  // pseudo-project. The fallback itself stays — a registry blip must not kill a run.
-  // What changed is what happens to the row afterwards: a faulted run no longer
-  // has its fault-derived location PERSISTED as `output_root` (so the rename hazard
-  // #1192 protects stays scoped to rows with real roots), and the run carries
-  // `metadata.identity_unresolved = true` so "unregistered" and "we could not tell"
-  // are distinguishable after the fact. See the persistence block in `executeWorkflow`
-  // and `ResolvedProjectPaths.identityResolution`.
-  //
-  // The retry is for Postgres: a stale or broken pooled connection is exactly the
-  // fault an immediate retry clears by drawing a fresh one, so zero delay is correct.
-  // SQLite never surfaces SQLITE_BUSY here: its adapter waits out busy locks itself.
+  // A registry outage must not kill a run, but its fallback must not become the
+  // persisted output_root. The faulted identity tells persistRunOutputRoot to leave
+  // that pointer unset and flag metadata.identity_unresolved instead (#2304).
+  // Retry immediately: PostgreSQL can draw a fresh pooled connection; SQLite
+  // already waits out busy locks in its adapter.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const codebase = await store.getCodebase(codebaseId);
@@ -166,10 +159,8 @@ async function lookupProjectIdentity(
         key = archonPaths.resolveProjectStorageKey(codebase, cwd);
         identityResolution = key.kind === 'cwd' ? 'unregistered' : 'resolved';
         if (key.kind === 'cwd') {
-          // The codebase exists but neither an owner/repo nor a _local identity
-          // could be derived from it — the run still gets external storage, but
-          // keyed on the working directory rather than the project. NOT a fault;
-          // the persistence block writes the cwd fallback as `output_root` here.
+          // An existing row without a project identity is unregistered, not faulted;
+          // unlike a failed lookup, its cwd fallback may be persisted.
           getLog().warn(
             { codebaseName: codebase.name, cwd: codebase.default_cwd },
             'codebase_project_identity_unresolved'

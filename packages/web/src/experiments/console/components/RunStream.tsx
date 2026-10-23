@@ -244,12 +244,12 @@ function messageEntries(messages: readonly Message[], showInline: boolean): Time
 function providerEntries(
   providerEvents: RunProviderEvents,
   nodeRuns: readonly NodeRun[],
-  toolCalls: ReturnType<typeof runToolCalls>
+  toolCalls: readonly PairedToolCall[]
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
 
   const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
-  const pairedTools = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
+  const pairedTools = new Map(toolCalls.map(t => [t.record, t]));
   for (const [stepName, records] of providerEvents) {
     for (const record of records) {
       const t = pairedTools.get(record);
@@ -308,9 +308,10 @@ export function RunStream({
   );
 
   const timeline = useMemo<TimelineEntry[]>(() => {
-    const entries: TimelineEntry[] = [];
-    entries.push(...messageEntries(messages, toolCalls.showInline));
-    entries.push(...providerEntries(providerEvents, nodeRuns, toolCalls));
+    const entries: TimelineEntry[] = [
+      ...messageEntries(messages, toolCalls.showInline),
+      ...providerEntries(providerEvents, nodeRuns, toolCalls.fromProviderEvents),
+    ];
 
     // One divider per node, positioned at its first transition so it heads that
     // node's events in the stream.
